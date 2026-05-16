@@ -1,6 +1,6 @@
 # Automated Setup
 
-> If you are unable to use the automated setup process, you can follow the instructions in the [manual setup guide](manual-setup.md).
+> If you are unable to use the automated setup process, you can follow the instructions in the [manual setup guide](azdo-manual-setup.md).
 
 ## Limitations
 

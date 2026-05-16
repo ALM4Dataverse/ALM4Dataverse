@@ -61,6 +61,26 @@ to the corresponding App Registration:
 | `TEST-main` | `repo:MyOrg/MyApp:environment:TEST-main` |
 | `PROD` | `repo:MyOrg/MyApp:environment:PROD` |
 
+> ℹ️ **GitHub Free users**: GitHub Environments (for storing secrets/variables) work on
+> all plans.  Only environment *protection rules* (required reviewers, wait timers) require
+> Pro/Team/Enterprise for private repos.  You can still use the environment-based subject
+> format on GitHub Free.
+
+**Approach 3 (prefixed global secrets) — branch-based WIF subject:**
+
+If you are NOT using GitHub Environments (credentials are repo-level secrets), the job does
+not run in an environment context.  In this case, use a branch-based subject:
+
+| Field | Value |
+|---|---|
+| Issuer | `https://token.actions.githubusercontent.com` |
+| Subject identifier | `repo:{owner}/{repo}:ref:refs/heads/{branch-name}` |
+| Audience | `api://AzureADTokenExchange` |
+
+**Example** (repo `MyOrg/MyApp`, branch `main`): `repo:MyOrg/MyApp:ref:refs/heads/main`
+
+Create one federated credential per branch you deploy from (e.g. `main`, `develop`).
+
 You can use one App Registration (and one set of federated credentials) for all
 environments, or create separate App Registrations per environment for stronger
 isolation.

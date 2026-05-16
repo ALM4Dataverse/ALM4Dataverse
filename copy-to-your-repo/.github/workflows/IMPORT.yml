@@ -10,7 +10,7 @@ on:
 
 jobs:
   import:
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/import-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/import.yml@stable
     permissions:
       id-token: write
     with:

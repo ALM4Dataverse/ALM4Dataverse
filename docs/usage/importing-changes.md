@@ -34,4 +34,4 @@ What happens:
 - The import process follows the same steps as `DEPLOY` except:
   - it uses the latest files from the repo
   - it imports an unmanaged solution instead of managed solution.
-- Where environment variables, connection reference mappings and other settings are required, they will be read from the `Environment- DEV-<branchname>` variable group. See [the information about variable groups](../config/environment-variable-group.md) for more info.
+- Where environment variables, connection reference mappings and other settings are required, they will be read from the `Environment- DEV-<branchname>` variable group. See [the information about variable groups](../config/azdo-environment-variable-group.md) for more info.

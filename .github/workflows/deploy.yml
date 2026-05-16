@@ -1,21 +1,33 @@
-name: Deploy to Environment (Reusable)
+name: Deploy to Environment
 
 # Reusable workflow: download build artifacts and deploy them to a single
 # Dataverse environment.
 #
 # Call this from your repo's DEPLOY-main.yml (once per environment):
-#   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+#   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
 #
 # CREDENTIALS — three supported approaches (see docs/config/github-secrets.md):
 #
 #   1. Workload Identity Federation / OIDC (recommended — no secrets to manage):
 #      Configure a federated credential on your App Registration trusting
-#      https://token.actions.githubusercontent.com with subject
-#      repo:{owner}/{repo}:environment:{environment-name}.
-#      Store AZURE_CLIENT_ID, AZURE_TENANT_ID and DATAVERSE_URL in the GitHub
-#      environment.  Do NOT set AZURE_CLIENT_SECRET.
+#      https://token.actions.githubusercontent.com with a subject matching how
+#      the workflow runs:
+#
+#      a) GitHub environment (Approach 1 or 2 — works on all plans):
+#         repo:{owner}/{repo}:environment:{environment-name}
+#         Store AZURE_CLIENT_ID, AZURE_TENANT_ID and DATAVERSE_URL in the GitHub
+#         environment.  Do NOT set AZURE_CLIENT_SECRET.
+#
+#      b) Branch-level, no GitHub environment (Approach 3, GitHub Free compatible):
+#         repo:{owner}/{repo}:ref:refs/heads/{branch-name}
+#         Use when NOT specifying a GitHub environment in the calling workflow.
+#         Create one federated credential per branch (e.g. refs/heads/main).
+#         Store AZURE_CLIENT_ID, AZURE_TENANT_ID in repo-level secrets and pass
+#         them explicitly.  Do NOT set AZURE_CLIENT_SECRET.
+#
 #      GitHub environment protection rules (required reviewers, wait timers, etc.)
 #      require GitHub Pro, Team, or Enterprise for private repositories.
+#      GitHub environments themselves (for credential storage) work on all plans.
 #
 #   2. GitHub Environments with client secret (Teams/Enterprise for approval gates):
 #      Store AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET, DATAVERSE_URL

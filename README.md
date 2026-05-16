@@ -25,9 +25,9 @@ Features:
 
 ### Azure DevOps
 
-1) [Run the automated setup process](docs/setup/automated-setup.md) to put in place the pipelines and other configuration needed.
+1) [Run the automated setup process](docs/setup/azdo-automated-setup.md) to put in place the pipelines and other configuration needed.
 
-   Alternatively, if you prefer manual configuration, see the [Manual Setup Guide](docs/setup/manual-setup.md).
+   Alternatively, if you prefer manual configuration, see the [Manual Setup Guide](docs/setup/azdo-manual-setup.md).
 
 
 ## Documentation
@@ -39,8 +39,8 @@ Features:
 
 #### Azure DevOps
 - [Azure DevOps Organization Requirements](docs/setup/azdo-organisation-requirements.md)
-- [Automated Setup](docs/setup/automated-setup.md)
-- [Manual Setup](docs/setup/manual-setup.md)
+- [Automated Setup](docs/setup/azdo-automated-setup.md)
+- [Manual Setup](docs/setup/azdo-manual-setup.md)
 
 #### Usage Instructions
 
@@ -61,8 +61,8 @@ Features:
 - [GitHub Secrets & Variables](docs/config/github-secrets.md)
 
 #### Azure DevOps
-- [Environment Variable Group](docs/config/environment-variable-group.md)
-- [Service Connection Configuration](docs/config/environment-service-connection.md)
+- [Environment Variable Group](docs/config/azdo-environment-variable-group.md)
+- [Service Connection Configuration](docs/config/azdo-environment-service-connection.md)
 
 #### Example 'Hook' Extensions
 

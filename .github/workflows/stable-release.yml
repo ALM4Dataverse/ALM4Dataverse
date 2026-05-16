@@ -62,8 +62,8 @@ jobs:
           \`\`\`
           
           📚 **Documentation:**
-          - [Automated Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/automated-setup.md) - Quick and easy setup using the script
-          - [Manual Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/manual-setup.md) - Step-by-step manual configuration
+          - [Automated Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/azdo-automated-setup.md) - Quick and easy setup using the script
+          - [Manual Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/azdo-manual-setup.md) - Step-by-step manual configuration
           - [Getting Started](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/README.md#getting-started) - Overview and documentation
           EOF
           

@@ -24,7 +24,7 @@ It is also possible to manually trigger the pipeline and manually select the rel
 >
 > Each `DEPLOY-<branchname>.yml` pipeline is associated with a single branch and must be edited to configure with a list of the environments that it will deploy to in the sequence they are listed.
 >
-> Each environment requires a [service connection](../config/environment-service-connection.md) to define the URL and auth parameters and [variable group](../config/environment-variable-group.md) to define environment specific values.
+> Each environment requires a [service connection](../config/azdo-environment-service-connection.md) to define the URL and auth parameters and [variable group](../config/azdo-environment-variable-group.md) to define environment specific values.
 >
 > When adding environments, don't forget to add the following policies to the variable group:
 > - Exclusive lock

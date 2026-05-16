@@ -229,14 +229,14 @@ Create a Service Connection for each Dataverse environment.
 
 ## 5. Variable Groups
 
-Variable groups store environment-specific configuration values. See the [Environment Variable Group documentation](../config/environment-variable-group.md) for detailed information about what variables to configure.
+Variable groups store environment-specific configuration values. See the [Environment Variable Group documentation](../config/azdo-environment-variable-group.md) for detailed information about what variables to configure.
 
 ### For Each Environment (Dev-main, TEST-main, UAT-main, PROD, etc.):
 
 1. Go to **Pipelines** > **Library**
 2. Click **+ Variable group**
 3. Name: `Environment-{EnvironmentName}` (e.g., `Environment-Dev-main`, `Environment-PROD`)
-4. Add the required variables (see [environment-variable-group.md](../config/environment-variable-group.md) for the full list)
+4. Add the required variables (see [azdo-environment-variable-group.md](../config/azdo-environment-variable-group.md) for the full list)
 5. Click **Save**
 
 ### Add Approval Check (for non-Dev environments):

@@ -15,7 +15,7 @@ on:
 
 jobs:
   export:
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/export-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/export.yml@stable
     permissions:
       contents: write
       id-token: write

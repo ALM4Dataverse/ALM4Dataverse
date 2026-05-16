@@ -1,65 +1,66 @@
-name: Import (Reusable)
+name: Export
 
-# Reusable workflow: build the current source and deploy it as unmanaged solutions
-# to a development Dataverse environment ("import from source").
+# Reusable workflow: export Dataverse solutions from a dev environment and commit
+# the unpacked changes back to the repository.
 #
-# Call this from your repo's IMPORT.yml:
-#   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/import-reusable.yml@stable
+# Call this from your repo's EXPORT.yml:
+#   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/export.yml@stable
 #
 # CREDENTIALS — three supported approaches (see docs/config/github-secrets.md):
 #
 #   1. Workload Identity Federation / OIDC (recommended — no secrets to manage):
 #      Configure a federated credential on your App Registration trusting
-#      https://token.actions.githubusercontent.com with subject
-#      repo:{owner}/{repo}:environment:{environment-name}.
-#      Store AZURE_CLIENT_ID, AZURE_TENANT_ID and DATAVERSE_URL in the GitHub
-#      environment.  Do NOT set AZURE_CLIENT_SECRET.
+#      https://token.actions.githubusercontent.com with a subject matching how
+#      the workflow runs:
+#
+#      a) GitHub environment (Approach 1 or 2):
+#         repo:{owner}/{repo}:environment:{environment-name}
+#         Store AZURE_CLIENT_ID, AZURE_TENANT_ID and DATAVERSE_URL in the GitHub
+#         environment.  Do NOT set AZURE_CLIENT_SECRET.
+#
+#      b) Branch-level, no GitHub environment (Approach 3, GitHub Free compatible):
+#         repo:{owner}/{repo}:ref:refs/heads/{branch-name}
+#         Pass credentials explicitly via the secrets: block.  Do NOT set
+#         AZURE_CLIENT_SECRET.
 #
 #   2. GitHub Environments with client secret (Teams/Enterprise for approval gates):
-#      Store AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET, DATAVERSE_URL,
-#      and DATAVERSESERVICEACCOUNTUPN as secrets/variables in a GitHub environment
-#      named after the dev environment (e.g. "Dev-main").
-#      Individual DataverseConnRef_* and DataverseEnvVar_* variables can also be
-#      stored in the GitHub environment and will be picked up automatically.
+#      Store AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET and DATAVERSE_URL
+#      as secrets/variables in a GitHub environment named after the dev environment
+#      (e.g. "Dev-main").  Pass that name via `environment-name`.
 #
 #   3. Prefixed global secrets (works on all licence levels):
-#      Store secrets at repo level with environment-specific prefixes and pass
-#      them explicitly. Connection references and environment variables can be
-#      supplied as JSON objects via dataverse-connection-refs / dataverse-env-vars.
+#      Store secrets at repo level with environment-specific prefixes, then pass
+#      them explicitly via the `secrets:` block when calling this workflow.
 
 on:
   workflow_call:
     inputs:
+      commit-message:
+        required: true
+        type: string
+        description: 'Commit message for the exported changes'
       environment-name:
         required: true
         type: string
         description: >
           Name of the GitHub environment to use (e.g. "Dev-main").
           If the environment does not exist in GitHub it will be created automatically
-          with no protection rules.  Used to resolve credentials from GitHub environment
-          secrets/variables when they are not passed explicitly.
+          with no protection rules.  Used to resolve AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
+          AZURE_TENANT_ID and DATAVERSE_URL from GitHub environment secrets/variables
+          when those are not passed explicitly.
       dataverse-url:
         type: string
         default: ''
         description: >
-          URL of the Dataverse environment to import into.
+          URL of the Dataverse environment to export from
+          (e.g. https://yourorg-dev.crm.dynamics.com).
           If omitted, DATAVERSE_URL from the GitHub environment is used.
-      dataverse-connection-refs:
+      dev-environment-label:
         type: string
         default: ''
         description: >
-          JSON object mapping Dataverse connection reference schema names to
-          connection IDs.  Example: {"contoso_sharedsharepointonline": "guid"}.
-          Only needed when NOT using GitHub environment variables named
-          DataverseConnRef_<schema_name>.
-      dataverse-env-vars:
-        type: string
-        default: ''
-        description: >
-          JSON object mapping Dataverse environment variable schema names to
-          values.  Example: {"contoso_APIEndpoint": "https://api.contoso.com"}.
-          Only needed when NOT using GitHub environment variables named
-          DataverseEnvVar_<schema_name>.
+          Label passed to the export script as EnvironmentName (used in log messages).
+          Defaults to "Dev-{branch}" when omitted.
       alm-repository:
         type: string
         default: 'ALM4Dataverse/ALM4Dataverse'
@@ -86,36 +87,28 @@ on:
         description: >
           Azure tenant (directory) ID.
           If omitted, AZURE_TENANT_ID from the GitHub environment is used.
-      dataverse-service-account-upn:
-        required: false
-        description: >
-          UPN (email) of the Dataverse service account used to activate
-          workflows/flows after import.
-          If omitted, DATAVERSESERVICEACCOUNTUPN from the GitHub environment is used.
 
 jobs:
-  import:
+  export:
     runs-on: windows-latest
     environment: ${{ inputs.environment-name }}
     permissions:
+      contents: write  # push changes back to the repository
       id-token: write  # request OIDC token for Workload Identity Federation
     env:
+      # Prefer an explicitly passed workflow secret; fall back to the GitHub environment secret.
       AZURE_CLIENT_ID:     ${{ secrets.azure-client-id     || secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID:     ${{ secrets.azure-tenant-id     || secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret || secrets.AZURE_CLIENT_SECRET }}
-      DATAVERSE_URL:       ${{ inputs.dataverse-url || vars.DATAVERSE_URL || secrets.DATAVERSE_URL }}
-      DATAVERSESERVICEACCOUNTUPN: >-
-        ${{ secrets.dataverse-service-account-upn
-            || secrets.DATAVERSESERVICEACCOUNTUPN
-            || vars.DATAVERSESERVICEACCOUNTUPN }}
-      DATAVERSE_CONNECTION_REFS: ${{ inputs.dataverse-connection-refs }}
-      DATAVERSE_ENV_VARS:        ${{ inputs.dataverse-env-vars }}
+      # Prefer explicit input; fall back to GitHub environment variable / secret.
+      DATAVERSE_URL: ${{ inputs.dataverse-url || vars.DATAVERSE_URL || secrets.DATAVERSE_URL }}
 
     steps:
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           path: self
+          persist-credentials: true
           fetch-depth: 1
 
       - name: Checkout ALM4Dataverse
@@ -151,31 +144,44 @@ jobs:
             Write-Host "Client secret provided — using client secret authentication"
           }
 
-      - name: Install Dependencies, Connect and Import
+      - name: Install Dependencies
         shell: pwsh
         working-directory: ${{ github.workspace }}/self
         run: |
-          # Apply connection references from JSON input.
-          # When using GitHub Environments, individual DataverseConnRef_* variables
-          # configured in the environment are already present as OS environment
-          # variables and will be picked up directly by deploy.ps1.
-          if (-not [string]::IsNullOrEmpty($env:DATAVERSE_CONNECTION_REFS)) {
-            $connRefs = $env:DATAVERSE_CONNECTION_REFS | ConvertFrom-Json
-            foreach ($prop in $connRefs.PSObject.Properties) {
-              [System.Environment]::SetEnvironmentVariable("DataverseConnRef_$($prop.Name)", $prop.Value)
-            }
-          }
-
-          # Apply Dataverse environment variable values from JSON input.
-          if (-not [string]::IsNullOrEmpty($env:DATAVERSE_ENV_VARS)) {
-            $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
-            foreach ($prop in $envVars.PSObject.Properties) {
-              [System.Environment]::SetEnvironmentVariable("DataverseEnvVar_$($prop.Name)", $prop.Value)
-            }
-          }
-
           & "${{ github.workspace }}/alm/pipelines/scripts/installdependencies.ps1"
+
+      - name: Connect and Export
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/self
+        run: |
+          $devEnvLabel = '${{ inputs.dev-environment-label }}'
+          if ([string]::IsNullOrEmpty($devEnvLabel)) {
+            $devEnvLabel = "Dev-${{ github.ref_name }}"
+          }
           & "${{ github.workspace }}/alm/pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
-          & "${{ github.workspace }}/alm/pipelines/scripts/import.ps1" `
+          & "${{ github.workspace }}/alm/pipelines/scripts/export.ps1" `
             -SourceDirectory "${{ github.workspace }}/self" `
-            -ArtifactStagingDirectory "${{ runner.temp }}/import-staging"
+            -ArtifactStagingDirectory "${{ runner.temp }}/export-staging" `
+            -TempDirectory "${{ runner.temp }}/export-temp" `
+            -EnvironmentName $devEnvLabel
+
+      - name: Commit and push changes
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/self
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          if ($LASTEXITCODE -ne 0) { throw "git config user.email failed with exit code $LASTEXITCODE" }
+          git config user.name "${{ github.actor }}"
+          if ($LASTEXITCODE -ne 0) { throw "git config user.name failed with exit code $LASTEXITCODE" }
+          git add .
+          if ($LASTEXITCODE -ne 0) { throw "git add failed with exit code $LASTEXITCODE" }
+          $status = git status --porcelain
+          if ([string]::IsNullOrEmpty($status)) {
+            Write-Host "No changes to commit"
+          } else {
+            git commit -m "${{ inputs.commit-message }}"
+            if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE" }
+            git push origin HEAD:${{ github.ref }}
+            if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+          }

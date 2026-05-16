@@ -2,7 +2,7 @@
 
 This guide describes how to set up ALM4Dataverse for use with GitHub Actions.
 
-> **Azure DevOps users**: if you are using Azure DevOps, follow the [Azure DevOps setup guide](manual-setup.md) instead.
+> **Azure DevOps users**: if you are using Azure DevOps, follow the [Azure DevOps setup guide](azdo-manual-setup.md) instead.
 
 ---
 
@@ -14,10 +14,10 @@ You call them from your own repository's workflow files, which you copy from the
 
 | Your workflow | Reusable workflow called | Purpose |
 |---|---|---|
-| `BUILD.yml` | `build-reusable.yml` | Pack solutions, upload artifacts, tag commit |
-| `EXPORT.yml` | `export-reusable.yml` | Export from dev Dataverse, commit to repo |
-| `IMPORT.yml` | `import-reusable.yml` | Build from source, import into dev Dataverse |
-| `DEPLOY-main.yml` | `deploy-environment-reusable.yml` | Deploy artifacts to each environment |
+| `BUILD.yml` | `build.yml` | Pack solutions, upload artifacts, tag commit |
+| `EXPORT.yml` | `export.yml` | Export from dev Dataverse, commit to repo |
+| `IMPORT.yml` | `import.yml` | Build from source, import into dev Dataverse |
+| `DEPLOY-main.yml` | `deploy.yml` | Deploy artifacts to each environment |
 
 ---
 
@@ -68,17 +68,27 @@ OIDC tokens with no secrets to manage or rotate.
 
 | Workflow scenario | Subject identifier |
 |---|---|
-| Targets a GitHub environment (recommended) | `repo:{owner}/{repo}:environment:{environment-name}` |
-| Branch-based (no GitHub environment) | `repo:{owner}/{repo}:ref:refs/heads/{branch-name}` |
-| Manual dispatch (no environment) | `repo:{owner}/{repo}:ref:refs/heads/{branch-name}` |
+| Targets a GitHub environment (Approach 1 or 2) | `repo:{owner}/{repo}:environment:{environment-name}` |
+| Branch-based, no GitHub environment (Approach 3, GitHub Free compatible) | `repo:{owner}/{repo}:ref:refs/heads/{branch-name}` |
 
-> **Example** for an environment named `TEST-main` in the repo `MyOrg/MyApp`:
-> `repo:MyOrg/MyApp:environment:TEST-main`
+> **Examples** for repo `MyOrg/MyApp`:
+> - Environment-based: `repo:MyOrg/MyApp:environment:TEST-main`
+> - Branch-based: `repo:MyOrg/MyApp:ref:refs/heads/main`
 
-Since the ALM4Dataverse reusable workflows always declare an `environment:`, the
-environment-based subject format is the recommended choice.  Create one federated
-credential per GitHub environment (Dev-main, TEST-main, PROD, etc.) pointing to the
-same or separate App Registrations.
+When using **Approach 1 or 2** (GitHub Environments), the ALM4Dataverse workflows always run
+within a named GitHub environment, so the environment-based subject is the right choice.
+Create one federated credential per GitHub environment (Dev-main, TEST-main, PROD, etc.).
+
+When using **Approach 3** (prefixed global repo-level secrets, GitHub Free compatible), jobs
+do not target a GitHub environment, so use the **branch-based** subject format.  Create one
+federated credential per branch (e.g. `refs/heads/main`, `refs/heads/develop`).
+
+> ℹ️ **GitHub Environments and GitHub Free**: GitHub Environments themselves (for storing
+> secrets and variables) work on all plans including GitHub Free.  Only *environment
+> protection rules* (required reviewers, wait timers) require GitHub Pro, Team, or Enterprise
+> for private repositories.  GitHub Free users can use Approach 1 or 2 with environment-based
+> WIF subjects — they just cannot configure approval gates via protection rules (use the
+> [gate tag mechanism](#deployment-gates-for-github-free) instead).
 
 📖 **References**:
 - [Workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation)
@@ -228,7 +238,7 @@ In the environment settings, you can add:
        github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' &&
        inputs.target-environment == 'TEST-main')
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
     permissions:
       actions: read
       contents: write
@@ -253,7 +263,7 @@ In the environment settings, you can add:
     if: >
       github.event_name == 'workflow_dispatch' &&
       inputs.target-environment == 'PROD'
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
     permissions:
       actions: read
       contents: write
@@ -280,7 +290,7 @@ To use: comment out Strategy A and uncomment this block.  Also add **Required re
         (github.event_name == 'workflow_dispatch' &&
          inputs.target-environment == 'PROD')
       )
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
     permissions:
       actions: read
       contents: write
@@ -408,7 +418,7 @@ jobs:
        github.event.workflow_run.conclusion == 'success') ||
       (github.event_name == 'workflow_dispatch' &&
        inputs.target-environment == 'TEST-main')
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
     permissions:
       actions: read
       contents: write
@@ -436,7 +446,7 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' &&
       inputs.target-environment == 'PROD'
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
     permissions:
       actions: read
       contents: write
@@ -468,7 +478,7 @@ jobs:
         (github.event_name == 'workflow_dispatch' &&
          inputs.target-environment == 'PROD')
       )
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy-environment-reusable.yml@stable
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
     permissions:
       actions: read
       contents: write
