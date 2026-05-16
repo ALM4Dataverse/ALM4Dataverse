@@ -62,17 +62,17 @@ This repository contains the shared pipeline templates and scripts.
    # Add the upstream repository as a remote
    git remote add upstream https://github.com/rnwood/ALM4Dataverse.git
    
-   # Fetch the stable tag
-   git fetch upstream stable
+   # Fetch only the stable tag from upstream (no other branches are imported)
+   git fetch upstream refs/tags/stable:refs/tags/stable
    
    # Create main branch from the stable tag
-   git checkout -b main upstream/stable
+   git checkout -b main stable
    
    # Push to your Azure DevOps repository
    git push origin main
    ```
 
-> **Note**: The 'stable' tag always points to the latest stable release. You can also use a specific version tag like `v1.0.0` instead of `stable` if you need to pin to a particular release. Find available releases at https://github.com/rnwood/ALM4Dataverse/releases
+> **Note**: The 'stable' tag always points to the latest stable release. You can also pin to a specific version tag (e.g., `v1.0.0`) by replacing `stable` with the version tag in the fetch and checkout commands (e.g., `git fetch upstream refs/tags/v1.0.0:refs/tags/v1.0.0` and `git checkout -b main v1.0.0`). Find available releases at https://github.com/rnwood/ALM4Dataverse/releases
 
 📖 **Reference**: [Create a Git repo](https://learn.microsoft.com/en-us/azure/devops/repos/git/create-new-repo)
 
