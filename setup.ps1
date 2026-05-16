@@ -1371,7 +1371,7 @@ function Sync-CopyToYourRepoIntoGitRepo {
                 # Update trigger branch
                 $content = $content -replace "- main", "- $branch"
                 if (-not $UseAlm4DataverseExtension) {
-                    $content = $content -replace '(?m)^(\s*default:\s*)true\s*$', '${1}false'
+                    $content = $content -replace '(?m)^(\s*#?\s*useAlm4DataverseExtension:\s*)true\s*$', '${1}false'
                 }
                 
                 $tempFile = [System.IO.Path]::GetTempFileName()
@@ -1381,7 +1381,7 @@ function Sync-CopyToYourRepoIntoGitRepo {
             }
             elseif (-not $UseAlm4DataverseExtension -and $normalizedRelativePath -in @('pipelines/EXPORT.yml', 'pipelines/IMPORT.yml')) {
                 $content = Get-Content -LiteralPath $file.FullName -Raw
-                $content = $content -replace '(?m)^(\s*default:\s*)true\s*$', '${1}false'
+                $content = $content -replace '(?m)^(\s*useAlm4DataverseExtension:\s*)true\s*$', '${1}false'
 
                 $tempFile = [System.IO.Path]::GetTempFileName()
                 $content | Set-Content -LiteralPath $tempFile -NoNewline
@@ -3462,7 +3462,8 @@ function Update-DeployPipelineInMainRepo {
     param(
         [Parameter(Mandatory)][array]$Environments,
         [Parameter(Mandatory)][object]$MainRepo,
-        [Parameter(Mandatory)][string]$AccessToken
+        [Parameter(Mandatory)][string]$AccessToken,
+        [Parameter()][bool]$UseAlm4DataverseExtension = $true
     )
 
     if ($Environments.Count -eq 0) { return }
@@ -3534,7 +3535,7 @@ function Update-DeployPipelineInMainRepo {
             $newStages += "  - template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse`n"
             $newStages += "    parameters:`n"
             $newStages += "      environmentName: $($env.ShortName)`n"
-            $newStages += "      useAlm4DataverseExtension: `${{ parameters.useAlm4DataverseExtension }}`n"
+            $newStages += "      useAlm4DataverseExtension: $($UseAlm4DataverseExtension.ToString().ToLowerInvariant())`n"
             $newStages += "      environmentUrl: `$(EnvironmentUrl)`n"
         }
 
@@ -3595,7 +3596,7 @@ $environments = Invoke-WithErrorHandling -OperationName "Selecting Deployment En
 
 if ($environments.Count -gt 0) {
     Invoke-WithErrorHandling -OperationName "Updating Deployment Pipeline" -AllowSkip -ScriptBlock {
-        Update-DeployPipelineInMainRepo -Environments $environments -MainRepo $mainRepo -AccessToken $azDevOpsAccessToken
+        Update-DeployPipelineInMainRepo -Environments $environments -MainRepo $mainRepo -AccessToken $azDevOpsAccessToken -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
     } | Out-Null
 
     # Get pipeline IDs for authorization

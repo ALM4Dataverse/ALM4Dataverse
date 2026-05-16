@@ -12,9 +12,6 @@ parameters:
 - name: commitMessage
   type: string
   displayName: 'Commit message for exported changes'
-- name: useAlm4DataverseExtension
-  type: boolean
-  default: true
 
 variables:
 - group: Environment-Dev-${{ variables['Build.SourceBranchName'] }}
@@ -23,5 +20,5 @@ stages:
 - template: pipelines/templates/export.yml@ALM4Dataverse
   parameters:
     commitMessage: ${{ parameters.commitMessage }}
-    useAlm4DataverseExtension: ${{ parameters.useAlm4DataverseExtension }}
+    useAlm4DataverseExtension: true
     environmentUrl: $(EnvironmentUrl)

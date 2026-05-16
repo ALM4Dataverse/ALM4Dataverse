@@ -17,11 +17,6 @@ resources:
 name: 'Deploy $(resources.pipeline.build.runName)'
 appendCommitMessageToRunName: false
 
-parameters:
-- name: useAlm4DataverseExtension
-  type: boolean
-  default: true
-
 stages:
   
   # Example - uncomment and repeat for each environment to deploy to
@@ -29,5 +24,5 @@ stages:
   # - template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
   #   parameters:
   #     environmentName: Test-main
-  #     useAlm4DataverseExtension: ${{ parameters.useAlm4DataverseExtension }}
+  #     useAlm4DataverseExtension: true
   #     environmentUrl: $(EnvironmentUrl)

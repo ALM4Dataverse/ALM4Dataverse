@@ -11,13 +11,8 @@ resources:
 variables:
 - group: Environment-Dev-${{ variables['Build.SourceBranchName'] }}
 
-parameters:
-- name: useAlm4DataverseExtension
-  type: boolean
-  default: true
-
 stages:
 - template: pipelines/templates/import.yml@ALM4Dataverse
   parameters:
-    useAlm4DataverseExtension: ${{ parameters.useAlm4DataverseExtension }}
+    useAlm4DataverseExtension: true
     environmentUrl: $(EnvironmentUrl)
