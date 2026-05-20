@@ -52,3 +52,4 @@ Features:
 
 - [Data import and export](config/example-hooks/data-import-export.md) (for example config/system data)
 - [Organization/environment settings](config/example-hooks/organization-settings.md) (for example enabling the 'PCF allowed' switch)
+- [Azure resource deployment with Bicep](config/example-hooks/azure-bicep.md) (for example deploying supporting Azure resources alongside Dataverse solutions)

@@ -52,7 +52,9 @@ You can also include any other PowerShell module from the [PowerShell Gallery](h
 Example hooks:
 
 - [Data import and export](example-hooks/data-import-export.md) (for example config/system data)
-- [Organization/environment settings](example-hooks/organization-settings.md) (for example enabling the 'PCF allowed' switch)- 
+- [Organization/environment settings](example-hooks/organization-settings.md) (for example enabling the 'PCF allowed' switch)
+- [Azure resource deployment with Bicep](example-hooks/azure-bicep.md) (for example deploying supporting Azure resources alongside Dataverse solutions)
+
 
 ```powershell
 hooks = @{
