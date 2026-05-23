@@ -11,13 +11,17 @@ param(
     [string]$ALM4DataverseRef
 )
 
+$resolveDevRefAfterGitIsAvailable = $false
+
 # ALM4DataverseRef default handling - injected during release, fallback for development
 if (-not $ALM4DataverseRef) {
     $injectedRef = '__ALM4DATAVERSE_REF__'
     # Check if placeholder was replaced by comparing if it starts with double underscore
     if ($injectedRef -like '__*') {
-        # Placeholders not replaced - must be running from repository for development
-        Write-Host "Development mode: Using 'stable' as ALM4DataverseRef" -ForegroundColor Yellow
+        # Placeholders not replaced - development mode.
+        # We resolve this after Git is available to support local branch/commit selection.
+        $resolveDevRefAfterGitIsAvailable = $true
+        Write-Host "Development mode: Will resolve ALM4DataverseRef from current branch/commit after Git is available (fallback: 'stable')." -ForegroundColor Yellow
         $ALM4DataverseRef = 'stable'
     } else {
         # Placeholder was replaced during release - use the injected value
@@ -268,6 +272,50 @@ function Install-PortableGit {
     }
 }
 
+function Resolve-DevelopmentDefaultAlm4DataverseRef {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$PrimaryRepositoryPath,
+        [Parameter()][string]$FallbackRef = 'stable'
+    )
+
+    # Try candidate local repositories in order; use first one that resolves.
+    $candidateRepos = @()
+    foreach ($candidate in @($PrimaryRepositoryPath, $PSScriptRoot)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate)) {
+            $candidateRepos += $candidate
+        }
+    }
+    $candidateRepos = @($candidateRepos | Select-Object -Unique)
+
+    foreach ($repoPath in $candidateRepos) {
+        $gitDir = Join-Path $repoPath '.git'
+        if (-not (Test-Path -LiteralPath $gitDir)) {
+            continue
+        }
+
+        try {
+            $branch = (& git -C $repoPath branch --show-current 2>$null).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($branch)) {
+                Write-Host "Development mode: Using current local branch '$branch' as ALM4DataverseRef" -ForegroundColor Yellow
+                return $branch
+            }
+
+            $commit = (& git -C $repoPath rev-parse HEAD 2>$null).Trim()
+            if ($commit -match '^[0-9a-f]{40}$') {
+                Write-Host "Development mode: Repository is in detached HEAD; using commit '$commit' as ALM4DataverseRef" -ForegroundColor Yellow
+                return $commit
+            }
+        }
+        catch {
+            throw "Could not resolve development ALM4DataverseRef from '$repoPath': $($_.Exception.Message)"
+        }
+    }
+
+    Write-Host "Development mode: Could not resolve current branch/commit. Using '$FallbackRef' as ALM4DataverseRef" -ForegroundColor Yellow
+    return $FallbackRef
+}
+
 Write-Section "Initialising setup"
 
 $TempModuleRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ALM4Dataverse\Modules"
@@ -347,6 +395,11 @@ if (-not $git) {
 
 Write-Host "Git is now available: $($git.Source)"
 Write-Host "Version: $(git --version)"
+
+if ($resolveDevRefAfterGitIsAvailable) {
+    $ALM4DataverseRef = Resolve-DevelopmentDefaultAlm4DataverseRef -PrimaryRepositoryPath $upstreamRepo -FallbackRef $ALM4DataverseRef
+    Write-Host "Development mode: Resolved ALM4DataverseRef to '$ALM4DataverseRef'" -ForegroundColor Yellow
+}
 
 #endregion
 
