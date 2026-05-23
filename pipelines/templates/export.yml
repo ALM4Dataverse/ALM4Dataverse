@@ -50,9 +50,9 @@ stages:
 
         - pwsh: |
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
-              $environmentUrl = "$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)"
+              $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
               if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
-                $environmentUrl = "$(PowerPlatformSetConnectionVariables.BuildTools.EnvironmentUrl)"
+                $environmentUrl = '$(PowerPlatformSetConnectionVariables.BuildTools.EnvironmentUrl)'
               }
               if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
                 throw "Environment URL could not be resolved from the selected connection variables task. Ensure the Power Platform service connection is configured correctly."
