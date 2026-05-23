@@ -36,6 +36,8 @@ if ($baseBranch -like "deps/*" -or $baseBranch -like "copilot/*") {
 
 Write-Host "Using base branch: $baseBranch"
 
+$hasErrors = $false
+
 foreach ($dep in $outdatedDeps) {
     $moduleName = $dep.name
     $currentVersion = $dep.currentVersion
@@ -71,6 +73,9 @@ foreach ($dep in $outdatedDeps) {
     } else {
         Write-Host "Creating new branch: $branchName"
         git checkout -b $branchName origin/$baseBranch
+        # Fetch the remote branch if it already exists (e.g. from a previous failed run)
+        # so that --force-with-lease has a valid remote tracking ref to compare against
+        git fetch origin ${branchName} 2>&1 | Out-Null
     }
     
     # Update the dependency in alm-config-defaults.psd1
@@ -107,6 +112,12 @@ foreach ($dep in $outdatedDeps) {
     git add $configPath
     git commit -m "chore(deps): update $moduleName to $latestVersion"
     git push --force-with-lease origin HEAD
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "##[error]Failed to push branch for $moduleName"
+        $hasErrors = $true
+        git checkout $baseBranch 2>$null || $true
+        continue
+    }
     
     # Create or update PR
     $prTitle = "chore(deps): update $moduleName to $latestVersion"
@@ -132,7 +143,10 @@ This PR updates the ``$moduleName`` PowerShell module dependency.
             Write-Host "✓ Updated PR #$($existingPR.number)"
         }
         catch {
-            Write-Host "##[warning]Failed to update PR: $_"
+            Write-Host "##[error]Failed to update PR: $_"
+            $hasErrors = $true
+            git checkout $baseBranch 2>$null || $true
+            continue
         }
     } else {
         Write-Host "Creating new PR"
@@ -141,7 +155,10 @@ This PR updates the ``$moduleName`` PowerShell module dependency.
             Write-Host "✓ Created new PR: $newPR"
         }
         catch {
-            Write-Host "##[warning]Failed to create PR: $_"
+            Write-Host "##[error]Failed to create PR: $_"
+            $hasErrors = $true
+            git checkout $baseBranch 2>$null || $true
+            continue
         }
     }
     
@@ -150,3 +167,8 @@ This PR updates the ``$moduleName`` PowerShell module dependency.
 }
 
 Write-Host "`nAll PRs created/updated successfully!"
+
+if ($hasErrors) {
+    Write-Host "##[error]One or more dependencies could not be processed. See errors above."
+    exit 1
+}
