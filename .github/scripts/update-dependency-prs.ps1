@@ -88,7 +88,7 @@ foreach ($dep in $outdatedDeps) {
     
     # Replace the version for this specific module - handle both single and double quotes
     $pattern = "(`"$escapedModuleName`"|'$escapedModuleName')\s*=\s*(`"|')$escapedCurrentVersion(`"|')"
-    $replacement = "`${1} = `"`$latestVersion`""
+    $replacement = "`${1} = `"$latestVersion`""
     $newContent = $configContent -replace $pattern, $replacement
     
     if ($configContent -eq $newContent) {
