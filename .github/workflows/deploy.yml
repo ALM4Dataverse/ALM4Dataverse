@@ -148,6 +148,7 @@ jobs:
           name: artifacts
           run-id: ${{ inputs.build-run-id }}
           github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
           path: artifacts
 
       - name: Resolve prefixed repo variables and secrets

@@ -29,6 +29,31 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "##[section]Building Artifacts"
 
+function Get-PacCliInstalledPackageVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PacToolPath
+    )
+
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        return ''
+    }
+
+    if (-not (Test-Path $PacToolPath)) {
+        return ''
+    }
+
+    $toolListOutput = @(& $dotnet.Source tool list --tool-path $PacToolPath 2>&1)
+    foreach ($line in $toolListOutput) {
+        if ($line -match '^\s*microsoft\.powerapps\.cli\.tool\s+(\S+)\s+') {
+            return $Matches[1].Split('+')[0]
+        }
+    }
+
+    return ''
+}
+
 # Read solutions configuration
 $config = Get-AlmConfig -BaseDirectory $SourceDirectory
 Write-Host "##[debug]Loaded configuration from alm-config.psd1"
@@ -93,13 +118,14 @@ foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     }
 }
 
-$pacCommand = Get-Command pac -ErrorAction SilentlyContinue
-if ($pacCommand) {
-    $resolvedPacVersion = (& $pacCommand.Source --version | Select-Object -First 1).Trim()
-    if (-not [string]::IsNullOrWhiteSpace($resolvedPacVersion)) {
-        $lockConfig.pacCliVersion = $resolvedPacVersion
-    }
+$pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+$resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
+
+if ([string]::IsNullOrWhiteSpace($resolvedPacVersion)) {
+    throw "Unable to resolve installed PAC CLI package version from 'dotnet tool list --tool-path $pacToolPath'. Ensure installdependencies.ps1 has installed Microsoft.PowerApps.CLI.Tool before build.ps1 runs."
 }
+
+$lockConfig.pacCliVersion = $resolvedPacVersion
 
 $lockPath = Join-Path $ArtifactStagingDirectory 'scriptDependencies.lock.json'
 $lockConfig | ConvertTo-Json | Out-File $lockPath -Encoding UTF8

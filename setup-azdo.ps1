@@ -2839,6 +2839,15 @@ Write-Section "Ensuring main repository contains pipeline YAMLs"
 
 Write-Section "Ensuring environment variable group"
 
+$mainRepo = Select-AzDoMainRepository -ProjectName $selectedProject.Name -SharedRepositoryName $sharedRepoName
+
+$script:mainRepoBranch = 'main'
+if ($mainRepo.defaultBranch) {
+    $script:mainRepoBranch = ConvertFrom-GitRefToBranchName -Ref $mainRepo.defaultBranch
+}
+
+$script:devEnvironmentShortName = "Dev-$script:mainRepoBranch"
+
 # Create the environment variable group only if it doesn't exist.
 # This seeds example values that you can later replace with your real connection reference ids / environment variable values.
 Invoke-WithErrorHandling -OperationName "Creating Environment Variable Group" -ScriptBlock {
@@ -2846,14 +2855,12 @@ Invoke-WithErrorHandling -OperationName "Creating Environment Variable Group" -S
             -Organization $orgName `
             -Project $selectedProject.Name `
             -ProjectId $selectedProject.Id `
-            -GroupName 'Environment-Dev-main' `
+            -GroupName "Environment-$script:devEnvironmentShortName" `
             -Variables @{
             'CONNREF_example_uniquename' = 'connectionid'
             'ENVVAR_example_uniquename'  = 'value'
         })
 } | Out-Null
-
-$mainRepo = Select-AzDoMainRepository -ProjectName $selectedProject.Name -SharedRepositoryName $sharedRepoName
 
 Invoke-WithErrorHandling -OperationName "Syncing Pipeline Files to Main Repository" -ScriptBlock {
     # Determine copy-to-your-repo folder location
@@ -2894,11 +2901,6 @@ Invoke-WithErrorHandling -OperationName "Setting Up Build Service Permissions" -
 
 Invoke-WithErrorHandling -OperationName "Creating Pipeline Definitions" -ScriptBlock {
     # Create/ensure actual Azure DevOps pipelines that point at the YAML files we just synced.
-    $script:mainRepoBranch = 'main'
-    if ($mainRepo.defaultBranch) {
-        $script:mainRepoBranch = ConvertFrom-GitRefToBranchName -Ref $mainRepo.defaultBranch
-    }
-
     $script:yamlFiles = @(
         'pipelines/BUILD.yml',
         "pipelines/DEPLOY-$script:mainRepoBranch.yml",
@@ -3550,9 +3552,10 @@ function Get-DataverseEnvironmentsSelection {
                         continue
                     }
 
-                    Write-Host "Short environment names should often follow the pattern ENVIRONMENT-branch (e.g. TEST-main, UAT-main, PROD)" -ForegroundColor DarkGray
+                    Write-Host "Use a short deployment environment name (for example: TEST, UAT, PROD)." -ForegroundColor DarkGray
 
-                    $shortName = Read-Host "Enter a short name for this environment (e.g. TEST-main, UAT-main, PROD)"
+                    $shortName = Read-Host "Enter a short name for this environment (e.g. TEST, UAT, PROD)"
+                    $shortName = $shortName.Trim()
                     if ([string]::IsNullOrWhiteSpace($shortName)) {
                         Write-Host "Short name is required." -ForegroundColor Red
                         Start-Sleep -Seconds 2
@@ -3744,7 +3747,7 @@ if ($environments.Count -gt 0) {
     # Add Dev environment to the list of environments to configure service connection for
     $allEnvs = @()
     $allEnvs += [pscustomobject]@{
-        ShortName = "Dev-main"
+        ShortName = $script:devEnvironmentShortName
         Url = $devEnvUrl
     }
     $allEnvs += $environments
@@ -3845,7 +3848,7 @@ if ($environments.Count -gt 0) {
 
             # Authorize pipeline for Service Connection
             if ($endpoint -and $endpoint.id) {
-                if ($env.ShortName -eq "Dev-main") {
+                if ($env.ShortName -eq $script:devEnvironmentShortName) {
                     if ($exportPipeline) {
                         Ensure-AzDoPipelinePermission -Organization $orgName -Project $selectedProject.Name -ResourceType 'endpoint' -ResourceId $endpoint.id -PipelineId $exportPipeline.id
                     }
@@ -3860,7 +3863,7 @@ if ($environments.Count -gt 0) {
         Invoke-WithErrorHandling -OperationName "Configuring Environment Resources for '$($env.ShortName)'" -ScriptBlock {
            write-section "Configuring Environment Resources for '$($env.ShortName)'"
             # Ensure Environment resource exists and authorize pipeline
-            if ($env.ShortName -ne "Dev-main") {
+            if ($env.ShortName -ne $script:devEnvironmentShortName) {
                 $azDoEnv = Ensure-AzDoEnvironment -Organization $orgName -Project $selectedProject.Name -EnvironmentName $env.ShortName -Description "Deployment environment for $($env.ShortName)"
                 
                 if ($azDoEnv -and $deployPipeline) {
@@ -3881,7 +3884,7 @@ if ($environments.Count -gt 0) {
 
             $varGroup = $null
             # Variable group for Dev is already created earlier, but we ensure it exists for others
-            if ($env.ShortName -ne "Dev-main") {
+            if ($env.ShortName -ne $script:devEnvironmentShortName) {
                 $varGroup = Ensure-AzDoVariableGroupExists `
                     -Organization $orgName `
                     -Project $selectedProject.Name `
@@ -3894,9 +3897,9 @@ if ($environments.Count -gt 0) {
                 }
             } else {
                 # Fetch and update Dev variable group with service account UPN
-                $varGroup = Get-VSTeamVariableGroup -ProjectName $selectedProject.Name -Name "Environment-Dev-main" -ErrorAction SilentlyContinue
+                $varGroup = Get-VSTeamVariableGroup -ProjectName $selectedProject.Name -Name "Environment-$script:devEnvironmentShortName" -ErrorAction SilentlyContinue
                 if ($varGroup) {
-                    Update-AzDoVariableGroup -ProjectName $selectedProject.Name -GroupName "Environment-Dev-main" -Variables @{
+                    Update-AzDoVariableGroup -ProjectName $selectedProject.Name -GroupName "Environment-$script:devEnvironmentShortName" -Variables @{
                         'DataverseServiceAccountUPN' = $script:serviceAccountUPN
                     } | Out-Null
                 }
@@ -3904,7 +3907,7 @@ if ($environments.Count -gt 0) {
 
             # Authorize pipeline for Variable Group
             if ($varGroup -and $varGroup.id) {
-                 if ($env.ShortName -eq "Dev-main") {
+                 if ($env.ShortName -eq $script:devEnvironmentShortName) {
                     if ($exportPipeline) {
                         Ensure-AzDoPipelinePermission -Organization $orgName -Project $selectedProject.Name -ResourceType 'variablegroup' -ResourceId $varGroup.id -PipelineId $exportPipeline.id
                     }

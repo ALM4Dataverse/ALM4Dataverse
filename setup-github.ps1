@@ -2015,9 +2015,10 @@ function Get-DeploymentEnvironmentsSelection {
                         continue
                     }
 
-                    Write-Host "Short environment names should follow the pattern ENVIRONMENT-branch (e.g. TEST-main, UAT-main, PROD)" -ForegroundColor DarkGray
+                    Write-Host "Use a short deployment environment name (for example: TEST, UAT, PROD)." -ForegroundColor DarkGray
 
-                    $shortName = Read-Host "Enter a short name for this environment (e.g. TEST-main, PROD)"
+                    $shortName = Read-Host "Enter a short name for this environment (e.g. TEST, UAT, PROD)"
+                    $shortName = $shortName.Trim()
                     if ([string]::IsNullOrWhiteSpace($shortName)) {
                         Write-Host "Short name is required." -ForegroundColor Red
                         Start-Sleep -Seconds 2
@@ -2124,6 +2125,7 @@ function Copy-WorkflowTemplatesToRepo {
             $content = Get-Content -LiteralPath $sourceFileToUse -Raw
             $content = $content -replace "branches:\s*\[\s*main\s*\]", "branches: [ $Branch ]"
             $content = $content -replace 'workflow_name: ''BUILD''', "workflow_name: 'BUILD'"
+            $content = $content -replace '\bTEST-main\b', 'TEST'
 
             if ($isTempFile) {
                 Set-Content -LiteralPath $sourceFileToUse -Value $content -NoNewline

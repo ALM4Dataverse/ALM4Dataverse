@@ -72,10 +72,59 @@ foreach ($module in $config.scriptDependencies.Keys) {
     Write-Host "Loaded $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
 }
 
+function Get-PacCliInstalledPackageVersion {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PacToolPath
+    )
+
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        return ''
+    }
+
+    if (-not (Test-Path $PacToolPath)) {
+        return ''
+    }
+
+    $toolListOutput = @(& $dotnet.Source tool list --tool-path $PacToolPath 2>&1)
+    foreach ($line in $toolListOutput) {
+        if ($line -match '^\s*microsoft\.powerapps\.cli\.tool\s+(\S+)\s+') {
+            return $Matches[1].Split('+')[0]
+        }
+    }
+
+    return ''
+}
+
+function Resolve-PacCliVersionSpecifier {
+    param(
+        [Parameter(Mandatory = $false)]
+        [string]$RawValue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RawValue)) {
+        return ''
+    }
+
+    $trimmed = $RawValue.Trim()
+    if ($trimmed -eq 'prerelease') {
+        return 'prerelease'
+    }
+
+    if ($trimmed -match '^\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?$') {
+        return $trimmed
+    }
+
+    throw "pacCliVersion '$RawValue' is invalid. Use '', 'prerelease', or an exact NuGet version like '2.7.4' or '2.7.4-preview.1'."
+}
+
 $pacCliVersion = ''
 if ($config.ContainsKey('pacCliVersion') -and $null -ne $config.pacCliVersion) {
     $pacCliVersion = [string]$config.pacCliVersion
 }
+
+$pacCliVersion = Resolve-PacCliVersionSpecifier -RawValue $pacCliVersion
 
 $pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
 if (-not (Test-Path $pacToolPath)) {
@@ -134,9 +183,10 @@ if (-not (Test-Path $pacExePath)) {
     throw "PAC CLI installation completed but pac.exe was not found at $pacExePath"
 }
 
-$pacVersion = (& $pacExePath --version | Select-Object -First 1).Trim()
+$pacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
+
 if ([string]::IsNullOrWhiteSpace($pacVersion)) {
-    throw "PAC CLI installation completed but failed to read installed version."
+    throw "PAC CLI installation completed but the installed package version could not be resolved from 'dotnet tool list --tool-path $pacToolPath'."
 }
 Write-Host "Installed PAC CLI version $pacVersion"
 

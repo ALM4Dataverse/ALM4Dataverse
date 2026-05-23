@@ -39,6 +39,11 @@ name: DEPLOY-main
 #
 # See docs/setup/github-setup.md
 
+permissions:
+  actions: read   # required to download artifacts from the BUILD run
+  contents: write # required to push deployment gate tags
+  id-token: write # required for WIF / OIDC authentication
+
 on:
   workflow_run:
     workflows: ['BUILD']
