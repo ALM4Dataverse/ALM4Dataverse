@@ -18,10 +18,11 @@ name: Import
 #         Store AZURE_CLIENT_ID, AZURE_TENANT_ID and DATAVERSE_URL in the GitHub
 #         environment.  Do NOT set AZURE_CLIENT_SECRET.
 #
-#      b) Branch-level, no GitHub environment (Approach 3, GitHub Free compatible):
-#         repo:{owner}/{repo}:ref:refs/heads/{branch-name}
-#         Pass credentials explicitly via the secrets: block.  Do NOT set
-#         AZURE_CLIENT_SECRET.
+#      b) Prefixed repo-level credentials (Approach 3):
+#         repo:{owner}/{repo}:environment:{environment-name}
+#         Store repo-level prefixed secrets/variables (for example DEV_MAIN_* or
+#         PREFIX_*). They are mapped automatically by this workflow.  Do NOT set
+#         AZURE_CLIENT_SECRET when using WIF.
 #
 #   2. GitHub Environments with client secret (Teams/Enterprise for approval gates):
 #      Store AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_SECRET, DATAVERSE_URL,
@@ -32,42 +33,23 @@ name: Import
 #
 #   3. Prefixed global secrets (works on all licence levels):
 #      Store secrets at repo level with environment-specific prefixes and pass
-#      them explicitly. Connection references and environment variables can be
-#      supplied as JSON objects via dataverse-connection-refs / dataverse-env-vars.
+#      them by inheritance (`secrets: inherit`). This workflow maps them
+#      automatically to unprefixed names. Connection references and environment
+#      variables can be supplied as prefixed JSON variables.
 
 on:
   workflow_call:
     inputs:
       environment-name:
-        required: true
+        required: false
         type: string
+        default: ''
         description: >
-          Name of the GitHub environment to use (e.g. "Dev-main").
+          Optional name of the GitHub environment to use (e.g. "Dev-main").
+          Defaults to Dev-{branch} when omitted.
           If the environment does not exist in GitHub it will be created automatically
-          with no protection rules.  Used to resolve non-secret credentials from
-          GitHub environment variables when they are not passed explicitly.
-      dataverse-url:
-        type: string
-        default: ''
-        description: >
-          URL of the Dataverse environment to import into.
-          If omitted, DATAVERSE_URL from the GitHub environment is used.
-      dataverse-connection-refs:
-        type: string
-        default: ''
-        description: >
-          JSON object mapping Dataverse connection reference schema names to
-          connection IDs.  Example: {"contoso_sharedsharepointonline": "guid"}.
-          Only needed when NOT using GitHub environment variables named
-          DataverseConnRef_<schema_name>.
-      dataverse-env-vars:
-        type: string
-        default: ''
-        description: >
-          JSON object mapping Dataverse environment variable schema names to
-          values.  Example: {"contoso_APIEndpoint": "https://api.contoso.com"}.
-          Only needed when NOT using GitHub environment variables named
-          DataverseEnvVar_<schema_name>.
+          with no protection rules.  Used to resolve credentials and configuration
+          from the GitHub environment, plus prefixed repo-level secrets/variables.
       alm-repository:
         type: string
         default: 'ALM4Dataverse/ALM4Dataverse'
@@ -76,47 +58,23 @@ on:
         type: string
         default: 'stable'
         description: 'ALM4Dataverse git ref (tag or branch) to use'
-    secrets:
-      azure-client-id:
-        required: false
-        description: >
-          Azure app registration client ID.
-          If omitted, AZURE_CLIENT_ID from the GitHub environment variable is used.
-      azure-client-secret:
-        required: false
-        description: >
-          Azure client secret value.
-          Not required when using Workload Identity Federation (OIDC).
-          If omitted, AZURE_CLIENT_SECRET from the GitHub environment is used (or
-          left unset when using WIF).
-      azure-tenant-id:
-        required: false
-        description: >
-          Azure tenant (directory) ID.
-          If omitted, AZURE_TENANT_ID from the GitHub environment variable is used.
-      dataverse-service-account-upn:
-        required: false
-        description: >
-          UPN (email) of the Dataverse service account used to activate
-          workflows/flows after import.
-          If omitted, DATAVERSESERVICEACCOUNTUPN from the GitHub environment variable is used.
 
 jobs:
   import:
     runs-on: windows-latest
-    environment: ${{ inputs.environment-name }}
+    environment: ${{ inputs.environment-name != '' && inputs.environment-name || format('Dev-{0}', github.ref_name) }}
     permissions:
       id-token: write  # request OIDC token for Workload Identity Federation
     env:
-      AZURE_CLIENT_ID:     ${{ secrets.azure-client-id     || vars.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID:     ${{ secrets.azure-tenant-id     || vars.AZURE_TENANT_ID }}
-      AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret || secrets.AZURE_CLIENT_SECRET }}
-      DATAVERSE_URL:       ${{ inputs.dataverse-url || vars.DATAVERSE_URL }}
+      AZURE_CLIENT_ID:     ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:     ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      DATAVERSE_URL:       ${{ vars.DATAVERSE_URL }}
       DATAVERSESERVICEACCOUNTUPN: >-
-        ${{ secrets.dataverse-service-account-upn
-            || vars.DATAVERSESERVICEACCOUNTUPN }}
-      DATAVERSE_CONNECTION_REFS: ${{ inputs.dataverse-connection-refs }}
-      DATAVERSE_ENV_VARS:        ${{ inputs.dataverse-env-vars }}
+        ${{ vars.DATAVERSESERVICEACCOUNTUPN
+            || secrets.DATAVERSESERVICEACCOUNTUPN }}
+      DATAVERSE_CONNECTION_REFS: ${{ vars.DATAVERSE_CONNECTION_REFS || vars.DATAVERSE_CONN_REFS }}
+      DATAVERSE_ENV_VARS:        ${{ vars.DATAVERSE_ENV_VARS }}
 
     steps:
       - name: Checkout source code
@@ -132,15 +90,137 @@ jobs:
           ref: ${{ inputs.alm-ref }}
           path: alm
 
+      - name: Resolve prefixed repo variables and secrets
+        shell: pwsh
+        env:
+          ALL_REPO_VARS_JSON: ${{ toJSON(vars) }}
+          ALL_REPO_SECRETS_JSON: ${{ toJSON(secrets) }}
+          RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name != '' && inputs.environment-name || format('Dev-{0}', github.ref_name) }}
+        run: |
+          function ConvertTo-HashtableSafe([string]$jsonText) {
+            if ([string]::IsNullOrWhiteSpace($jsonText)) {
+              return @{}
+            }
+
+            try {
+              $result = $jsonText | ConvertFrom-Json -AsHashtable
+              if ($null -eq $result) {
+                return @{}
+              }
+
+              return $result
+            } catch {
+              Write-Warning "Could not parse JSON context for prefixed mapping. Continuing without it."
+              return @{}
+            }
+          }
+
+          function Write-GitHubEnv([string]$name, [string]$value) {
+            $delimiter = "EOF_$([Guid]::NewGuid().ToString('N'))"
+            Add-Content -Path $env:GITHUB_ENV -Value "$name<<$delimiter"
+            Add-Content -Path $env:GITHUB_ENV -Value $value
+            Add-Content -Path $env:GITHUB_ENV -Value $delimiter
+          }
+
+          function Get-PrefixFromEnvironment([string]$environmentName) {
+            if ([string]::IsNullOrWhiteSpace($environmentName)) {
+              return ''
+            }
+
+            $normalized = ($environmentName.Trim().ToUpperInvariant() -replace '[^A-Z0-9]+', '_').Trim('_')
+            if ([string]::IsNullOrWhiteSpace($normalized)) {
+              return ''
+            }
+
+            return "$normalized`_"
+          }
+
+          $aliasTargets = @{
+            'DATAVERSE_SERVICE_ACCOUNT_UPN' = 'DATAVERSESERVICEACCOUNTUPN'
+            'DATAVERSE_CONN_REFS'           = 'DATAVERSE_CONNECTION_REFS'
+          }
+
+          $derivedPrefix   = Get-PrefixFromEnvironment $env:RESOLVED_ENVIRONMENT_NAME
+          $prefixCandidates = @('PREFIX_')
+          if (-not [string]::IsNullOrWhiteSpace($derivedPrefix) -and $derivedPrefix -ne 'PREFIX_') {
+            $prefixCandidates = @($derivedPrefix) + $prefixCandidates
+          }
+
+          $sources = @(
+            @{ Name = 'secrets';   Data = ConvertTo-HashtableSafe $env:ALL_REPO_SECRETS_JSON; IsSensitive = $true  },
+            @{ Name = 'variables'; Data = ConvertTo-HashtableSafe $env:ALL_REPO_VARS_JSON;    IsSensitive = $false }
+          )
+
+          $setCount = 0
+          foreach ($source in $sources) {
+            foreach ($entry in $source.Data.GetEnumerator()) {
+              $fullName = [string]$entry.Key
+
+              $matchedPrefix = $null
+              foreach ($candidate in $prefixCandidates) {
+                if ($fullName.StartsWith($candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+                  $matchedPrefix = $candidate
+                  break
+                }
+              }
+
+              if ($null -eq $matchedPrefix) {
+                continue
+              }
+
+              $targetName = $fullName.Substring($matchedPrefix.Length)
+              if ([string]::IsNullOrWhiteSpace($targetName)) {
+                continue
+              }
+
+              $targetNames = @($targetName)
+              if ($aliasTargets.ContainsKey($targetName)) {
+                $targetNames += $aliasTargets[$targetName]
+              }
+
+              $rawValue = $entry.Value
+              if ($null -eq $rawValue) {
+                continue
+              }
+
+              $valueText = if ($rawValue -is [string]) {
+                [string]$rawValue
+              } else {
+                $rawValue | ConvertTo-Json -Compress -Depth 50
+              }
+
+              if ([string]::IsNullOrWhiteSpace($valueText)) {
+                continue
+              }
+
+              foreach ($name in ($targetNames | Select-Object -Unique)) {
+                if (-not [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($name))) {
+                  continue
+                }
+
+                [System.Environment]::SetEnvironmentVariable($name, $valueText)
+                Write-GitHubEnv -name $name -value $valueText
+                if ($source.IsSensitive) {
+                  Write-Output "::add-mask::$valueText"
+                }
+
+                $setCount++
+                Write-Host "Mapped prefixed $($source.Name) '$fullName' -> '$name'"
+              }
+            }
+          }
+
+          Write-Host "Prefixed mapping complete. Variables set: $setCount"
+
       - name: Validate authentication inputs
         shell: pwsh
         run: |
           if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
-            throw "AZURE_CLIENT_ID is required. Set GitHub environment variable AZURE_CLIENT_ID or pass the azure-client-id secret input."
+            throw "AZURE_CLIENT_ID is required. Set GitHub environment variable AZURE_CLIENT_ID or provide a prefixed repo-level secret/variable."
           }
 
           if ([string]::IsNullOrWhiteSpace($env:AZURE_TENANT_ID)) {
-            throw "AZURE_TENANT_ID is required. Set GitHub environment variable AZURE_TENANT_ID or pass the azure-tenant-id secret input."
+            throw "AZURE_TENANT_ID is required. Set GitHub environment variable AZURE_TENANT_ID or provide a prefixed repo-level secret/variable."
           }
 
           $tenant = $env:AZURE_TENANT_ID.Trim()
@@ -151,11 +231,11 @@ jobs:
           }
 
           if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
-            throw "DATAVERSE_URL is required. Pass input dataverse-url or set GitHub environment variable DATAVERSE_URL."
+            throw "DATAVERSE_URL is required. Set GitHub environment variable DATAVERSE_URL or provide a prefixed repo-level variable."
           }
 
           if ([string]::IsNullOrWhiteSpace($env:DATAVERSESERVICEACCOUNTUPN)) {
-            throw "DATAVERSESERVICEACCOUNTUPN is required. Set GitHub environment variable DATAVERSESERVICEACCOUNTUPN or pass dataverse-service-account-upn secret input."
+            throw "DATAVERSESERVICEACCOUNTUPN is required. Set GitHub environment variable DATAVERSESERVICEACCOUNTUPN or provide a prefixed repo-level secret/variable."
           }
 
       - name: Set up Workload Identity Federation (if no client secret)
@@ -188,7 +268,7 @@ jobs:
         shell: pwsh
         working-directory: ${{ github.workspace }}/self
         run: |
-          # Apply connection references from JSON input.
+          # Apply connection references from JSON environment variable.
           # When using GitHub Environments, individual DataverseConnRef_* variables
           # configured in the environment are already present as OS environment
           # variables and will be picked up directly by deploy.ps1.
@@ -199,7 +279,7 @@ jobs:
             }
           }
 
-          # Apply Dataverse environment variable values from JSON input.
+          # Apply Dataverse environment variable values from JSON environment variable.
           if (-not [string]::IsNullOrEmpty($env:DATAVERSE_ENV_VARS)) {
             $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
             foreach ($prop in $envVars.PSObject.Properties) {

@@ -33,7 +33,9 @@ name: DEPLOY-main
 #      - WIF / OIDC (recommended): AZURE_CLIENT_ID + AZURE_TENANT_ID in the
 #        GitHub environment; federated credential in Entra ID.
 #      - GitHub Environments + client secret: also set AZURE_CLIENT_SECRET.
-#      - Prefixed global secrets: pass credentials via secrets: block.
+#      - Prefixed global secrets/variables: use per-environment prefixes
+#        (e.g. TEST_MAIN_ / PROD_ or PREFIX_). The reusable workflow resolves
+#        these automatically.
 #
 # See docs/setup/github-setup.md
 
@@ -159,104 +161,3 @@ jobs:
   #             && inputs.build-run-id
   #             || github.event.workflow_run.id }}
   #   secrets: inherit
-
-
-  # ── APPROACH 3: Prefixed global secrets (all licence levels) ─────────────────
-  #
-  # Store per-environment credentials as repo-level secrets/variables using the
-  # naming convention TEST_MAIN_* / PROD_* etc.
-  # See docs/config/github-secrets.md for the full list of names.
-  #
-  # Uncomment these blocks and comment out the Approach 1/2 blocks above.
-
-  # deploy-test:
-  #   if: >
-  #     (github.event_name == 'workflow_run' &&
-  #      github.event.workflow_run.conclusion == 'success') ||
-  #     (github.event_name == 'workflow_dispatch' &&
-  #      inputs.target-environment == 'TEST-main')
-  #   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-  #   permissions:
-  #     actions: read
-  #     contents: write
-  #     id-token: write
-  #   with:
-  #     environment-name: TEST-main
-  #     build-run-id: >-
-  #       ${{ github.event_name == 'workflow_dispatch'
-  #             && inputs.build-run-id
-  #             || github.event.workflow_run.id }}
-  #     dataverse-url:             ${{ vars.TEST_MAIN_DATAVERSE_URL }}
-  #     dataverse-connection-refs: ${{ vars.TEST_MAIN_DATAVERSE_CONN_REFS }}
-  #     dataverse-env-vars:        ${{ vars.TEST_MAIN_DATAVERSE_ENV_VARS }}
-  #     success-gate-tag: >-
-  #       deployed/TEST-main/${{ github.event_name == 'workflow_dispatch'
-  #             && inputs.build-run-id
-  #             || github.event.workflow_run.id }}
-  #   secrets:
-  #     azure-client-id:               ${{ secrets.TEST_MAIN_AZURE_CLIENT_ID }}
-  #     azure-client-secret:           ${{ secrets.TEST_MAIN_AZURE_CLIENT_SECRET }}
-  #     azure-tenant-id:               ${{ secrets.TEST_MAIN_AZURE_TENANT_ID }}
-  #     dataverse-service-account-upn: ${{ secrets.TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN }}
-
-  # ── deploy-prod (A): GitHub Free — manual re-trigger + gate tag ──────────────
-
-  # deploy-prod:
-  #   if: >
-  #     github.event_name == 'workflow_dispatch' &&
-  #     inputs.target-environment == 'PROD'
-  #   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-  #   permissions:
-  #     actions: read
-  #     contents: write
-  #     id-token: write
-  #   with:
-  #     environment-name: PROD
-  #     build-run-id: ${{ inputs.build-run-id }}
-  #     required-gate-tag: deployed/TEST-main/${{ inputs.build-run-id }}
-  #     success-gate-tag:  deployed/PROD/${{ inputs.build-run-id }}
-  #     dataverse-url:             ${{ vars.PROD_DATAVERSE_URL }}
-  #     dataverse-connection-refs: ${{ vars.PROD_DATAVERSE_CONN_REFS }}
-  #     dataverse-env-vars:        ${{ vars.PROD_DATAVERSE_ENV_VARS }}
-  #   secrets:
-  #     azure-client-id:               ${{ secrets.PROD_AZURE_CLIENT_ID }}
-  #     azure-client-secret:           ${{ secrets.PROD_AZURE_CLIENT_SECRET }}
-  #     azure-tenant-id:               ${{ secrets.PROD_AZURE_TENANT_ID }}
-  #     dataverse-service-account-upn: ${{ secrets.PROD_DATAVERSE_SERVICE_ACCOUNT_UPN }}
-
-  # ── deploy-prod (B): GitHub Pro/Team/Enterprise — auto-chain + approval gate ─
-  # To use instead of (A): see comments on the Approach 1/2 (B) block above.
-
-  # deploy-prod:
-  #   needs: deploy-test
-  #   if: >-
-  #     always() && (
-  #       (github.event_name == 'workflow_run' &&
-  #        needs.deploy-test.result == 'success') ||
-  #       (github.event_name == 'workflow_dispatch' &&
-  #        inputs.target-environment == 'PROD')
-  #     )
-  #   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-  #   permissions:
-  #     actions: read
-  #     contents: write
-  #     id-token: write
-  #   with:
-  #     environment-name: PROD
-  #     build-run-id: >-
-  #       ${{ github.event_name == 'workflow_dispatch'
-  #             && inputs.build-run-id
-  #             || github.event.workflow_run.id }}
-  #     # No required-gate-tag: environment protection rule is the gate.
-  #     success-gate-tag: >-
-  #       deployed/PROD/${{ github.event_name == 'workflow_dispatch'
-  #             && inputs.build-run-id
-  #             || github.event.workflow_run.id }}
-  #     dataverse-url:             ${{ vars.PROD_DATAVERSE_URL }}
-  #     dataverse-connection-refs: ${{ vars.PROD_DATAVERSE_CONN_REFS }}
-  #     dataverse-env-vars:        ${{ vars.PROD_DATAVERSE_ENV_VARS }}
-  #   secrets:
-  #     azure-client-id:               ${{ secrets.PROD_AZURE_CLIENT_ID }}
-  #     azure-client-secret:           ${{ secrets.PROD_AZURE_CLIENT_SECRET }}
-  #     azure-tenant-id:               ${{ secrets.PROD_AZURE_TENANT_ID }}
-  #     dataverse-service-account-upn: ${{ secrets.PROD_DATAVERSE_SERVICE_ACCOUNT_UPN }}

@@ -3,6 +3,11 @@
 This document describes every secret and variable used by the ALM4Dataverse GitHub
 Actions workflows, and how they map to each of the three credential approaches.
 
+> The reusable workflows do **not** accept credential/value `workflow_call` inputs
+> (for example `dataverse-url`, `dataverse-connection-refs`, `dataverse-env-vars`)
+> or secret inputs (`azure-client-id`, `azure-tenant-id`, etc.). Configure values
+> using GitHub environment variables/secrets or prefixed repo-level secrets/variables.
+
 ---
 
 ## Approach comparison
@@ -12,7 +17,7 @@ Actions workflows, and how they map to each of the three credential approaches.
 | Secrets to manage | None | Client secret (rotate periodically) | Client secret (rotate periodically) |
 | Approval gates | ✅ (Pro/Team/Enterprise for private repos) | ✅ (Pro/Team/Enterprise for private repos) | ❌ |
 | Licence requirement | All plans (protection rules require Pro+) | All plans (protection rules require Pro+) | All plans |
-| Connection refs / env vars | Individual `DataverseConnRef_*` / `DataverseEnvVar_*` in environment | Individual `DataverseConnRef_*` / `DataverseEnvVar_*` in environment | Single JSON variable per environment |
+| Connection refs / env vars | Individual `DataverseConnRef_*` / `DataverseEnvVar_*` in environment | Individual `DataverseConnRef_*` / `DataverseEnvVar_*` in environment | Prefixed `DataverseConnRef_*` / `DataverseEnvVar_*` **or** prefixed JSON variables |
 | Entra ID setup | Federated credential per GitHub environment | Client secret | Client secret |
 
 See [GitHub Setup Guide](../setup/github-setup.md) for detailed configuration steps.
@@ -28,9 +33,7 @@ Store the following in each GitHub environment (Settings > Environments > {Envir
 
 | Secret name | Description |
 |---|---|
-| `AZURE_CLIENT_ID` | Azure app registration (client) ID |
-| `AZURE_TENANT_ID` | Entra ID tenant (directory) ID |
-| `DATAVERSESERVICEACCOUNTUPN` | UPN (email) of the Dataverse service account used to activate processes after deployment |
+| `DATAVERSESERVICEACCOUNTUPN` | UPN (email) of the Dataverse service account used to activate processes after deployment (optional as secret; can also be a variable) |
 
 > Do **not** add `AZURE_CLIENT_SECRET`.  When the workflows detect its absence they
 > automatically request an OIDC token from GitHub and set `AZURE_FEDERATED_TOKEN_FILE`
@@ -40,7 +43,10 @@ Store the following in each GitHub environment (Settings > Environments > {Envir
 
 | Variable name | Description | Example value |
 |---|---|---|
+| `AZURE_CLIENT_ID` | Azure app registration (client) ID | `00000000-0000-0000-0000-000000000001` |
+| `AZURE_TENANT_ID` | Entra ID tenant (directory) ID | `00000000-0000-0000-0000-000000000002` |
 | `DATAVERSE_URL` | URL of the target Dataverse environment | `https://yourorg-test.crm.dynamics.com` |
+| `DATAVERSESERVICEACCOUNTUPN` | UPN of the Dataverse service account | `svc-dataverse@contoso.com` |
 
 ### Entra ID federated credential setup
 
@@ -66,20 +72,24 @@ to the corresponding App Registration:
 > Pro/Team/Enterprise for private repos.  You can still use the environment-based subject
 > format on GitHub Free.
 
-**Approach 3 (prefixed global secrets) — branch-based WIF subject:**
+**Approach 3 (prefixed global secrets) — WIF subject:**
 
-If you are NOT using GitHub Environments (credentials are repo-level secrets), the job does
-not run in an environment context.  In this case, use a branch-based subject:
+The current reusable workflows still run in a GitHub environment context when using
+prefixed repo-level secrets/variables:
+
+- `EXPORT.yml` / `IMPORT.yml`: default environment is `Dev-{branch}`
+- `DEPLOY-main.yml`: uses the target environment name (for example `TEST-main`, `PROD`)
+
+So for WIF, use the same environment-based subject format:
 
 | Field | Value |
 |---|---|
 | Issuer | `https://token.actions.githubusercontent.com` |
-| Subject identifier | `repo:{owner}/{repo}:ref:refs/heads/{branch-name}` |
+| Subject identifier | `repo:{owner}/{repo}:environment:{environment-name}` |
 | Audience | `api://AzureADTokenExchange` |
 
-**Example** (repo `MyOrg/MyApp`, branch `main`): `repo:MyOrg/MyApp:ref:refs/heads/main`
-
-Create one federated credential per branch you deploy from (e.g. `main`, `develop`).
+Create one federated credential per GitHub environment you deploy against
+(for example `Dev-main`, `TEST-main`, `PROD`).
 
 You can use one App Registration (and one set of federated credentials) for all
 environments, or create separate App Registrations per environment for stronger
@@ -110,9 +120,9 @@ For each Dataverse environment variable, add a GitHub environment **variable** (
 
 | Name | Type | Value |
 |------|------|-------|
-| `AZURE_CLIENT_ID` | Secret | `00000000-0000-0000-0000-000000000001` |
-| `AZURE_TENANT_ID` | Secret | `00000000-0000-0000-0000-000000000002` |
-| `DATAVERSESERVICEACCOUNTUPN` | Secret | `svc-dataverse@contoso.com` |
+| `AZURE_CLIENT_ID` | Variable | `00000000-0000-0000-0000-000000000001` |
+| `AZURE_TENANT_ID` | Variable | `00000000-0000-0000-0000-000000000002` |
+| `DATAVERSESERVICEACCOUNTUPN` | Variable | `svc-dataverse@contoso.com` |
 | `DATAVERSE_URL` | Variable | `https://yourorg-dev.crm.dynamics.com` |
 | `DataverseConnRef_contoso_sharedsharepointonline` | Variable | `12345678-1234-1234-1234-123456789abc` |
 | `DataverseEnvVar_contoso_APIEndpoint` | Variable | `https://api.dev.contoso.com` |
@@ -127,16 +137,17 @@ Store the following in each GitHub environment.
 
 | Secret name | Description |
 |---|---|
-| `AZURE_CLIENT_ID` | Azure app registration (client) ID |
 | `AZURE_CLIENT_SECRET` | Azure app registration client secret |
-| `AZURE_TENANT_ID` | Entra ID tenant (directory) ID |
-| `DATAVERSESERVICEACCOUNTUPN` | UPN (email) of the Dataverse service account used to activate processes after deployment |
+| `DATAVERSESERVICEACCOUNTUPN` | UPN (email) of the Dataverse service account used to activate processes after deployment (optional as secret; can also be a variable) |
 
 ### Variables (non-sensitive values)
 
 | Variable name | Description | Example value |
 |---|---|---|
+| `AZURE_CLIENT_ID` | Azure app registration (client) ID | `00000000-0000-0000-0000-000000000001` |
+| `AZURE_TENANT_ID` | Entra ID tenant (directory) ID | `00000000-0000-0000-0000-000000000002` |
 | `DATAVERSE_URL` | URL of the target Dataverse environment | `https://yourorg-test.crm.dynamics.com` |
+| `DATAVERSESERVICEACCOUNTUPN` | UPN of the Dataverse service account | `svc-dataverse@contoso.com` |
 
 ### Per-solution connection references and environment variables
 
@@ -147,10 +158,10 @@ the GitHub environment.
 
 | Name | Type | Value |
 |------|------|-------|
-| `AZURE_CLIENT_ID` | Secret | `00000000-0000-0000-0000-000000000001` |
+| `AZURE_CLIENT_ID` | Variable | `00000000-0000-0000-0000-000000000001` |
 | `AZURE_CLIENT_SECRET` | Secret | `<client secret value>` |
-| `AZURE_TENANT_ID` | Secret | `00000000-0000-0000-0000-000000000002` |
-| `DATAVERSESERVICEACCOUNTUPN` | Secret | `svc-dataverse@contoso.com` |
+| `AZURE_TENANT_ID` | Variable | `00000000-0000-0000-0000-000000000002` |
+| `DATAVERSESERVICEACCOUNTUPN` | Variable | `svc-dataverse@contoso.com` |
 | `DATAVERSE_URL` | Variable | `https://yourorg-dev.crm.dynamics.com` |
 | `DataverseConnRef_contoso_sharedsharepointonline` | Variable | `12345678-1234-1234-1234-123456789abc` |
 | `DataverseEnvVar_contoso_APIEndpoint` | Variable | `https://api.dev.contoso.com` |
@@ -162,8 +173,17 @@ the GitHub environment.
 Store the following as repository-level secrets and variables
 (Settings > Secrets and variables > Actions).
 
+The reusable workflows automatically map prefixed names to the unprefixed runtime
+variables expected by the PowerShell scripts. No per-workflow `secrets:` mapping is
+required in `EXPORT.yml`, `IMPORT.yml`, or `DEPLOY-main.yml`.
+
 Use an environment-specific prefix in each name.  The recommended prefix format is
 `{ENV}_{BRANCH}_` for branch-scoped environments or `{ENV}_` for shared environments.
+
+Mapping uses either:
+
+- A derived prefix from the effective environment name (for example `Dev-main` → `DEV_MAIN_`)
+- Or the literal fallback prefix `PREFIX_`
 
 Examples in the tables below use `TEST_MAIN_` (for `TEST-main` environment) and
 `PROD_` (for `PROD` environment).  Adjust to match your environment names.
@@ -173,7 +193,7 @@ Examples in the tables below use `TEST_MAIN_` (for `TEST-main` environment) and
 | Secret name | Description |
 |---|---|
 | `{PREFIX}AZURE_CLIENT_ID` | Azure app registration (client) ID |
-| `{PREFIX}AZURE_CLIENT_SECRET` | Azure client secret value (omit if using WIF with explicit credential passing) |
+| `{PREFIX}AZURE_CLIENT_SECRET` | Azure client secret value (omit if using WIF) |
 | `{PREFIX}AZURE_TENANT_ID` | Entra ID tenant (directory) ID |
 | `{PREFIX}DATAVERSE_SERVICE_ACCOUNT_UPN` | UPN of the Dataverse service account |
 
@@ -184,6 +204,8 @@ Examples in the tables below use `TEST_MAIN_` (for `TEST-main` environment) and
 | `{PREFIX}DATAVERSE_URL` | Dataverse environment URL | `https://yourorg-test.crm.dynamics.com` |
 | `{PREFIX}DATAVERSE_CONN_REFS` | JSON — connection reference values | See below |
 | `{PREFIX}DATAVERSE_ENV_VARS` | JSON — environment variable values | See below |
+| `{PREFIX}DataverseConnRef_<schema_name>` | Individual connection reference value | `12345678-1234-1234-1234-123456789abc` |
+| `{PREFIX}DataverseEnvVar_<schema_name>` | Individual Dataverse environment variable value | `https://api.test.contoso.com` |
 
 ### Connection references JSON format
 
@@ -248,14 +270,14 @@ The ALM4Dataverse PowerShell scripts use the following OS environment variables:
 
 | OS env var | Source |
 |---|---|
-| `AZURE_CLIENT_ID` | GitHub secret — picked up by `DefaultAzureCredential` in `connect.ps1` |
-| `AZURE_TENANT_ID` | GitHub secret — picked up by `DefaultAzureCredential` |
-| `AZURE_CLIENT_SECRET` | GitHub secret — picked up by `DefaultAzureCredential` (client secret auth only) |
+| `AZURE_CLIENT_ID` | GitHub environment variable, or auto-mapped from prefixed repo secret/variable |
+| `AZURE_TENANT_ID` | GitHub environment variable, or auto-mapped from prefixed repo secret/variable |
+| `AZURE_CLIENT_SECRET` | GitHub environment secret, or auto-mapped from prefixed repo secret |
 | `AZURE_FEDERATED_TOKEN_FILE` | Set by the WIF setup step — picked up by `DefaultAzureCredential` (WIF auth only) |
-| `DATAVERSE_URL` | GitHub variable/secret — passed to `connect.ps1 -Url` |
-| `DATAVERSESERVICEACCOUNTUPN` | GitHub variable/secret — read by `deploy.ps1` |
-| `DataverseConnRef_<name>` | GitHub env variable (direct) **or** expanded from JSON by the workflow step |
-| `DataverseEnvVar_<name>` | GitHub env variable (direct) **or** expanded from JSON by the workflow step |
+| `DATAVERSE_URL` | GitHub environment variable, or auto-mapped from prefixed repo variable |
+| `DATAVERSESERVICEACCOUNTUPN` | GitHub environment variable/secret, or auto-mapped from prefixed repo secret/variable |
+| `DataverseConnRef_<name>` | GitHub environment variable (direct), prefixed repo variable auto-mapped, **or** expanded from prefixed JSON |
+| `DataverseEnvVar_<name>` | GitHub environment variable (direct), prefixed repo variable auto-mapped, **or** expanded from prefixed JSON |
 
 **WIF flow**: when `AZURE_CLIENT_SECRET` is absent, the reusable workflow requests a
 short-lived OIDC token from GitHub's token endpoint, writes it to a temp file under

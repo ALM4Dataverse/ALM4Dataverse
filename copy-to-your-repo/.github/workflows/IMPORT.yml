@@ -13,27 +13,7 @@ jobs:
     uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/import.yml@stable
     permissions:
       id-token: write
-    with:
-      # Name of the GitHub environment that holds your dev Dataverse credentials.
-      # Convention: Dev-{branch}, e.g. Dev-main.
-      # For the prefixed global secrets approach, replace this with any placeholder
-      # name and pass credentials explicitly via the secrets: block below.
-      environment-name: Dev-${{ github.ref_name }}
-
-      # Optional — only needed when NOT using a GitHub environment named above.
-      # dataverse-url: ${{ vars.DEV_MAIN_DATAVERSE_URL }}
-
-      # Connection references and environment variables as JSON objects.
-      # Only needed when NOT using GitHub environment variables named
-      # DataverseConnRef_* / DataverseEnvVar_*.
-      # dataverse-connection-refs: ${{ vars.DEV_MAIN_DATAVERSE_CONN_REFS }}
-      # dataverse-env-vars:        ${{ vars.DEV_MAIN_DATAVERSE_ENV_VARS }}
-
-    # Credentials come from the GitHub environment named above (WIF or client secret).
-    # When using the prefixed global secrets approach, pass them here instead:
+    # Credentials are resolved automatically by the reusable workflow from either:
+    # 1) GitHub environment Dev-{branch} (default), or
+    # 2) repo-level prefixed secrets/variables (e.g. DEV_MAIN_* or PREFIX_*).
     secrets: inherit
-    # secrets:
-    #   azure-client-id:               ${{ secrets.DEV_MAIN_AZURE_CLIENT_ID }}
-    #   azure-client-secret:           ${{ secrets.DEV_MAIN_AZURE_CLIENT_SECRET }}  # omit for WIF
-    #   azure-tenant-id:               ${{ secrets.DEV_MAIN_AZURE_TENANT_ID }}
-    #   dataverse-service-account-upn: ${{ secrets.DEV_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN }}

@@ -71,25 +71,23 @@ OIDC tokens with no secrets to manage or rotate.
 
 | Workflow scenario | Subject identifier |
 |---|---|
-| Targets a GitHub environment (Approach 1 or 2) | `repo:{owner}/{repo}:environment:{environment-name}` |
-| Branch-based, no GitHub environment (Approach 3, GitHub Free compatible) | `repo:{owner}/{repo}:ref:refs/heads/{branch-name}` |
+| Default ALM4Dataverse workflows (Approach 1, 2, and 3) | `repo:{owner}/{repo}:environment:{environment-name}` |
 
 > **Examples** for repo `MyOrg/MyApp`:
 > - Environment-based: `repo:MyOrg/MyApp:environment:TEST-main`
-> - Branch-based: `repo:MyOrg/MyApp:ref:refs/heads/main`
 
-When using **Approach 1 or 2** (GitHub Environments), the ALM4Dataverse workflows always run
-within a named GitHub environment, so the environment-based subject is the right choice.
+ALM4Dataverse reusable workflows run within a named GitHub environment across all
+credential approaches:
+
+- `EXPORT` / `IMPORT` default to `Dev-{branch}` when `environment-name` is not passed.
+- `DEPLOY` uses the target environment name (for example `TEST-main`, `PROD`).
+
 Create one federated credential per GitHub environment (Dev-main, TEST-main, PROD, etc.).
-
-When using **Approach 3** (prefixed global repo-level secrets, GitHub Free compatible), jobs
-do not target a GitHub environment, so use the **branch-based** subject format.  Create one
-federated credential per branch (e.g. `refs/heads/main`, `refs/heads/develop`).
 
 > ℹ️ **GitHub Environments and GitHub Free**: GitHub Environments themselves (for storing
 > secrets and variables) work on all plans including GitHub Free.  Only *environment
 > protection rules* (required reviewers, wait timers) require GitHub Pro, Team, or Enterprise
-> for private repositories.  GitHub Free users can use Approach 1 or 2 with environment-based
+> for private repositories.  GitHub Free users can use Approach 1, 2, or 3 with environment-based
 > WIF subjects — they just cannot configure approval gates via protection rules (use the
 > [gate tag mechanism](#deployment-gates-for-github-free) instead).
 
@@ -173,6 +171,11 @@ If your default branch is not `main`:
 ALM4Dataverse supports three approaches for per-environment credentials.
 They can be mixed: use whichever fits each environment.
 
+Reusable workflows do **not** take credential/value `workflow_call` inputs (for example
+`dataverse-url`, `dataverse-connection-refs`, `dataverse-env-vars`) or secret inputs
+(`azure-client-id`, `azure-tenant-id`, etc.). Values are resolved from GitHub
+environment variables/secrets or prefixed repo-level secrets/variables.
+
 See [GitHub Secrets & Variables Reference](../config/github-secrets.md) for the full
 list of secrets and variables required for each approach.
 
@@ -201,8 +204,8 @@ Inside each environment, add:
 
 | Name | Type | Value |
 |------|------|-------|
-| `AZURE_CLIENT_ID` | Secret | App registration client ID |
-| `AZURE_TENANT_ID` | Secret | Entra ID tenant ID |
+| `AZURE_CLIENT_ID` | Variable | App registration client ID |
+| `AZURE_TENANT_ID` | Variable | Entra ID tenant ID |
 | `DATAVERSESERVICEACCOUNTUPN` | Secret or Variable | UPN of the service account for activating processes |
 | `DATAVERSE_URL` | Variable | Dataverse environment URL (e.g. `https://yourorg-test.crm.dynamics.com`) |
 
@@ -331,9 +334,9 @@ Inside each environment, add:
 
 | Name | Type | Value |
 |------|------|-------|
-| `AZURE_CLIENT_ID` | Secret | App registration client ID |
+| `AZURE_CLIENT_ID` | Variable | App registration client ID |
 | `AZURE_CLIENT_SECRET` | Secret | App registration client secret |
-| `AZURE_TENANT_ID` | Secret | Entra ID tenant ID |
+| `AZURE_TENANT_ID` | Variable | Entra ID tenant ID |
 | `DATAVERSESERVICEACCOUNTUPN` | Secret or Variable | UPN of the service account for activating processes |
 | `DATAVERSE_URL` | Variable | Dataverse environment URL (e.g. `https://yourorg-test.crm.dynamics.com`) |
 
@@ -364,6 +367,10 @@ Store all credentials as repository-level secrets/variables using a naming conve
 that includes the environment name as a prefix.  This approach works on **all GitHub
 licence levels** including GitHub Free on private repositories.
 
+The reusable workflows auto-map prefixed names to the unprefixed runtime variables used
+by ALM4Dataverse scripts. You keep `secrets: inherit` and do not manually map prefixed
+secret names in the workflow YAML.
+
 > ⚠️ **No approval gates**: Without environment protection rules there is no built-in
 > approval mechanism.  Anyone who can trigger the DEPLOY workflow can deploy to any
 > environment.  For production environments, consider restricting who can trigger the
@@ -383,9 +390,19 @@ In **Settings** > **Secrets and variables** > **Actions**, add:
 | `TEST_MAIN_DATAVERSE_CONN_REFS` | Variable | JSON — see below |
 | `TEST_MAIN_DATAVERSE_ENV_VARS` | Variable | JSON — see below |
 
+Optional (instead of JSON):
+
+| Name | Type | Value |
+|------|------|-------|
+| `TEST_MAIN_DataverseConnRef_<schema_name>` | Variable | Connection ID GUID |
+| `TEST_MAIN_DataverseEnvVar_<schema_name>` | Variable | Environment variable value |
+
 Repeat with a `PROD_` prefix for production (and similar for other environments).
 
 For dev environments used in EXPORT/IMPORT, use a prefix like `DEV_MAIN_`.
+
+The prefix is matched from the effective environment name (for example `Dev-main` →
+`DEV_MAIN_`) with fallback support for a literal `PREFIX_` prefix.
 
 **Connection references JSON format** (variable `TEST_MAIN_DATAVERSE_CONN_REFS`):
 
@@ -405,106 +422,18 @@ For dev environments used in EXPORT/IMPORT, use a prefix like `DEV_MAIN_`.
 }
 ```
 
-#### 3.2 Configure your DEPLOY workflow (prefixed secrets)
+#### 3.2 Configure workflows for prefixed credentials
 
-`DEPLOY-main.yml` contains a job per environment with explicit secret/variable mapping.
-The same two strategies apply — see [1.4](#14-configure-your-deploy-workflow-wif) for the
-`deploy-prod` variants; only the credential wiring differs.
+No extra credential wiring is needed in the copied workflow stubs:
 
-**Strategy A (GitHub Free default):**
+- `EXPORT.yml`: keep `secrets: inherit` (no prefixed `secrets:` block)
+- `IMPORT.yml`: keep `secrets: inherit` (no prefixed `secrets:` block)
+- `DEPLOY-main.yml`: keep the default jobs with `secrets: inherit`
 
-```yaml
-jobs:
-  deploy-test:
-    if: >
-      (github.event_name == 'workflow_run' &&
-       github.event.workflow_run.conclusion == 'success') ||
-      (github.event_name == 'workflow_dispatch' &&
-       inputs.target-environment == 'TEST-main')
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-    with:
-      environment-name: TEST-main
-      build-run-id: >-
-        ${{ github.event_name == 'workflow_dispatch'
-              && inputs.build-run-id
-              || github.event.workflow_run.id }}
-      dataverse-url:             ${{ vars.TEST_MAIN_DATAVERSE_URL }}
-      dataverse-connection-refs: ${{ vars.TEST_MAIN_DATAVERSE_CONN_REFS }}
-      dataverse-env-vars:        ${{ vars.TEST_MAIN_DATAVERSE_ENV_VARS }}
-      success-gate-tag: >-
-        deployed/TEST-main/${{ github.event_name == 'workflow_dispatch'
-              && inputs.build-run-id
-              || github.event.workflow_run.id }}
-    secrets:
-      azure-client-id:               ${{ secrets.TEST_MAIN_AZURE_CLIENT_ID }}
-      azure-client-secret:           ${{ secrets.TEST_MAIN_AZURE_CLIENT_SECRET }}
-      azure-tenant-id:               ${{ secrets.TEST_MAIN_AZURE_TENANT_ID }}
-      dataverse-service-account-upn: ${{ secrets.TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN }}
-
-  deploy-prod:
-    if: >
-      github.event_name == 'workflow_dispatch' &&
-      inputs.target-environment == 'PROD'
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-    with:
-      environment-name: PROD
-      build-run-id: ${{ inputs.build-run-id }}
-      required-gate-tag: deployed/TEST-main/${{ inputs.build-run-id }}
-      success-gate-tag:  deployed/PROD/${{ inputs.build-run-id }}
-      dataverse-url:             ${{ vars.PROD_DATAVERSE_URL }}
-      dataverse-connection-refs: ${{ vars.PROD_DATAVERSE_CONN_REFS }}
-      dataverse-env-vars:        ${{ vars.PROD_DATAVERSE_ENV_VARS }}
-    secrets:
-      azure-client-id:               ${{ secrets.PROD_AZURE_CLIENT_ID }}
-      azure-client-secret:           ${{ secrets.PROD_AZURE_CLIENT_SECRET }}
-      azure-tenant-id:               ${{ secrets.PROD_AZURE_TENANT_ID }}
-      dataverse-service-account-upn: ${{ secrets.PROD_DATAVERSE_SERVICE_ACCOUNT_UPN }}
-```
-
-**Strategy B (GitHub Pro/Team/Enterprise — auto-chain):** swap `deploy-prod` for:
-
-```yaml
-  deploy-prod:
-    needs: deploy-test
-    if: >-
-      always() && (
-        (github.event_name == 'workflow_run' &&
-         needs.deploy-test.result == 'success') ||
-        (github.event_name == 'workflow_dispatch' &&
-         inputs.target-environment == 'PROD')
-      )
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-    with:
-      environment-name: PROD
-      build-run-id: >-
-        ${{ github.event_name == 'workflow_dispatch'
-              && inputs.build-run-id
-              || github.event.workflow_run.id }}
-      success-gate-tag: >-
-        deployed/PROD/${{ github.event_name == 'workflow_dispatch'
-              && inputs.build-run-id
-              || github.event.workflow_run.id }}
-      dataverse-url:             ${{ vars.PROD_DATAVERSE_URL }}
-      dataverse-connection-refs: ${{ vars.PROD_DATAVERSE_CONN_REFS }}
-      dataverse-env-vars:        ${{ vars.PROD_DATAVERSE_ENV_VARS }}
-    secrets:
-      azure-client-id:               ${{ secrets.PROD_AZURE_CLIENT_ID }}
-      azure-client-secret:           ${{ secrets.PROD_AZURE_CLIENT_SECRET }}
-      azure-tenant-id:               ${{ secrets.PROD_AZURE_TENANT_ID }}
-      dataverse-service-account-upn: ${{ secrets.PROD_DATAVERSE_SERVICE_ACCOUNT_UPN }}
-```
+The same two deployment promotion strategies still apply exactly as shown in
+[1.4](#14-configure-your-deploy-workflow-wif); the only difference is where values
+come from (auto-mapped prefixed repo secrets/variables instead of GitHub environment
+values).
 
 ---
 
