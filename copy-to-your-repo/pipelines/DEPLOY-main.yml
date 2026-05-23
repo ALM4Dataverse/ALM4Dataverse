@@ -23,3 +23,4 @@ stages:
   # - template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
   #   parameters:
   #     environmentName: Test-main
+  #     useAlm4DataverseExtension: true

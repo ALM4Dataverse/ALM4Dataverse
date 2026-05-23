@@ -13,7 +13,11 @@ parameters:
   type: string
   displayName: 'Commit message for exported changes'
 
+variables:
+- group: Environment-Dev-${{ variables['Build.SourceBranchName'] }}
+
 stages:
 - template: pipelines/templates/export.yml@ALM4Dataverse
   parameters:
     commitMessage: ${{ parameters.commitMessage }}
+    useAlm4DataverseExtension: true

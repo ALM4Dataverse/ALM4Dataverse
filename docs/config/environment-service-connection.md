@@ -1,10 +1,12 @@
 # Service Connection Configuration
 
-This document describes the service connections that should be configured in Azure DevOps for each environment to support the ALM4Dataverse pipelines.
+This document describes service connection options for Azure DevOps environments used by ALM4Dataverse pipelines.
 
 ## Overview
 
-Service connections in Azure DevOps authenticate the pipelines to your Dataverse environments. ALM4Dataverse uses Power Platform service connections to connect to each environment during export and deployment operations.
+When `useAlm4DataverseExtension: true`, pipelines use Power Platform service connections and the ALM4Dataverse extension **Set Connection Variables** task.
+
+When `useAlm4DataverseExtension: false`, pipelines still use Power Platform service connections, but use Power Platform Build Tools **Set Connection Variables** task (`PowerPlatformSetConnectionVariables@2`). In this mode, only service-principal-with-secret authentication is available.
 
 For detailed steps on creating service principals and service connections, see the [Manual Setup Guide](../setup/manual-setup.md#4-service-principal-setup).
 

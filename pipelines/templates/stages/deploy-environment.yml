@@ -1,6 +1,9 @@
 parameters:
   - name: environmentName
     type: string
+  - name: useAlm4DataverseExtension
+    type: boolean
+    default: true
   - name: timeoutInMinutes
     type: number
     default: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
@@ -30,16 +33,72 @@ stages:
                   inputs:
                     AddToolsToPath: true
                 
-                - task: ALM4Dataverse.alm4dataverse-azdo-extensions.alm4dataverse-set-connection-variables.ALM4DataverseSetConnectionVariables@1
-                  displayName: 'Set Connection Variables'
-                  name: ALM4DataverseSetConnectionVariables
-                  inputs:
-                    authenticationType: 'PowerPlatformSPN'
-                    PowerPlatformSPN: '${{ parameters.environmentName }}'
+                - ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
+                  - task: ALM4Dataverse.alm4dataverse-azdo-extensions.alm4dataverse-set-connection-variables.ALM4DataverseSetConnectionVariables@1
+                    displayName: 'Set Connection Variables'
+                    name: ALM4DataverseSetConnectionVariables
+                    inputs:
+                      authenticationType: 'PowerPlatformSPN'
+                      PowerPlatformSPN: '${{ parameters.environmentName }}'
+
+                - ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
+                  - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.set-connection-variables.PowerPlatformSetConnectionVariables@2
+                    displayName: 'Set Connection Variables'
+                    name: PowerPlatformSetConnectionVariables
+                    inputs:
+                      authenticationType: 'PowerPlatformSPN'
+                      PowerPlatformSPN: '${{ parameters.environmentName }}'
                 
                 - pwsh: |
                     & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/installdependencies.ps1"
-                    & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect.ps1" -Url $(ALM4DataverseSetConnectionVariables.EnvironmentUrl)
+                    $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
+                    if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
+                      $environmentUrl = '$(BuildTools.EnvironmentUrl)'
+                    }
+                    if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
+                      throw "Environment URL could not be resolved from the selected connection variables task. Ensure the Power Platform service connection is configured correctly."
+                    }
+
+                    $useAlm4DataverseExtension = '${{ parameters.useAlm4DataverseExtension }}' -eq 'true'
+                    if (-not $useAlm4DataverseExtension) {
+                      function Resolve-ConnectionVariable {
+                        param([string[]]$Candidates)
+
+                        foreach ($candidate in $Candidates) {
+                          if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -notmatch '^\$\(.+\)$') {
+                            return $candidate
+                          }
+                        }
+
+                        return $null
+                      }
+
+                      $resolvedClientId = Resolve-ConnectionVariable @(
+                        $env:AZURE_CLIENT_ID
+                        '$(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)'
+                        '$(BuildTools.ApplicationId)'
+                      )
+                      $resolvedTenantId = Resolve-ConnectionVariable @(
+                        $env:AZURE_TENANT_ID
+                        '$(PowerPlatformSetConnectionVariables.BuildTools.TenantId)'
+                        '$(BuildTools.TenantId)'
+                      )
+                      $resolvedClientSecret = Resolve-ConnectionVariable @(
+                        $env:AZURE_CLIENT_SECRET
+                        '$(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)'
+                        '$(BuildTools.ClientSecret)'
+                      )
+
+                      if ([string]::IsNullOrWhiteSpace($resolvedClientId) -or [string]::IsNullOrWhiteSpace($resolvedTenantId) -or [string]::IsNullOrWhiteSpace($resolvedClientSecret)) {
+                        throw "Service principal credentials could not be resolved from Set Connection Variables task outputs. Verify the Power Platform service connection and task output variable names."
+                      }
+
+                      $env:AZURE_CLIENT_ID = $resolvedClientId
+                      $env:AZURE_TENANT_ID = $resolvedTenantId
+                      $env:AZURE_CLIENT_SECRET = $resolvedClientSecret
+                    }
+
+                    & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect.ps1" -Url $environmentUrl
                     
                     # Run the deployment script FROM THE ARTIFACTS
                     # This ensures the script version matches the solution version being deployed
@@ -48,4 +107,9 @@ stages:
                   displayName: 'Connect and Run Deployment Script from Artifacts'
                   workingDirectory: '$(Pipeline.Workspace)/build/artifacts'
                   env:
-                    AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+                    ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
+                      AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+                    ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
+                      AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
+                      AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
+                      AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
