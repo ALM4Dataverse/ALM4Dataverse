@@ -264,6 +264,21 @@ if (Test-Path $lockFile) {
     Write-Host "Using pinned versions from lock file"
 }
 
+# If bundled modules directory exists (self-contained/offline mode), use those directly
+$bundledModulesDir = Join-Path (Get-Location) 'modules'
+if (Test-Path $bundledModulesDir) {
+    Write-Host "Using bundled modules from $bundledModulesDir"
+    $env:PSModulePath = "$bundledModulesDir;$env:PSModulePath"
+    foreach ($module in $config.scriptDependencies.Keys) {
+        Import-Module $module -ErrorAction Stop
+        $loadedModule = Get-Module -Name $module
+        Write-Host "Loaded bundled $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
+    }
+    Write-Host "Dependencies loaded from bundled modules"
+    Write-Host "##[endgroup]"
+    return
+}
+
 foreach ($module in $config.scriptDependencies.Keys) {
 
     $version = $config.scriptDependencies[$module]

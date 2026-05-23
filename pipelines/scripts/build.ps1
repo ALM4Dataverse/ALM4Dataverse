@@ -1167,9 +1167,40 @@ $lockConfig | ConvertTo-Json | Out-File $lockPath -Encoding UTF8
 
 Write-Host "##[endgroup]"
 
+# Save PS modules for self-contained/offline deployment (Package Deployer scenario)
+Write-Host "##[group]Saving PowerShell modules for offline deployment"
+$modulesDir = Join-Path $ArtifactStagingDirectory 'modules'
+foreach ($moduleName in $lockConfig.scriptDependencies.Keys) {
+    $version = $lockConfig.scriptDependencies[$moduleName]
+    Write-Host "Saving $moduleName $version to $modulesDir"
+    Save-Module -Name $moduleName -RequiredVersion $version -Path $modulesDir -Force -AllowPrerelease:($version.Contains("-"))
+}
+Write-Host "##[endgroup]"
+
 Write-Host "##[section]Build completed successfully!"
 
 Invoke-Hook -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
+}
+
+# Build Package Deployer package if the project exists
+$pdProjectPath = Join-Path $PSScriptRoot ".." ".." "ALM4Dataverse.PackageDeployer" "ALM4Dataverse.PackageDeployer.csproj"
+if (Test-Path $pdProjectPath) {
+    Write-Host "##[section]Building Package Deployer package"
+    $pdProjectPath = Resolve-Path $pdProjectPath | Select-Object -ExpandProperty Path
+    $pdPublishDir = Join-Path $ArtifactStagingDirectory "packagedeployer"
+
+    dotnet publish $pdProjectPath `
+        -c Release `
+        -o $pdPublishDir `
+        "-p:BuildArtifactsPath=$ArtifactStagingDirectory"
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
+    }
+
+    $pdpkgZip = Join-Path $ArtifactStagingDirectory "ALM4Dataverse.PackageDeployer.pdpkg.zip"
+    Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
+    Write-Host "Package Deployer package created: $pdpkgZip"
 }

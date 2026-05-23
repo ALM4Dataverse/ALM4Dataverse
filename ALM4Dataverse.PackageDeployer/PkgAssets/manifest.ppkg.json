@@ -1,0 +1,9 @@
+{
+  "manifest": {
+    "schema": "1.0.0",
+    "packageUniqueName": "ALM4Dataverse.PackageDeployer",
+    "packageVersion": "1.0.0",
+    "packageDescription": "ALM4Dataverse Deployment Package - delegates deployment to PowerShell scripts",
+    "packagePublisher": "ALM4Dataverse"
+  }
+}
