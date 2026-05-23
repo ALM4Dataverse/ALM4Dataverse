@@ -122,7 +122,7 @@ on:
         required: false
         description: >
           Azure app registration client ID.
-          If omitted, AZURE_CLIENT_ID from the GitHub environment is used.
+          If omitted, AZURE_CLIENT_ID from the GitHub environment variable is used.
       azure-client-secret:
         required: false
         description: >
@@ -134,13 +134,13 @@ on:
         required: false
         description: >
           Azure tenant (directory) ID.
-          If omitted, AZURE_TENANT_ID from the GitHub environment is used.
+          If omitted, AZURE_TENANT_ID from the GitHub environment variable is used.
       dataverse-service-account-upn:
         required: false
         description: >
           UPN (email) of the Dataverse service account used to activate
           workflows/flows after deployment.
-          If omitted, DATAVERSESERVICEACCOUNTUPN from the GitHub environment is used.
+          If omitted, DATAVERSESERVICEACCOUNTUPN from the GitHub environment variable is used.
 
 jobs:
   deploy:
@@ -151,13 +151,12 @@ jobs:
       contents: write  # required to push success-gate-tag after deployment
       id-token: write  # request OIDC token for Workload Identity Federation
     env:
-      AZURE_CLIENT_ID:     ${{ secrets.azure-client-id     || secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID:     ${{ secrets.azure-tenant-id     || secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_ID:     ${{ secrets.azure-client-id     || vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:     ${{ secrets.azure-tenant-id     || vars.AZURE_TENANT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret || secrets.AZURE_CLIENT_SECRET }}
-      DATAVERSE_URL:       ${{ inputs.dataverse-url || vars.DATAVERSE_URL || secrets.DATAVERSE_URL }}
+      DATAVERSE_URL:       ${{ inputs.dataverse-url || vars.DATAVERSE_URL }}
       DATAVERSESERVICEACCOUNTUPN: >-
         ${{ secrets.dataverse-service-account-upn
-            || secrets.DATAVERSESERVICEACCOUNTUPN
             || vars.DATAVERSESERVICEACCOUNTUPN }}
       DATAVERSE_CONNECTION_REFS: ${{ inputs.dataverse-connection-refs }}
       DATAVERSE_ENV_VARS:        ${{ inputs.dataverse-env-vars }}
@@ -203,6 +202,32 @@ jobs:
           run-id: ${{ inputs.build-run-id }}
           github-token: ${{ github.token }}
           path: artifacts
+
+      - name: Validate authentication inputs
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
+            throw "AZURE_CLIENT_ID is required. Set GitHub environment variable AZURE_CLIENT_ID or pass the azure-client-id secret input."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_TENANT_ID)) {
+            throw "AZURE_TENANT_ID is required. Set GitHub environment variable AZURE_TENANT_ID or pass the azure-tenant-id secret input."
+          }
+
+          $tenant = $env:AZURE_TENANT_ID.Trim()
+          $isGuid = $tenant -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+          $isDns  = $tenant -match '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$'
+          if (-not ($isGuid -or $isDns)) {
+            throw "AZURE_TENANT_ID value '$tenant' is invalid. Use a tenant GUID or tenant domain (for example, contoso.onmicrosoft.com)."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
+            throw "DATAVERSE_URL is required. Pass input dataverse-url or set GitHub environment variable DATAVERSE_URL."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:DATAVERSESERVICEACCOUNTUPN)) {
+            throw "DATAVERSESERVICEACCOUNTUPN is required. Set GitHub environment variable DATAVERSESERVICEACCOUNTUPN or pass dataverse-service-account-upn secret input."
+          }
 
       - name: Set up Workload Identity Federation (if no client secret)
         shell: pwsh

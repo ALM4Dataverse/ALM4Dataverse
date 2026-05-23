@@ -45,8 +45,9 @@ on:
         description: >
           Name of the GitHub environment to use (e.g. "Dev-main").
           If the environment does not exist in GitHub it will be created automatically
-          with no protection rules.  Used to resolve AZURE_CLIENT_ID, AZURE_CLIENT_SECRET,
-          AZURE_TENANT_ID and DATAVERSE_URL from GitHub environment secrets/variables
+          with no protection rules.  Used to resolve AZURE_CLIENT_ID,
+          AZURE_TENANT_ID and DATAVERSE_URL from GitHub environment variables,
+          and AZURE_CLIENT_SECRET from GitHub environment secrets
           when those are not passed explicitly.
       dataverse-url:
         type: string
@@ -74,7 +75,7 @@ on:
         required: false
         description: >
           Azure app registration client ID.
-          If omitted, AZURE_CLIENT_ID from the GitHub environment is used.
+          If omitted, AZURE_CLIENT_ID from the GitHub environment variable is used.
       azure-client-secret:
         required: false
         description: >
@@ -86,7 +87,7 @@ on:
         required: false
         description: >
           Azure tenant (directory) ID.
-          If omitted, AZURE_TENANT_ID from the GitHub environment is used.
+          If omitted, AZURE_TENANT_ID from the GitHub environment variable is used.
 
 jobs:
   export:
@@ -96,12 +97,12 @@ jobs:
       contents: write  # push changes back to the repository
       id-token: write  # request OIDC token for Workload Identity Federation
     env:
-      # Prefer an explicitly passed workflow secret; fall back to the GitHub environment secret.
-      AZURE_CLIENT_ID:     ${{ secrets.azure-client-id     || secrets.AZURE_CLIENT_ID }}
-      AZURE_TENANT_ID:     ${{ secrets.azure-tenant-id     || secrets.AZURE_TENANT_ID }}
+      # Prefer explicitly passed workflow secret, then GitHub environment variable.
+      AZURE_CLIENT_ID:     ${{ secrets.azure-client-id     || vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:     ${{ secrets.azure-tenant-id     || vars.AZURE_TENANT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.azure-client-secret || secrets.AZURE_CLIENT_SECRET }}
-      # Prefer explicit input; fall back to GitHub environment variable / secret.
-      DATAVERSE_URL: ${{ inputs.dataverse-url || vars.DATAVERSE_URL || secrets.DATAVERSE_URL }}
+      # Prefer explicit input; fall back to GitHub environment variable.
+      DATAVERSE_URL: ${{ inputs.dataverse-url || vars.DATAVERSE_URL }}
 
     steps:
       - name: Checkout source code
@@ -117,6 +118,28 @@ jobs:
           repository: ${{ inputs.alm-repository }}
           ref: ${{ inputs.alm-ref }}
           path: alm
+
+      - name: Validate authentication inputs
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
+            throw "AZURE_CLIENT_ID is required. Set GitHub environment variable AZURE_CLIENT_ID or pass the azure-client-id secret input."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_TENANT_ID)) {
+            throw "AZURE_TENANT_ID is required. Set GitHub environment variable AZURE_TENANT_ID or pass the azure-tenant-id secret input."
+          }
+
+          $tenant = $env:AZURE_TENANT_ID.Trim()
+          $isGuid = $tenant -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+          $isDns  = $tenant -match '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$'
+          if (-not ($isGuid -or $isDns)) {
+            throw "AZURE_TENANT_ID value '$tenant' is invalid. Use a tenant GUID or tenant domain (for example, contoso.onmicrosoft.com)."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
+            throw "DATAVERSE_URL is required. Pass input dataverse-url or set GitHub environment variable DATAVERSE_URL."
+          }
 
       - name: Set up Workload Identity Federation (if no client secret)
         shell: pwsh

@@ -5,7 +5,7 @@ This repo contains:
 implementation for Dataverse.
 - a set of process documentation and guidance on how to use and extend it.
 
-Supports both **Azure DevOps** and **GitHub Actions**.
+Supports both **Azure DevOps** and **GitHub Actions** (PREVIEW).
 
 Features:
 

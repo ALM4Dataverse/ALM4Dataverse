@@ -135,6 +135,47 @@ function ConvertTo-UrlSafeName {
     return $safeName
 }
 
+function Test-IsValidTenantIdentifier {
+    <#
+    .SYNOPSIS
+        Validates an Entra tenant identifier.
+
+    .DESCRIPTION
+        Accepts either a tenant GUID or a tenant domain name
+        (for example contoso.onmicrosoft.com).
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TenantIdentifier
+    )
+
+    $value = $TenantIdentifier.Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $false
+    }
+
+    $isGuid = $value -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+    $isDns = $value -match '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$'
+
+    return ($isGuid -or $isDns)
+}
+
+function Assert-ValidTenantIdentifier {
+    <#
+    .SYNOPSIS
+        Throws when an Entra tenant identifier is invalid.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$TenantIdentifier,
+        [Parameter()][string]$Source = 'TenantId'
+    )
+
+    if (-not (Test-IsValidTenantIdentifier -TenantIdentifier $TenantIdentifier)) {
+        throw "$Source value '$TenantIdentifier' is invalid. Use a tenant GUID or tenant domain (for example, contoso.onmicrosoft.com)."
+    }
+}
+
 #endregion
 
 #region Initialization
@@ -491,6 +532,23 @@ function Get-AuthToken {
         Set-Variable -Name "MsalApp" -Value $app -Scope Script
     }
 
+    # Persist token cache between script runs so cached Azure logins can be reused.
+    $msalCacheDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ALM4Dataverse'
+    New-DirectoryIfMissing -Path $msalCacheDir
+    $msalCachePath = Join-Path $msalCacheDir 'msal-token-cache.bin'
+
+    try {
+        if (Test-Path -LiteralPath $msalCachePath) {
+            $cacheBytes = [System.IO.File]::ReadAllBytes($msalCachePath)
+            if ($cacheBytes -and $cacheBytes.Length -gt 0) {
+                $app.UserTokenCache.DeserializeMsalV3($cacheBytes, $true)
+            }
+        }
+    }
+    catch {
+        Write-Warning "Failed to load MSAL token cache from '$msalCachePath': $($_.Exception.Message)"
+    }
+
     $accounts = @($app.GetAccountsAsync().GetAwaiter().GetResult())
 
     if ($ListAccountsOnly) {
@@ -538,6 +596,16 @@ function Get-AuthToken {
             Write-Error "Failed to acquire token interactively: $_"
             throw
         }
+    }
+
+    try {
+        $updatedCacheBytes = $app.UserTokenCache.SerializeMsalV3()
+        if ($updatedCacheBytes -and $updatedCacheBytes.Length -gt 0) {
+            [System.IO.File]::WriteAllBytes($msalCachePath, $updatedCacheBytes)
+        }
+    }
+    catch {
+        Write-Warning "Failed to save MSAL token cache to '$msalCachePath': $($_.Exception.Message)"
     }
 
     return $authResult
@@ -2256,6 +2324,8 @@ if ([string]::IsNullOrWhiteSpace($TenantId)) {
     Write-Host "Using tenant: $TenantId"
 }
 
+Assert-ValidTenantIdentifier -TenantIdentifier $TenantId -Source 'Resolved Azure tenant ID'
+
 # ─────────────────────────────────────────────────────────────
 Write-Section "Ensuring Shared Workflow Repository"
 
@@ -2467,11 +2537,11 @@ if ($devEnvUrl) {
                 -CredentialName $credName)
         }
 
-        # Set GitHub environment secrets/variables (Approach 1 or 2)
-        Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
-            -SecretName "AZURE_CLIENT_ID" -SecretValue $devCreds.ApplicationId
-        Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
-            -SecretName "AZURE_TENANT_ID" -SecretValue $devCreds.TenantId
+        # Set GitHub environment variables/secrets (non-sensitive values as variables)
+        Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
+            -VariableName "AZURE_CLIENT_ID" -VariableValue $devCreds.ApplicationId
+        Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
+            -VariableName "AZURE_TENANT_ID" -VariableValue $devCreds.TenantId
         
         if ($devCreds.AuthType -eq 'Secret' -and $devCreds.ClientSecret) {
             Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
@@ -2488,8 +2558,8 @@ if ($devEnvUrl) {
 
         $script:cachedServiceAccounts += $devServiceAccountUPN
 
-        Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
-            -SecretName "DATAVERSESERVICEACCOUNTUPN" -SecretValue $devServiceAccountUPN
+        Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
+            -VariableName "DATAVERSESERVICEACCOUNTUPN" -VariableValue $devServiceAccountUPN
 
         # Create Dataverse app user
         Ensure-DataverseApplicationUser -EnvironmentUrl $devEnvUrl -ApplicationId $devCreds.ApplicationId -TenantId $TenantId
@@ -2536,11 +2606,11 @@ else {
                     -CredentialName $credName)
             }
 
-            # Set GitHub environment secrets/variables
-            Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
-                -SecretName "AZURE_CLIENT_ID" -SecretValue $creds.ApplicationId
-            Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
-                -SecretName "AZURE_TENANT_ID" -SecretValue $creds.TenantId
+            # Set GitHub environment variables/secrets (non-sensitive values as variables)
+            Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
+                -VariableName "AZURE_CLIENT_ID" -VariableValue $creds.ApplicationId
+            Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
+                -VariableName "AZURE_TENANT_ID" -VariableValue $creds.TenantId
 
             if ($creds.AuthType -eq 'Secret' -and $creds.ClientSecret) {
                 Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
@@ -2557,8 +2627,8 @@ else {
 
             $script:cachedServiceAccounts += $serviceAccountUPN
 
-            Set-GitHubEnvironmentSecret -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
-                -SecretName "DATAVERSESERVICEACCOUNTUPN" -SecretValue $serviceAccountUPN
+            Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $env.ShortName `
+                -VariableName "DATAVERSESERVICEACCOUNTUPN" -VariableValue $serviceAccountUPN
 
             # Create Dataverse app user
             Ensure-DataverseApplicationUser -EnvironmentUrl $env.Url -ApplicationId $creds.ApplicationId -TenantId $TenantId

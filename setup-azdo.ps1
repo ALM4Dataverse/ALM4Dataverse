@@ -557,6 +557,23 @@ function Get-AuthToken {
         Set-Variable -Name "MsalApp" -Value $app -Scope Script
     }
 
+    # Persist token cache between script runs so cached Azure logins can be reused.
+    $msalCacheDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'ALM4Dataverse'
+    New-DirectoryIfMissing -Path $msalCacheDir
+    $msalCachePath = Join-Path $msalCacheDir 'msal-token-cache.bin'
+
+    try {
+        if (Test-Path -LiteralPath $msalCachePath) {
+            $cacheBytes = [System.IO.File]::ReadAllBytes($msalCachePath)
+            if ($cacheBytes -and $cacheBytes.Length -gt 0) {
+                $app.UserTokenCache.DeserializeMsalV3($cacheBytes, $true)
+            }
+        }
+    }
+    catch {
+        Write-Warning "Failed to load MSAL token cache from '$msalCachePath': $($_.Exception.Message)"
+    }
+
     $accounts = @($app.GetAccountsAsync().GetAwaiter().GetResult())
 
     if ($ListAccountsOnly) {
@@ -604,6 +621,16 @@ function Get-AuthToken {
             Write-Error "Failed to acquire token interactively: $_"
             throw
         }
+    }
+
+    try {
+        $updatedCacheBytes = $app.UserTokenCache.SerializeMsalV3()
+        if ($updatedCacheBytes -and $updatedCacheBytes.Length -gt 0) {
+            [System.IO.File]::WriteAllBytes($msalCachePath, $updatedCacheBytes)
+        }
+    }
+    catch {
+        Write-Warning "Failed to save MSAL token cache to '$msalCachePath': $($_.Exception.Message)"
     }
 
     return $authResult
