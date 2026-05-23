@@ -2847,7 +2847,7 @@ if ($devEnvUrl) {
             [void](Add-EntraIdFederatedCredential `
                 -ApplicationObjectId $devCreds.ApplicationObjectId `
                 -TenantId $TenantId `
-                -Subject "repo:$repoFullName`:environment:$($devEnvShortName.ToUpper())" `
+                -Subject "repo:$repoFullName`:environment:$devEnvShortName" `
                 -CredentialName $credName)
         }
 
@@ -2863,8 +2863,7 @@ if ($devEnvUrl) {
                 -Owner $repoOwner `
                 -Repo $repoName `
                 -EnvironmentName $devEnvShortName `
-                -EnableApprovals:$enableEnvironmentApprovals `
-                -RequiredReviewerIds $environmentApprovalReviewerIds)
+                -EnableApprovals:$false)
 
             # Set GitHub environment variables/secrets (non-sensitive values as variables)
             Set-GitHubEnvironmentVariable -Owner $repoOwner -Repo $repoName -EnvironmentName $devEnvShortName `
@@ -2938,7 +2937,7 @@ else {
                 [void](Add-EntraIdFederatedCredential `
                     -ApplicationObjectId $creds.ApplicationObjectId `
                     -TenantId $TenantId `
-                    -Subject "repo:$repoFullName`:environment:$($env.ShortName.ToUpper())" `
+                    -Subject "repo:$repoFullName`:environment:$env.ShortName" `
                     -CredentialName $credName)
             }
 
