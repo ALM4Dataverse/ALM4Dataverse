@@ -46,6 +46,8 @@ Features:
 
 ## Documentation
 
+- [Frequently asked question](docs/faqs.md)
+
 ### Initial Setup
 
 #### GitHub Actions
