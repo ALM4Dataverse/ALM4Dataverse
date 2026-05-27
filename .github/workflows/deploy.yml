@@ -274,6 +274,32 @@ jobs:
             return Invoke-GitHubApi -RelativePath "actions/runs/$RunId"
           }
 
+          function Test-IsBuildWorkflowRun {
+            param([Parameter(Mandatory)][object]$Run)
+
+            $workflowPath = ''
+            if ($Run.PSObject.Properties.Name -contains 'path') {
+              $workflowPath = [string]$Run.path
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($workflowPath)) {
+              if ($workflowPath -match '(?i)(^|/)\.github/workflows/build\.ya?ml(?:@.+)?$') {
+                return $true
+              }
+            }
+
+            $workflowName = ''
+            if ($Run.PSObject.Properties.Name -contains 'name') {
+              $workflowName = [string]$Run.name
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($workflowName) -and $workflowName.Trim() -ieq 'BUILD') {
+              return $true
+            }
+
+            return $false
+          }
+
           function Find-BuildRunByName {
             param([Parameter(Mandatory)][string]$RunName)
 
@@ -363,10 +389,11 @@ jobs:
           }
           $buildRunTagKey = ConvertTo-GateTagSegment -Value $buildRunName
           $buildRunWorkflowPath = [string]$buildRun.path
+          $buildRunWorkflowName = [string]$buildRun.name
           $buildRunConclusion = [string]$buildRun.conclusion
 
-          if ($buildRunWorkflowPath -notmatch '(?i)\.github/workflows/build\.ya?ml@') {
-            throw "Resolved workflow run '$buildRunId' does not belong to BUILD.yml."
+          if (-not (Test-IsBuildWorkflowRun -Run $buildRun)) {
+            throw "Resolved workflow run '$buildRunId' does not belong to BUILD.yml. GitHub reported path '$buildRunWorkflowPath' and workflow name '$buildRunWorkflowName'."
           }
 
           if ($buildRunConclusion -ne 'success') {
