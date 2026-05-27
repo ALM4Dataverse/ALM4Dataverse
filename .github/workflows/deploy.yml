@@ -294,7 +294,7 @@ jobs:
               }
             }
 
-            throw "No BUILD workflow run named '$RunName' was found. Use the exact BUILD name shown in the Actions run title (for example 'repo-main-4'), or supply the numeric run ID instead."
+            throw "No BUILD workflow run named '$RunName' was found. Use the exact BUILD name shown in the Actions run title (for example 'repo-main-2025-05-27T14:23:11Z-4'), or supply the numeric run ID instead."
           }
 
           $environmentName = $env:INPUT_ENVIRONMENT_NAME.Trim()

@@ -2475,7 +2475,7 @@ function Update-DeployWorkflowInRepoClone {
     $lines.Add('  workflow_dispatch:')
     $lines.Add('    inputs:')
     $lines.Add('      build-run-name:')
-    $lines.Add("        description: 'Exact BUILD name to deploy (for example repo-main-4). Numeric run IDs also work.'")
+    $lines.Add("        description: 'Exact BUILD name to deploy (for example repo-main-2025-05-27T14:23:11Z-4). Numeric run IDs also work.'")
     $lines.Add('        required: true')
     $lines.Add('        type: string')
     $lines.Add('      target-environment:')

@@ -6,9 +6,10 @@ name: Build
 #   uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/build.yml@stable
 #
 # Outputs the GitHub Actions run ID so downstream DEPLOY workflows can
-# download the artifacts produced here. The caller workflow supplies a git-safe
-# exact BUILD name so the Actions run title, deployment selection, tags, and the
-# "Set build number" step all stay perfectly aligned.
+# download the artifacts produced here. The caller workflow supplies the exact
+# BUILD name so the Actions run title, deployment selection, and the
+# "Set build number" step all stay perfectly aligned. When that name is used in
+# git tags later, this workflow sanitizes it automatically.
 
 on:
   workflow_call:
@@ -133,7 +134,7 @@ jobs:
           $buildNumber = '${{ inputs.build-name }}'
           echo "BUILD_NUMBER=$buildNumber" >> $env:GITHUB_ENV
           "run_name=$buildNumber" >> $env:GITHUB_OUTPUT
-          Write-Host "Canonical build name: $buildNumber"
+          Write-Host "Exact build name: $buildNumber"
           Write-Host "Build number: $buildNumber"
 
       - name: Install Dependencies and Build

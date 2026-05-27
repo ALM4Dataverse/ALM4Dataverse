@@ -6,7 +6,7 @@ name: BUILD
 #
 # See docs/usage/building-releases.md and docs/setup/github-setup.md
 
-run-name: ${{ format('{0}-{1}-{2}', github.event.repository.name, github.ref_name, github.run_number) }}
+run-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, github.ref_name, github.event.head_commit.timestamp || github.event.workflow_run.created_at || github.event.repository.updated_at || github.run_id, github.run_number) }}
 
 on:
   push:
@@ -24,7 +24,7 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/build.yml@stable
     with:
-      build-name: ${{ format('{0}-{1}-{2}', github.event.repository.name, github.ref_name, github.run_number) }}
+      build-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, github.ref_name, github.event.head_commit.timestamp || github.event.workflow_run.created_at || github.event.repository.updated_at || github.run_id, github.run_number) }}
       timeout-minutes: 360
     permissions:
       contents: write
