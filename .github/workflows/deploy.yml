@@ -428,45 +428,23 @@ jobs:
         if: steps.resolve.outputs.required_gate_tag != ''
         shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          function Get-ExactGitTagRef {
-            param([Parameter(Mandatory)][string]$TagName)
-
-            # Use the first path segment as the listing prefix so the URL contains
-            # no slash in the variable part, avoiding REST router ambiguity.
-            $prefix = ($TagName -split '/')[0]
-            $allRefs = @(Invoke-RestMethod -Uri "$apiBase/git/refs/tags/$prefix?per_page=100" -Headers $headers)
-            $exactRef = $allRefs | Where-Object { ([string]$_.ref) -ceq "refs/tags/$TagName" } | Select-Object -First 1
-            return $exactRef
-          }
-
           # Verify the previous environment's success-gate-tag exists before proceeding.
           # This enforces ordered deployment promotion without environment protection rules.
+          $ErrorActionPreference = 'Stop'
           $gateTag = '${{ steps.resolve.outputs.required_gate_tag }}'
-          $apiBase = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)"
-          $headers = @{
-            Authorization = "Bearer $($env:GITHUB_TOKEN)"
-            Accept        = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
+          $repo    = $env:GITHUB_REPOSITORY
+
           Write-Host "Checking for required gate tag: $gateTag"
-          try {
-            $gateRef = Get-ExactGitTagRef -TagName $gateTag
-            if ($null -eq $gateRef) {
-              throw [System.Net.WebException]::new("Gate tag not found")
-            }
+          $out = gh api "/repos/$repo/git/refs/tags/$gateTag" 2>&1
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ Gate tag '$gateTag' found — proceeding with deployment."
-          } catch {
-            $status = $_.Exception.Response.StatusCode.value__
-            if ($status -eq 404 -or $null -eq $_.Exception.Response) {
-              Write-Error (
-                "Deployment gate check FAILED: the tag '$gateTag' does not exist.`n" +
-                "This means the prerequisite environment has not been successfully deployed for this build.`n" +
-                "Deploy to the previous environment first, then re-trigger this workflow.")
-            } else {
-              Write-Error "Unexpected error checking gate tag '$gateTag': $_"
-            }
+          } else {
+            Write-Error (
+              "Deployment gate check FAILED: the tag '$gateTag' does not exist.`n" +
+              "This means the prerequisite environment has not been successfully deployed for this build.`n" +
+              "Deploy to the previous environment first, then re-trigger this workflow.")
             exit 1
           }
 
@@ -709,192 +687,56 @@ jobs:
         if: steps.resolve.outputs.success_gate_tag != ''
         shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Record both:
           # 1) a permanent, auditable gate tag for this build/environment pair, and
           # 2) a movable environment pointer tag showing the build currently deployed
           #    to this environment.
-          $successTag             = '${{ steps.resolve.outputs.success_gate_tag }}'
-          $environmentPointerTag  = '${{ steps.resolve.outputs.environment_pointer_tag }}'
-          $buildRunId             = '${{ steps.resolve.outputs.build_run_id }}'
-          $apiBase                = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)"
-          $headers                = @{
-            Authorization = "Bearer $($env:GITHUB_TOKEN)"
-            Accept        = "application/vnd.github+json"
-            "X-GitHub-Api-Version" = "2022-11-28"
-          }
+          $ErrorActionPreference = 'Stop'
+          $successTag            = '${{ steps.resolve.outputs.success_gate_tag }}'
+          $environmentPointerTag = '${{ steps.resolve.outputs.environment_pointer_tag }}'
+          $buildRunId            = '${{ steps.resolve.outputs.build_run_id }}'
+          $repo                  = $env:GITHUB_REPOSITORY
 
-          function New-TagRef {
-            param(
-              [Parameter(Mandatory)][string]$TagName,
-              [Parameter(Mandatory)][string]$Sha
-            )
-
-            $body = @{ ref = "refs/tags/$TagName"; sha = $Sha } | ConvertTo-Json
-            Invoke-RestMethod -Method POST -Uri "$apiBase/git/refs" -Headers $headers -Body $body | Out-Null
-          }
-
-          function Get-TagRef {
-            param(
-              [Parameter(Mandatory)][string]$TagName,
-              [switch]$AllowMissing
-            )
-
-            # Use the first path segment as the listing prefix so the URL contains
-            # no slash in the variable part, avoiding REST router ambiguity for
-            # slash-containing tag names like 'deployed/test'.
-            $prefix = ($TagName -split '/')[0]
-            try {
-              $allRefs = @(Invoke-RestMethod -Uri "$apiBase/git/refs/tags/$prefix?per_page=100" -Headers $headers)
-              $exactRef = $allRefs | Where-Object { ([string]$_.ref) -ieq "refs/tags/$TagName" } | Select-Object -First 1
-              if ($null -eq $exactRef) {
-                if ($AllowMissing) { return $null }
-                throw "Tag ref 'refs/tags/$TagName' was not found."
-              }
-              return $exactRef
-            } catch {
-              $status = $_.Exception.Response.StatusCode.value__
-              if ($AllowMissing -and ($status -eq 404 -or ($null -eq $_.Exception.Response -and $_.Exception.Message -like "*was not found*"))) {
-                return $null
-              }
-              throw
-            }
-          }
-
-          function Resolve-TagTargetSha {
-            param(
-              [Parameter(Mandatory)][object]$TagRef
-            )
-
-            $objectType = ''
-            if ($TagRef.object -and $TagRef.object.PSObject.Properties.Name -contains 'type') {
-              $objectType = [string]$TagRef.object.type
-            }
-
-            $objectSha = ''
-            if ($TagRef.object -and $TagRef.object.PSObject.Properties.Name -contains 'sha') {
-              $objectSha = [string]$TagRef.object.sha
-            }
-
-            if ([string]::IsNullOrWhiteSpace($objectSha)) {
-              return ''
-            }
-
-            if ($objectType -ieq 'tag') {
-              $tagObject = Invoke-RestMethod -Uri "$apiBase/git/tags/$objectSha" -Headers $headers
-              if ($null -ne $tagObject.object -and $tagObject.object.PSObject.Properties.Name -contains 'sha') {
-                return [string]$tagObject.object.sha
-              }
-            }
-
-            return $objectSha
-          }
-
-          function Remove-TagRef {
-            param(
-              [Parameter(Mandatory)][string]$TagName,
-              [string]$RefUrl = ''
-            )
-
-            $uri = $RefUrl
-            if ([string]::IsNullOrWhiteSpace($uri)) {
-              $relativePath = "git/refs/tags/$TagName"
-              $uri = "$apiBase/$relativePath"
-            }
-
-            Invoke-RestMethod -Method DELETE -Uri $uri -Headers $headers | Out-Null
-          }
-
-          function Update-TagRef {
-            param(
-              [Parameter(Mandatory)][string]$TagName,
-              [Parameter(Mandatory)][string]$Sha,
-              [string]$RefUrl = ''
-            )
-
-            $uri = $RefUrl
-            if ([string]::IsNullOrWhiteSpace($uri)) {
-              $relativePath = "git/refs/tags/$TagName"
-              $uri = "$apiBase/$relativePath"
-            }
-
-            $body = @{ sha = $Sha; force = $true } | ConvertTo-Json
-            Invoke-RestMethod -Method PATCH -Uri $uri -Headers $headers -Body $body | Out-Null
-          }
-
-          # Resolve the HEAD commit SHA of the originating BUILD run.
+          # Resolve HEAD SHA of the originating BUILD run via gh CLI.
           Write-Host "Resolving HEAD SHA for BUILD run $buildRunId..."
-          $run = Invoke-RestMethod -Uri "$apiBase/actions/runs/$buildRunId" -Headers $headers
-          $sha = $run.head_sha
+          $sha = (gh api "/repos/$repo/actions/runs/$buildRunId" --jq '.head_sha').Trim()
+          if ([string]::IsNullOrWhiteSpace($sha)) { throw "Could not resolve HEAD SHA for run $buildRunId." }
           Write-Host "HEAD SHA: $sha"
 
+          # ── Permanent gate tag (create once; skip on re-run) ──────────────────
           Write-Host "Pushing permanent gate tag: $successTag"
-          try {
-            New-TagRef -TagName $successTag -Sha $sha
+          $out = gh api --method POST "/repos/$repo/git/refs" `
+                        --field "ref=refs/tags/$successTag" `
+                        --field "sha=$sha" 2>&1
+          if ($LASTEXITCODE -eq 0) {
             Write-Host "✅ Gate tag '$successTag' pushed successfully."
-          } catch {
-            $status = $_.Exception.Response.StatusCode.value__
-            if ($status -eq 422) {
-              Write-Host "ℹ️  Gate tag '$successTag' already exists (re-run?) — skipping."
-            } else {
-              Write-Error "Failed to push gate tag '$successTag': $_"
-              exit 1
-            }
+          } elseif ("$out" -match '"already exists"|Reference already exists') {
+            Write-Host "ℹ️  Gate tag '$successTag' already exists (re-run?) — skipping."
+          } else {
+            Write-Error "Failed to push gate tag '$successTag': $out"
+            exit 1
           }
 
+          # ── Movable environment pointer tag (delete-then-create) ──────────────
           if (-not [string]::IsNullOrWhiteSpace($environmentPointerTag)) {
             Write-Host "Updating environment pointer tag: $environmentPointerTag"
 
-            try {
-              $existingPointerTag = Get-TagRef -TagName $environmentPointerTag -AllowMissing
-              if ($null -eq $existingPointerTag) {
-                try {
-                  New-TagRef -TagName $environmentPointerTag -Sha $sha
-                  Write-Host "✅ Environment pointer tag '$environmentPointerTag' created successfully."
-                } catch {
-                  $status = $_.Exception.Response.StatusCode.value__
-                  if ($status -ne 422) {
-                    throw
-                  }
-
-                  Write-Host "Environment pointer tag '$environmentPointerTag' reported as already existing while being created — reloading current ref."
-                  $existingPointerTag = Get-TagRef -TagName $environmentPointerTag -AllowMissing
-                  if ($null -eq $existingPointerTag) {
-                    throw
-                  }
-                }
-              }
-
-              if ($null -ne $existingPointerTag) {
-                $existingPointerTargetSha = Resolve-TagTargetSha -TagRef $existingPointerTag
-                if ([string]::IsNullOrWhiteSpace($existingPointerTargetSha)) {
-                  throw "Could not resolve the existing target SHA for environment pointer tag '$environmentPointerTag'."
-                }
-
-                if ($existingPointerTargetSha -eq $sha) {
-                  Write-Host "ℹ️  Environment pointer tag '$environmentPointerTag' already points to $sha — no update needed."
-                }
-                else {
-                  Write-Host "Environment pointer tag '$environmentPointerTag' currently points to $existingPointerTargetSha — updating to $sha."
-                  try {
-                    Update-TagRef -TagName $environmentPointerTag -Sha $sha -RefUrl ([string]$existingPointerTag.url)
-                    Write-Host "✅ Environment pointer tag '$environmentPointerTag' updated successfully."
-                  } catch {
-                    $status = $_.Exception.Response.StatusCode.value__
-                    if ($status -ne 422) {
-                      throw
-                    }
-
-                    Write-Host "GitHub rejected the direct ref update for '$environmentPointerTag' (422) — recreating the ref instead."
-                    Remove-TagRef -TagName $environmentPointerTag -RefUrl ([string]$existingPointerTag.url)
-                    New-TagRef -TagName $environmentPointerTag -Sha $sha
-                    Write-Host "✅ Environment pointer tag '$environmentPointerTag' updated successfully after recreate."
-                  }
-                }
-              }
-            } catch {
-              Write-Error "Failed to update environment pointer tag '$environmentPointerTag': $_"
+            # Delete the existing pointer tag if it exists; ignore 404.
+            $delOut = gh api --method DELETE "/repos/$repo/git/refs/tags/$environmentPointerTag" 2>&1
+            if ($LASTEXITCODE -ne 0 -and "$delOut" -notmatch '"Not Found"|404') {
+              Write-Error "Unexpected error deleting pointer tag '$environmentPointerTag': $delOut"
               exit 1
             }
+
+            # Create the pointer tag at the new SHA.
+            $createOut = gh api --method POST "/repos/$repo/git/refs" `
+                                --field "ref=refs/tags/$environmentPointerTag" `
+                                --field "sha=$sha" 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "Failed to create environment pointer tag '$environmentPointerTag': $createOut"
+              exit 1
+            }
+            Write-Host "✅ Environment pointer tag '$environmentPointerTag' updated successfully."
           }
