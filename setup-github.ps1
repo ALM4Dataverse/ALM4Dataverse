@@ -47,8 +47,11 @@ else {
     __SETUP_COMMON_LIB__
 }
 
+$script:setupPhaseNames = @('Connect', 'Repository', 'Configure', 'DEV env', 'Deployment envs')
+
 #region Initialization
 
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 0
 Write-Section "Initialising setup"
 
 $TempModuleRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ALM4Dataverse\Modules"
@@ -93,7 +96,6 @@ if ($upstreamRepo -like '__*') {
 }
 
 $requiredModules = @{
-    'PSMenu'                           = '0.2.0'
     'Rnwood.Dataverse.Data.PowerShell' = $rnwoodDataverseVersion
 }
 
@@ -700,9 +702,11 @@ function Get-GitHubExistingEnvironmentState {
         }
     }
 
+    $friendlyName = Resolve-DataverseEnvironmentFriendlyName -EnvironmentUrl $environmentUrl -FallbackName $EnvironmentName
+
     return [pscustomobject]@{
         ShortName         = $EnvironmentName
-        FriendlyName      = $EnvironmentName
+        FriendlyName      = $friendlyName
         Url               = $environmentUrl
         Credentials       = $existingCredential
         ServiceAccountUPN = $serviceAccountUPN
@@ -1001,8 +1005,15 @@ function Ensure-GitHubForkForSharedWorkflows {
         [Parameter()][string]$PreferredRepositoryFullName
     )
 
-    $existingForks = @(Get-GitHubForksOfRepositoryForOwner -Owner $ForkOwner -UpstreamFullName $UpstreamFullName)
-    $ownedRepos = @(Get-GitHubOwnedReposForOwner -Owner $ForkOwner)
+    $sharedRepositoryOptions = Invoke-WithSpectreStatus -Status 'Retrieving shared workflow repository options...' -ScriptBlock {
+        [pscustomobject]@{
+            ExistingForks = @(Get-GitHubForksOfRepositoryForOwner -Owner $ForkOwner -UpstreamFullName $UpstreamFullName)
+            OwnedRepos    = @(Get-GitHubOwnedReposForOwner -Owner $ForkOwner)
+        }
+    }
+
+    $existingForks = @($sharedRepositoryOptions.ExistingForks)
+    $ownedRepos = @($sharedRepositoryOptions.OwnedRepos)
 
     $menuItems = @()
     $menuActions = @()
@@ -1067,10 +1078,7 @@ function Ensure-GitHubForkForSharedWorkflows {
         }
 
         while ($true) {
-            $forkName = Read-Host "Fork repository name [$defaultForkName]"
-            if ([string]::IsNullOrWhiteSpace($forkName)) {
-                $forkName = $defaultForkName
-            }
+            $forkName = Read-TextWithDefault -Prompt 'Fork repository name' -DefaultValue $defaultForkName
 
             if ($forkName -match '^[A-Za-z0-9._-]+$') {
                 break
@@ -1101,7 +1109,9 @@ function Ensure-GitHubForkForSharedWorkflows {
     $forkParts = $selectedForkFullName.Split('/', 2)
     $forkOwnerName = $forkParts[0]
     $forkRepoName = $forkParts[1]
-    $forkRepo = Get-GitHubRepo -Owner $forkOwnerName -Repo $forkRepoName
+    $forkRepo = Invoke-WithSpectreStatus -Status "Loading repository details for '$selectedForkFullName'..." -ScriptBlock {
+        Get-GitHubRepo -Owner $forkOwnerName -Repo $forkRepoName
+    }
 
     $defaultBranch = 'main'
     if ($forkRepo.defaultBranchRef -and $forkRepo.defaultBranchRef.name) {
@@ -1270,14 +1280,11 @@ function New-GitHubRepositoryInteractive {
     Write-Host "Create a new GitHub repository" -ForegroundColor Green
     Write-Host ""
 
-    $owner = Read-Host "Repository owner (user or org) [$DefaultOwner]"
-    if ([string]::IsNullOrWhiteSpace($owner)) {
-        $owner = $DefaultOwner
-    }
+    $owner = Read-TextWithDefault -Prompt 'Repository owner (user or organization)' -DefaultValue $DefaultOwner
 
     $repoName = $null
     while ($true) {
-        $repoName = Read-Host "New repository name"
+        $repoName = Read-TextWithDefault -Prompt 'New repository name'
         if ([string]::IsNullOrWhiteSpace($repoName)) {
             Write-Warning "Repository name cannot be empty."
             continue
@@ -1569,11 +1576,11 @@ function Get-GitHubCredentialsForEnvironment {
     }
     else { # Manual
         Write-Host "Enter App Registration details:" -ForegroundColor Cyan
-        $name = Read-Host "Friendly name (for reuse reference)"
+        $name = Read-TextWithDefault -Prompt 'Friendly name (for reuse reference)' -AllowEmpty
         if ([string]::IsNullOrWhiteSpace($name)) { $name = "Credential-" + (Get-Date -Format "HHmm") }
         
         while ($true) {
-            $appId = Read-Host "Application ID (Client ID)"
+            $appId = Read-TextWithDefault -Prompt 'Application ID (Client ID)'
             if ($appId -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                 break
             }
@@ -1583,7 +1590,7 @@ function Get-GitHubCredentialsForEnvironment {
         }
 
         while ($true) {
-            $appObjectId = Read-Host "Application Object ID (from Entra ID > App registrations > Overview, NOT the 'Object ID' of the enterprise app)"
+            $appObjectId = Read-TextWithDefault -Prompt 'Application object ID (from App registrations > Overview, not the enterprise app object ID)'
             if ($appObjectId -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                 break
             }
@@ -1606,9 +1613,7 @@ function Get-GitHubCredentialsForEnvironment {
         $secret = $null
         if ($authType -eq 'Secret') {
             while ($true) {
-                $secretSecure = Read-Host "Client Secret" -AsSecureString
-                $bstr   = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretSecure)
-                $secret = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+                $secret = Read-SecretText -Prompt 'Client Secret'
                 
                 if ($secret -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                     Write-Warning "The Client Secret looks like a GUID. You should enter the Secret VALUE, not the Secret ID."
@@ -1663,6 +1668,75 @@ function Get-GitHubExistingEnvironmentSelectionSummary {
     return ($summaryParts -join ' | ')
 }
 
+function Get-DataverseEnvironmentCatalog {
+    [CmdletBinding()]
+    param(
+        [Parameter()][switch]$ForceRefresh,
+        [Parameter()][switch]$ShowStatus
+    )
+
+    $hasCachedCatalog = ($null -ne (Get-Variable -Name 'dataverseEnvironmentCatalog' -Scope Script -ErrorAction SilentlyContinue)) -and $null -ne $script:dataverseEnvironmentCatalog
+    if (-not $ForceRefresh -and $hasCachedCatalog) {
+        return @($script:dataverseEnvironmentCatalog)
+    }
+
+    $fetchCatalog = {
+        @(Get-DataverseEnvironment -AccessToken {
+            param($resource)
+            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
+            try {
+                $uri = [System.Uri]$resource
+                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
+            }
+            catch {}
+
+            $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
+            return $auth.AccessToken
+        })
+    }
+
+    if ($ShowStatus) {
+        $script:dataverseEnvironmentCatalog = @(Invoke-WithSpectreStatus -Status 'Retrieving Dataverse environments...' -ScriptBlock $fetchCatalog)
+    }
+    else {
+        $script:dataverseEnvironmentCatalog = @(& $fetchCatalog)
+    }
+
+    if (-not $script:dataverseEnvironmentCatalog -or $script:dataverseEnvironmentCatalog.Count -eq 0) {
+        throw 'No Dataverse environments found. Ensure the account has access to at least one environment.'
+    }
+
+    return @($script:dataverseEnvironmentCatalog)
+}
+
+function Resolve-DataverseEnvironmentFriendlyName {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$EnvironmentUrl,
+        [Parameter()][string]$FallbackName
+    )
+
+    $normalizedEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $EnvironmentUrl
+    if ([string]::IsNullOrWhiteSpace($normalizedEnvironmentUrl)) {
+        return $FallbackName
+    }
+
+    try {
+        $matchingEnvironment = Get-DataverseEnvironmentCatalog | Where-Object {
+            (ConvertTo-NormalizedEnvironmentUrl -Url $_.Endpoints['WebApplication']) -eq $normalizedEnvironmentUrl
+        } | Select-Object -First 1
+
+        if ($matchingEnvironment -and -not [string]::IsNullOrWhiteSpace($matchingEnvironment.FriendlyName)) {
+            return [string]$matchingEnvironment.FriendlyName
+        }
+    }
+    catch {
+        Write-Host "Could not resolve Dataverse environment name for '$normalizedEnvironmentUrl'. Falling back to '$FallbackName'." -ForegroundColor DarkGray
+    }
+
+    return $FallbackName
+}
+
 function Select-DataverseEnvironment {
     [CmdletBinding()]
     param(
@@ -1674,22 +1748,8 @@ function Select-DataverseEnvironment {
     )
 
     Write-Host ""
-    Write-Host "Retrieving Dataverse environments..." -ForegroundColor Yellow
-    
-    $environments = @(Get-DataverseEnvironment -AccessToken { 
-        param($resource)
-        if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
-        $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-        return $auth.AccessToken
-    })
 
-    if ($environments.Count -eq 0) {
-        throw "No Dataverse environments found. Ensure the account has access to at least one environment."
-    }
+    $environments = @(Get-DataverseEnvironmentCatalog -ShowStatus)
 
     $normalizedExcludeUrl = ConvertTo-NormalizedEnvironmentUrl -Url $ExcludeUrl
     $normalizedPreferredUrl = ConvertTo-NormalizedEnvironmentUrl -Url $PreferredUrl
@@ -1931,7 +1991,7 @@ function Get-DataverseServiceAccountUPN {
         Write-Host ""
         
         while ($true) {
-            $upn = Read-Host "Service Account UPN (e.g., serviceaccount@contoso.com)"
+            $upn = Read-TextWithDefault -Prompt 'Service Account UPN (for example: serviceaccount@contoso.com)'
             if ([string]::IsNullOrWhiteSpace($upn)) {
                 Write-Warning "Service Account UPN cannot be empty."
                 continue
@@ -1970,25 +2030,28 @@ function Get-DataverseSolutionsSelection {
     $devEnvUrl = ConvertTo-NormalizedEnvironmentUrl -Url $selectedEnv.Endpoints["WebApplication"]
     Write-Host "Selected: $($selectedEnv.FriendlyName) ($devEnvUrl)" -ForegroundColor Cyan
 
-    $connection = Get-DataverseConnection -Url $devEnvUrl -AccessToken { 
-        param($resource)
-        if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
-        $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-        return $auth.AccessToken
+    $connection = Invoke-WithSpectreStatus -Status 'Connecting to the selected DEV environment...' -ScriptBlock {
+        Get-DataverseConnection -Url $devEnvUrl -AccessToken {
+            param($resource)
+            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
+            try {
+                $uri = [System.Uri]$resource
+                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
+            } catch {}
+            $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
+            return $auth.AccessToken
+        }
     }
     
     if (-not $connection) { throw "Failed to connect to Dataverse environment." }
     
     Write-Host "Connected to: $($connection.ConnectedOrgFriendlyName)"
-    Write-Host "Retrieving solutions..." -ForegroundColor Yellow
     
-    $allSolutions = Get-DataverseRecord -Connection $connection -TableName 'solution' -Columns @('solutionid','uniquename','friendlyname','version','ismanaged') -FilterValues @{
-        'isvisible' = $true
-        'ismanaged' = $false
+    $allSolutions = Invoke-WithSpectreStatus -Status 'Retrieving unmanaged solutions from Dataverse...' -ScriptBlock {
+        Get-DataverseRecord -Connection $connection -TableName 'solution' -Columns @('solutionid','uniquename','friendlyname','version','ismanaged') -FilterValues @{
+            'isvisible' = $true
+            'ismanaged' = $false
+        }
     }
     
     if (-not $allSolutions -or $allSolutions.Count -eq 0) {
@@ -2469,11 +2532,11 @@ function Publish-GitHubRepoChanges {
 
         & git config user.name 'ALM4Dataverse Setup'
         & git config user.email 'setup@alm4dataverse.local'
-        & git commit -m $PublishPlan.CommitMessage 2>&1 | Out-Host
+        & git commit -m $PublishPlan.CommitMessage 2>&1
         if ($LASTEXITCODE -ne 0) { throw 'Git commit failed.' }
 
         Write-Host "Pushing to origin/$($PublishPlan.BranchName)..." -ForegroundColor Yellow
-        & git push -u origin $PublishPlan.BranchName 2>&1 | Out-Host
+        & git push -u origin $PublishPlan.BranchName 2>&1
         if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
 
         $pullRequestUrl = $null
@@ -2491,7 +2554,7 @@ function Publish-GitHubRepoChanges {
             $existingPullRequest = $existingPullRequests | Select-Object -First 1
             if ($existingPullRequest) {
                 Write-Host "Updating existing pull request #$($existingPullRequest.number)..." -ForegroundColor Yellow
-                & gh pr edit $existingPullRequest.number --title $PublishPlan.PullRequestTitle --body $PublishPlan.PullRequestDescription 2>&1 | Out-Host
+                & gh pr edit $existingPullRequest.number --title $PublishPlan.PullRequestTitle --body $PublishPlan.PullRequestDescription 2>&1
                 if ($LASTEXITCODE -ne 0) {
                     throw 'Failed to update the pull request.'
                 }
@@ -2526,9 +2589,9 @@ function Publish-GitHubRepoChanges {
 #  MAIN SETUP FLOW
 # ─────────────────────────────────────────────────────────────
 
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 0
 Write-Section "Authenticating with GitHub"
 
-Write-Host "Checking GitHub CLI authentication status..." -ForegroundColor Yellow
 $ghStatus = & gh auth status --hostname github.com 2>&1
 $hasExistingGitHubLogin = ($LASTEXITCODE -eq 0)
 
@@ -2551,7 +2614,6 @@ if ($hasExistingGitHubLogin) {
 
     if ($ghChoice -eq 0) {
         Write-Host "Using existing GitHub login." -ForegroundColor Green
-        Write-Host ($ghStatus -join "`n") -ForegroundColor DarkGray
     }
     else {
         Write-Host "Signing in with a different GitHub account..." -ForegroundColor Yellow
@@ -2611,16 +2673,14 @@ if ($cachedAzureAccounts.Count -gt 0) {
 
     if ($azureAuthChoice -lt $cachedAzureAccounts.Count) {
         $preferredAzureUsername = $cachedAzureAccounts[$azureAuthChoice]
-        Write-Host "Using cached Azure login: $preferredAzureUsername" -ForegroundColor Green
     }
     else {
         $forceAzureInteractive = $true
-        Read-Host "Press Enter to open browser for Azure authentication..."
+        Wait-ForUserAcknowledgement -Message 'Open the browser for Azure authentication when you are ready.' -ContinueLabel 'Open browser'
     }
 }
 else {
-    Write-Host "No cached Azure login detected. Browser sign-in is required." -ForegroundColor Yellow
-    Read-Host "Press Enter to open browser for Azure authentication..."
+    Wait-ForUserAcknowledgement -Message 'Open the browser for Azure authentication when you are ready.' -ContinueLabel 'Open browser'
 }
 
 $script:azureAuthResult = Invoke-WithErrorHandling -OperationName "Azure Authentication" -ScriptBlock {
@@ -2643,6 +2703,7 @@ if ([string]::IsNullOrWhiteSpace($TenantId)) {
 Assert-ValidTenantIdentifier -TenantIdentifier $TenantId -Source 'Resolved Azure tenant ID'
 
 # ─────────────────────────────────────────────────────────────
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 1
 Write-Section "Ensuring Shared Workflow Repository"
 
 $upstreamWorkflowRepoFullName = Resolve-GitHubRepoFullNameFromSource -Source $upstreamRepo -Fallback 'ALM4Dataverse/ALM4Dataverse'
@@ -2654,9 +2715,9 @@ Write-Host "Using ALM4Dataverse ref: $ALM4DataverseRef" -ForegroundColor DarkGra
 # ─────────────────────────────────────────────────────────────
 Write-Section "Select GitHub Repository"
 
-Write-Host "Fetching repositories you have write access to..." -ForegroundColor Yellow
-
-$repos = @(Get-GitHubRepoList)
+$repos = @(Invoke-WithSpectreStatus -Status 'Fetching repositories you have write access to...' -ScriptBlock {
+    Get-GitHubRepoList
+})
 $selectedRepo = $null
 
 $repos = @($repos | Sort-Object -Property nameWithOwner)
@@ -2706,9 +2767,9 @@ Write-Section "Cloning Repository"
 
 Invoke-WithErrorHandling -OperationName "Cloning repository" -ScriptBlock {
     Write-Host "Cloning $repoFullName to $cloneRoot..." -ForegroundColor Yellow
-    & gh repo clone $repoFullName $cloneRoot -- --depth 1 2>&1 | Out-Host
+    & gh repo clone $repoFullName $cloneRoot -- --depth 1 2>&1
     if ($LASTEXITCODE -ne 0) { throw "gh repo clone failed." }
-}
+} -StatusMessage 'Cloning the selected repository...' -CaptureOutputInPanel | Out-Null
 
 Push-Location $cloneRoot
 try {
@@ -2724,12 +2785,14 @@ finally {
     Pop-Location
 }
 
-$existingSetupState = Get-GitHubRepositoryExistingSetupState `
-    -RepoRoot $cloneRoot `
-    -RepoOwner $repoOwner `
-    -RepoName $repoName `
-    -DefaultBranch $defaultBranch `
-    -TenantId $TenantId
+$existingSetupState = Invoke-WithSpectreStatus -Status 'Inspecting the existing repository configuration...' -ScriptBlock {
+    Get-GitHubRepositoryExistingSetupState `
+        -RepoRoot $cloneRoot `
+        -RepoOwner $repoOwner `
+        -RepoName $repoName `
+        -DefaultBranch $defaultBranch `
+        -TenantId $TenantId
+}
 
 if ($existingSetupState.SharedWorkflowRepository) {
     Write-Host "Existing shared workflow repository detected: $($existingSetupState.SharedWorkflowRepository)" -ForegroundColor DarkGray
@@ -2764,8 +2827,9 @@ $enableEnvironmentApprovals = $false
 $environmentApprovalReviewerIds = @()
 $deploymentPromotionMode = 'manual-gate-tag'
 
-Write-Host "Checking GitHub environment and required-reviewer availability for '$repoFullName'..." -ForegroundColor Yellow
-$environmentCapabilities = Get-GitHubEnvironmentCapabilities -Owner $repoOwner -Repo $repoName -ApprovalReviewerId $script:ghUserId
+$environmentCapabilities = Invoke-WithSpectreStatus -Status "Checking GitHub environment capabilities for '$repoFullName'..." -ScriptBlock {
+    Get-GitHubEnvironmentCapabilities -Owner $repoOwner -Repo $repoName -ApprovalReviewerId $script:ghUserId
+}
 
 if ($existingSetupState.CredentialStorageScope -eq 'Environment' -and $environmentCapabilities.EnvironmentsAvailable) {
     $useGitHubEnvironments = $true
@@ -2844,6 +2908,12 @@ $repoPublishPlan = Get-RepoChangePublishPlan `
     -Ref $ALM4DataverseRef
 
 $deploymentEnvironments = @()
+$solutionResult = $null
+$devEnvUrl = $null
+$devEnvFriendlyName = $null
+$reuseExistingDevEnvironmentConfiguration = $false
+$devEnvironmentConfiguration = $null
+$devEnvShortName = "Dev-$defaultBranch"
 $repoPublishResult = $null
 
 # ─────────────────────────────────────────────────────────────
@@ -2856,13 +2926,14 @@ try {
     }
 
     if ($repoPublishPlan.BranchName -ne $defaultBranch) {
-        & git checkout -B $repoPublishPlan.BranchName 2>&1 | Out-Host
+        & git checkout -B $repoPublishPlan.BranchName 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to create or switch to working branch '$($repoPublishPlan.BranchName)'."
         }
     }
 
     # ─────────────────────────────────────────────────────────
+    Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 2
     Write-Section "Copy Workflow Templates"
 
     $copyRoot = $null
@@ -2879,7 +2950,7 @@ try {
         try {
             & git clone --depth 1 --branch $ALM4DataverseRef `
                 $upstreamGitSource `
-                $upstreamClone 2>&1 | Out-Host
+                $upstreamClone 2>&1 | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Failed to clone ALM4Dataverse templates." }
             $copyRoot = Join-Path $upstreamClone 'copy-to-your-repo'
         }
@@ -2888,260 +2959,362 @@ try {
         }
     }
 
-    Invoke-WithErrorHandling -OperationName "Copying workflow templates" -ScriptBlock {
+    Invoke-WithErrorHandling -OperationName "Copying workflow templates" -StatusMessage 'Copying workflow templates into your repository...' -ScriptBlock {
         Copy-WorkflowTemplatesToRepo `
             -SourceRoot $copyRoot `
             -TargetRoot $cloneRoot `
             -Branch $defaultBranch `
             -SharedWorkflowRepository $sharedWorkflowRepository `
             -SharedWorkflowRef $sharedWorkflowReference
-    } | Out-Null
+    } -CaptureOutputInPanel | Out-Null
 
-    # ─────────────────────────────────────────────────────────
-    Write-Section "Configure Solutions (alm-config.psd1)"
+    Invoke-SetupWizard -Title 'GitHub Actions ALM4Dataverse setup' -Steps @(
+        [pscustomobject]@{
+            Name = 'Configure solutions'
+            Action = {
+                Write-Section 'Configure Solutions (alm-config.psd1)'
 
-    $solutionResult = Invoke-WithErrorHandling -OperationName "Selecting solutions" -ScriptBlock {
-        $existingConfigPath = Join-Path $cloneRoot 'alm-config.psd1'
-        Get-DataverseSolutionsSelection -ExistingConfigPath $existingConfigPath -ExistingEnvironmentUrl $existingSetupState.DevEnvironment.Url -ExistingEnvironmentConfiguration $existingSetupState.DevEnvironment
-    }
-
-    if ($solutionResult -and $solutionResult.Solutions.Count -gt 0) {
-        Invoke-WithErrorHandling -OperationName "Updating alm-config.psd1" -ScriptBlock {
-            Update-AlmConfigInRepoClone -Solutions $solutionResult.Solutions -RepoRoot $cloneRoot
-        } | Out-Null
-    }
-
-    $devEnvUrl = if ($solutionResult) { $solutionResult.EnvironmentUrl } else { $null }
-    $devEnvFriendlyName = if ($solutionResult) { $solutionResult.EnvironmentFriendlyName } else { $null }
-    $reuseExistingDevEnvironmentConfiguration = if ($solutionResult) { [bool]$solutionResult.ReuseExistingConfiguration } else { $false }
-
-    # ─────────────────────────────────────────────────────────
-    Write-Section "Configure Deployment Workflow"
-
-    $initialDeploymentEnvironments = @()
-    foreach ($existingDeploymentEnvironment in @($existingSetupState.DeploymentEnvironments)) {
-        if ([string]::IsNullOrWhiteSpace($existingDeploymentEnvironment.ShortName)) {
-            continue
-        }
-
-        $existingEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $existingDeploymentEnvironment.Url
-        if ($existingEnvironmentUrl -and $existingEnvironmentUrl -ieq $devEnvUrl) {
-            Write-Warning "Skipping existing deployment stage '$($existingDeploymentEnvironment.ShortName)' because it points at the selected DEV environment URL."
-            continue
-        }
-
-        $initialDeploymentEnvironments += [pscustomobject]@{
-            ShortName            = $existingDeploymentEnvironment.ShortName
-            FriendlyName         = $existingDeploymentEnvironment.FriendlyName
-            Url                  = $existingEnvironmentUrl
-            Credentials          = $existingDeploymentEnvironment.Credentials
-            ServiceAccountUPN    = $existingDeploymentEnvironment.ServiceAccountUPN
-            ConfigurationPending = (($null -eq $existingDeploymentEnvironment.Credentials) -or [string]::IsNullOrWhiteSpace($existingDeploymentEnvironment.ServiceAccountUPN))
-        }
-    }
-
-    $deploymentEnvironments = Invoke-WithErrorHandling -OperationName "Selecting deployment environments" -ScriptBlock {
-        Select-ConfiguredDeploymentEnvironments `
-            -InitialEnvironments $initialDeploymentEnvironments `
-            -Heading 'Target Deployment Environments' `
-            -Title 'Manage deployment environments' `
-            -GuidanceLines @(
-                "Add each target Dataverse environment together with the App Registration and service account that will be used for that stage.",
-                "The table shows the full deployment configuration before DEPLOY-$defaultBranch.yml is regenerated, so you can verify URLs, authentication choices, and service-account ownership in one place.",
-                'Best practice: keep short names stable and list environments in promotion order (for example TEST, UAT, PROD) because that sequence becomes the deployment stage chain.'
-            ) `
-            -DocRelativePath 'docs/setup/github-setup.md' `
-            -Ref $ALM4DataverseRef `
-            -AddEnvironmentScriptBlock {
-                param($currentSelections)
-
-                $selectedEnv = Select-DataverseEnvironment -Prompt 'Select a Dataverse environment for deployment' -ExcludeUrl $devEnvUrl
-                if (-not $selectedEnv) {
-                    return $null
+                $solutionResult = Invoke-WithErrorHandling -OperationName 'Selecting solutions' -ScriptBlock {
+                    $existingConfigPath = Join-Path $cloneRoot 'alm-config.psd1'
+                    Get-DataverseSolutionsSelection -ExistingConfigPath $existingConfigPath -ExistingEnvironmentUrl $existingSetupState.DevEnvironment.Url -ExistingEnvironmentConfiguration $existingSetupState.DevEnvironment
                 }
 
-                $url = ConvertTo-NormalizedEnvironmentUrl -Url $selectedEnv.Endpoints['WebApplication']
-                if ($currentSelections | Where-Object { $_.Url -ieq $url }) {
-                    Write-Host 'An environment with that URL is already selected.' -ForegroundColor Red
-                    Start-Sleep -Seconds 2
-                    return $null
-                }
+                $devEnvUrl = if ($solutionResult) { $solutionResult.EnvironmentUrl } else { $null }
+                $devEnvFriendlyName = if ($solutionResult) { $solutionResult.EnvironmentFriendlyName } else { $null }
+                $reuseExistingDevEnvironmentConfiguration = if ($solutionResult) { [bool]$solutionResult.ReuseExistingConfiguration } else { $false }
 
-                Write-Host 'Use a short deployment environment name (for example: TEST, UAT, PROD).' -ForegroundColor DarkGray
-                $shortName = Read-TextWithDefault -Prompt 'Enter a short name for this environment' -DefaultValue ''
-                if ($currentSelections | Where-Object { $_.ShortName -ieq $shortName }) {
-                    Write-Host 'An environment with that short name is already selected.' -ForegroundColor Red
-                    Start-Sleep -Seconds 2
-                    return $null
-                }
+                Invoke-WithErrorHandling -OperationName 'Updating alm-config.psd1' -StatusMessage 'Updating alm-config.psd1 with the selected solutions...' -ScriptBlock {
+                    Update-AlmConfigInRepoClone -Solutions @($solutionResult.Solutions) -RepoRoot $cloneRoot
+                } -CaptureOutputInPanel | Out-Null
+            }
+        },
+        [pscustomobject]@{
+            Name = 'Configure deployment workflow'
+            Action = {
+                Write-Section 'Configure Deployment Workflow'
 
-                $environmentConfiguration = Get-GitHubEnvironmentConfiguration `
-                    -EnvironmentName $shortName `
-                    -EnvironmentUrl $url `
-                    -FriendlyName $selectedEnv.FriendlyName `
-                    -ExistingCredentials $script:cachedCredentials `
-                    -ExistingServiceAccounts $script:cachedServiceAccounts `
-                    -TenantId $TenantId `
-                    -RepoName $repoName
+                $initialDeploymentEnvironments = @()
+                foreach ($existingDeploymentEnvironment in @($existingSetupState.DeploymentEnvironments)) {
+                    if ([string]::IsNullOrWhiteSpace($existingDeploymentEnvironment.ShortName)) {
+                        continue
+                    }
 
-                if (-not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $environmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $environmentConfiguration.Credentials.TenantId })) {
-                    $script:cachedCredentials += $environmentConfiguration.Credentials
-                }
-                if ($script:cachedServiceAccounts -notcontains $environmentConfiguration.ServiceAccountUPN) {
-                    $script:cachedServiceAccounts += $environmentConfiguration.ServiceAccountUPN
-                }
+                    $existingEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $existingDeploymentEnvironment.Url
+                    if ($existingEnvironmentUrl -and $existingEnvironmentUrl -ieq $devEnvUrl) {
+                        Write-Warning "Skipping existing deployment stage '$($existingDeploymentEnvironment.ShortName)' because it points at the selected DEV environment URL."
+                        continue
+                    }
 
-                return [pscustomobject]@{
-                    ShortName            = $environmentConfiguration.ShortName
-                    FriendlyName         = $environmentConfiguration.FriendlyName
-                    Url                  = $environmentConfiguration.Url
-                    Credentials          = $environmentConfiguration.Credentials
-                    ServiceAccountUPN    = $environmentConfiguration.ServiceAccountUPN
-                    ConfigurationPending = $false
-                }
-            } `
-            -EditEnvironmentScriptBlock {
-                param($currentSelections, $environmentToEdit, $environmentIndex)
-
-                $otherSelections = @()
-                for ($selectionIndex = 0; $selectionIndex -lt $currentSelections.Count; $selectionIndex++) {
-                    if ($selectionIndex -ne $environmentIndex) {
-                        $otherSelections += $currentSelections[$selectionIndex]
+                    $initialDeploymentEnvironments += [pscustomobject]@{
+                        ShortName            = $existingDeploymentEnvironment.ShortName
+                        FriendlyName         = $existingDeploymentEnvironment.FriendlyName
+                        Url                  = $existingEnvironmentUrl
+                        Credentials          = $existingDeploymentEnvironment.Credentials
+                        ServiceAccountUPN    = $existingDeploymentEnvironment.ServiceAccountUPN
+                        ConfigurationPending = (($null -eq $existingDeploymentEnvironment.Credentials) -or [string]::IsNullOrWhiteSpace($existingDeploymentEnvironment.ServiceAccountUPN))
                     }
                 }
 
-                $currentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $environmentToEdit.Url
-                $selectedEnv = Select-DataverseEnvironment -Prompt "Select the Dataverse environment for '$($environmentToEdit.ShortName)'" -ExcludeUrl $devEnvUrl -PreferredUrl $currentUrl
-                if (-not $selectedEnv) {
-                    return $null
+                $deploymentEnvironments = @(Invoke-WithErrorHandling -OperationName 'Selecting deployment environments' -ScriptBlock {
+                    Select-ConfiguredDeploymentEnvironments `
+                        -InitialEnvironments $initialDeploymentEnvironments `
+                        -Heading 'Target Deployment Environments' `
+                        -Title 'Manage deployment environments' `
+                        -GuidanceLines @(
+                            'Add each target Dataverse environment together with the App Registration and service account that will be used for that stage.',
+                            "The table shows the full deployment configuration before DEPLOY-$defaultBranch.yml is regenerated, so you can verify URLs, authentication choices, and service-account ownership in one place.",
+                            'Best practice: keep short names stable and list environments in promotion order (for example TEST, UAT, PROD) because that sequence becomes the deployment stage chain.'
+                        ) `
+                        -DocRelativePath 'docs/setup/github-setup.md' `
+                        -Ref $ALM4DataverseRef `
+                        -AddEnvironmentScriptBlock {
+                            param($currentSelections)
+
+                            $selectedEnv = Select-DataverseEnvironment -Prompt 'Select a Dataverse environment for deployment' -ExcludeUrl $devEnvUrl
+                            if (-not $selectedEnv) {
+                                return $null
+                            }
+
+                            $url = ConvertTo-NormalizedEnvironmentUrl -Url $selectedEnv.Endpoints['WebApplication']
+                            if ($currentSelections | Where-Object { $_.Url -ieq $url }) {
+                                Write-Host 'An environment with that URL is already selected.' -ForegroundColor Red
+                                return $null
+                            }
+
+                            Write-Host 'Use a short deployment environment name (for example: TEST, UAT, PROD).' -ForegroundColor DarkGray
+                            $shortName = Read-TextWithDefault -Prompt 'Enter a short name for this environment' -DefaultValue ''
+                            if ($currentSelections | Where-Object { $_.ShortName -ieq $shortName }) {
+                                Write-Host 'An environment with that short name is already selected.' -ForegroundColor Red
+                                return $null
+                            }
+
+                            $environmentConfiguration = Get-GitHubEnvironmentConfiguration `
+                                -EnvironmentName $shortName `
+                                -EnvironmentUrl $url `
+                                -FriendlyName $selectedEnv.FriendlyName `
+                                -ExistingCredentials $script:cachedCredentials `
+                                -ExistingServiceAccounts $script:cachedServiceAccounts `
+                                -TenantId $TenantId `
+                                -RepoName $repoName
+
+                            if (-not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $environmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $environmentConfiguration.Credentials.TenantId })) {
+                                $script:cachedCredentials += $environmentConfiguration.Credentials
+                            }
+                            if ($script:cachedServiceAccounts -notcontains $environmentConfiguration.ServiceAccountUPN) {
+                                $script:cachedServiceAccounts += $environmentConfiguration.ServiceAccountUPN
+                            }
+
+                            return [pscustomobject]@{
+                                ShortName            = $environmentConfiguration.ShortName
+                                FriendlyName         = $environmentConfiguration.FriendlyName
+                                Url                  = $environmentConfiguration.Url
+                                Credentials          = $environmentConfiguration.Credentials
+                                ServiceAccountUPN    = $environmentConfiguration.ServiceAccountUPN
+                                ConfigurationPending = $false
+                            }
+                        } `
+                        -EditEnvironmentScriptBlock {
+                            param($currentSelections, $environmentToEdit, $environmentIndex)
+
+                            $otherSelections = @()
+                            for ($selectionIndex = 0; $selectionIndex -lt $currentSelections.Count; $selectionIndex++) {
+                                if ($selectionIndex -ne $environmentIndex) {
+                                    $otherSelections += $currentSelections[$selectionIndex]
+                                }
+                            }
+
+                            $currentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $environmentToEdit.Url
+                            $selectedEnv = Select-DataverseEnvironment -Prompt "Select the Dataverse environment for '$($environmentToEdit.ShortName)'" -ExcludeUrl $devEnvUrl -PreferredUrl $currentUrl
+                            if (-not $selectedEnv) {
+                                return $null
+                            }
+
+                            $url = ConvertTo-NormalizedEnvironmentUrl -Url $selectedEnv.Endpoints['WebApplication']
+                            if ($otherSelections | Where-Object { $_.Url -ieq $url }) {
+                                Write-Host 'An environment with that URL is already selected.' -ForegroundColor Red
+                                return $null
+                            }
+
+                            Write-Host 'Use a short deployment environment name (for example: TEST, UAT, PROD).' -ForegroundColor DarkGray
+                            $shortName = Read-TextWithDefault -Prompt 'Enter a short name for this environment' -DefaultValue $environmentToEdit.ShortName
+                            if ($otherSelections | Where-Object { $_.ShortName -ieq $shortName }) {
+                                Write-Host 'An environment with that short name is already selected.' -ForegroundColor Red
+                                return $null
+                            }
+
+                            $currentCredentials = @($script:cachedCredentials)
+                            $currentCredentials += @($otherSelections | ForEach-Object { $_.Credentials } | Where-Object { $null -ne $_ })
+                            $currentServiceAccounts = @($script:cachedServiceAccounts)
+                            $currentServiceAccounts += @($otherSelections | ForEach-Object { $_.ServiceAccountUPN } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+                            $environmentConfiguration = Get-GitHubEnvironmentConfiguration `
+                                -EnvironmentName $shortName `
+                                -EnvironmentUrl $url `
+                                -FriendlyName $selectedEnv.FriendlyName `
+                                -ExistingCredentials $currentCredentials `
+                                -ExistingServiceAccounts $currentServiceAccounts `
+                                -TenantId $TenantId `
+                                -RepoName $repoName `
+                                -ExistingCredential $environmentToEdit.Credentials `
+                                -ExistingServiceAccountUPN $environmentToEdit.ServiceAccountUPN
+
+                            if (-not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $environmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $environmentConfiguration.Credentials.TenantId })) {
+                                $script:cachedCredentials += $environmentConfiguration.Credentials
+                            }
+                            if ($script:cachedServiceAccounts -notcontains $environmentConfiguration.ServiceAccountUPN) {
+                                $script:cachedServiceAccounts += $environmentConfiguration.ServiceAccountUPN
+                            }
+
+                            return [pscustomobject]@{
+                                ShortName            = $environmentConfiguration.ShortName
+                                FriendlyName         = $environmentConfiguration.FriendlyName
+                                Url                  = $environmentConfiguration.Url
+                                Credentials          = $environmentConfiguration.Credentials
+                                ServiceAccountUPN    = $environmentConfiguration.ServiceAccountUPN
+                                ConfigurationPending = $false
+                            }
+                        }
+                })
+
+                $resolvedDeploymentEnvironments = @()
+                foreach ($selectedDeploymentEnvironment in @($deploymentEnvironments)) {
+                    if ([string]::IsNullOrWhiteSpace($selectedDeploymentEnvironment.ShortName)) {
+                        continue
+                    }
+
+                    $resolvedEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $selectedDeploymentEnvironment.Url
+                    $resolvedFriendlyName = if ([string]::IsNullOrWhiteSpace($selectedDeploymentEnvironment.FriendlyName)) { $selectedDeploymentEnvironment.ShortName } else { $selectedDeploymentEnvironment.FriendlyName }
+
+                    if ([string]::IsNullOrWhiteSpace($resolvedEnvironmentUrl)) {
+                        $resolvedEnvironment = Select-DataverseEnvironment -Prompt "Resolve the Dataverse environment for existing deployment stage '$($selectedDeploymentEnvironment.ShortName)'" -ExcludeUrl $devEnvUrl -PreferredUrl $selectedDeploymentEnvironment.Url
+                        if (-not $resolvedEnvironment) {
+                            throw "No Dataverse environment selected for existing deployment stage '$($selectedDeploymentEnvironment.ShortName)'."
+                        }
+
+                        $resolvedEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $resolvedEnvironment.Endpoints['WebApplication']
+                        $resolvedFriendlyName = $resolvedEnvironment.FriendlyName
+                    }
+
+                    if ($resolvedEnvironmentUrl -and $resolvedEnvironmentUrl -ieq $devEnvUrl) {
+                        Write-Warning "Skipping deployment environment '$($selectedDeploymentEnvironment.ShortName)' because it points at the selected DEV environment URL."
+                        continue
+                    }
+
+                    $needsConfiguration = (
+                        ($selectedDeploymentEnvironment.PSObject.Properties.Name -contains 'ConfigurationPending' -and $selectedDeploymentEnvironment.ConfigurationPending) -or
+                        ($null -eq $selectedDeploymentEnvironment.Credentials) -or
+                        [string]::IsNullOrWhiteSpace($selectedDeploymentEnvironment.ServiceAccountUPN)
+                    )
+
+                    if ($needsConfiguration) {
+                        Write-Host "Completing configuration for existing deployment environment '$($selectedDeploymentEnvironment.ShortName)'..." -ForegroundColor Yellow
+                        $completedEnvironment = Get-GitHubEnvironmentConfiguration `
+                            -EnvironmentName $selectedDeploymentEnvironment.ShortName `
+                            -EnvironmentUrl $resolvedEnvironmentUrl `
+                            -FriendlyName $resolvedFriendlyName `
+                            -ExistingCredentials $script:cachedCredentials `
+                            -ExistingServiceAccounts $script:cachedServiceAccounts `
+                            -TenantId $TenantId `
+                            -RepoName $repoName `
+                            -ExistingCredential $selectedDeploymentEnvironment.Credentials `
+                            -ExistingServiceAccountUPN $selectedDeploymentEnvironment.ServiceAccountUPN
+                    }
+                    else {
+                        $completedEnvironment = [pscustomobject]@{
+                            ShortName         = $selectedDeploymentEnvironment.ShortName
+                            FriendlyName      = $resolvedFriendlyName
+                            Url               = $resolvedEnvironmentUrl
+                            Credentials       = $selectedDeploymentEnvironment.Credentials
+                            ServiceAccountUPN = $selectedDeploymentEnvironment.ServiceAccountUPN
+                        }
+                    }
+
+                    $resolvedDeploymentEnvironments += $completedEnvironment
+                    if ($completedEnvironment.Credentials -and -not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $completedEnvironment.Credentials.ApplicationId -and $_.TenantId -eq $completedEnvironment.Credentials.TenantId })) {
+                        $script:cachedCredentials += $completedEnvironment.Credentials
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($completedEnvironment.ServiceAccountUPN) -and $script:cachedServiceAccounts -notcontains $completedEnvironment.ServiceAccountUPN) {
+                        $script:cachedServiceAccounts += $completedEnvironment.ServiceAccountUPN
+                    }
                 }
 
-                $url = ConvertTo-NormalizedEnvironmentUrl -Url $selectedEnv.Endpoints['WebApplication']
-                if ($otherSelections | Where-Object { $_.Url -ieq $url }) {
-                    Write-Host 'An environment with that URL is already selected.' -ForegroundColor Red
-                    Start-Sleep -Seconds 2
-                    return $null
+                $deploymentEnvironments = @($resolvedDeploymentEnvironments)
+
+                Invoke-WithErrorHandling -OperationName 'Updating DEPLOY workflow' -StatusMessage 'Regenerating the DEPLOY workflow for the selected environments...' -ScriptBlock {
+                    Update-DeployWorkflowInRepoClone `
+                        -RepoRoot $cloneRoot `
+                        -Branch $defaultBranch `
+                        -DeploymentEnvironments $deploymentEnvironments `
+                        -SharedWorkflowRepository $sharedWorkflowRepository `
+                        -SharedWorkflowRef $sharedWorkflowReference `
+                        -PromotionMode $deploymentPromotionMode
+                } -CaptureOutputInPanel | Out-Null
+            }
+        },
+        [pscustomobject]@{
+            Name = 'Configure DEV credentials'
+            Action = {
+                Write-Section 'Configure Dev Environment Credentials'
+
+                if ($useGitHubEnvironments) {
+                    Write-Host "Preparing GitHub environment '$devEnvShortName' for the DEV Dataverse environment." -ForegroundColor Green
+                }
+                else {
+                    Write-Host "Preparing prefixed repo-level credentials for DEV environment '$devEnvShortName'." -ForegroundColor Green
+                }
+                Write-Host ''
+
+                if (-not $devEnvUrl) {
+                    $existingDevEnvironmentSummary = Get-GitHubExistingEnvironmentSelectionSummary -ExistingEnvironment $existingSetupState.DevEnvironment
+                    $devEnvSelection = Select-DataverseEnvironment -Prompt 'Select your DEV Dataverse environment' -PreferredUrl $existingSetupState.DevEnvironment.Url -PreferredSelectionSummary $existingDevEnvironmentSummary -KeepPreferredInList
+                    if ($devEnvSelection) {
+                        $devEnvUrl = ConvertTo-NormalizedEnvironmentUrl -Url $devEnvSelection.Endpoints['WebApplication']
+                        $devEnvFriendlyName = $devEnvSelection.FriendlyName
+                        $reuseExistingDevEnvironmentConfiguration = ($devEnvSelection.PSObject.Properties.Name -contains 'UseExistingConfiguration' -and $devEnvSelection.UseExistingConfiguration)
+                    }
                 }
 
-                Write-Host 'Use a short deployment environment name (for example: TEST, UAT, PROD).' -ForegroundColor DarkGray
-                $shortName = Read-TextWithDefault -Prompt 'Enter a short name for this environment' -DefaultValue $environmentToEdit.ShortName
-                if ($otherSelections | Where-Object { $_.ShortName -ieq $shortName }) {
-                    Write-Host 'An environment with that short name is already selected.' -ForegroundColor Red
-                    Start-Sleep -Seconds 2
-                    return $null
+                if (-not $devEnvUrl) {
+                    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No DEV environment is currently selected, so there is nothing to configure for this step yet.[/]')
+                    $devEnvironmentConfiguration = $null
+                    return
                 }
 
-                $currentCredentials = @($script:cachedCredentials)
-                $currentCredentials += @($otherSelections | ForEach-Object { $_.Credentials } | Where-Object { $null -ne $_ })
-                $currentServiceAccounts = @($script:cachedServiceAccounts)
-                $currentServiceAccounts += @($otherSelections | ForEach-Object { $_.ServiceAccountUPN } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                $canReuseExistingDevConfiguration = (
+                    $reuseExistingDevEnvironmentConfiguration -and
+                    $existingSetupState.DevEnvironment -and
+                    $existingSetupState.DevEnvironment.Credentials -and
+                    -not [string]::IsNullOrWhiteSpace($existingSetupState.DevEnvironment.ServiceAccountUPN)
+                )
 
-                $environmentConfiguration = Get-GitHubEnvironmentConfiguration `
-                    -EnvironmentName $shortName `
-                    -EnvironmentUrl $url `
-                    -FriendlyName $selectedEnv.FriendlyName `
-                    -ExistingCredentials $currentCredentials `
-                    -ExistingServiceAccounts $currentServiceAccounts `
-                    -TenantId $TenantId `
-                    -RepoName $repoName `
-                    -ExistingCredential $environmentToEdit.Credentials `
-                    -ExistingServiceAccountUPN $environmentToEdit.ServiceAccountUPN
-
-                if (-not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $environmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $environmentConfiguration.Credentials.TenantId })) {
-                    $script:cachedCredentials += $environmentConfiguration.Credentials
+                if ($canReuseExistingDevConfiguration) {
+                    Write-Host 'Using the existing DEV environment credentials and service account you selected from the menu.' -ForegroundColor Green
+                    $devEnvironmentConfiguration = [pscustomobject]@{
+                        ShortName         = $devEnvShortName
+                        FriendlyName      = $(if ([string]::IsNullOrWhiteSpace($devEnvFriendlyName)) { $devEnvShortName } else { $devEnvFriendlyName })
+                        Url               = (ConvertTo-NormalizedEnvironmentUrl -Url $devEnvUrl)
+                        Credentials       = $existingSetupState.DevEnvironment.Credentials
+                        ServiceAccountUPN = $existingSetupState.DevEnvironment.ServiceAccountUPN
+                    }
                 }
-                if ($script:cachedServiceAccounts -notcontains $environmentConfiguration.ServiceAccountUPN) {
-                    $script:cachedServiceAccounts += $environmentConfiguration.ServiceAccountUPN
+                else {
+                    if ($reuseExistingDevEnvironmentConfiguration -and -not $canReuseExistingDevConfiguration) {
+                        Write-Warning 'The existing DEV environment entry is missing either credentials or service account information, so setup needs to ask for the missing details.'
+                    }
+
+                    $devEnvironmentConfiguration = Invoke-WithErrorHandling -OperationName 'Selecting DEV credentials' -ScriptBlock {
+                        Get-GitHubEnvironmentConfiguration `
+                            -EnvironmentName $devEnvShortName `
+                            -EnvironmentUrl $devEnvUrl `
+                            -FriendlyName $devEnvFriendlyName `
+                            -ExistingCredentials $script:cachedCredentials `
+                            -ExistingServiceAccounts $script:cachedServiceAccounts `
+                            -TenantId $TenantId `
+                            -RepoName $repoName `
+                            -ExistingCredential $existingSetupState.DevEnvironment.Credentials `
+                            -ExistingServiceAccountUPN $existingSetupState.DevEnvironment.ServiceAccountUPN
+                    }
                 }
 
-                return [pscustomobject]@{
-                    ShortName            = $environmentConfiguration.ShortName
-                    FriendlyName         = $environmentConfiguration.FriendlyName
-                    Url                  = $environmentConfiguration.Url
-                    Credentials          = $environmentConfiguration.Credentials
-                    ServiceAccountUPN    = $environmentConfiguration.ServiceAccountUPN
-                    ConfigurationPending = $false
+                if ($devEnvironmentConfiguration -and -not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $devEnvironmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $devEnvironmentConfiguration.Credentials.TenantId })) {
+                    $script:cachedCredentials += $devEnvironmentConfiguration.Credentials
+                }
+                if ($devEnvironmentConfiguration -and $script:cachedServiceAccounts -notcontains $devEnvironmentConfiguration.ServiceAccountUPN) {
+                    $script:cachedServiceAccounts += $devEnvironmentConfiguration.ServiceAccountUPN
                 }
             }
+        },
+        [pscustomobject]@{
+            Name = 'Review choices'
+            Action = {
+                Write-Section 'Review setup choices'
+
+                $allConfiguredEnvironments = @()
+                if ($devEnvironmentConfiguration) {
+                    $allConfiguredEnvironments += $devEnvironmentConfiguration
+                }
+                $allConfiguredEnvironments += @($deploymentEnvironments)
+
+                Show-KeyValueSummaryTable -Heading 'Setup review' -Values ([ordered]@{
+                    'Repository'                = $repoFullName
+                    'Shared workflow source'    = $sharedWorkflowRepository
+                    'Shared workflow ref'       = $sharedWorkflowReference
+                    'Credential storage'        = $(if ($useGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables/secrets' })
+                    'Promotion mode'            = $deploymentPromotionMode
+                    'Publish mode'              = $(if ($repoPublishPlan.Mode -eq 'PullRequest') { "Pull request into $($repoPublishPlan.TargetBranch) from $($repoPublishPlan.BranchName)" } else { "Direct commit to $($repoPublishPlan.BranchName)" })
+                    'Deployment environments'   = [string]$deploymentEnvironments.Count
+                })
+
+                Show-EnvironmentConfigurationTable -EnvironmentConfigurations $allConfiguredEnvironments
+                Confirm-SetupReviewAction
+            }
+        }
+    )
+
+    Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 2
+    $repoPublishResult = Invoke-WithErrorHandling -OperationName 'Publishing GitHub repository changes' -StatusMessage 'Publishing repository changes to GitHub...' -CaptureOutputInPanel -ScriptBlock {
+        Publish-GitHubRepoChanges -RepoRoot $cloneRoot -PublishPlan $repoPublishPlan
     }
-
-    $resolvedDeploymentEnvironments = @()
-    foreach ($selectedDeploymentEnvironment in @($deploymentEnvironments)) {
-        if ([string]::IsNullOrWhiteSpace($selectedDeploymentEnvironment.ShortName)) {
-            continue
-        }
-
-        $resolvedEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $selectedDeploymentEnvironment.Url
-        $resolvedFriendlyName = if ([string]::IsNullOrWhiteSpace($selectedDeploymentEnvironment.FriendlyName)) { $selectedDeploymentEnvironment.ShortName } else { $selectedDeploymentEnvironment.FriendlyName }
-
-        if ([string]::IsNullOrWhiteSpace($resolvedEnvironmentUrl)) {
-            $resolvedEnvironment = Select-DataverseEnvironment -Prompt "Resolve the Dataverse environment for existing deployment stage '$($selectedDeploymentEnvironment.ShortName)'" -ExcludeUrl $devEnvUrl -PreferredUrl $selectedDeploymentEnvironment.Url
-            if (-not $resolvedEnvironment) {
-                throw "No Dataverse environment selected for existing deployment stage '$($selectedDeploymentEnvironment.ShortName)'."
-            }
-
-            $resolvedEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $resolvedEnvironment.Endpoints['WebApplication']
-            $resolvedFriendlyName = $resolvedEnvironment.FriendlyName
-        }
-
-        if ($resolvedEnvironmentUrl -and $resolvedEnvironmentUrl -ieq $devEnvUrl) {
-            Write-Warning "Skipping deployment environment '$($selectedDeploymentEnvironment.ShortName)' because it points at the selected DEV environment URL."
-            continue
-        }
-
-        $needsConfiguration = (
-            ($selectedDeploymentEnvironment.PSObject.Properties.Name -contains 'ConfigurationPending' -and $selectedDeploymentEnvironment.ConfigurationPending) -or
-            ($null -eq $selectedDeploymentEnvironment.Credentials) -or
-            [string]::IsNullOrWhiteSpace($selectedDeploymentEnvironment.ServiceAccountUPN)
-        )
-
-        if ($needsConfiguration) {
-            Write-Host "Completing configuration for existing deployment environment '$($selectedDeploymentEnvironment.ShortName)'..." -ForegroundColor Yellow
-            $completedEnvironment = Get-GitHubEnvironmentConfiguration `
-                -EnvironmentName $selectedDeploymentEnvironment.ShortName `
-                -EnvironmentUrl $resolvedEnvironmentUrl `
-                -FriendlyName $resolvedFriendlyName `
-                -ExistingCredentials $script:cachedCredentials `
-                -ExistingServiceAccounts $script:cachedServiceAccounts `
-                -TenantId $TenantId `
-                -RepoName $repoName `
-                -ExistingCredential $selectedDeploymentEnvironment.Credentials `
-                -ExistingServiceAccountUPN $selectedDeploymentEnvironment.ServiceAccountUPN
-        }
-        else {
-            $completedEnvironment = [pscustomobject]@{
-                ShortName         = $selectedDeploymentEnvironment.ShortName
-                FriendlyName      = $resolvedFriendlyName
-                Url               = $resolvedEnvironmentUrl
-                Credentials       = $selectedDeploymentEnvironment.Credentials
-                ServiceAccountUPN = $selectedDeploymentEnvironment.ServiceAccountUPN
-            }
-        }
-
-        $resolvedDeploymentEnvironments += $completedEnvironment
-        if ($completedEnvironment.Credentials -and -not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $completedEnvironment.Credentials.ApplicationId -and $_.TenantId -eq $completedEnvironment.Credentials.TenantId })) {
-            $script:cachedCredentials += $completedEnvironment.Credentials
-        }
-        if (-not [string]::IsNullOrWhiteSpace($completedEnvironment.ServiceAccountUPN) -and $script:cachedServiceAccounts -notcontains $completedEnvironment.ServiceAccountUPN) {
-            $script:cachedServiceAccounts += $completedEnvironment.ServiceAccountUPN
-        }
-    }
-
-    $deploymentEnvironments = @($resolvedDeploymentEnvironments)
-
-    Invoke-WithErrorHandling -OperationName "Updating DEPLOY workflow" -ScriptBlock {
-        Update-DeployWorkflowInRepoClone `
-            -RepoRoot $cloneRoot `
-            -Branch $defaultBranch `
-            -DeploymentEnvironments $deploymentEnvironments `
-            -SharedWorkflowRepository $sharedWorkflowRepository `
-            -SharedWorkflowRef $sharedWorkflowReference `
-            -PromotionMode $deploymentPromotionMode
-    } | Out-Null
-
-    # ─────────────────────────────────────────────────────────
-    # Commit and push the workflow template + config changes
-    $repoPublishResult = Publish-GitHubRepoChanges -RepoRoot $cloneRoot -PublishPlan $repoPublishPlan
 }
 finally {
     Pop-Location
@@ -3149,9 +3322,9 @@ finally {
 }
 
 # ─────────────────────────────────────────────────────────────
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 3
 Write-Section "Configure Dev Environment Credentials"
 
-$devEnvShortName = "Dev-$defaultBranch"
 if ($useGitHubEnvironments) {
     Write-Host "Setting up GitHub environment '$devEnvShortName' for the DEV Dataverse environment." -ForegroundColor Green
 }
@@ -3160,61 +3333,8 @@ else {
 }
 Write-Host ""
 
-if (-not $devEnvUrl) {
-    $existingDevEnvironmentSummary = Get-GitHubExistingEnvironmentSelectionSummary -ExistingEnvironment $existingSetupState.DevEnvironment
-    $devEnvSelection = Select-DataverseEnvironment -Prompt "Select your DEV Dataverse environment" -PreferredUrl $existingSetupState.DevEnvironment.Url -PreferredSelectionSummary $existingDevEnvironmentSummary -KeepPreferredInList
-    if ($devEnvSelection) {
-        $devEnvUrl = ConvertTo-NormalizedEnvironmentUrl -Url $devEnvSelection.Endpoints["WebApplication"]
-        $devEnvFriendlyName = $devEnvSelection.FriendlyName
-        $reuseExistingDevEnvironmentConfiguration = ($devEnvSelection.PSObject.Properties.Name -contains 'UseExistingConfiguration' -and $devEnvSelection.UseExistingConfiguration)
-    }
-}
-
-if ($devEnvUrl) {
-    $canReuseExistingDevConfiguration = (
-        $reuseExistingDevEnvironmentConfiguration -and
-        $existingSetupState.DevEnvironment -and
-        $existingSetupState.DevEnvironment.Credentials -and
-        -not [string]::IsNullOrWhiteSpace($existingSetupState.DevEnvironment.ServiceAccountUPN)
-    )
-
-    if ($canReuseExistingDevConfiguration) {
-        Write-Host 'Using the existing DEV environment credentials and service account you selected from the menu.' -ForegroundColor Green
-        $devEnvironmentConfiguration = [pscustomobject]@{
-            ShortName         = $devEnvShortName
-            FriendlyName      = $(if ([string]::IsNullOrWhiteSpace($devEnvFriendlyName)) { $devEnvShortName } else { $devEnvFriendlyName })
-            Url               = (ConvertTo-NormalizedEnvironmentUrl -Url $devEnvUrl)
-            Credentials       = $existingSetupState.DevEnvironment.Credentials
-            ServiceAccountUPN = $existingSetupState.DevEnvironment.ServiceAccountUPN
-        }
-    }
-    else {
-        if ($reuseExistingDevEnvironmentConfiguration -and -not $canReuseExistingDevConfiguration) {
-            Write-Warning 'The existing DEV environment entry is missing either credentials or service account information, so setup needs to ask for the missing details.'
-        }
-
-        $devEnvironmentConfiguration = Invoke-WithErrorHandling -OperationName "Selecting DEV credentials" -ScriptBlock {
-            Get-GitHubEnvironmentConfiguration `
-                -EnvironmentName $devEnvShortName `
-                -EnvironmentUrl $devEnvUrl `
-                -FriendlyName $devEnvFriendlyName `
-                -ExistingCredentials $script:cachedCredentials `
-                -ExistingServiceAccounts $script:cachedServiceAccounts `
-                -TenantId $TenantId `
-                    -RepoName $repoName `
-                    -ExistingCredential $existingSetupState.DevEnvironment.Credentials `
-                    -ExistingServiceAccountUPN $existingSetupState.DevEnvironment.ServiceAccountUPN
-        }
-    }
-
-    if (-not ($script:cachedCredentials | Where-Object { $_.ApplicationId -eq $devEnvironmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $devEnvironmentConfiguration.Credentials.TenantId })) {
-        $script:cachedCredentials += $devEnvironmentConfiguration.Credentials
-    }
-    if ($script:cachedServiceAccounts -notcontains $devEnvironmentConfiguration.ServiceAccountUPN) {
-        $script:cachedServiceAccounts += $devEnvironmentConfiguration.ServiceAccountUPN
-    }
-
-    Invoke-WithErrorHandling -OperationName "Setting up DEV credentials" -ScriptBlock {
+if ($devEnvironmentConfiguration) {
+    Invoke-WithErrorHandling -OperationName "Setting up DEV credentials" -StatusMessage 'Applying DEV environment credentials...' -CaptureOutputInPanel -ScriptBlock {
         Apply-GitHubEnvironmentConfiguration `
             -EnvironmentConfiguration $devEnvironmentConfiguration `
             -TenantId $TenantId `
@@ -3225,8 +3345,12 @@ if ($devEnvUrl) {
             -EnableApprovals:$false
     } | Out-Null
 }
+else {
+    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No DEV environment credentials were configured in the wizard, so this step will be skipped.[/]')
+}
 
 # ─────────────────────────────────────────────────────────────
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 4
 Write-Section "Configure Deployment Environment Credentials"
 
 if ($useGitHubEnvironments) {
@@ -3245,7 +3369,8 @@ if ($deploymentEnvironments.Count -eq 0) {
     Write-Host "No deployment environments selected. You can run this script again to add them later." -ForegroundColor Yellow
 }
 else {
-    foreach ($env in $deploymentEnvironments) {
+    for ($envIndex = 0; $envIndex -lt $deploymentEnvironments.Count; $envIndex++) {
+        $env = $deploymentEnvironments[$envIndex]
         Write-Section "Applying environment configuration: $($env.ShortName)"
         Write-Host "Dataverse URL: $($env.Url)" -ForegroundColor DarkGray
         Write-Host ""
@@ -3260,27 +3385,33 @@ else {
                 -UseGitHubEnvironments $useGitHubEnvironments `
                 -EnableApprovals:$enableEnvironmentApprovals `
                 -RequiredReviewerIds $environmentApprovalReviewerIds
-        } | Out-Null
+        } -StatusMessage "Applying configuration for environment '$($env.ShortName)'..." -CaptureOutputInPanel | Out-Null
     }
 }
 
 # ─────────────────────────────────────────────────────────────
-Clear-Host
-Write-Host "Setup completed successfully!" -ForegroundColor Green
-Write-Host ""
-Write-Host "Access your GitHub repository at" -ForegroundColor Green
-Write-Host "https://github.com/$repoFullName/actions" -ForegroundColor Green
-Write-Host ""
-if ($repoPublishResult -and $repoPublishResult.Mode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($repoPublishResult.PullRequestUrl)) {
-    Write-Host "Repository changes were pushed to branch '$($repoPublishResult.BranchName)' and a pull request was created:" -ForegroundColor Green
-    Write-Host $repoPublishResult.PullRequestUrl -ForegroundColor Green
-    Write-Host ""
-}
-elseif ($repoPublishResult -and $repoPublishResult.HasChanges) {
-    Write-Host "Repository changes were committed directly to '$($repoPublishResult.BranchName)'." -ForegroundColor Green
-    Write-Host ""
-}
-
-Write-Host "Next steps:" -ForegroundColor Green
-Write-Host (Get-Alm4DataverseDocUrl -RelativePath 'docs/setup/github-setup.md' -Ref $ALM4DataverseRef) -ForegroundColor Green
-Write-Host (Get-Alm4DataverseDocUrl -RelativePath 'docs/config/github-secrets.md' -Ref $ALM4DataverseRef) -ForegroundColor Green
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 4
+Show-SetupCompletionScreen `
+    -Heading 'GitHub Actions setup completed successfully!' `
+    -AccessLabel 'Open your GitHub Actions page' `
+    -AccessUrl "https://github.com/$repoFullName/actions" `
+    -MetricCards @(
+        @{ Label = 'Solutions'; AccentColor = 'green3_1'; Value = [string]@($solutionResult.Solutions).Count; Detail = 'Configured in alm-config.psd1' },
+        @{ Label = 'Environments'; AccentColor = 'yellow3'; Value = [string]($deploymentEnvironments.Count + $(if ($devEnvironmentConfiguration) { 1 } else { 0 })); Detail = 'DEV plus deployment stages' },
+        @{ Label = 'Credential storage'; AccentColor = 'deepskyblue1'; Value = $(if ($useGitHubEnvironments) { 'Environments' } else { 'Repo-level' }); Detail = 'Where secrets and variables are stored' },
+        @{ Label = 'Promotion'; AccentColor = 'mediumpurple3'; Value = $deploymentPromotionMode; Detail = 'DEPLOY workflow strategy' }
+    ) `
+    -SummaryValues ([ordered]@{
+        'Repository'              = $repoFullName
+        'Shared workflow source'  = $sharedWorkflowRepository
+        'Promotion mode'          = $deploymentPromotionMode
+        'Credential storage'      = $(if ($useGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables/secrets' })
+        'Configured environments' = [string]($deploymentEnvironments.Count + $(if ($devEnvironmentConfiguration) { 1 } else { 0 }))
+    }) `
+    -NextStepLinks @(
+        (Get-Alm4DataverseDocUrl -RelativePath 'docs/setup/github-setup.md' -Ref $ALM4DataverseRef),
+        (Get-Alm4DataverseDocUrl -RelativePath 'docs/config/github-secrets.md' -Ref $ALM4DataverseRef)
+    ) `
+    -Notes @(
+        $(if ($repoPublishResult -and $repoPublishResult.Mode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($repoPublishResult.PullRequestUrl)) { "A pull request was opened: $($repoPublishResult.PullRequestUrl)" } elseif ($repoPublishResult -and $repoPublishResult.HasChanges) { "Repository changes were committed directly to '$($repoPublishResult.BranchName)'." } else { 'The repository already contained the generated files, so nothing new had to be committed.' })
+    )

@@ -1,12 +1,3 @@
-function Write-Section {
-    param([Parameter(Mandatory)][string]$Message)
-
-    Write-Progress -Completed -Activity "Done"
-    Clear-Host
-    Write-Host "==== $Message ====" -ForegroundColor Cyan
-    Write-Host ""
-}
-
 function New-DirectoryIfMissing {
     param([Parameter(Mandatory)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -14,30 +5,1509 @@ function New-DirectoryIfMissing {
     }
 }
 
+function Initialize-SpectreConsole {
+    [CmdletBinding()]
+    param()
+
+    if (Get-Variable -Name 'SpectreConsoleInitialized' -Scope Script -ErrorAction SilentlyContinue) {
+        return
+    }
+
+    try {
+        [void][Spectre.Console.AnsiConsole]
+        $script:SpectreConsoleInitialized = $true
+        return
+    }
+    catch {
+        # Continue and load the assembly from the NuGet package.
+    }
+
+    $spectreVersion = '0.53.1'
+    $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'ALM4Dataverse\SpectreConsole'
+    $expandedRoot = Join-Path $packageRoot $spectreVersion
+    $packagePath = Join-Path $packageRoot "Spectre.Console.$spectreVersion.nupkg"
+
+    New-DirectoryIfMissing -Path $packageRoot
+
+    if (-not (Test-Path -LiteralPath $expandedRoot)) {
+        if (-not (Test-Path -LiteralPath $packagePath)) {
+            try {
+                if ($PSVersionTable.PSVersion.Major -lt 6) {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                }
+            }
+            catch {
+                # Non-fatal; continue.
+            }
+
+            $packageUrl = "https://www.nuget.org/api/v2/package/Spectre.Console/$spectreVersion"
+            Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
+        }
+
+        Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+    }
+
+    $candidateFrameworks = if ($PSVersionTable.PSEdition -eq 'Core') {
+        @('net8.0', 'netstandard2.0')
+    }
+    else {
+        @('netstandard2.0')
+    }
+
+    $spectreAssemblyPath = $null
+    foreach ($candidateFramework in $candidateFrameworks) {
+        $candidatePath = Join-Path $expandedRoot "lib\$candidateFramework\Spectre.Console.dll"
+        if (Test-Path -LiteralPath $candidatePath) {
+            $spectreAssemblyPath = $candidatePath
+            break
+        }
+    }
+
+    if (-not $spectreAssemblyPath) {
+        $spectreAssemblyPath = Get-ChildItem -Path $expandedRoot -Recurse -Filter 'Spectre.Console.dll' -File |
+            Select-Object -ExpandProperty FullName -First 1
+    }
+
+    if (-not $spectreAssemblyPath) {
+        throw "Could not locate Spectre.Console.dll after extracting package version $spectreVersion."
+    }
+
+    Add-Type -Path $spectreAssemblyPath -ErrorAction Stop
+    $script:SpectreConsoleInitialized = $true
+    $script:SpectreConsoleAssemblyPath = $spectreAssemblyPath
+}
+
+function ConvertTo-SpectreMarkupLiteral {
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowNull()][string]$Text
+    )
+
+    if ($null -eq $Text) {
+        return ''
+    }
+
+    return ([string]$Text).Replace('[', '[[').Replace(']', ']]')
+}
+
+function New-SpectreTable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string[]]$Columns
+    )
+
+    Initialize-SpectreConsole
+
+    $table = [Spectre.Console.Table]::new()
+    foreach ($column in $Columns) {
+        [void]$table.AddColumn([Spectre.Console.TableColumn]::new("[grey]$(ConvertTo-SpectreMarkupLiteral -Text $column)[/]"))
+    }
+
+    return $table
+}
+
+function Add-SpectreTableRow {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Table,
+        [Parameter(Mandatory)][string[]]$Cells
+    )
+
+    Initialize-SpectreConsole
+
+    $renderables = [Spectre.Console.Rendering.IRenderable[]]@(
+        foreach ($cell in $Cells) {
+            [Spectre.Console.Markup]::new((ConvertTo-SpectreMarkupLiteral -Text $cell))
+        }
+    )
+
+    [void]$Table.Rows.Add($renderables)
+}
+
+function New-SpectrePanel {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Content,
+        [Parameter()][string]$Header,
+        [Parameter()][string]$HeaderMarkup,
+        [Parameter()][string]$BorderColor = 'grey35',
+        [Parameter()][switch]$Expand,
+        [Parameter()][int]$PaddingX = 1,
+        [Parameter()][int]$PaddingY = 0
+    )
+
+    Initialize-SpectreConsole
+
+    $panel = [Spectre.Console.Panel]::new($Content)
+    $panel.Border = [Spectre.Console.BoxBorder]::Rounded
+    $panel.BorderStyle = [Spectre.Console.Style]::Parse($BorderColor)
+    $panel.Padding = [Spectre.Console.Padding]::new($PaddingX, $PaddingY, $PaddingX, $PaddingY)
+    $panel.Expand = $Expand.IsPresent
+
+    if (-not [string]::IsNullOrWhiteSpace($HeaderMarkup)) {
+        $panel.Header = [Spectre.Console.PanelHeader]::new($HeaderMarkup)
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($Header)) {
+        $panel.Header = [Spectre.Console.PanelHeader]::new("[bold]$(ConvertTo-SpectreMarkupLiteral -Text $Header)[/]")
+    }
+
+    return $panel
+}
+
+function New-SpectreInfoGrid {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter()][int]$LabelWidth = 18
+    )
+
+    Initialize-SpectreConsole
+
+    $grid = [Spectre.Console.Grid]::new()
+    $grid.Expand = $true
+
+    $labelColumn = [Spectre.Console.GridColumn]::new()
+    $labelColumn.NoWrap = $true
+    $labelColumn.Width = $LabelWidth
+    $labelColumn.Padding = [Spectre.Console.Padding]::new(0, 0, 2, 0)
+
+    [void]$grid.AddColumn($labelColumn)
+    [void]$grid.AddColumn()
+
+    foreach ($entry in $Values.GetEnumerator()) {
+        [void]$grid.AddRow([Spectre.Console.Rendering.IRenderable[]]@(
+            [Spectre.Console.Markup]::new("[grey]$(ConvertTo-SpectreMarkupLiteral -Text ([string]$entry.Key))[/]"),
+            [Spectre.Console.Markup]::new("[white]$(ConvertTo-SpectreMarkupLiteral -Text ([string]$entry.Value))[/]")
+        ))
+    }
+
+    return $grid
+}
+
+function New-SpectreMetricColumns {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][array]$Cards
+    )
+
+    Initialize-SpectreConsole
+
+    $renderables = [Spectre.Console.Rendering.IRenderable[]]@(
+        foreach ($card in @($Cards)) {
+            if ($null -eq $card) {
+                continue
+            }
+
+            $label = ''
+            $value = ''
+            $detail = ''
+            $accentColor = 'deepskyblue1'
+
+            if ($card -is [hashtable]) {
+                $label = [string]$card.Label
+                $value = [string]$card.Value
+                $detail = [string]$card.Detail
+                if ($card.ContainsKey('AccentColor') -and -not [string]::IsNullOrWhiteSpace($card.AccentColor)) {
+                    $accentColor = [string]$card.AccentColor
+                }
+            }
+            else {
+                if ($card.PSObject.Properties.Name -contains 'Label') { $label = [string]$card.Label }
+                if ($card.PSObject.Properties.Name -contains 'Value') { $value = [string]$card.Value }
+                if ($card.PSObject.Properties.Name -contains 'Detail') { $detail = [string]$card.Detail }
+                if ($card.PSObject.Properties.Name -contains 'AccentColor' -and -not [string]::IsNullOrWhiteSpace($card.AccentColor)) {
+                    $accentColor = [string]$card.AccentColor
+                }
+            }
+
+            $lines = @(
+                "[bold $accentColor]$(ConvertTo-SpectreMarkupLiteral -Text $value)[/]",
+                "[grey]$(ConvertTo-SpectreMarkupLiteral -Text $label)[/]"
+            )
+            if (-not [string]::IsNullOrWhiteSpace($detail)) {
+                $lines += "[dim]$(ConvertTo-SpectreMarkupLiteral -Text $detail)[/]"
+            }
+
+            New-SpectrePanel -Content ([Spectre.Console.Markup]::new(($lines -join [Environment]::NewLine))) -BorderColor $accentColor -Expand
+        }
+    )
+
+    $columns = [Spectre.Console.Columns]::new($renderables)
+    $columns.Expand = $true
+    $columns.Padding = [Spectre.Console.Padding]::new(1, 0, 1, 0)
+    return $columns
+}
+
+function Show-SpectreMetricCards {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][array]$Cards
+    )
+
+    $filteredCards = @($Cards | Where-Object { $null -ne $_ })
+    if ($filteredCards.Count -eq 0) {
+        return
+    }
+
+    Initialize-SpectreConsole
+    [Spectre.Console.AnsiConsole]::Write((New-SpectreMetricColumns -Cards $filteredCards))
+    [Spectre.Console.AnsiConsole]::WriteLine()
+}
+
+function Show-SolutionSelectionOverview {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][int]$SelectedCount,
+        [Parameter(Mandatory)][int]$AvailableCount
+    )
+
+    $remainingCount = [Math]::Max($AvailableCount - $SelectedCount, 0)
+    Show-SpectreMetricCards -Cards @(
+        @{ Label = 'Selected'; AccentColor = 'green3_1'; Value = [string]$SelectedCount; Detail = 'Chosen for source control' },
+        @{ Label = 'Remaining'; AccentColor = $(if ($remainingCount -gt 0) { 'deepskyblue1' } else { 'grey42' }); Value = [string]$remainingCount; Detail = 'Still available to add' },
+        @{ Label = 'Available total'; AccentColor = 'mediumpurple3'; Value = [string]$AvailableCount; Detail = 'Detected in the environment' }
+    )
+}
+
+function Show-EnvironmentConfigurationOverview {
+    [CmdletBinding()]
+    param(
+        [Parameter()][array]$EnvironmentConfigurations
+    )
+
+    $items = @($EnvironmentConfigurations)
+    $pendingCount = 0
+    $wifCount = 0
+    $secretCount = 0
+    $uniqueServiceAccounts = @()
+
+    foreach ($env in $items) {
+        $hasCredential = ($env.PSObject.Properties.Name -contains 'Credentials' -and $null -ne $env.Credentials)
+        $hasServiceAccount = ($env.PSObject.Properties.Name -contains 'ServiceAccountUPN' -and -not [string]::IsNullOrWhiteSpace($env.ServiceAccountUPN))
+        $isPending = ($env.PSObject.Properties.Name -contains 'ConfigurationPending' -and $env.ConfigurationPending) -or -not $hasCredential -or -not $hasServiceAccount
+        if ($isPending) {
+            $pendingCount++
+        }
+
+        if ($hasCredential -and $env.Credentials.PSObject.Properties.Name -contains 'AuthType') {
+            switch ([string]$env.Credentials.AuthType) {
+                'WIF' { $wifCount++ }
+                'Secret' { $secretCount++ }
+            }
+        }
+
+        if ($hasServiceAccount) {
+            $uniqueServiceAccounts += [string]$env.ServiceAccountUPN
+        }
+    }
+
+    $uniqueServiceAccounts = @($uniqueServiceAccounts | Select-Object -Unique)
+    $authMix = if (($wifCount + $secretCount) -eq 0) {
+        'Unassigned'
+    }
+    elseif ($wifCount -gt 0 -and $secretCount -gt 0) {
+        'Mixed'
+    }
+    elseif ($wifCount -gt 0) {
+        'WIF'
+    }
+    else {
+        'Secret'
+    }
+
+    Show-SpectreMetricCards -Cards @(
+        @{ Label = 'Environments'; AccentColor = 'yellow3'; Value = [string]$items.Count; Detail = 'Configured stages' },
+        @{ Label = 'Pending setup'; AccentColor = $(if ($pendingCount -gt 0) { 'red3_1' } else { 'green3_1' }); Value = [string]$pendingCount; Detail = $(if ($pendingCount -gt 0) { 'Need credentials or service accounts' } else { 'Ready for apply' }) },
+        @{ Label = 'Auth mode'; AccentColor = 'deepskyblue1'; Value = $authMix; Detail = "WIF: $wifCount • Secret: $secretCount" },
+        @{ Label = 'Service accounts'; AccentColor = 'mediumpurple3'; Value = [string]$uniqueServiceAccounts.Count; Detail = 'Unique automation owners' }
+    )
+}
+
+function Show-KeyValueSummaryTable {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][hashtable]$Values,
+        [Parameter()][string]$Heading = 'Summary'
+    )
+
+    Initialize-SpectreConsole
+
+    $table = New-SpectreTable -Columns @('Setting', 'Value')
+    foreach ($entry in $Values.GetEnumerator()) {
+        Add-SpectreTableRow -Table $table -Cells @([string]$entry.Key, [string]$entry.Value)
+    }
+
+    [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content $table -Header $Heading -BorderColor 'mediumspringgreen' -Expand))
+    [Spectre.Console.AnsiConsole]::WriteLine()
+}
+
+function Set-SetupWizardContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][string[]]$StepNames,
+        [Parameter(Mandatory)][int]$CurrentStepIndex
+    )
+
+    $script:SetupWizardContext = [pscustomobject]@{
+        Title            = $Title
+        StepNames        = @($StepNames)
+        CurrentStepIndex = $CurrentStepIndex
+    }
+}
+
+function Set-SetupPhaseContext {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string[]]$PhaseNames,
+        [Parameter(Mandatory)][int]$CurrentPhaseIndex
+    )
+
+    $script:SetupPhaseContext = [pscustomobject]@{
+        PhaseNames         = @($PhaseNames)
+        CurrentPhaseIndex  = $CurrentPhaseIndex
+    }
+}
+
+function Clear-SetupPhaseContext {
+    [CmdletBinding()]
+    param()
+
+    Remove-Variable -Name 'SetupPhaseContext' -Scope Script -ErrorAction SilentlyContinue
+}
+
+function Get-SetupPhaseContext {
+    [CmdletBinding()]
+    param()
+
+    return (Get-Variable -Name 'SetupPhaseContext' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+}
+
+function Clear-SetupWizardContext {
+    [CmdletBinding()]
+    param()
+
+    Remove-Variable -Name 'SetupWizardContext' -Scope Script -ErrorAction SilentlyContinue
+}
+
+function Get-SetupWizardContext {
+    [CmdletBinding()]
+    param()
+
+    return (Get-Variable -Name 'SetupWizardContext' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+}
+
+function Get-SetupCurrentSectionMessage {
+    [CmdletBinding()]
+    param()
+
+    return (Get-Variable -Name 'SetupCurrentSectionMessage' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+}
+
+function Set-SetupPromptDocContext {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$DocRelativePath,
+        [Parameter()][string]$Ref,
+        [Parameter()][string]$LinkLabel = 'Click for docs'
+    )
+
+    $script:SetupPromptDocContext = [pscustomobject]@{
+        DocRelativePath = $DocRelativePath
+        Ref             = $Ref
+        LinkLabel       = $LinkLabel
+    }
+}
+
+function Clear-SetupPromptDocContext {
+    [CmdletBinding()]
+    param()
+
+    Remove-Variable -Name 'SetupPromptDocContext' -Scope Script -ErrorAction SilentlyContinue
+}
+
+function Get-SetupPromptDocContext {
+    [CmdletBinding()]
+    param()
+
+    return (Get-Variable -Name 'SetupPromptDocContext' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+}
+
+function Request-SetupWizardBack {
+    [CmdletBinding()]
+    param()
+
+    throw ([System.InvalidOperationException]::new('__ALM4DATAVERSE_WIZARD_BACK__'))
+}
+
+function Test-IsSetupWizardBackException {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Exception]$Exception
+    )
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [System.InvalidOperationException] -and $current.Message -eq '__ALM4DATAVERSE_WIZARD_BACK__') {
+            return $true
+        }
+
+        $current = $current.InnerException
+    }
+
+    return $false
+}
+
+function New-SetupHeroPanel {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    Initialize-SpectreConsole
+
+    return "ALM4Dataverse Setup - $Message"
+}
+
+function New-SetupTipsPanel {
+    [CmdletBinding()]
+    param()
+
+    Initialize-SpectreConsole
+
+    $tipLines = @(
+        '• Use ↑ and ↓ to move through prompts.',
+        '• Press Enter to confirm the highlighted option.',
+        '• Longer lists automatically enable search so you can type to filter.',
+        '• The wizard navigation menu appears after each step so you can go back before applying changes.'
+    )
+
+    return (New-SpectrePanel -Content ([Spectre.Console.Markup]::new(('[grey]' + (($tipLines | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '[/]' + [Environment]::NewLine + '[grey]') + '[/]'))) -Header 'Controls and flow' -BorderColor 'grey42' -Expand)
+}
+
+function Write-SetupDashboard {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [Parameter()][switch]$IncludeTrailingSpacer
+    )
+
+    Initialize-SpectreConsole
+
+    if (-not (Write-SetupConsoleBar -Text (New-SetupHeroPanel -Message $Message) -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -AdvanceCursor)) {
+        $heroText = "[black on grey]$(ConvertTo-SpectreMarkupLiteral -Text (New-SetupHeroPanel -Message $Message))[/]"
+        [Spectre.Console.AnsiConsole]::MarkupLine($heroText)
+    }
+
+    if ($IncludeTrailingSpacer) {
+        [Spectre.Console.AnsiConsole]::WriteLine()
+    }
+}
+
+function Test-IsUserInterruptException {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Exception]$Exception
+    )
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if (
+            $current -is [System.Management.Automation.PipelineStoppedException] -or
+            $current -is [System.OperationCanceledException] -or
+            $current -is [System.Threading.Tasks.TaskCanceledException]
+        ) {
+            return $true
+        }
+
+        $current = $current.InnerException
+    }
+
+    return $false
+}
+
+function Invoke-SetupWizard {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][array]$Steps
+    )
+
+    if ($Steps.Count -eq 0) {
+        return
+    }
+
+    $currentStepIndex = 0
+    $stepNames = @($Steps | ForEach-Object { [string]$_.Name })
+
+    try {
+        while ($currentStepIndex -lt $Steps.Count) {
+            try {
+                Set-SetupWizardContext -Title $Title -StepNames $stepNames -CurrentStepIndex $currentStepIndex
+                & $Steps[$currentStepIndex].Action
+                $currentStepIndex++
+            }
+            catch {
+                if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+                    if ($currentStepIndex -gt 0) {
+                        $currentStepIndex--
+                    }
+
+                    continue
+                }
+
+                throw
+            }
+        }
+    }
+    finally {
+        Clear-SetupWizardContext
+    }
+}
+
+function Confirm-SetupReviewAction {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$ApplyLabel = 'Apply changes',
+        [Parameter()][string]$CancelLabel = 'Cancel setup',
+        [Parameter()][string]$Title = 'Review complete. Apply the configuration or cancel setup.'
+    )
+
+    $selection = Select-FromMenu -Title $Title -Items @($ApplyLabel, $CancelLabel)
+    if ($null -eq $selection) {
+        throw 'Setup cancelled by user.'
+    }
+
+    if ($selection -ne 0) {
+        throw 'Setup cancelled by user.'
+    }
+}
+
+function Get-SetupPromptGuidance {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
+        [Parameter(Mandatory)][string]$PromptText
+    )
+
+    $currentSectionMessage = Get-SetupCurrentSectionMessage
+    $docContext = Get-SetupPromptDocContext
+
+    $guidanceRules = @(
+        [pscustomobject]@{
+            Kinds          = @('Menu')
+            PromptPattern  = '^GitHub authentication$'
+            SectionPattern = '^Authenticating with GitHub$'
+            Lines          = @(
+                'Choose which GitHub account setup should use for repository access, workflow creation, and environment management.',
+                'If you switch accounts, setup will sign out of the current GitHub CLI session and open a browser so you can sign in again.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds          = @('Menu')
+            PromptPattern  = '^Azure authentication$'
+            SectionPattern = '^Authenticating with Azure$'
+            Lines          = @(
+                'Choose which Azure sign-in setup should use for Entra ID app registrations and Dataverse access during GitHub setup.',
+                'Use an account that can reach the tenant and the DEV environment you plan to configure.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds          = @('Menu')
+            PromptPattern  = '^Azure authentication$'
+            SectionPattern = '^Authenticating$'
+            Lines          = @(
+                'Choose which Azure sign-in setup should use for Azure DevOps access, service connections, and Dataverse configuration.',
+                'Use an account that can access the target organization or project and the DEV environment you plan to configure.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Open the browser for Azure authentication when you are ready\.$'
+            Lines         = @(
+                'Continue when you are ready for setup to open the browser and complete the Azure sign-in flow.',
+                'This is used to obtain the tokens needed for the remaining automated setup steps.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select the repository to set up ALM4Dataverse in$'
+            Lines         = @(
+                'Choose the main repository where ALM4Dataverse should add workflow files and repository configuration.',
+                'This is the repo your solutions and deployment automation will live in.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select shared workflow repository$'
+            Lines         = @(
+                'Select the repo where you want to store the reusable ALM4Dataverse workflows.',
+                'It should be a different repo from your main application repo so multiple repos can reference the same shared workflow source.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select repository visibility$'
+            Lines         = @(
+                'Choose whether the new repository should be public or private.',
+                'Private is the safer default when the repo will hold organization-specific configuration or automation.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^Select App Registration credentials for '.+'$"
+            Lines         = @(
+                'Choose the App Registration that workflows should use to authenticate to Dataverse for this environment.',
+                'You can reuse an existing registration or create a new one if you want tighter isolation per environment.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^How should setup handle the existing client secret for '.+'\?$"
+            Lines         = @(
+                'Decide whether setup should keep using the existing client secret or replace it.',
+                'Keeping it avoids touching downstream consumers; replacing it is useful if you want to rotate credentials now.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select authentication type for the new App Registration$'
+            Lines         = @(
+                'Choose how the new App Registration should authenticate.',
+                'Workload identity federation avoids storing a secret; client-secret mode works on older patterns but requires secret management.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select authentication type for the new service connection$'
+            Lines         = @(
+                'Choose how the Azure DevOps service connection should authenticate.',
+                'Workload identity federation is the modern option; secret-based auth is the fallback when federation is not available.'
+            )
+            DocRelativePath = 'docs/config/azdo-environment-service-connection.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select authentication type$'
+            Lines         = @(
+                'Choose whether the credentials should use workload identity federation or a client secret.',
+                'This affects which values setup asks for and how the automation will be authorized later.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^Select Dataverse Service Account for '.+'$"
+            Lines         = @(
+                'Choose which Dataverse user account should own automated changes in this environment.',
+                'Use a dedicated service account where possible so imports, deployment actions, and ownership are easy to audit.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select an Azure DevOps organization$'
+            Lines         = @(
+                'Choose the Azure DevOps organization that will host the project, repositories, pipelines, and approvals for this setup.',
+                'Make sure you pick the long-lived organization your team already uses for ALM assets.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select the target Azure DevOps project$'
+            Lines         = @(
+                'Choose the Azure DevOps project that should contain the ALM repositories, pipelines, service connections, and approvals.',
+                'Use a stable project name instead of one tied to a temporary phase or release.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select a process \(template\) for the new project$'
+            Lines         = @(
+                'Choose the Azure DevOps work-item process template for the new project.',
+                'This affects boards and work tracking, not the ALM4Dataverse pipeline behavior itself.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds          = @('Menu')
+            PromptPattern  = '^Select the repo$'
+            SectionPattern = '^Selecting main Git repository$'
+            Lines          = @(
+                'Choose the main application repository where ALM4Dataverse should add pipeline YAML and configuration files.',
+                'Do not pick the shared template repo here; this should be the repo that contains your solution source.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select the shared repository that will host the ALM4Dataverse templates$'
+            Lines         = @(
+                'Select the repo where you want to store the reusable ALM4Dataverse templates and shared pipeline assets.',
+                'It should be a different repo from your main application repo so multiple repos can consume the same shared source.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^Select Service Principal credentials for '.+'$"
+            Lines         = @(
+                'Choose the service principal or service connection that Azure DevOps should use for this environment.',
+                'You can reuse credentials when appropriate, or create a dedicated identity for stronger isolation.'
+            )
+            DocRelativePath = 'docs/config/azdo-environment-service-connection.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Manage solutions$'
+            Lines         = @(
+                'Use this menu to build the ordered list of unmanaged Dataverse solutions that should be kept in source control.',
+                'The order matters because setup writes it into `alm-config.psd1` and later automation uses that sequence.'
+            )
+            DocRelativePath = 'docs/config/alm-config.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select a solution to add$'
+            Lines         = @(
+                'Choose the next unmanaged solution to add to the source-controlled list.',
+                'Start with the lowest-level dependencies so the final order matches how solutions should be processed.'
+            )
+            DocRelativePath = 'docs/config/alm-config.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Manage deployment environments$'
+            Lines         = @(
+                'Use this menu to add, edit, or remove the Dataverse environments that form your deployment path.',
+                'Keep the short names stable and the list in promotion order, because that order becomes the generated stage chain.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select the environment to edit$'
+            Lines         = @(
+                'Choose which configured environment entry you want to update.',
+                'Editing lets you correct the target Dataverse URL, short name, credentials, or service account before setup applies changes.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Select the environment to remove$'
+            Lines         = @(
+                'Choose which configured environment entry should be removed from the deployment plan.',
+                'Removing it here prevents setup from generating or updating that stage during this run.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^Select (your DEV environment|your DEV Dataverse environment|a Dataverse environment for deployment|the Dataverse environment for '.+'|a deployment environment|the deployment environment for '.+'|a Dataverse environment|Resolve the Dataverse environment for existing deployment stage '.+')$"
+            Lines         = @(
+                'Choose the actual Dataverse environment that should back this stage or configuration slot.',
+                'Check the friendly name and URL carefully so setup does not point DEV or deployment automation at the wrong environment.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^Review complete\. Apply the configuration or cancel setup\.$'
+            Lines         = @(
+                'Review this final choice before setup writes files, updates repositories, or provisions credentials and connections.',
+                'Choose Apply changes to continue, or cancel if you want to go back and adjust the plan first.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^How would you like to proceed\?$'
+            Lines         = @(
+                'The previous action failed, so decide whether setup should retry, skip the step, or stop completely.',
+                'Skipping is handy for exploration, but it can leave the generated configuration incomplete.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = '^How should the .+ repository changes be published\?$'
+            Lines         = @(
+                'Choose whether setup should commit changes directly or push them to a branch for review in a pull request.',
+                'Direct commit is fastest; pull request mode is safer when branch protection or review gates are in play.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^Fork '.+' has diverged from upstream\. Choose how to update it\.$"
+            Lines         = @(
+                'The selected fork no longer matches the upstream shared-workflow repo cleanly, so choose how setup should reconcile it.',
+                'Rebase preserves your commits where possible; reset force-aligns the fork to upstream and discards divergent history.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Menu')
+            PromptPattern = "^The shared repo '.+' has diverged\. Choose how to update it\.$"
+            Lines         = @(
+                'The selected shared repository no longer matches the upstream ALM4Dataverse source cleanly, so choose how setup should reconcile it.',
+                'Rebase preserves your extra commits where possible; reset force-aligns the repo to upstream and discards divergent history.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Fork repository name$'
+            Lines         = @(
+                'Enter the GitHub repository name for the shared-workflow fork setup should create or reuse.',
+                'A clear stable name helps when multiple application repos will reference the same shared workflow source.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Repository owner \(user or organization\)$'
+            Lines         = @(
+                'Enter the GitHub user or organization that should own the new repository.',
+                'Use the team-owned organization when the repo should outlive a single developer account.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^New repository name$'
+            Lines         = @(
+                'Enter the name for the new repository that will receive the generated ALM4Dataverse files.',
+                'Pick a durable name that matches the application or solution set you are automating.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Friendly name \(for reuse reference\)$'
+            Lines         = @(
+                'Enter a friendly label that makes this credential easy to recognise if you want to reuse it later in setup.',
+                'This is just a setup-time reference label, so choose something descriptive rather than secret.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Credential name \(for reuse reference\)$'
+            Lines         = @(
+                'Enter a friendly label that makes this credential easy to recognise if you want to reuse it later in setup.',
+                'This label is for setup convenience and should describe the identity and environment clearly.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Application ID \(Client ID\)$'
+            Lines         = @(
+                'Enter the Application (client) ID of the Entra ID App Registration that should be used for this environment.',
+                'Copy the value from App registrations > Overview so setup can bind the automation to the correct identity.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Application object ID \(from App registrations > Overview, not the enterprise app object ID\)$'
+            Lines         = @(
+                'Enter the App Registration object ID from the Entra ID App registrations blade, not the Enterprise applications object ID.',
+                'Setup needs this specific object ID when it creates or updates workload identity configuration.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Service Account UPN \(for example: serviceaccount@contoso\.com\)$'
+            Lines         = @(
+                'Enter the UPN of the Dataverse user account that should own automated changes in this environment.',
+                'Use a dedicated service account where practical so ownership and audit trails stay clear.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Enter a short name for this environment$'
+            Lines         = @(
+                'Enter the stable short name that should identify this environment in pipeline and workflow stage names.',
+                'Use concise names such as TEST, UAT, or PROD and keep them stable over time.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Branch to commit to$'
+            Lines         = @(
+                'Enter the branch that should receive the generated setup changes directly.',
+                'Use the protected or default branch only if your governance rules allow direct commits from automation setup.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Branch to push for the pull request$'
+            Lines         = @(
+                'Enter the working branch name setup should push before opening a pull request.',
+                'A clear branch name makes the purpose of the generated change set obvious to reviewers.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Pull request title$'
+            Lines         = @(
+                'Enter the title that reviewers will see on the generated pull request.',
+                'Keep it short but descriptive so the automation-related change is easy to spot in repo history.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Enter the name for the new Azure DevOps project$'
+            Lines         = @(
+                'Enter the name of the Azure DevOps project that should host your repositories, pipelines, and approvals.',
+                'Choose a long-lived project name rather than something tied to a one-off migration or release.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Enter the name for the new main repository$'
+            Lines         = @(
+                'Enter the name of the main application repository that will receive the generated ALM4Dataverse pipeline files.',
+                'This repo should represent your app or solution source, not the shared template repo.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('Text')
+            PromptPattern = '^Enter the name for the shared repository$'
+            Lines         = @(
+                'Enter the name of the shared repository that will hold reusable ALM4Dataverse templates and shared pipeline assets.',
+                'Keep it separate from the main app repo so you can reference the same shared assets from multiple repositories.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('YesNo')
+            PromptPattern = '^Use ALM4Dataverse AzDO extension\? \(required for Workload Identity Federation\)$'
+            Lines         = @(
+                'Decide whether setup should generate pipelines that depend on the ALM4Dataverse Azure DevOps extension.',
+                'Enable it if you want workload identity federation and the richer ALM4Dataverse task set; disable it only for the secret-based fallback path.'
+            )
+            DocRelativePath = 'docs/config/azdo-environment-service-connection.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('YesNo')
+            PromptPattern = "^Extension '.+' not found\. Install it\?$"
+            Lines         = @(
+                'Confirm whether setup should install the missing Azure DevOps extension automatically.',
+                'This usually requires organization-level permission, but it saves you from installing the dependency manually first.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('YesNo')
+            PromptPattern = "^Updates are available from upstream \(fast-forward\)\. Update '.+'\?$"
+            Lines         = @(
+                'Confirm whether setup should fast-forward the selected shared-workflow fork to match upstream.',
+                'Choose Yes when you want the reusable workflow repo aligned before generating references to it.'
+            )
+            DocRelativePath = 'docs/setup/github-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('YesNo')
+            PromptPattern = "^Updates are available from the shared repo \(fast-forward\)\. Update '.+'\?$"
+            Lines         = @(
+                'Confirm whether setup should fast-forward the selected shared repository so it matches the upstream ALM4Dataverse source.',
+                'Choose Yes when you want the shared pipeline assets aligned before your main repo references them.'
+            )
+            DocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        },
+        [pscustomobject]@{
+            Kinds         = @('YesNo')
+            PromptPattern = '^Are you sure this is the Secret Value\?$'
+            Lines         = @(
+                'Confirm that you pasted the secret value itself rather than the secret ID, name, or description.',
+                'This matters because the secret is hidden as you type and setup cannot tell whether you pasted the wrong field.'
+            )
+        },
+        [pscustomobject]@{
+            Kinds         = @('Secret')
+            PromptPattern = '^Client Secret$'
+            Lines         = @(
+                'Paste the client secret value exactly as issued by Entra ID or your identity platform.',
+                'This prompt hides what you type, so double-check you copied the secret value and not the secret identifier.'
+            )
+        }
+    )
+
+    $matchedRule = $null
+    foreach ($rule in $guidanceRules) {
+        if ($rule.Kinds -notcontains $PromptKind) {
+            continue
+        }
+
+        if ($PromptText -notmatch $rule.PromptPattern) {
+            continue
+        }
+
+        if (
+            $rule.PSObject.Properties.Name -contains 'SectionPattern' -and
+            -not [string]::IsNullOrWhiteSpace($rule.SectionPattern) -and
+            ($currentSectionMessage -notmatch $rule.SectionPattern)
+        ) {
+            continue
+        }
+
+        $matchedRule = $rule
+        break
+    }
+
+    $fallbackLines = switch ($PromptKind) {
+        'Menu' {
+            @(
+                'Choose the option that best matches what you want setup to do next.',
+                'If you are unsure, prefer the safer or more reviewable option and keep the current default where one is shown.'
+            )
+        }
+        'Text' {
+            @(
+                'Enter the requested value and press Enter to continue.',
+                'If a default value is shown, you can accept it as-is or replace it with something more appropriate for your setup.'
+            )
+        }
+        'YesNo' {
+            @(
+                'Confirm whether setup should continue with the action described below.',
+                'Choose No if you want to keep the current state unchanged and review the step again.'
+            )
+        }
+        'Secret' {
+            @(
+                'Enter the sensitive value requested for this step.',
+                'The input is hidden while you type, so paste carefully and verify you copied the right field from the source system.'
+            )
+        }
+    }
+
+    $effectiveDocRelativePath = $null
+    $effectiveRef = $null
+    $effectiveLinkLabel = 'Click for docs'
+
+    if ($matchedRule -and $matchedRule.PSObject.Properties.Name -contains 'DocRelativePath' -and -not [string]::IsNullOrWhiteSpace($matchedRule.DocRelativePath)) {
+        $effectiveDocRelativePath = $matchedRule.DocRelativePath
+    }
+    elseif ($docContext -and -not [string]::IsNullOrWhiteSpace($docContext.DocRelativePath)) {
+        $effectiveDocRelativePath = $docContext.DocRelativePath
+        $effectiveRef = $docContext.Ref
+        if (-not [string]::IsNullOrWhiteSpace($docContext.LinkLabel)) {
+            $effectiveLinkLabel = $docContext.LinkLabel
+        }
+    }
+
+    if ($matchedRule -and $matchedRule.PSObject.Properties.Name -contains 'Ref' -and -not [string]::IsNullOrWhiteSpace($matchedRule.Ref)) {
+        $effectiveRef = $matchedRule.Ref
+    }
+
+    if ($matchedRule -and $matchedRule.PSObject.Properties.Name -contains 'LinkLabel' -and -not [string]::IsNullOrWhiteSpace($matchedRule.LinkLabel)) {
+        $effectiveLinkLabel = $matchedRule.LinkLabel
+    }
+
+    return [pscustomobject]@{
+        Lines           = $(if ($matchedRule) { @($matchedRule.Lines) } else { $fallbackLines })
+        DocRelativePath = $effectiveDocRelativePath
+        Ref             = $effectiveRef
+        LinkLabel       = $effectiveLinkLabel
+    }
+}
+
+function Show-SetupPromptGuidance {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
+        [Parameter(Mandatory)][string]$PromptText
+    )
+
+    $guidance = Get-SetupPromptGuidance -PromptKind $PromptKind -PromptText $PromptText
+    if (-not $guidance) {
+        return
+    }
+
+    $guidanceHeader = if ([string]::IsNullOrWhiteSpace($PromptText)) { 'Prompt guidance' } else { $PromptText }
+
+    Write-SetupGuidance `
+        -Lines $guidance.Lines `
+        -DocRelativePath $guidance.DocRelativePath `
+        -Ref $guidance.Ref `
+        -LinkLabel $guidance.LinkLabel `
+        -Header $guidanceHeader `
+        -SkipContextUpdate
+}
+
+function Get-SetupPromptInlineText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Text', 'YesNo', 'Secret')][string]$PromptKind
+    )
+
+    switch ($PromptKind) {
+        'Text' { return '[grey]>[/]' }
+        'YesNo' { return '[grey]>[/]' }
+        'Secret' { return '[grey]>[/]' }
+    }
+}
+
+function Write-SetupConsoleBar {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$Text,
+        [Parameter()][ConsoleColor]$ForegroundColor = [ConsoleColor]::Black,
+        [Parameter()][ConsoleColor]$BackgroundColor = [ConsoleColor]::Gray,
+        [Parameter()][int]$TargetRow = -1,
+        [Parameter()][switch]$RestoreCursorPosition,
+        [Parameter()][switch]$AdvanceCursor
+    )
+
+    try {
+        $windowWidth = [Console]::WindowWidth
+        $windowHeight = [Console]::WindowHeight
+        if ($windowWidth -le 0 -or $windowHeight -le 0) {
+            return $false
+        }
+
+        $resolvedRow = if ($TargetRow -lt 0) {
+            [Console]::CursorTop
+        }
+        else {
+            [Math]::Min($TargetRow, [Math]::Max($windowHeight - 1, 0))
+        }
+
+        $barText = if ($null -eq $Text) { '' } else { [string]$Text }
+        $renderText = if ($barText.Length -ge $windowWidth) {
+            $barText.Substring(0, [Math]::Max($windowWidth - 1, 0))
+        }
+        else {
+            $barText.PadRight($windowWidth)
+        }
+
+        $originalForeground = [Console]::ForegroundColor
+        $originalBackground = [Console]::BackgroundColor
+        $originalCursorLeft = [Console]::CursorLeft
+        $originalCursorTop = [Console]::CursorTop
+
+        try {
+            [Console]::SetCursorPosition(0, $resolvedRow)
+            [Console]::ForegroundColor = $ForegroundColor
+            [Console]::BackgroundColor = $BackgroundColor
+            [Console]::Write($renderText)
+        }
+        finally {
+            [Console]::ForegroundColor = $originalForeground
+            [Console]::BackgroundColor = $originalBackground
+
+            if ($RestoreCursorPosition) {
+                $safeCursorTop = [Math]::Min($originalCursorTop, [Math]::Max([Console]::BufferHeight - 1, 0))
+                $safeCursorLeft = [Math]::Min($originalCursorLeft, [Math]::Max([Console]::BufferWidth - 1, 0))
+                [Console]::SetCursorPosition($safeCursorLeft, $safeCursorTop)
+            }
+            elseif ($AdvanceCursor) {
+                $nextRow = [Math]::Min($resolvedRow + 1, [Math]::Max([Console]::BufferHeight - 1, 0))
+                [Console]::SetCursorPosition(0, $nextRow)
+            }
+        }
+
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Show-SetupStatusBarAtBottom {
+    [CmdletBinding()]
+    param(
+        [Parameter()][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind = 'Text',
+        [Parameter()][switch]$SearchEnabled
+    )
+
+    Initialize-SpectreConsole
+
+    $segments = switch ($PromptKind) {
+        'Menu' {
+            @(
+                'Up/Down=move',
+                'Enter=select',
+                $(if ($SearchEnabled) { 'Type=filter' } else { $null }),
+                'Ctrl+C=exit'
+            )
+        }
+        'YesNo' {
+            @(
+                'Y/N=choose',
+                'Enter=confirm',
+                'Ctrl+C=exit'
+            )
+        }
+        'Secret' {
+            @(
+                'Enter=confirm',
+                'Ctrl+C=exit'
+            )
+        }
+        default {
+            @(
+                'Enter=confirm',
+                'Ctrl+C=exit'
+            )
+        }
+    }
+
+    $segments = @($segments | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($segments.Count -eq 0) {
+        return
+    }
+
+    $statusText = ($segments -join '  •  ')
+
+    if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)) {
+        $markup = '[black on grey]' + (($segments | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '  •  ') + '[/]'
+        [Spectre.Console.AnsiConsole]::MarkupLine($markup)
+    }
+}
+
+function Clear-SetupStatusBarAtBottom {
+    [CmdletBinding()]
+    param()
+
+    [void](Write-SetupConsoleBar -Text '' -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)
+}
+
+function Show-SelectionPromptWithInterruptHandling {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Prompt
+    )
+
+    Initialize-SpectreConsole
+
+    $cancellationTokenSource = [System.Threading.CancellationTokenSource]::new()
+    $cancellationState = [pscustomobject]@{
+        Cancelled           = $false
+        TokenSourceDisposed = $false
+    }
+
+    $cancelHandler = [System.ConsoleCancelEventHandler]{
+        param($sender, $eventArgs)
+
+        $eventArgs.Cancel = $true
+        $cancellationState.Cancelled = $true
+
+        if (-not $cancellationState.TokenSourceDisposed -and -not $cancellationTokenSource.IsCancellationRequested) {
+            $cancellationTokenSource.Cancel()
+        }
+    }
+
+    $handlerAttached = $false
+    try {
+        [Console]::add_CancelKeyPress($cancelHandler)
+        $handlerAttached = $true
+
+        return $Prompt.ShowAsync([Spectre.Console.AnsiConsole]::Console, $cancellationTokenSource.Token).GetAwaiter().GetResult()
+    }
+    catch {
+        if ($cancellationState.Cancelled -or (Test-IsUserInterruptException -Exception $_.Exception)) {
+            throw ([System.OperationCanceledException]::new('Setup cancelled by user.'))
+        }
+
+        throw
+    }
+    finally {
+        if ($handlerAttached) {
+            try {
+                [Console]::remove_CancelKeyPress($cancelHandler)
+            }
+            catch {
+                # Ignore cleanup failures.
+            }
+        }
+
+        $cancellationState.TokenSourceDisposed = $true
+        $cancellationTokenSource.Dispose()
+    }
+}
+
+function Write-SetupPromptFrame {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
+        [Parameter(Mandatory)][string]$PromptText,
+        [Parameter()][switch]$PreserveExistingContent,
+        [Parameter()][switch]$SkipPromptGuidance
+    )
+
+    Initialize-SpectreConsole
+
+    $currentSectionMessage = Get-SetupCurrentSectionMessage
+    if (-not $PreserveExistingContent -and -not [string]::IsNullOrWhiteSpace($currentSectionMessage)) {
+        [Spectre.Console.AnsiConsole]::Clear()
+        Write-SetupDashboard -Message $currentSectionMessage
+    }
+
+    if (-not $SkipPromptGuidance) {
+        Show-SetupPromptGuidance -PromptKind $PromptKind -PromptText $PromptText
+    }
+}
+
+function Wait-ForUserAcknowledgement {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [Parameter()][string]$ContinueLabel = 'Continue'
+    )
+
+    $choice = Select-FromMenu -Title $Message -Items @($ContinueLabel, 'Cancel setup')
+    if ($choice -ne 0) {
+        throw 'Setup cancelled by user.'
+    }
+}
+
+function Read-SecretText {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Prompt,
+        [Parameter()][switch]$AllowEmpty
+    )
+
+    Initialize-SpectreConsole
+
+    while ($true) {
+        Write-SetupPromptFrame -PromptKind 'Secret' -PromptText $Prompt
+        Show-SetupStatusBarAtBottom -PromptKind 'Secret'
+        $textPrompt = [Spectre.Console.TextPrompt[string]]::new((Get-SetupPromptInlineText -PromptKind 'Secret'))
+        $textPrompt.IsSecret = $true
+        if ($AllowEmpty) {
+            $textPrompt.AllowEmpty = $true
+        }
+
+        try {
+            $value = $textPrompt.Show([Spectre.Console.AnsiConsole]::Console)
+        }
+        finally {
+            Clear-SetupStatusBarAtBottom
+        }
+
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            if ($AllowEmpty) {
+                return ''
+            }
+
+            [Spectre.Console.AnsiConsole]::MarkupLine('[red]A value is required. Please try again.[/]')
+            continue
+        }
+
+        return $value
+    }
+}
+
+function Write-Section {
+    param([Parameter(Mandatory)][string]$Message)
+
+    Initialize-SpectreConsole
+    $script:SetupCurrentSectionMessage = $Message
+    Clear-SetupPromptDocContext
+    [Spectre.Console.AnsiConsole]::Clear()
+    Write-SetupDashboard -Message $Message
+}
+
 function Select-FromMenu {
     <#
     .SYNOPSIS
-        Simple interactive console menu selection using PSMenu.
+        Interactive console menu selection using Spectre.Console.
 
     .DESCRIPTION
-        Arrow keys to move, Enter to select, Esc to cancel.
-
-        This function wraps the PSMenu module's Show-Menu function.
+        Arrow keys move, Enter selects, and search is enabled automatically for long lists.
     #>
 
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string[]]$Items
+        [Parameter(Mandatory)][string[]]$Items,
+        [Parameter()][switch]$PreserveExistingContent,
+        [Parameter()][switch]$SkipPromptGuidance
     )
 
     if ($Items.Count -eq 0) { return $null }
 
-    Write-Host $Title -ForegroundColor Green
-    Write-Host ""
+    Initialize-SpectreConsole
 
-    $selectedIndex = Show-Menu -MenuItems $Items -ReturnIndex
-    return $selectedIndex
+    $originalTreatControlCAsInput = $null
+    $canRestoreTreatControlCAsInput = $false
+    try {
+        $originalTreatControlCAsInput = [Console]::TreatControlCAsInput
+        [Console]::TreatControlCAsInput = $false
+        $canRestoreTreatControlCAsInput = $true
+    }
+    catch {
+        $canRestoreTreatControlCAsInput = $false
+    }
+
+    Write-SetupPromptFrame -PromptKind 'Menu' -PromptText $Title -PreserveExistingContent:$PreserveExistingContent -SkipPromptGuidance:$SkipPromptGuidance
+
+    $prompt = [Spectre.Console.SelectionPrompt[string]]::new()
+    $prompt.Title = ''
+    $prompt.PageSize = [Math]::Min([Math]::Max($Items.Count, 1), [Console]::WindowHeight - ([Console]::CursorTop + 6))
+    $prompt.MoreChoicesText = ''
+    $prompt.WrapAround = $true
+
+    $effectiveItems = @($Items)
+    $wizardContext = Get-SetupWizardContext
+    $hasGenericBack = $false
+    if (
+        $wizardContext -and
+        $wizardContext.CurrentStepIndex -gt 0 -and
+        -not ($effectiveItems -contains 'Back') -and
+        -not ($effectiveItems -contains '← Back to previous step')
+    ) {
+        $effectiveItems += '← Back to previous step'
+        $hasGenericBack = $true
+    }
+
+    if ($effectiveItems.Count -gt 8) {
+        $prompt.SearchEnabled = $true
+        $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
+    }
+
+    foreach ($item in $effectiveItems) {
+        [void]$prompt.AddChoice($item)
+    }
+
+    Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
+
+    try {
+        $selectedValue = Show-SelectionPromptWithInterruptHandling -Prompt $prompt
+        if ($hasGenericBack -and $selectedValue -eq '← Back to previous step') {
+            Request-SetupWizardBack
+        }
+
+        if ($null -eq $selectedValue) {
+            return $null
+        }
+
+        for ($itemIndex = 0; $itemIndex -lt $Items.Count; $itemIndex++) {
+            if ($Items[$itemIndex] -ceq $selectedValue) {
+                return $itemIndex
+            }
+        }
+
+        return [Array]::IndexOf($Items, $selectedValue)
+    }
+    finally {
+        Clear-SetupStatusBarAtBottom
+
+        if ($canRestoreTreatControlCAsInput) {
+            try {
+                [Console]::TreatControlCAsInput = $originalTreatControlCAsInput
+            }
+            catch {
+                # Ignore cleanup failures.
+            }
+        }
+    }
 }
 
 function Read-YesNo {
@@ -47,12 +1517,15 @@ function Read-YesNo {
         [Parameter()][switch]$DefaultNo
     )
 
-    $suffix = if ($DefaultNo) { ' [y/N]' } else { ' [Y/n]' }
-    $answer = Read-Host ($Prompt + $suffix)
-    if ([string]::IsNullOrWhiteSpace($answer)) {
-        return (-not $DefaultNo)
+    Initialize-SpectreConsole
+    Write-SetupPromptFrame -PromptKind 'YesNo' -PromptText $Prompt
+    Show-SetupStatusBarAtBottom -PromptKind 'YesNo'
+    try {
+        return [Spectre.Console.AnsiConsole]::Confirm((Get-SetupPromptInlineText -PromptKind 'YesNo'), (-not $DefaultNo))
     }
-    return ($answer.Trim().ToLowerInvariant() -in @('y', 'yes'))
+    finally {
+        Clear-SetupStatusBarAtBottom
+    }
 }
 
 function ConvertFrom-GitRefToBranchName {
@@ -189,27 +1662,111 @@ function Get-Alm4DataverseDocUrl {
     return "https://github.com/ALM4Dataverse/ALM4Dataverse/tree/$effectiveRef/$normalizedPath"
 }
 
+function Get-SetupGuidanceHeaderMarkup {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$Header = 'What this step covers',
+        [Parameter()][string]$DocUrl,
+        [Parameter()][string]$LinkLabel = 'Click for docs'
+    )
+
+    Initialize-SpectreConsole
+
+    $leftMarkup = "[bold]$(ConvertTo-SpectreMarkupLiteral -Text $Header)[/]"
+    return $leftMarkup
+}
+
+function Write-SetupPanelBottomBorderOverlay {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$VisibleText,
+        [Parameter()][string]$MarkupText,
+        [Parameter(Mandatory)][int]$PanelWriteStartTop
+    )
+
+    if ([string]::IsNullOrWhiteSpace($VisibleText) -or [string]::IsNullOrWhiteSpace($MarkupText)) {
+        return
+    }
+
+    try {
+        $savedLeft = [Console]::CursorLeft
+        $savedTop = [Console]::CursorTop
+        $windowWidth = [Console]::WindowWidth
+
+        if ($windowWidth -le 0) {
+            return
+        }
+
+        $overlayRow = if ($savedLeft -eq 0 -and $savedTop -gt $PanelWriteStartTop) {
+            $savedTop - 1
+        }
+        else {
+            $savedTop
+        }
+
+        $overlayColumn = [Math]::Max($windowWidth - $VisibleText.Length - 2, 1)
+        [Console]::SetCursorPosition($overlayColumn, $overlayRow)
+        [Spectre.Console.AnsiConsole]::Write([Spectre.Console.Markup]::new($MarkupText))
+        [Console]::SetCursorPosition($savedLeft, $savedTop)
+    }
+    catch {
+        # Ignore overlay failures in hosts that do not expose reliable cursor positioning.
+    }
+}
+
 function Write-SetupGuidance {
     [CmdletBinding()]
     param(
         [Parameter()][string[]]$Lines,
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref,
-        [Parameter()][string]$LinkLabel = 'Full docs'
+        [Parameter()][string]$LinkLabel = 'Full docs',
+        [Parameter()][string]$Header = 'What this step covers',
+        [Parameter()][switch]$SkipContextUpdate
     )
 
+    Initialize-SpectreConsole
+
+    if (-not $SkipContextUpdate) {
+        Set-SetupPromptDocContext -DocRelativePath $DocRelativePath -Ref $Ref -LinkLabel $LinkLabel
+    }
+
+    $contentLines = @()
     foreach ($line in @($Lines)) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
-            Write-Host $line -ForegroundColor Green
+            $contentLines += "• $(ConvertTo-SpectreMarkupLiteral -Text $line)"
         }
     }
 
+    $docUrl = $null
     if (-not [string]::IsNullOrWhiteSpace($DocRelativePath)) {
         $docUrl = Get-Alm4DataverseDocUrl -RelativePath $DocRelativePath -Ref $Ref
-        Write-Host "${LinkLabel}: $docUrl" -ForegroundColor Green
     }
 
-    Write-Host ""
+    if ($contentLines.Count -eq 0 -and [string]::IsNullOrWhiteSpace($docUrl)) {
+        return
+    }
+
+    $panelContentText = if ($contentLines.Count -gt 0) { $contentLines -join [Environment]::NewLine } else { '[grey][/]' }
+    $panelHeaderMarkup = Get-SetupGuidanceHeaderMarkup -Header $Header -DocUrl $docUrl -LinkLabel $LinkLabel
+    $panelWriteStartTop = 0
+    try {
+        $panelWriteStartTop = [Console]::CursorTop
+    }
+    catch {
+        $panelWriteStartTop = 0
+    }
+
+    [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content ([Spectre.Console.Markup]::new($panelContentText)) -HeaderMarkup $panelHeaderMarkup -BorderColor 'springgreen3' -Expand))
+
+    if (-not [string]::IsNullOrWhiteSpace($docUrl)) {
+        $overlayLabelText = if ([string]::IsNullOrWhiteSpace($LinkLabel)) { 'Click for docs' } else { $LinkLabel }
+        $overlayVisibleText = " $overlayLabelText "
+        $overlayMarkup = "[grey][link=$docUrl]$(ConvertTo-SpectreMarkupLiteral -Text $overlayVisibleText)[/][/]"
+        Write-SetupPanelBottomBorderOverlay -VisibleText $overlayVisibleText -MarkupText $overlayMarkup -PanelWriteStartTop $panelWriteStartTop
+    }
+
+    [Spectre.Console.AnsiConsole]::WriteLine()
 }
 
 function Read-TextWithDefault {
@@ -220,13 +1777,35 @@ function Read-TextWithDefault {
         [Parameter()][switch]$AllowEmpty
     )
 
+    Initialize-SpectreConsole
+
     while ($true) {
-        $displayPrompt = $Prompt
+        $value = $null
+        Write-SetupPromptFrame -PromptKind 'Text' -PromptText $Prompt
         if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
-            $displayPrompt = "$Prompt [$DefaultValue]"
+            Show-SetupStatusBarAtBottom -PromptKind 'Text'
+            try {
+                $value = [Spectre.Console.AnsiConsole]::Ask[string]((Get-SetupPromptInlineText -PromptKind 'Text'), $DefaultValue)
+            }
+            finally {
+                Clear-SetupStatusBarAtBottom
+            }
+        }
+        else {
+            Show-SetupStatusBarAtBottom -PromptKind 'Text'
+            $textPrompt = [Spectre.Console.TextPrompt[string]]::new((Get-SetupPromptInlineText -PromptKind 'Text'))
+            if ($AllowEmpty) {
+                $textPrompt.AllowEmpty = $true
+            }
+
+            try {
+                $value = $textPrompt.Show([Spectre.Console.AnsiConsole]::Console)
+            }
+            finally {
+                Clear-SetupStatusBarAtBottom
+            }
         }
 
-        $value = Read-Host $displayPrompt
         if ([string]::IsNullOrWhiteSpace($value)) {
             if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
                 return $DefaultValue
@@ -235,7 +1814,7 @@ function Read-TextWithDefault {
                 return ''
             }
 
-            Write-Warning "A value is required. Please try again."
+            [Spectre.Console.AnsiConsole]::MarkupLine('[red]A value is required. Please try again.[/]')
             continue
         }
 
@@ -380,28 +1959,32 @@ function Show-EnvironmentConfigurationTable {
         [Parameter()][array]$EnvironmentConfigurations
     )
 
+    Initialize-SpectreConsole
+
     $items = @($EnvironmentConfigurations)
     if ($items.Count -eq 0) {
-        Write-Host 'No environments selected.' -ForegroundColor DarkGray
+        [Spectre.Console.AnsiConsole]::MarkupLine('[grey]No environments selected yet.[/]')
         return
     }
 
-    $rows = foreach ($env in $items) {
+    [Spectre.Console.AnsiConsole]::MarkupLine('[bold yellow]Environment plan[/]')
+    $table = New-SpectreTable -Columns @('Short name', 'Friendly name', 'Dataverse URL', 'Credential', 'Service account')
+    foreach ($env in $items) {
         $serviceAccountUPN = ''
         if ($env.PSObject.Properties.Name -contains 'ServiceAccountUPN' -and -not [string]::IsNullOrWhiteSpace($env.ServiceAccountUPN)) {
             $serviceAccountUPN = [string]$env.ServiceAccountUPN
         }
 
-        [pscustomobject]@{
-            ShortName      = [string]$env.ShortName
-            FriendlyName   = [string]$env.FriendlyName
-            Url            = [string]$env.Url
-            Credential     = Get-CredentialSummaryText -Credentials $env.Credentials
-            ServiceAccount = $serviceAccountUPN
-        }
+        Add-SpectreTableRow -Table $table -Cells @(
+            [string]$env.ShortName,
+            [string]$env.FriendlyName,
+            [string]$env.Url,
+            (Get-CredentialSummaryText -Credentials $env.Credentials),
+            $serviceAccountUPN
+        )
     }
 
-    $rows | Format-Table -Property ShortName, FriendlyName, Url, Credential, ServiceAccount -Wrap -AutoSize | Out-Host
+    [Spectre.Console.AnsiConsole]::Write($table)
 }
 
 function Select-OrderedSolutions {
@@ -417,26 +2000,45 @@ function Select-OrderedSolutions {
     }
 
     while ($true) {
-        Clear-Host
-        Write-Host 'Solutions Configuration' -ForegroundColor Cyan
-        Write-Host '=======================' -ForegroundColor Cyan
-        Write-Host ''
+        Write-Section 'Configure solution order'
+        Show-SetupPromptGuidance -PromptKind 'Menu' -PromptText 'Manage solutions'
 
         if ($selectedSolutions.Count -eq 0) {
-            Write-Host 'No solutions selected.' -ForegroundColor DarkGray
+            [Spectre.Console.AnsiConsole]::MarkupLine('[grey]No solutions selected yet.[/]')
         }
         else {
-            Write-Host 'Selected solutions (in dependency order):' -ForegroundColor Green
-            $selectedSolutions | Select-Object @{ N = 'Friendly Name'; E = { $_.friendlyname } }, @{ N = 'Unique Name'; E = { $_.uniquename } }, Version | Format-Table -AutoSize | Out-Host
-        }
-        Write-Host ''
+            [Spectre.Console.AnsiConsole]::MarkupLine('[bold green]Selected solutions (dependency order)[/]')
+            $table = New-SpectreTable -Columns @('#', 'Friendly name', 'Unique name', 'Version')
+            for ($solutionIndex = 0; $solutionIndex -lt $selectedSolutions.Count; $solutionIndex++) {
+                $solution = $selectedSolutions[$solutionIndex]
+                Add-SpectreTableRow -Table $table -Cells @(
+                    [string]($solutionIndex + 1),
+                    [string]$solution.friendlyname,
+                    [string]$solution.uniquename,
+                    [string]$solution.version
+                )
+            }
 
-        $menuItems = @('Add a solution', 'Clear list')
+            [Spectre.Console.AnsiConsole]::Write($table)
+        }
+
+        [Spectre.Console.AnsiConsole]::WriteLine()
+
+        $menuItems = @('Add a solution')
         if ($selectedSolutions.Count -gt 0) {
+            $menuItems += 'Remove a solution'
+            if ($selectedSolutions.Count -gt 1) {
+                $menuItems += 'Move a solution earlier'
+                $menuItems += 'Move a solution later'
+            }
+            $menuItems += 'Clear list'
+            $menuItems += 'Done'
+        }
+        else {
             $menuItems += 'Done'
         }
 
-        $selection = Select-FromMenu -Title 'Manage solutions' -Items $menuItems
+        $selection = Select-FromMenu -Title 'Manage solutions' -Items $menuItems -PreserveExistingContent -SkipPromptGuidance
 
         if ($null -eq $selection) {
             return @($selectedSolutions)
@@ -450,23 +2052,51 @@ function Select-OrderedSolutions {
                 })
 
                 if ($available.Count -eq 0) {
-                    Write-Host 'All solutions already selected.' -ForegroundColor Yellow
-                    Start-Sleep -Seconds 2
+                    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]All available solutions are already selected.[/]')
                     continue
                 }
 
                 $solMenu = @($available | ForEach-Object { "$($_.friendlyname) ($($_.uniquename))" })
-                $solMenu += '--- Cancel ---'
 
                 $solIndex = Select-FromMenu -Title 'Select a solution to add' -Items $solMenu
                 if ($null -ne $solIndex -and $solIndex -lt $available.Count) {
                     $selectedSolutions += $available[$solIndex]
                 }
             }
+            'Remove a solution' {
+                $solMenu = @($selectedSolutions | ForEach-Object { "$($_.friendlyname) ($($_.uniquename))" })
+                $solIndex = Select-FromMenu -Title 'Select a solution to remove' -Items $solMenu
+                if ($null -ne $solIndex -and $solIndex -lt $selectedSolutions.Count) {
+                    $selectedSolutions = @(
+                        for ($selectedIndex = 0; $selectedIndex -lt $selectedSolutions.Count; $selectedIndex++) {
+                            if ($selectedIndex -ne $solIndex) {
+                                $selectedSolutions[$selectedIndex]
+                            }
+                        }
+                    )
+                }
+            }
+            'Move a solution earlier' {
+                $solMenu = @($selectedSolutions | ForEach-Object { "$($_.friendlyname) ($($_.uniquename))" })
+                $solIndex = Select-FromMenu -Title 'Select a solution to move earlier' -Items $solMenu
+                if ($null -ne $solIndex -and $solIndex -gt 0) {
+                    $temp = $selectedSolutions[$solIndex - 1]
+                    $selectedSolutions[$solIndex - 1] = $selectedSolutions[$solIndex]
+                    $selectedSolutions[$solIndex] = $temp
+                }
+            }
+            'Move a solution later' {
+                $solMenu = @($selectedSolutions | ForEach-Object { "$($_.friendlyname) ($($_.uniquename))" })
+                $solIndex = Select-FromMenu -Title 'Select a solution to move later' -Items $solMenu
+                if ($null -ne $solIndex -and $solIndex -lt ($selectedSolutions.Count - 1)) {
+                    $temp = $selectedSolutions[$solIndex + 1]
+                    $selectedSolutions[$solIndex + 1] = $selectedSolutions[$solIndex]
+                    $selectedSolutions[$solIndex] = $temp
+                }
+            }
             'Clear list' {
                 $selectedSolutions = @()
-                Write-Host 'List cleared.' -ForegroundColor Yellow
-                Start-Sleep -Seconds 1
+                [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]Solution list cleared.[/]')
             }
             'Done' {
                 return @($selectedSolutions)
@@ -577,27 +2207,35 @@ function Select-ConfiguredDeploymentEnvironments {
     }
 
     while ($true) {
-        Clear-Host
-        Write-Host $Heading -ForegroundColor Cyan
-        Write-Host ('=' * $Heading.Length) -ForegroundColor Cyan
-        Write-Host ''
+        Write-Section $Heading
 
+        $guidanceShown = $false
         if ($GuidanceLines -or $DocRelativePath) {
             Write-SetupGuidance -Lines $GuidanceLines -DocRelativePath $DocRelativePath -Ref $Ref
+            $guidanceShown = $true
+        }
+
+        if (-not $guidanceShown) {
+            Show-SetupPromptGuidance -PromptKind 'Menu' -PromptText $Title
         }
 
         Show-EnvironmentConfigurationTable -EnvironmentConfigurations $selectedEnvironments
-        Write-Host ''
+        [Spectre.Console.AnsiConsole]::WriteLine()
 
-        $menuItems = @('Add an environment', 'Clear list')
+        $menuItems = @('Add an environment')
         if ($selectedEnvironments.Count -gt 0) {
             if ($EditEnvironmentScriptBlock) {
                 $menuItems += 'Edit an environment'
             }
+            $menuItems += 'Remove an environment'
+            $menuItems += 'Clear list'
+            $menuItems += 'Done'
+        }
+        else {
             $menuItems += 'Done'
         }
 
-        $selection = Select-FromMenu -Title $Title -Items $menuItems
+        $selection = Select-FromMenu -Title $Title -Items $menuItems -PreserveExistingContent -SkipPromptGuidance
         if ($null -eq $selection) {
             return @($selectedEnvironments)
         }
@@ -609,10 +2247,30 @@ function Select-ConfiguredDeploymentEnvironments {
                     $selectedEnvironments += $newEnvironment
                 }
             }
+            'Remove an environment' {
+                $environmentMenuItems = @()
+                for ($i = 0; $i -lt $selectedEnvironments.Count; $i++) {
+                    $environment = $selectedEnvironments[$i]
+                    $shortName = [string]$environment.ShortName
+                    $friendlyName = if ([string]::IsNullOrWhiteSpace($environment.FriendlyName)) { $shortName } else { [string]$environment.FriendlyName }
+                    $url = if ([string]::IsNullOrWhiteSpace($environment.Url)) { '<not set>' } else { [string]$environment.Url }
+                    $environmentMenuItems += "$shortName - $friendlyName ($url)"
+                }
+
+                $removeSelection = Select-FromMenu -Title 'Select the environment to remove' -Items $environmentMenuItems
+                if ($null -ne $removeSelection) {
+                    $selectedEnvironments = @(
+                        for ($selectedIndex = 0; $selectedIndex -lt $selectedEnvironments.Count; $selectedIndex++) {
+                            if ($selectedIndex -ne $removeSelection) {
+                                $selectedEnvironments[$selectedIndex]
+                            }
+                        }
+                    )
+                }
+            }
             'Clear list' {
                 $selectedEnvironments = @()
-                Write-Host 'List cleared.' -ForegroundColor Yellow
-                Start-Sleep -Seconds 1
+                [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]Environment list cleared.[/]')
             }
             'Edit an environment' {
                 $environmentMenuItems = @()
@@ -748,37 +2406,180 @@ function Resolve-DevelopmentDefaultAlm4DataverseRef {
     return $FallbackRef
 }
 
+function ConvertTo-SetupActivityOutputLine {
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowNull()]$Entry
+    )
+
+    if ($null -eq $Entry) {
+        return $null
+    }
+
+    $style = 'white'
+    $text = $null
+
+    if ($Entry -is [System.Management.Automation.InformationRecord]) {
+        $text = [string]$Entry.MessageData
+        $style = 'grey'
+    }
+    elseif ($Entry -is [System.Management.Automation.WarningRecord]) {
+        $text = [string]$Entry.Message
+        $style = 'yellow'
+    }
+    elseif ($Entry -is [System.Management.Automation.VerboseRecord]) {
+        $text = [string]$Entry.Message
+        $style = 'deepskyblue1'
+    }
+    elseif ($Entry -is [System.Management.Automation.DebugRecord]) {
+        $text = [string]$Entry.Message
+        $style = 'mediumpurple3'
+    }
+    elseif ($Entry -is [System.Management.Automation.ErrorRecord]) {
+        $text = [string]$Entry.ToString()
+        $style = 'red3_1'
+    }
+    else {
+        $text = [string]$Entry
+    }
+
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $null
+    }
+
+    return "[$style]$(ConvertTo-SpectreMarkupLiteral -Text $text.Trim())[/]"
+}
+
+function Show-SetupActivityOutputPanel {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Heading,
+        [Parameter()][string[]]$Lines,
+        [Parameter()][int]$MaxLines = 12
+    )
+
+    Initialize-SpectreConsole
+
+    $effectiveLines = @($Lines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($effectiveLines.Count -eq 0) {
+        $effectiveLines = @('[grey]No additional output was produced for this action.[/]')
+    }
+    elseif ($effectiveLines.Count -gt $MaxLines) {
+        $hiddenCount = $effectiveLines.Count - $MaxLines
+        $effectiveLines = @("[grey]... $hiddenCount earlier line(s) omitted ...[/]") + $effectiveLines[($effectiveLines.Count - $MaxLines)..($effectiveLines.Count - 1)]
+    }
+
+    $content = [Spectre.Console.Markup]::new(($effectiveLines -join [Environment]::NewLine))
+    [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content $content -Header $Heading -BorderColor 'grey42' -Expand))
+    [Spectre.Console.AnsiConsole]::WriteLine()
+}
+
+function Invoke-WithSpectreStatus {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [Parameter()][switch]$CaptureOutputInPanel
+    )
+
+    Initialize-SpectreConsole
+
+    try {
+        $statusDisplay = [Spectre.Console.AnsiConsole]::Status()
+        $statusDisplay.AutoRefresh = $true
+        $statusDisplay.SpinnerStyle = [Spectre.Console.Style]::Parse('bold deepskyblue1')
+
+        if (-not $CaptureOutputInPanel) {
+            return $statusDisplay.Start(
+                "[bold deepskyblue1]$(ConvertTo-SpectreMarkupLiteral -Text $Status)[/]",
+                [System.Func[Spectre.Console.StatusContext, object]]{
+                    param($context)
+                    & $ScriptBlock $context
+                }
+            )
+        }
+
+        $capturedLines = [System.Collections.Generic.List[string]]::new()
+
+        $result = $statusDisplay.Start(
+            "[bold deepskyblue1]$(ConvertTo-SpectreMarkupLiteral -Text $Status)[/]",
+            [System.Func[Spectre.Console.StatusContext, object]]{
+                param($context)
+
+                $capturedOutput = @(& { & $ScriptBlock $context } 6>&1 5>&1 4>&1 3>&1 2>&1)
+                foreach ($entry in $capturedOutput) {
+                    $line = ConvertTo-SetupActivityOutputLine -Entry $entry
+                    if (-not [string]::IsNullOrWhiteSpace($line)) {
+                        $capturedLines.Add($line)
+                    }
+                }
+
+                return $null
+            }
+        )
+
+        Show-SetupActivityOutputPanel -Heading $Status -Lines $capturedLines
+        return $result
+    }
+    catch {
+        if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+            throw
+        }
+
+        if (Test-IsUserInterruptException -Exception $_.Exception) {
+            throw
+        }
+
+        return & $ScriptBlock $null
+    }
+}
+
 function Invoke-WithErrorHandling {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][scriptblock]$ScriptBlock,
         [Parameter(Mandatory)][string]$OperationName,
-        [Parameter()][switch]$AllowSkip
+        [Parameter()][switch]$AllowSkip,
+        [Parameter()][string]$StatusMessage,
+        [Parameter()][switch]$CaptureOutputInPanel
     )
 
     while ($true) {
         try {
-            return & $ScriptBlock
+            if ([string]::IsNullOrWhiteSpace($StatusMessage)) {
+                return & $ScriptBlock
+            }
+
+            return Invoke-WithSpectreStatus -Status $StatusMessage -ScriptBlock $ScriptBlock -CaptureOutputInPanel:$CaptureOutputInPanel
         }
         catch {
-            Write-Host "`n" -NoNewline
-            Write-Host "ERROR in $OperationName" -ForegroundColor Red -BackgroundColor Black
-            Write-Host "="*80 -ForegroundColor Red
-            Write-Host "Error Type: $($_.Exception.GetType().Name)" -ForegroundColor Yellow
-            Write-Host "Error Message: $($_.Exception.Message)" -ForegroundColor Yellow
-
-            if ($_.ScriptStackTrace) {
-                Write-Host "`nStack Trace:" -ForegroundColor DarkGray
-                Write-Host $_.ScriptStackTrace -ForegroundColor DarkGray
+            if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+                throw
             }
+
+            if (Test-IsUserInterruptException -Exception $_.Exception) {
+                throw
+            }
+
+            Initialize-SpectreConsole
+
+            $errorLines = @(
+                "[bold red]ERROR in $(ConvertTo-SpectreMarkupLiteral -Text $OperationName)[/]",
+                "[yellow]Error Type:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.Exception.GetType().Name)",
+                "[yellow]Error Message:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.Exception.Message)"
+            )
 
             if ($_.InvocationInfo.PositionMessage) {
-                Write-Host "`nLocation:" -ForegroundColor DarkGray
-                Write-Host $_.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+                $errorLines += "[grey]Location:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.InvocationInfo.PositionMessage.Trim())"
             }
 
-            Write-Host "="*80 -ForegroundColor Red
-            Write-Host ""
+            if ($_.ScriptStackTrace) {
+                $errorLines += "[grey]Stack Trace:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.ScriptStackTrace.Trim())"
+            }
+
+            [Spectre.Console.AnsiConsole]::WriteLine()
+            [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content ([Spectre.Console.Markup]::new(($errorLines -join [Environment]::NewLine))) -Header 'Setup error' -BorderColor 'red3_1' -Expand -PaddingY 1))
+            [Spectre.Console.AnsiConsole]::WriteLine()
 
             $options = @('Retry')
             if ($AllowSkip) {
@@ -811,6 +2612,63 @@ function Invoke-WithErrorHandling {
     }
 }
 
+function Show-SetupCompletionScreen {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Heading,
+        [Parameter(Mandatory)][string]$AccessLabel,
+        [Parameter(Mandatory)][string]$AccessUrl,
+        [Parameter()][array]$MetricCards,
+        [Parameter()][hashtable]$SummaryValues,
+        [Parameter()][string[]]$NextStepLinks,
+        [Parameter()][string[]]$Notes
+    )
+
+    Initialize-SpectreConsole
+    [Spectre.Console.AnsiConsole]::Clear()
+
+    Write-SetupDashboard -Message $Heading -IncludeTrailingSpacer
+
+    $heroLines = @(
+        '[grey]The guided setup has finished and the generated automation assets are ready for review.[/]',
+        "[grey]$([string](ConvertTo-SpectreMarkupLiteral -Text $AccessLabel)):[/] [link=$AccessUrl]$AccessUrl[/]"
+    )
+
+    [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content ([Spectre.Console.Markup]::new(($heroLines -join [Environment]::NewLine))) -Header 'Ready to open' -BorderColor 'green3_1' -Expand -PaddingY 1))
+    [Spectre.Console.AnsiConsole]::WriteLine()
+
+    if ($MetricCards -and @($MetricCards).Count -gt 0) {
+        Show-SpectreMetricCards -Cards $MetricCards
+    }
+
+    if ($SummaryValues -and $SummaryValues.Count -gt 0) {
+        [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content (New-SpectreInfoGrid -Values $SummaryValues -LabelWidth 18) -Header 'Result summary' -BorderColor 'deepskyblue1' -Expand))
+        [Spectre.Console.AnsiConsole]::WriteLine()
+    }
+
+    if ($NextStepLinks -and $NextStepLinks.Count -gt 0) {
+        $linkMarkup = @(
+            foreach ($link in $NextStepLinks) {
+                "• [link=$link]$link[/]"
+            }
+        ) -join [Environment]::NewLine
+
+        [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content ([Spectre.Console.Markup]::new($linkMarkup)) -Header 'Next steps' -BorderColor 'yellow3' -Expand))
+        [Spectre.Console.AnsiConsole]::WriteLine()
+    }
+
+    if ($Notes -and $Notes.Count -gt 0) {
+        $noteMarkup = @(
+            foreach ($note in $Notes) {
+                "• $(ConvertTo-SpectreMarkupLiteral -Text $note)"
+            }
+        ) -join [Environment]::NewLine
+
+        [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content ([Spectre.Console.Markup]::new($noteMarkup)) -Header 'Notes' -BorderColor 'grey42' -Expand))
+        [Spectre.Console.AnsiConsole]::WriteLine()
+    }
+}
+
 function Get-AuthToken {
     param(
         [Parameter(Mandatory)][string]$ResourceUrl,
@@ -827,7 +2685,6 @@ function Get-AuthToken {
         [void][Microsoft.Identity.Client.PublicClientApplicationBuilder]
     }
     catch {
-        Write-Host "Type not found, attempting to load from module..." -ForegroundColor Yellow
         $module = Get-Module -Name "Rnwood.Dataverse.Data.PowerShell"
         if ($module) {
             $base = $module.ModuleBase
@@ -844,7 +2701,6 @@ function Get-AuthToken {
             }
 
             if ($dllPath -and (Test-Path $dllPath)) {
-                Write-Host "Loading MSAL from: $dllPath" -ForegroundColor DarkGray
                 Add-Type -Path $dllPath
             }
             else {
@@ -858,7 +2714,6 @@ function Get-AuthToken {
                 }
 
                 if ($found) {
-                    Write-Host "DLL found recursively at: $($found.FullName)" -ForegroundColor Yellow
                     Add-Type -Path $found.FullName
                 }
             }

@@ -49,6 +49,8 @@ else {
     __SETUP_COMMON_LIB__
 }
 
+$script:setupPhaseNames = @('Connect', 'Repository', 'Configure', 'DEV env', 'Deployment envs')
+
 #region Initialization
 
 function Install-PortableGit {
@@ -112,6 +114,7 @@ function Install-PortableGit {
     }
 }
 
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 0
 Write-Section "Initialising setup"
 
 $TempModuleRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ALM4Dataverse\Modules"
@@ -157,7 +160,6 @@ if ($upstreamRepo -like '__*') {
 
 $requiredModules = @{
     'VSTeam'                           = '7.15.2'
-    'PSMenu'                           = '0.2.0'
     'Rnwood.Dataverse.Data.PowerShell' = $rnwoodDataverseVersion
 }
 
@@ -197,6 +199,7 @@ if ($resolveDevRefAfterGitIsAvailable) {
     Write-Host "Development mode: Resolved ALM4DataverseRef to '$ALM4DataverseRef'" -ForegroundColor Yellow
 }
 
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 0
 Write-Section "Authenticating"
 
 Write-Host "To enable automated setup setup, we need to authenticate with the necessary services." -ForegroundColor Green
@@ -224,16 +227,14 @@ if ($cachedAzureAccounts.Count -gt 0) {
 
     if ($azureAuthChoice -lt $cachedAzureAccounts.Count) {
         $preferredAzureUsername = $cachedAzureAccounts[$azureAuthChoice]
-        Write-Host "Using cached Azure login: $preferredAzureUsername" -ForegroundColor Green
     }
     else {
         $forceAzureInteractive = $true
-        Read-Host "Press Enter to open browser for authentication..."
+        Wait-ForUserAcknowledgement -Message 'Open the browser for Azure authentication when you are ready.' -ContinueLabel 'Open browser'
     }
 }
 else {
-    Write-Host "No cached Azure login detected. Browser sign-in is required." -ForegroundColor Yellow
-    Read-Host "Press Enter to open browser for authentication..."
+    Wait-ForUserAcknowledgement -Message 'Open the browser for Azure authentication when you are ready.' -ContinueLabel 'Open browser'
 }
 
 $authResult = Invoke-WithErrorHandling -OperationName "Authentication" -ScriptBlock {
@@ -292,7 +293,9 @@ function New-AzDoProject {
     Write-Section "Creating new Azure DevOps project"
     Write-Host "Project: $ProjectName" -ForegroundColor Cyan
 
-    $processes = @(Get-VSTeamProcess)
+    $processes = @(Invoke-WithSpectreStatus -Status 'Retrieving Azure DevOps process templates...' -ScriptBlock {
+        Get-VSTeamProcess
+    })
     if ($processes.Count -eq 0) {
         throw "Unable to list Azure DevOps processes to create a project. Verify permissions in the organization."
     }
@@ -442,6 +445,7 @@ function Wait-AzDoGitRepositoryImport {
     throw "Timed out waiting for repository import to complete after $TimeoutSeconds seconds."
 }
 
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 1
 Write-Section "Select Azure DevOps organization"
 
 # Use direct REST API to get organizations (VSTeam requires an org to connect to first)
@@ -515,7 +519,9 @@ function Initialize-AzDoProjectAndRepositories {
 
     $azDevOpsAccessToken = $adoAccessToken.Token
 
-    $projects = Get-VSTeamProject
+    $projects = @(Invoke-WithSpectreStatus -Status 'Retrieving Azure DevOps projects...' -ScriptBlock {
+        Get-VSTeamProject
+    })
     $projectNames = @()
     if ($projects) {
         $projectNames = @($projects | ForEach-Object { $_.Name })
@@ -530,11 +536,13 @@ function Initialize-AzDoProjectAndRepositories {
     }
 
     if ($index -eq ($menuItems.Count - 1)) {
-        $name = Read-Host 'Enter the name for the new Azure DevOps project'
+        $name = Read-TextWithDefault -Prompt 'Enter the name for the new Azure DevOps project'
 
         $created = New-AzDoProject -Organization $orgName -ProjectName $name -Visibility private
 
-        $projects = Get-VSTeamProject
+        $projects = @(Invoke-WithSpectreStatus -Status 'Refreshing Azure DevOps projects...' -ScriptBlock {
+            Get-VSTeamProject
+        })
         $selectedProject = $null
 
         if ($projects) {
@@ -732,7 +740,7 @@ function Initialize-AzDoProjectAndRepositories {
                 if ((Get-Location).Path -eq $workRoot) { Pop-Location }
                 try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
             }
-        }
+        } -StatusMessage "Initializing shared repository '$sharedRepoName'..." -CaptureOutputInPanel
     }
 
     if (-not $justInitialized) {
@@ -876,6 +884,75 @@ function Initialize-AzDoProjectAndRepositories {
 
 #region Dataverse Environment Selection Helper
 
+function Get-DataverseEnvironmentCatalog {
+    [CmdletBinding()]
+    param(
+        [Parameter()][switch]$ForceRefresh,
+        [Parameter()][switch]$ShowStatus
+    )
+
+    $hasCachedCatalog = ($null -ne (Get-Variable -Name 'dataverseEnvironmentCatalog' -Scope Script -ErrorAction SilentlyContinue)) -and $null -ne $script:dataverseEnvironmentCatalog
+    if (-not $ForceRefresh -and $hasCachedCatalog) {
+        return @($script:dataverseEnvironmentCatalog)
+    }
+
+    $fetchCatalog = {
+        @(Get-DataverseEnvironment -AccessToken {
+            param($resource)
+            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
+            try {
+                $uri = [System.Uri]$resource
+                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
+            }
+            catch {}
+
+            $auth = Get-AuthToken -ResourceUrl $resource
+            return $auth.AccessToken
+        })
+    }
+
+    if ($ShowStatus) {
+        $script:dataverseEnvironmentCatalog = @(Invoke-WithSpectreStatus -Status 'Retrieving Dataverse environments...' -ScriptBlock $fetchCatalog)
+    }
+    else {
+        $script:dataverseEnvironmentCatalog = @(& $fetchCatalog)
+    }
+
+    if (-not $script:dataverseEnvironmentCatalog -or $script:dataverseEnvironmentCatalog.Count -eq 0) {
+        throw 'No Dataverse environments found for this user.'
+    }
+
+    return @($script:dataverseEnvironmentCatalog)
+}
+
+function Resolve-DataverseEnvironmentFriendlyName {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$EnvironmentUrl,
+        [Parameter()][string]$FallbackName
+    )
+
+    $normalizedEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $EnvironmentUrl
+    if ([string]::IsNullOrWhiteSpace($normalizedEnvironmentUrl)) {
+        return $FallbackName
+    }
+
+    try {
+        $matchingEnvironment = Get-DataverseEnvironmentCatalog | Where-Object {
+            (ConvertTo-NormalizedEnvironmentUrl -Url $_.Endpoints['WebApplication']) -eq $normalizedEnvironmentUrl
+        } | Select-Object -First 1
+
+        if ($matchingEnvironment -and -not [string]::IsNullOrWhiteSpace($matchingEnvironment.FriendlyName)) {
+            return [string]$matchingEnvironment.FriendlyName
+        }
+    }
+    catch {
+        Write-Host "Could not resolve Dataverse environment name for '$normalizedEnvironmentUrl'. Falling back to '$FallbackName'." -ForegroundColor DarkGray
+    }
+
+    return $FallbackName
+}
+
 function Select-DataverseEnvironment {
     [CmdletBinding()]
     param(
@@ -884,23 +961,7 @@ function Select-DataverseEnvironment {
         [Parameter()][string]$PreferredUrl
     )
 
-    Write-Host "Listing Dataverse environments..." -ForegroundColor Yellow
-
-    # Get all environments using Get-DataverseEnvironment
-    $environments = @(Get-DataverseEnvironment -AccessToken { 
-        param($resource)
-        if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
-        $auth = Get-AuthToken -ResourceUrl $resource
-        return $auth.AccessToken
-    })
-
-    if (-not $environments -or $environments.Count -eq 0) {
-        throw "No Dataverse environments found for this user."
-    }
+    $environments = @(Get-DataverseEnvironmentCatalog -ShowStatus)
 
     $normalizedExcludeUrl = ConvertTo-NormalizedEnvironmentUrl -Url $ExcludeUrl
     $normalizedPreferredUrl = ConvertTo-NormalizedEnvironmentUrl -Url $PreferredUrl
@@ -961,7 +1022,9 @@ function Select-AzDoMainRepository {
 
     Write-Section "Selecting main Git repository"
 
-    $repos = @(Get-VSTeamGitRepository -ProjectName $ProjectName)
+    $repos = @(Invoke-WithSpectreStatus -Status "Retrieving repositories in '$ProjectName'..." -ScriptBlock {
+        Get-VSTeamGitRepository -ProjectName $ProjectName
+    })
     # 'Main' repo is the user's application repo (not the shared ALM4Dataverse repo)
     $reposSorted = @($repos | Sort-Object -Property Name)
 
@@ -979,7 +1042,7 @@ function Select-AzDoMainRepository {
     }
 
     if ($selectedIndex -eq ($menu.Count - 1)) {
-        $newRepoName = Read-Host "Enter the name for the new main repository"
+        $newRepoName = Read-TextWithDefault -Prompt 'Enter the name for the new main repository'
         $newRepoName = $newRepoName.Trim()
         if ([string]::IsNullOrWhiteSpace($newRepoName)) {
             throw "Repository name cannot be empty."
@@ -1152,7 +1215,9 @@ function Select-AzDoSharedRepository {
 
     Write-Section 'Selecting shared ALM4Dataverse repository'
 
-    $repos = @(Get-VSTeamGitRepository -ProjectName $ProjectName)
+    $repos = @(Invoke-WithSpectreStatus -Status "Retrieving shared repository options in '$ProjectName'..." -ScriptBlock {
+        Get-VSTeamGitRepository -ProjectName $ProjectName
+    })
     $reposSorted = @($repos | Sort-Object -Property Name)
     $candidateRepos = @($reposSorted | Where-Object {
         [string]::IsNullOrWhiteSpace($ExcludeRepositoryName) -or $_.Name -ne $ExcludeRepositoryName
@@ -1191,10 +1256,7 @@ function Select-AzDoSharedRepository {
     }
 
     while ($true) {
-        $newRepoName = Read-Host "Enter the name for the shared repository [$($selectedAction.DefaultName)]"
-        if ([string]::IsNullOrWhiteSpace($newRepoName)) {
-            $newRepoName = $selectedAction.DefaultName
-        }
+        $newRepoName = Read-TextWithDefault -Prompt 'Enter the name for the shared repository' -DefaultValue $selectedAction.DefaultName
 
         $newRepoName = $newRepoName.Trim()
         if ([string]::IsNullOrWhiteSpace($newRepoName)) {
@@ -2518,11 +2580,11 @@ function Get-PowerPlatformSCCredentials {
     }
     else { # Manual
         Write-Host "Enter Service Principal details:" -ForegroundColor Cyan
-        $name = Read-Host "Credential Name (for reuse reference)"
+        $name = Read-TextWithDefault -Prompt 'Credential name (for reuse reference)' -AllowEmpty
         if ([string]::IsNullOrWhiteSpace($name)) { $name = "Credential-" + (Get-Date -Format "HHmm") }
         
         while ($true) {
-            $appId = Read-Host "Application ID (Client ID)"
+            $appId = Read-TextWithDefault -Prompt 'Application ID (Client ID)'
             if ($appId -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                 break
             }
@@ -2551,9 +2613,7 @@ function Get-PowerPlatformSCCredentials {
         $secret = $null
         if ($authType -eq 'Secret') {
             while ($true) {
-                $secretSecure = Read-Host "Client Secret" -AsSecureString
-                $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secretSecure)
-                $secret = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($bstr)
+                $secret = Read-SecretText -Prompt 'Client Secret'
                 
                 if ($secret -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                     Write-Warning "The Client Secret looks like a GUID. You should enter the Secret VALUE, not the Secret ID."
@@ -2632,7 +2692,7 @@ function Get-DataverseServiceAccountUPN {
         Write-Host ""
         
         while ($true) {
-            $upn = Read-Host "Service Account UPN (e.g., serviceaccount@contoso.com)"
+            $upn = Read-TextWithDefault -Prompt 'Service Account UPN (for example: serviceaccount@contoso.com)'
             if ([string]::IsNullOrWhiteSpace($upn)) {
                 Write-Warning "Service Account UPN cannot be empty. Please try again."
                 continue
@@ -2791,16 +2851,16 @@ $repoPublishPlan = Get-RepoChangePublishPlan `
     -Ref $ALM4DataverseRef
         Push-Location $mainRepoWorkingRoot
         try {
-            & git checkout $script:mainRepoBranch 2>&1 | Out-Host
+            & git checkout $script:mainRepoBranch 2>&1
             if ($LASTEXITCODE -ne 0) {
-                & git checkout -b $script:mainRepoBranch 2>&1 | Out-Host
+                & git checkout -b $script:mainRepoBranch 2>&1
                 if ($LASTEXITCODE -ne 0) {
                     throw "Failed to check out branch '$script:mainRepoBranch' in the working tree."
                 }
             }
 
             if ($repoPublishPlan.BranchName -ne $script:mainRepoBranch) {
-                & git checkout -B $repoPublishPlan.BranchName 2>&1 | Out-Host
+                & git checkout -B $repoPublishPlan.BranchName 2>&1
                 if ($LASTEXITCODE -ne 0) {
                     throw "Failed to create or switch to working branch '$($repoPublishPlan.BranchName)'."
                 }
@@ -2840,7 +2900,7 @@ Invoke-WithErrorHandling -OperationName "Preparing main repository working tree"
     }
 
     Sync-CopyToYourRepoIntoGitRepo -SourceRoot $copyRoot -TargetRoot $mainRepoWorkingRoot -RepositoryName $mainRepo.Name -SharedRepositoryName $sharedRepoName -Branch $script:mainRepoBranch -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
-} | Out-Null
+} -StatusMessage 'Preparing the main repository working tree...' -CaptureOutputInPanel | Out-Null
 
 #endregion
 
@@ -2868,15 +2928,17 @@ function Get-DataverseSolutionsSelection {
         Write-Host "Selected environment: $($selectedEnv.FriendlyName) ($devEnvUrl)" -ForegroundColor Cyan
 
         # Connect to the selected environment
-        $connection = Get-DataverseConnection -Url $devEnvUrl -AccessToken { 
-            param($resource)
-            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-            try {
-                $uri = [System.Uri]$resource
-                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-            } catch {}
-            $auth = Get-AuthToken -ResourceUrl $resource
-            return $auth.AccessToken
+        $connection = Invoke-WithSpectreStatus -Status 'Connecting to the selected DEV environment...' -ScriptBlock {
+            Get-DataverseConnection -Url $devEnvUrl -AccessToken {
+                param($resource)
+                if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
+                try {
+                    $uri = [System.Uri]$resource
+                    $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
+                } catch {}
+                $auth = Get-AuthToken -ResourceUrl $resource
+                return $auth.AccessToken
+            }
         }
         
         if (-not $connection) {
@@ -2884,12 +2946,13 @@ function Get-DataverseSolutionsSelection {
         }
         
         Write-Host "Connected to environment: $($connection.ConnectedOrgFriendlyName)"
-        Write-Host "Retrieving solutions..." -ForegroundColor Yellow
         
         # Get all solutions (excluding system solutions)
-        $allSolutions = Get-DataverseRecord -Connection $connection -TableName 'solution' -Columns @('solutionid', 'uniquename', 'friendlyname', 'version', 'ismanaged', 'description') -FilterValues @{
-            'isvisible' = $true
-            'ismanaged' = $false
+        $allSolutions = Invoke-WithSpectreStatus -Status 'Retrieving unmanaged solutions from Dataverse...' -ScriptBlock {
+            Get-DataverseRecord -Connection $connection -TableName 'solution' -Columns @('solutionid', 'uniquename', 'friendlyname', 'version', 'ismanaged', 'description') -FilterValues @{
+                'isvisible' = $true
+                'ismanaged' = $false
+            }
         }
         
         if (-not $allSolutions -or $allSolutions.Count -eq 0) {
@@ -3181,8 +3244,10 @@ function Get-AzDoExistingEnvironmentState {
 
     $credentials = $null
     $environmentUrl = $null
+    $friendlyName = $EnvironmentName
     if ($endpoint) {
         $environmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $endpoint.url
+        $friendlyName = Resolve-DataverseEnvironmentFriendlyName -EnvironmentUrl $environmentUrl -FallbackName $EnvironmentName
 
         $applicationId = $null
         $resolvedTenantId = $TenantId
@@ -3221,7 +3286,7 @@ function Get-AzDoExistingEnvironmentState {
 
     return [pscustomobject]@{
         ShortName         = $EnvironmentName
-        FriendlyName      = $EnvironmentName
+        FriendlyName      = $friendlyName
         Url               = $environmentUrl
         Credentials       = $credentials
         ServiceAccountUPN = $serviceAccountUPN
@@ -3297,28 +3362,34 @@ function Get-DataverseEnvironmentsSelection {
         if ($existingNames.Count -gt 0) {
             Write-Host "Found $($existingNames.Count) environment(s) in deployment pipeline. Pre-populating the deployment environment table..." -ForegroundColor Cyan
 
-            foreach ($name in $existingNames) {
-                if ($selectedEnvironments | Where-Object { $_.ShortName -ieq $name }) {
-                    continue
+            $selectedEnvironments += @(Invoke-WithSpectreStatus -Status 'Inspecting existing deployment environment configuration...' -ScriptBlock {
+                $resolvedExistingEnvironments = @()
+
+                foreach ($name in $existingNames) {
+                    if ($selectedEnvironments | Where-Object { $_.ShortName -ieq $name }) {
+                        continue
+                    }
+
+                    $existingEnvironmentState = Get-AzDoExistingEnvironmentState -ProjectName $ProjectName -EnvironmentName $name -TenantId $TenantId
+
+                    $existingEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $existingEnvironmentState.Url
+                    if ($existingEnvironmentUrl -eq $normalizedExcludedUrl) {
+                        Write-Warning "Skipping existing deployment stage '$name' because it points at the selected DEV environment URL."
+                        continue
+                    }
+
+                    $resolvedExistingEnvironments += [pscustomobject]@{
+                        ShortName            = $name
+                        FriendlyName         = $(if (-not [string]::IsNullOrWhiteSpace($existingEnvironmentState.FriendlyName)) { $existingEnvironmentState.FriendlyName } else { "$name (Existing)" })
+                        Url                  = $existingEnvironmentUrl
+                        Credentials          = $existingEnvironmentState.Credentials
+                        ServiceAccountUPN    = $existingEnvironmentState.ServiceAccountUPN
+                        ConfigurationPending = (($null -eq $existingEnvironmentState.Credentials) -or [string]::IsNullOrWhiteSpace($existingEnvironmentState.ServiceAccountUPN))
+                    }
                 }
 
-                $existingEnvironmentState = Get-AzDoExistingEnvironmentState -ProjectName $ProjectName -EnvironmentName $name -TenantId $TenantId
-
-                $existingEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $existingEnvironmentState.Url
-                if ($existingEnvironmentUrl -eq $normalizedExcludedUrl) {
-                    Write-Warning "Skipping existing deployment stage '$name' because it points at the selected DEV environment URL."
-                    continue
-                }
-
-                $selectedEnvironments += [pscustomobject]@{
-                    ShortName            = $name
-                    FriendlyName         = $(if (-not [string]::IsNullOrWhiteSpace($existingEnvironmentState.FriendlyName)) { $existingEnvironmentState.FriendlyName } else { "$name (Existing)" })
-                    Url                  = $existingEnvironmentUrl
-                    Credentials          = $existingEnvironmentState.Credentials
-                    ServiceAccountUPN    = $existingEnvironmentState.ServiceAccountUPN
-                    ConfigurationPending = (($null -eq $existingEnvironmentState.Credentials) -or [string]::IsNullOrWhiteSpace($existingEnvironmentState.ServiceAccountUPN))
-                }
-            }
+                return @($resolvedExistingEnvironments)
+            })
         }
     }
 
@@ -3502,8 +3573,6 @@ function Update-DeployPipelineInWorkingTree {
         [Parameter()][bool]$UseAlm4DataverseExtension = $true
     )
 
-    if ($Environments.Count -eq 0) { return $false }
-
     $deployYamlName = "DEPLOY-$Branch.yml"
     $deployYamlPath = Join-Path $RepoRoot "pipelines\$deployYamlName"
     if (-not (Test-Path $deployYamlPath)) {
@@ -3602,13 +3671,13 @@ function Publish-AzDoRepoChanges {
         & git config user.name 'ALM4Dataverse Setup' 2>$null
         & git config user.email 'setup@alm4dataverse.local' 2>$null
 
-        & git commit -m $PublishPlan.CommitMessage 2>&1 | Out-Host
+        & git commit -m $PublishPlan.CommitMessage 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw 'Git commit failed.'
         }
 
         Write-Host "Pushing to origin/$($PublishPlan.BranchName)..." -ForegroundColor Yellow
-        & git -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push -u origin $PublishPlan.BranchName 2>&1 | Out-Host
+        & git -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push -u origin $PublishPlan.BranchName 2>&1
         if ($LASTEXITCODE -ne 0) {
             throw 'Git push failed.'
         }
@@ -3752,123 +3821,162 @@ function Apply-AzDoEnvironmentConfiguration {
     }
 }
 
-Write-Section "Selecting Dataverse solution(s) to manage"
-
-Write-SetupGuidance -Lines @(
-    "Select the unmanaged solutions from your DEV environment that belong in source control.",
-    "Best practice: keep them in dependency order because that is the order written into alm-config.psd1."
-) -DocRelativePath 'docs/config/alm-config.md' -Ref $ALM4DataverseRef
-
-$existingDevEnvironmentState = Get-AzDoExistingEnvironmentState -ProjectName $selectedProject.Name -EnvironmentName $script:devEnvironmentShortName -TenantId $adoAuthResult.TenantId
-
-$solutionData = Invoke-WithErrorHandling -OperationName "Selecting Dataverse Solutions" -ScriptBlock {
-    $existingConfigPath = Join-Path $mainRepoWorkingRoot 'alm-config.psd1'
-    $result = Get-DataverseSolutionsSelection -ExistingConfigPath $existingConfigPath -ExistingEnvironmentUrl $existingDevEnvironmentState.Url
-    return $result
+$existingDevEnvironmentState = Invoke-WithSpectreStatus -Status "Inspecting existing DEV environment configuration for '$script:devEnvironmentShortName'..." -ScriptBlock {
+    Get-AzDoExistingEnvironmentState -ProjectName $selectedProject.Name -EnvironmentName $script:devEnvironmentShortName -TenantId $adoAuthResult.TenantId
 }
-
-$solutions = $solutionData.Solutions
-$devEnvUrl = $solutionData.EnvironmentUrl
-$devEnvFriendlyName = $solutionData.EnvironmentFriendlyName
-
-if ($solutions.Count -gt 0) {
-    Invoke-WithErrorHandling -OperationName "Updating alm-config.psd1 with Solutions" -AllowSkip -ScriptBlock {
-        $configUpdated = Update-AlmConfigInWorkingTree -Solutions $solutions -RepoRoot $mainRepoWorkingRoot
-        if ($configUpdated) {
-            Write-Host "Updated alm-config.psd1 with $($solutions.Count) solution(s) in the working tree."
-        }
-    } | Out-Null
-}
-
+$solutionData = $null
+$solutions = @()
+$devEnvUrl = $null
+$devEnvFriendlyName = $null
 $devEnvironmentConfiguration = $null
-if ($devEnvUrl) {
-    Write-Section "Configure DEV environment access"
-    Write-SetupGuidance -Lines @(
-        "The DEV environment uses the fixed short name '$script:devEnvironmentShortName' so EXPORT and BUILD always target the branch-specific development slot.",
-        'Choose the service principal and Dataverse service account now so the later review table includes the full environment configuration instead of only the URLs.',
-        'Best practice: use a dedicated service account for automation ownership and a separate service principal per environment where practical.'
-    ) -DocRelativePath 'docs/config/azdo-environment-service-connection.md' -Ref $ALM4DataverseRef
+$environments = @()
 
-    $devEnvironmentConfiguration = Invoke-WithErrorHandling -OperationName 'Selecting DEV environment credentials' -ScriptBlock {
-        Get-AzDoEnvironmentConfiguration `
-            -EnvironmentName $script:devEnvironmentShortName `
-            -EnvironmentUrl $devEnvUrl `
-            -FriendlyName $devEnvFriendlyName `
-            -ExistingCredentials $credentialsCache `
-            -ExistingServiceAccounts $serviceAccountsCache `
-            -TenantId $adoAuthResult.TenantId `
-            -ProjectName $selectedProject.Name `
-            -OrganizationId $orgId `
-            -OrganizationName $orgName `
-            -UseAlm4DataverseExtension $script:useAlm4DataverseExtension `
-                -ExistingCredential $existingDevEnvironmentState.Credentials `
-                -ExistingServiceAccountUPN $existingDevEnvironmentState.ServiceAccountUPN `
-            -IsDevelopmentEnvironment $true
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 2
+Invoke-SetupWizard -Title 'Azure DevOps ALM4Dataverse setup' -Steps @(
+    [pscustomobject]@{
+        Name = 'Select DEV solutions'
+        Action = {
+            Write-Section 'Selecting Dataverse solution(s) to manage'
+            Write-SetupGuidance -Lines @(
+                'Select the unmanaged solutions from your DEV environment that belong in source control.',
+                'Best practice: keep them in dependency order because that is the order written into alm-config.psd1.'
+            ) -DocRelativePath 'docs/config/alm-config.md' -Ref $ALM4DataverseRef
+
+            $solutionData = Invoke-WithErrorHandling -OperationName 'Selecting Dataverse Solutions' -ScriptBlock {
+                $existingConfigPath = Join-Path $mainRepoWorkingRoot 'alm-config.psd1'
+                Get-DataverseSolutionsSelection -ExistingConfigPath $existingConfigPath -ExistingEnvironmentUrl $existingDevEnvironmentState.Url
+            }
+
+            $solutions = @($solutionData.Solutions)
+            $devEnvUrl = $solutionData.EnvironmentUrl
+            $devEnvFriendlyName = $solutionData.EnvironmentFriendlyName
+
+            Invoke-WithErrorHandling -OperationName 'Updating alm-config.psd1 with Solutions' -AllowSkip -StatusMessage 'Updating alm-config.psd1 with the selected solutions...' -ScriptBlock {
+                $configUpdated = Update-AlmConfigInWorkingTree -Solutions $solutions -RepoRoot $mainRepoWorkingRoot
+                if ($configUpdated) {
+                    Write-Host "Updated alm-config.psd1 with $($solutions.Count) solution(s) in the working tree."
+                }
+            } -CaptureOutputInPanel | Out-Null
+        }
+    },
+    [pscustomobject]@{
+        Name = 'Configure DEV access'
+        Action = {
+            Write-Section 'Configure DEV environment access'
+
+            if (-not $devEnvUrl) {
+                [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No DEV environment is currently selected, so there is nothing to configure for this step yet.[/]')
+                $devEnvironmentConfiguration = $null
+                return
+            }
+
+            Write-SetupGuidance -Lines @(
+                "The DEV environment uses the fixed short name '$script:devEnvironmentShortName' so EXPORT and BUILD always target the branch-specific development slot.",
+                'Choose the service principal and Dataverse service account now so the later review table includes the full environment configuration instead of only the URLs.',
+                'Best practice: use a dedicated service account for automation ownership and a separate service principal per environment where practical.'
+            ) -DocRelativePath 'docs/config/azdo-environment-service-connection.md' -Ref $ALM4DataverseRef
+
+            $devEnvironmentConfiguration = Invoke-WithErrorHandling -OperationName 'Selecting DEV environment credentials' -ScriptBlock {
+                Get-AzDoEnvironmentConfiguration `
+                    -EnvironmentName $script:devEnvironmentShortName `
+                    -EnvironmentUrl $devEnvUrl `
+                    -FriendlyName $devEnvFriendlyName `
+                    -ExistingCredentials $credentialsCache `
+                    -ExistingServiceAccounts $serviceAccountsCache `
+                    -TenantId $adoAuthResult.TenantId `
+                    -ProjectName $selectedProject.Name `
+                    -OrganizationId $orgId `
+                    -OrganizationName $orgName `
+                    -UseAlm4DataverseExtension $script:useAlm4DataverseExtension `
+                    -ExistingCredential $existingDevEnvironmentState.Credentials `
+                    -ExistingServiceAccountUPN $existingDevEnvironmentState.ServiceAccountUPN `
+                    -IsDevelopmentEnvironment $true
+            }
+
+            if ($devEnvironmentConfiguration -and -not ($credentialsCache | Where-Object { $_.ApplicationId -eq $devEnvironmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $devEnvironmentConfiguration.Credentials.TenantId })) {
+                $credentialsCache += $devEnvironmentConfiguration.Credentials
+            }
+            if ($devEnvironmentConfiguration -and $serviceAccountsCache -notcontains $devEnvironmentConfiguration.ServiceAccountUPN) {
+                $serviceAccountsCache += $devEnvironmentConfiguration.ServiceAccountUPN
+            }
+        }
+    },
+    [pscustomobject]@{
+        Name = 'Configure deployment environments'
+        Action = {
+            Write-Section 'Selecting Deployment Environments'
+            Write-SetupGuidance -Lines @(
+                'Select Dataverse environments to deploy to in the required order and choose the corresponding authentication + service-account details as you add each one.',
+                'Best practice: list lower environments first because DEPLOY stages will be generated in that sequence and the summary table should mirror your intended promotion path.'
+            ) -DocRelativePath 'docs/setup/azdo-manual-setup.md' -Ref $ALM4DataverseRef
+
+            $environments = @(Invoke-WithErrorHandling -OperationName 'Selecting Deployment Environments' -ScriptBlock {
+                Get-DataverseEnvironmentsSelection `
+                    -ExcludedUrl $devEnvUrl `
+                    -RepoRoot $mainRepoWorkingRoot `
+                    -Branch $script:mainRepoBranch `
+                    -ProjectName $selectedProject.Name `
+                    -ExistingCredentials $credentialsCache `
+                    -ExistingServiceAccounts $serviceAccountsCache `
+                    -TenantId $adoAuthResult.TenantId `
+                    -OrganizationId $orgId `
+                    -OrganizationName $orgName `
+                    -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+            })
+
+            Invoke-WithErrorHandling -OperationName 'Updating Deployment Pipeline' -AllowSkip -StatusMessage 'Regenerating the DEPLOY pipeline stages...' -ScriptBlock {
+                Update-DeployPipelineInWorkingTree -Environments $environments -RepoRoot $mainRepoWorkingRoot -Branch $script:mainRepoBranch -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+            } -CaptureOutputInPanel | Out-Null
+        }
+    },
+    [pscustomobject]@{
+        Name = 'Review choices'
+        Action = {
+            Write-Section 'Review Dataverse environment configuration'
+
+            $allConfiguredEnvironments = @()
+            if ($devEnvironmentConfiguration) {
+                $allConfiguredEnvironments += $devEnvironmentConfiguration
+            }
+            $allConfiguredEnvironments += @($environments)
+
+            Show-KeyValueSummaryTable -Heading 'Setup review' -Values ([ordered]@{
+                'Azure DevOps project' = $selectedProject.Name
+                'Main repository'      = $mainRepo.Name
+                'Shared repository'    = $sharedRepoName
+                'Publish mode'         = $(if ($repoPublishPlan.Mode -eq 'PullRequest') { "Pull request into $($repoPublishPlan.TargetBranch) from $($repoPublishPlan.BranchName)" } else { "Direct commit to $($repoPublishPlan.BranchName)" })
+                'Extension mode'       = $(if ($script:useAlm4DataverseExtension) { 'ALM4Dataverse extension enabled' } else { 'ALM4Dataverse extension disabled' })
+                'Solutions selected'   = [string]$solutions.Count
+            })
+
+            Show-EnvironmentConfigurationTable -EnvironmentConfigurations $allConfiguredEnvironments
+            Confirm-SetupReviewAction
+        }
     }
-
-    if (-not ($credentialsCache | Where-Object { $_.ApplicationId -eq $devEnvironmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $devEnvironmentConfiguration.Credentials.TenantId })) {
-        $credentialsCache += $devEnvironmentConfiguration.Credentials
-    }
-    if ($serviceAccountsCache -notcontains $devEnvironmentConfiguration.ServiceAccountUPN) {
-        $serviceAccountsCache += $devEnvironmentConfiguration.ServiceAccountUPN
-    }
-}
-
-Write-Section "Selecting Deployment Environments"
-
-Write-SetupGuidance -Lines @(
-    "Select Dataverse environments to deploy to in the required order and choose the corresponding authentication + service-account details as you add each one.",
-    "Best practice: list lower environments first because DEPLOY stages will be generated in that sequence and the summary table should mirror your intended promotion path."
-) -DocRelativePath 'docs/setup/azdo-manual-setup.md' -Ref $ALM4DataverseRef
-
-$environments = Invoke-WithErrorHandling -OperationName "Selecting Deployment Environments" -ScriptBlock {
-    return Get-DataverseEnvironmentsSelection `
-        -ExcludedUrl $devEnvUrl `
-        -RepoRoot $mainRepoWorkingRoot `
-        -Branch $script:mainRepoBranch `
-        -ProjectName $selectedProject.Name `
-        -ExistingCredentials $credentialsCache `
-        -ExistingServiceAccounts $serviceAccountsCache `
-        -TenantId $adoAuthResult.TenantId `
-        -OrganizationId $orgId `
-        -OrganizationName $orgName `
-        -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
-}
-
-if ($environments.Count -gt 0) {
-    Invoke-WithErrorHandling -OperationName 'Updating Deployment Pipeline' -AllowSkip -ScriptBlock {
-        Update-DeployPipelineInWorkingTree -Environments $environments -RepoRoot $mainRepoWorkingRoot -Branch $script:mainRepoBranch -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
-    } | Out-Null
-}
+)
 
 $allConfiguredEnvironments = @()
 if ($devEnvironmentConfiguration) {
     $allConfiguredEnvironments += $devEnvironmentConfiguration
 }
-$allConfiguredEnvironments += $environments
+$allConfiguredEnvironments += @($environments)
 
-Write-Section 'Review Dataverse environment configuration'
-Show-EnvironmentConfigurationTable -EnvironmentConfigurations $allConfiguredEnvironments
-Write-Host ''
-if (-not (Read-YesNo -Prompt 'Proceed with these Dataverse environment settings?')) {
-    throw 'Setup cancelled so you can revise the environment configuration selections.'
-}
-
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 2
 $repoPublishResult = Invoke-WithErrorHandling -OperationName 'Publishing main repository changes' -ScriptBlock {
     Publish-AzDoRepoChanges -RepoRoot $mainRepoWorkingRoot -PublishPlan $repoPublishPlan -AccessToken $azDevOpsAccessToken -Repository $mainRepo
-}
+} -StatusMessage 'Publishing repository changes to Azure DevOps...' -CaptureOutputInPanel
 
-Invoke-WithErrorHandling -OperationName 'Setting Up Build Service Permissions' -ScriptBlock {
-    Write-Section 'Ensuring Build Service has Contribute on main repo'
+Write-Section 'Ensuring Build Service has Contribute on main repo'
+Invoke-WithErrorHandling -OperationName 'Setting Up Build Service Permissions' -StatusMessage 'Granting build service permissions for the main repository...' -CaptureOutputInPanel -ScriptBlock {
     Ensure-AzDoBuildServiceHasContributeOnRepo -Organization $orgName -ProjectName $selectedProject.Name -ProjectId $selectedProject.Id -RepositoryId $mainRepo.Id
 } | Out-Null
 
-Invoke-WithErrorHandling -OperationName 'Creating Pipeline Definitions' -ScriptBlock {
+Invoke-WithErrorHandling -OperationName 'Creating Pipeline Definitions' -StatusMessage 'Creating Azure DevOps pipeline definitions...' -CaptureOutputInPanel -ScriptBlock {
     Ensure-AzDoPipelinesForMainRepo -Organization $orgName -Project $selectedProject.Name -Repository $mainRepo -YamlFiles $script:yamlFiles -FolderPath "\$($mainRepo.Name)"
 } | Out-Null
 
-Invoke-WithErrorHandling -OperationName 'Authorizing Pipelines for Repositories' -AllowSkip -ScriptBlock {
-    Write-Section 'Authorizing pipelines for repositories'
+Write-Section 'Authorizing pipelines for repositories'
+Invoke-WithErrorHandling -OperationName 'Authorizing Pipelines for Repositories' -AllowSkip -StatusMessage 'Authorizing pipelines to access the required repositories...' -CaptureOutputInPanel -ScriptBlock {
     $pipelineNames = $script:yamlFiles | ForEach-Object { [System.IO.Path]::GetFileNameWithoutExtension($_) }
     $allPipelines = Get-VSTeamBuildDefinition -ProjectName $selectedProject.Name
     $pipelineFolder = "\$($mainRepo.Name)"
@@ -3892,18 +4000,46 @@ $deployPipeline = Get-VSTeamBuildDefinition -ProjectName $selectedProject.Name |
 if (-not $exportPipeline) { Write-Warning 'EXPORT pipeline not found. Skipping some DEV authorizations.' }
 if (-not $deployPipeline) { Write-Warning "DEPLOY-$script:mainRepoBranch pipeline not found. Skipping some deployment authorizations." }
 
-foreach ($env in $allConfiguredEnvironments) {
-    Invoke-WithErrorHandling -OperationName "Applying environment configuration for '$($env.ShortName)'" -AllowSkip -ScriptBlock {
-        Write-Section "Applying environment configuration for '$($env.ShortName)'"
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 3
+Write-Section "Configure DEV environment"
+
+if ($devEnvironmentConfiguration) {
+    Invoke-WithErrorHandling -OperationName "Applying environment configuration for '$($devEnvironmentConfiguration.ShortName)'" -AllowSkip -ScriptBlock {
         Apply-AzDoEnvironmentConfiguration `
-            -EnvironmentConfiguration $env `
+            -EnvironmentConfiguration $devEnvironmentConfiguration `
             -OrganizationName $orgName `
             -ProjectName $selectedProject.Name `
             -ProjectId $selectedProject.Id `
             -ExportPipeline $exportPipeline `
             -DeployPipeline $deployPipeline `
             -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
-    } | Out-Null
+    } -StatusMessage "Applying configuration for environment '$($devEnvironmentConfiguration.ShortName)'..." -CaptureOutputInPanel | Out-Null
+}
+else {
+    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No DEV environment configuration was captured in the wizard, so this step will be skipped.[/]')
+}
+
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 4
+Write-Section 'Configure deployment environments'
+
+if ($environments.Count -eq 0) {
+    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No deployment environments were configured in the wizard, so this step will be skipped.[/]')
+}
+else {
+    for ($envIndex = 0; $envIndex -lt $environments.Count; $envIndex++) {
+        $env = $environments[$envIndex]
+        Write-Section "Applying environment configuration for '$($env.ShortName)'"
+        Invoke-WithErrorHandling -OperationName "Applying environment configuration for '$($env.ShortName)'" -AllowSkip -ScriptBlock {
+            Apply-AzDoEnvironmentConfiguration `
+                -EnvironmentConfiguration $env `
+                -OrganizationName $orgName `
+                -ProjectName $selectedProject.Name `
+                -ProjectId $selectedProject.Id `
+                -ExportPipeline $exportPipeline `
+                -DeployPipeline $deployPipeline `
+                -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+        } -StatusMessage "Applying configuration for environment '$($env.ShortName)'..." -CaptureOutputInPanel | Out-Null
+    }
 }
 
 #endregion
@@ -3912,22 +4048,27 @@ if ($mainRepoWorkingRoot -and (Test-Path $mainRepoWorkingRoot)) {
     try { Remove-Item -LiteralPath $mainRepoWorkingRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 }
 
-Clear-Host
-Write-Host "Setup completed successfully!" -ForegroundColor Green
-Write-Host ""
-Write-Host "Access your Azure DevOps project at" -ForegroundColor Green
-Write-Host "https://dev.azure.com/$orgName/$($selectedProject.Name)/_build" -ForegroundColor Green
-Write-Host ""
-if ($repoPublishResult -and $repoPublishResult.Mode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($repoPublishResult.PullRequestUrl)) {
-    Write-Host "Repository changes were pushed to branch '$($repoPublishResult.BranchName)' and a pull request was created:" -ForegroundColor Green
-    Write-Host $repoPublishResult.PullRequestUrl -ForegroundColor Green
-    Write-Host ""
-}
-elseif ($repoPublishResult -and $repoPublishResult.HasChanges) {
-    Write-Host "Repository changes were committed directly to '$($repoPublishResult.BranchName)'." -ForegroundColor Green
-    Write-Host ""
-}
-
-Write-Host "Next steps:" -ForegroundColor Green
-Write-Host (Get-Alm4DataverseDocUrl -RelativePath 'docs/setup/azdo-automated-setup.md' -Ref $ALM4DataverseRef) -ForegroundColor Green
-Write-Host (Get-Alm4DataverseDocUrl -RelativePath 'docs/config/azdo-environment-variable-group.md' -Ref $ALM4DataverseRef) -ForegroundColor Green
+Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 4
+Show-SetupCompletionScreen `
+    -Heading 'Azure DevOps setup completed successfully!' `
+    -AccessLabel 'Open your Azure DevOps project' `
+    -AccessUrl "https://dev.azure.com/$orgName/$($selectedProject.Name)/_build" `
+    -MetricCards @(
+        @{ Label = 'Solutions'; AccentColor = 'green3_1'; Value = [string]$solutions.Count; Detail = 'Configured in alm-config.psd1' },
+        @{ Label = 'Environments'; AccentColor = 'yellow3'; Value = [string]$allConfiguredEnvironments.Count; Detail = 'Configured in Azure DevOps' },
+        @{ Label = 'Publish mode'; AccentColor = 'deepskyblue1'; Value = $(if ($repoPublishResult -and $repoPublishResult.Mode -eq 'PullRequest') { 'Pull request' } elseif ($repoPublishResult -and $repoPublishResult.HasChanges) { 'Direct commit' } else { 'No changes' }); Detail = $(if ($repoPublishResult) { $repoPublishResult.BranchName } else { 'Repository already up to date' }) }
+    ) `
+    -SummaryValues ([ordered]@{
+        'Azure DevOps project' = $selectedProject.Name
+        'Main repository'      = $mainRepo.Name
+        'Shared repository'    = $sharedRepoName
+        'Publish mode'         = $(if ($repoPublishResult -and $repoPublishResult.Mode -eq 'PullRequest') { "Pull request from $($repoPublishResult.BranchName) to $($repoPublishResult.TargetBranch)" } elseif ($repoPublishResult -and $repoPublishResult.HasChanges) { "Direct commit to $($repoPublishResult.BranchName)" } else { 'No repository changes were needed' })
+        'Configured environments' = [string]$allConfiguredEnvironments.Count
+    }) `
+    -NextStepLinks @(
+        (Get-Alm4DataverseDocUrl -RelativePath 'docs/setup/azdo-automated-setup.md' -Ref $ALM4DataverseRef),
+        (Get-Alm4DataverseDocUrl -RelativePath 'docs/config/azdo-environment-variable-group.md' -Ref $ALM4DataverseRef)
+    ) `
+    -Notes @(
+        $(if ($repoPublishResult -and $repoPublishResult.Mode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($repoPublishResult.PullRequestUrl)) { "A pull request was opened: $($repoPublishResult.PullRequestUrl)" } elseif ($repoPublishResult -and $repoPublishResult.HasChanges) { "Repository changes were committed directly to '$($repoPublishResult.BranchName)'." } else { 'The repository already contained the generated files, so nothing new had to be committed.' })
+    )
