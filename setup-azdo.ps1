@@ -2879,8 +2879,8 @@ Invoke-WithErrorHandling -OperationName "Creating Environment Variable Group" -S
             -ProjectId $selectedProject.Id `
             -GroupName "Environment-$script:devEnvironmentShortName" `
             -Variables @{
-            'CONNREF_example_uniquename' = 'connectionid'
-            'ENVVAR_example_uniquename'  = 'value'
+            'DataverseConnRef_example_uniquename' = 'connectionid'
+            'DataverseEnvVar_example_uniquename'  = 'value'
         })
 } | Out-Null
 
@@ -3913,8 +3913,8 @@ if ($environments.Count -gt 0) {
                     -ProjectId $selectedProject.Id `
                     -GroupName "Environment-$($env.ShortName)" `
                     -Variables @{
-                    'DATAVERSECONNREF_example_uniquename' = 'connectionid'
-                    'DATAVERSEENVVAR_example_uniquename'  = 'value'
+                    'DataverseConnRef_example_uniquename' = 'connectionid'
+                    'DataverseEnvVar_example_uniquename'  = 'value'
                     'DataverseServiceAccountUPN' = $script:serviceAccountUPN
                 }
             } else {
