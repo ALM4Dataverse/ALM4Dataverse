@@ -90,6 +90,31 @@ function ConvertTo-SpectreMarkupLiteral {
     return ([string]$Text).Replace('[', '[[').Replace(']', ']]')
 }
 
+function Test-SetupDebugEnabled {
+    [CmdletBinding()]
+    param()
+
+    $debugValue = $env:ALM4DATAVERSE_DEBUG
+    if ([string]::IsNullOrWhiteSpace($debugValue)) {
+        return $false
+    }
+
+    return @('1', 'true', 'yes', 'on') -contains $debugValue.Trim().ToLowerInvariant()
+}
+
+function Write-SetupDebug {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Message
+    )
+
+    if (-not (Test-SetupDebugEnabled)) {
+        return
+    }
+
+    Write-Host "[DEBUG] $Message" -ForegroundColor DarkGray
+}
+
 function New-SpectreTable {
     [CmdletBinding()]
     param(
@@ -1519,6 +1544,7 @@ function Select-FromMenu {
     $effectiveItems = @($Items)
     $wizardContext = Get-SetupWizardContext
     $hasGenericBack = $false
+    $singleChoiceCancelLabel = $null
     if (
         $wizardContext -and
         $wizardContext.CurrentStepIndex -gt 0 -and
@@ -1529,9 +1555,24 @@ function Select-FromMenu {
         $hasGenericBack = $true
     }
 
+    # Some hosts render a one-item SelectionPrompt incorrectly (duplicate highlighted rows).
+    # Keep the standard menu interaction by injecting an explicit cancel option when only one item exists.
+    if ($effectiveItems.Count -eq 1 -and $Items.Count -eq 1 -and -not $hasGenericBack) {
+        $singleChoiceCancelLabel = '< Cancel setup'
+        $effectiveItems += $singleChoiceCancelLabel
+        Write-SetupDebug -Message "Single-item menu workaround active for title='$Title'; added '$singleChoiceCancelLabel'."
+    }
+
+    Write-SetupDebug -Message "Select-FromMenu title='$Title' items=$($Items.Count) effectiveItems=$($effectiveItems.Count) hasGenericBack=$hasGenericBack"
+    if (Test-SetupDebugEnabled) {
+        for ($debugIndex = 0; $debugIndex -lt $effectiveItems.Count; $debugIndex++) {
+            Write-SetupDebug -Message "  [$debugIndex] $($effectiveItems[$debugIndex])"
+        }
+    }
+
     $prompt = [Spectre.Console.SelectionPrompt[string]]::new()
     $prompt.MoreChoicesText = ''
-    $prompt.WrapAround = $true
+    $prompt.WrapAround = ($effectiveItems.Count -gt 1)
 
     $availableMenuRows = 10
     try {
@@ -1561,6 +1602,13 @@ function Select-FromMenu {
 
     try {
         $selectedValue = Show-SelectionPromptWithInterruptHandling -Prompt $prompt
+        Write-SetupDebug -Message "SelectionPrompt selected value: '$selectedValue'"
+
+        if ($singleChoiceCancelLabel -and $selectedValue -ceq $singleChoiceCancelLabel) {
+            Write-SetupDebug -Message "Single-item menu cancel option selected; returning null."
+            return $null
+        }
+
         $isBackSelection = ($selectedValue -eq 'Back' -or $selectedValue -like '< Back*')
         if ($isBackSelection -and ($effectiveItems -contains '< Back to previous step' -or $effectiveItems -contains 'Back')) {
             Request-SetupWizardBack
@@ -1572,11 +1620,14 @@ function Select-FromMenu {
 
         for ($itemIndex = 0; $itemIndex -lt $Items.Count; $itemIndex++) {
             if ($Items[$itemIndex] -ceq $selectedValue) {
+                Write-SetupDebug -Message "Returning menu index $itemIndex for value '$selectedValue'"
                 return $itemIndex
             }
         }
 
-        return [Array]::IndexOf($Items, $selectedValue)
+        $fallbackIndex = [Array]::IndexOf($Items, $selectedValue)
+        Write-SetupDebug -Message "Fallback menu index resolution returned $fallbackIndex for value '$selectedValue'"
+        return $fallbackIndex
     }
     finally {
         Clear-SetupStatusBarAtBottom

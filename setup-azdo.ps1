@@ -537,25 +537,94 @@ $orgData = Invoke-WithErrorHandling -OperationName "Discovering Azure DevOps Org
     $accountsResponse = Invoke-RestMethod -Uri $accountsUrl -Method Get -Headers $headers
     
     $orgs = @($accountsResponse.value)
+    Write-SetupDebug -Message "Azure DevOps accounts API returned $($orgs.Count) rows for memberId '$memberId'."
+    if (Test-SetupDebugEnabled) {
+        for ($orgIndex = 0; $orgIndex -lt $orgs.Count; $orgIndex++) {
+            $org = $orgs[$orgIndex]
+            $debugName = [string]$org.accountName
+            $debugId = [string]$org.accountId
+            $debugUri = [string]$org.accountUri
+            Write-SetupDebug -Message "  raw[$orgIndex] name='$debugName' id='$debugId' uri='$debugUri'"
+        }
+    }
     
     if ($orgs.Count -eq 0) {
         throw "No Azure DevOps organizations were returned for this user."
     }
 
-    $orgsSorted = $orgs | Sort-Object -Property accountName
-    $orgNames = @($orgsSorted | ForEach-Object { $_.accountName })
+    # The accounts API can occasionally return duplicate rows for the same organization.
+    # De-duplicate primarily by accountId (stable), then by accountUri/accountName fallback.
+    $orgByKey = @{}
+    foreach ($org in $orgs) {
+        if (-not $org) {
+            continue
+        }
+
+        $orgKey = $null
+        if ($org.PSObject.Properties.Name -contains 'accountId' -and -not [string]::IsNullOrWhiteSpace([string]$org.accountId)) {
+            $orgKey = "id:$([string]$org.accountId)".ToLowerInvariant()
+        }
+        elseif ($org.PSObject.Properties.Name -contains 'accountUri' -and -not [string]::IsNullOrWhiteSpace([string]$org.accountUri)) {
+            $orgKey = "uri:$([string]$org.accountUri)".ToLowerInvariant()
+        }
+        else {
+            $orgKey = "name:$([string]$org.accountName)".ToLowerInvariant()
+        }
+
+        if (-not $orgByKey.ContainsKey($orgKey)) {
+            $orgByKey[$orgKey] = $org
+        }
+    }
+
+    $orgsSorted = @($orgByKey.Values | Sort-Object -Property accountName, accountUri)
+    Write-SetupDebug -Message "Azure DevOps organizations after de-duplication: $($orgsSorted.Count) rows."
+    if (Test-SetupDebugEnabled) {
+        for ($orgIndex = 0; $orgIndex -lt $orgsSorted.Count; $orgIndex++) {
+            $org = $orgsSorted[$orgIndex]
+            Write-SetupDebug -Message "  dedup[$orgIndex] name='$([string]$org.accountName)' id='$([string]$org.accountId)' uri='$([string]$org.accountUri)'"
+        }
+    }
+
+    # Keep labels concise when unique; add URI only when names collide.
+    $nameCounts = @{}
+    foreach ($org in $orgsSorted) {
+        $nameKey = [string]$org.accountName
+        if ($nameCounts.ContainsKey($nameKey)) {
+            $nameCounts[$nameKey] = [int]$nameCounts[$nameKey] + 1
+        }
+        else {
+            $nameCounts[$nameKey] = 1
+        }
+    }
+
+    $orgLabels = @(
+        $orgsSorted | ForEach-Object {
+            $name = [string]$_.accountName
+            if ($nameCounts[$name] -gt 1 -and -not [string]::IsNullOrWhiteSpace([string]$_.accountUri)) {
+                "$name ($([string]$_.accountUri))"
+            }
+            else {
+                $name
+            }
+        }
+    )
+    $orgNames = @($orgsSorted | ForEach-Object { [string]$_.accountName })
     
     return @{
-        Orgs = $orgsSorted
-        OrgNames = $orgNames
+        Orgs      = $orgsSorted
+        OrgNames  = $orgNames
+        OrgLabels = $orgLabels
     }
 }
 
 $orgsSorted = $orgData.Orgs
 $orgNames = $orgData.OrgNames
+$orgLabels = $orgData.OrgLabels
+
+Write-SetupDebug -Message "Organization menu labels: $($orgLabels -join ' | ')"
 
 $orgIndex = 0
-$orgIndex = Select-FromMenu -Title "Select an Azure DevOps organization" -Items $orgNames
+$orgIndex = Select-FromMenu -Title "Select an Azure DevOps organization" -Items $orgLabels
 if ($null -eq $orgIndex) {
     Write-Host "No organization selected." -ForegroundColor Yellow
     return
