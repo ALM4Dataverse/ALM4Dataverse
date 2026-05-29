@@ -495,6 +495,45 @@ function Get-GitHubRepo {
     return $result | ConvertFrom-Json
 }
 
+function Ensure-GitHubSharedWorkflowAccessPolicy {
+    <#
+    .SYNOPSIS
+        Ensures a private shared workflow repository has its Actions access policy configured
+        to allow other repositories owned by the same user or organization to use its reusable workflows.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo
+    )
+
+    $repoDetails = Invoke-GhApi -Endpoint "repos/$Owner/$Repo"
+    if (-not $repoDetails) {
+        Write-Warning "Could not retrieve repository details for '$Owner/$Repo'; skipping Actions access policy check."
+        return
+    }
+
+    if (-not $repoDetails.private) {
+        Write-Host "Shared workflow repository '$Owner/$Repo' is public; no Actions access policy configuration required." -ForegroundColor DarkGray
+        return
+    }
+
+    # Private repo: set access_level so other repos owned by the same user/org can call its reusable workflows.
+    # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#allowing-access-to-components-in-a-private-repository
+    $ownerType = $repoDetails.owner.type
+    $accessLevel = if ($ownerType -eq 'Organization') { 'organization' } else { 'user' }
+
+    $currentPolicy = Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/permissions/access" -AllowNotFound
+    if ($currentPolicy -and $currentPolicy.access_level -eq $accessLevel) {
+        Write-Host "Shared workflow repository '$Owner/$Repo' Actions access policy is already set to '$accessLevel'." -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Setting Actions access policy on '$Owner/$Repo' to '$accessLevel' so its reusable workflows are accessible from other private repositories..." -ForegroundColor Yellow
+    Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/permissions/access" -Method 'PUT' -Body @{ access_level = $accessLevel } | Out-Null
+    Write-Host "Actions access policy set to '$accessLevel' on '$Owner/$Repo'." -ForegroundColor Green
+}
+
 function Get-GitHubActionsVariableValue {
     [CmdletBinding()]
     param(
@@ -2876,6 +2915,11 @@ if ($sharedWorkflowRepo.defaultBranchRef -and $sharedWorkflowRepo.defaultBranchR
 Write-Host "Shared workflow repository: $sharedWorkflowRepository" -ForegroundColor Green
 Write-Host "Shared workflow reference (synced branch): $sharedWorkflowReference" -ForegroundColor Green
 
+$sharedWorkflowRepoParts = $sharedWorkflowRepository.Split('/', 2)
+Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workflow repository '$sharedWorkflowRepository'..." -ScriptBlock {
+    Ensure-GitHubSharedWorkflowAccessPolicy -Owner $sharedWorkflowRepoParts[0] -Repo $sharedWorkflowRepoParts[1]
+} | Out-Null
+
 $useGitHubEnvironments = $false
 $enableEnvironmentApprovals = $false
 $environmentApprovalReviewerIds = @()
@@ -2982,6 +3026,31 @@ try {
     }
 
     if ($repoPublishPlan.BranchName -ne $defaultBranch) {
+        if ($repoPublishPlan.Mode -eq 'PullRequest') {
+            & git ls-remote --exit-code --heads origin $defaultBranch 2>&1 | Out-Null
+            $targetBranchExistsOnOrigin = ($LASTEXITCODE -eq 0)
+
+            if (-not $targetBranchExistsOnOrigin) {
+                Write-Host "Initializing base branch '$defaultBranch' on origin for pull request mode..." -ForegroundColor Yellow
+
+                & git config user.name 'ALM4Dataverse Setup' 2>$null
+                & git config user.email 'setup@alm4dataverse.local' 2>$null
+
+                & git rev-parse --verify HEAD 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    & git commit --allow-empty -m 'Initialize repository base branch for ALM4Dataverse setup' 2>&1 | Out-Null
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Failed to create initial commit for base branch '$defaultBranch'."
+                    }
+                }
+
+                & git push -u origin $defaultBranch 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Failed to push base branch '$defaultBranch' to origin."
+                }
+            }
+        }
+
         & git checkout -B $repoPublishPlan.BranchName 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw "Failed to create or switch to working branch '$($repoPublishPlan.BranchName)'."

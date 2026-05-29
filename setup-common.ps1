@@ -110,14 +110,15 @@ function Add-SpectreTableRow {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Table,
-        [Parameter(Mandatory)][string[]]$Cells
+        [Parameter(Mandatory)][AllowEmptyString()][string[]]$Cells
     )
 
     Initialize-SpectreConsole
 
     $renderables = [Spectre.Console.Rendering.IRenderable[]]@(
         foreach ($cell in $Cells) {
-            [Spectre.Console.Markup]::new((ConvertTo-SpectreMarkupLiteral -Text $cell))
+            $cellText = if ($null -eq $cell) { '' } else { [string]$cell }
+            [Spectre.Console.Markup]::new((ConvertTo-SpectreMarkupLiteral -Text $cellText))
         }
     )
 

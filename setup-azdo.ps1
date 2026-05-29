@@ -900,6 +900,7 @@ function Initialize-AzDoProjectAndRepositories {
         MainRepo             = $mainRepo
         MainRepoWorkingTree  = $mainRepoWorkingTree
         MainRepoWorkingRoot  = $mainRepoWorkingRoot
+        AzDevOpsAccessToken  = $azDevOpsAccessToken
         SharedRepo           = $repo
         SharedRepoName       = $sharedRepoName
     }
@@ -1107,7 +1108,7 @@ function Get-AzDoDeploymentEnvironmentNamesFromWorkingTree {
     }
 
     $content = Get-Content -LiteralPath $deployPath -Raw
-    $envMatches = [regex]::Matches($content, 'environmentName:\s*([^\s\r\n]+)')
+    $envMatches = [regex]::Matches($content, '(?mi)^\s*environmentName:\s*([^\s\r\n]+)\s*$')
     $environmentNames = @()
     foreach ($envMatch in $envMatches) {
         $environmentName = $envMatch.Groups[1].Value.Trim().Trim('"', "'")
@@ -2783,6 +2784,7 @@ $selectedProject = $initialization.SelectedProject
 $mainRepo = $initialization.MainRepo
 $mainRepoWorkingTree = $initialization.MainRepoWorkingTree
 $mainRepoWorkingRoot = $initialization.MainRepoWorkingRoot
+$azDevOpsAccessToken = $initialization.AzDevOpsAccessToken
 $repo = $initialization.SharedRepo
 $sharedRepoName = $initialization.SharedRepoName
 
@@ -2822,6 +2824,31 @@ $repoPublishPlan = Get-RepoChangePublishPlan `
             }
 
             if ($repoPublishPlan.BranchName -ne $script:mainRepoBranch) {
+                if ($repoPublishPlan.Mode -eq 'PullRequest') {
+                    & git ls-remote --exit-code --heads origin $script:mainRepoBranch 2>&1 | Out-Null
+                    $targetBranchExistsOnOrigin = ($LASTEXITCODE -eq 0)
+
+                    if (-not $targetBranchExistsOnOrigin) {
+                        Write-Host "Initializing base branch '$script:mainRepoBranch' on origin for pull request mode..." -ForegroundColor Yellow
+
+                        & git config user.name 'ALM4Dataverse Setup' 2>$null
+                        & git config user.email 'setup@alm4dataverse.local' 2>$null
+
+                        & git rev-parse --verify HEAD 2>&1 | Out-Null
+                        if ($LASTEXITCODE -ne 0) {
+                            & git commit --allow-empty -m 'Initialize repository base branch for ALM4Dataverse setup' 2>&1 | Out-Null
+                            if ($LASTEXITCODE -ne 0) {
+                                throw "Failed to create initial commit for base branch '$script:mainRepoBranch'."
+                            }
+                        }
+
+                        & git -c "http.extraheader=AUTHORIZATION: bearer $azDevOpsAccessToken" push -u origin $script:mainRepoBranch 2>&1 | Out-Null
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Failed to push base branch '$script:mainRepoBranch' to origin."
+                        }
+                    }
+                }
+
                 & git checkout -B $repoPublishPlan.BranchName 2>&1
                 if ($LASTEXITCODE -ne 0) {
                     throw "Failed to create or switch to working branch '$($repoPublishPlan.BranchName)'."
@@ -3346,6 +3373,7 @@ function Get-DataverseEnvironmentsSelection {
                         Url                  = $existingEnvironmentUrl
                         Credentials          = $existingEnvironmentState.Credentials
                         ServiceAccountUPN    = $existingEnvironmentState.ServiceAccountUPN
+                        IsDevelopmentEnvironment = $false
                         ConfigurationPending = (($null -eq $existingEnvironmentState.Credentials) -or [string]::IsNullOrWhiteSpace($existingEnvironmentState.ServiceAccountUPN))
                     }
                 }
@@ -3511,6 +3539,7 @@ function Get-DataverseEnvironmentsSelection {
                 Url               = $resolvedEnvironmentUrl
                 Credentials       = $selectedEnvironment.Credentials
                 ServiceAccountUPN = $selectedEnvironment.ServiceAccountUPN
+                IsDevelopmentEnvironment = $false
             }
         }
 
@@ -3690,7 +3719,12 @@ function Apply-AzDoEnvironmentConfiguration {
 
     $creds = $EnvironmentConfiguration.Credentials
     $serviceAccountUPN = $EnvironmentConfiguration.ServiceAccountUPN
-    $pipelineForPermissions = if ($EnvironmentConfiguration.IsDevelopmentEnvironment) { $ExportPipeline } else { $DeployPipeline }
+    $isDevelopmentEnvironment = $false
+    if ($EnvironmentConfiguration.PSObject.Properties.Name -contains 'IsDevelopmentEnvironment') {
+        $isDevelopmentEnvironment = [bool]$EnvironmentConfiguration.IsDevelopmentEnvironment
+    }
+
+    $pipelineForPermissions = if ($isDevelopmentEnvironment) { $ExportPipeline } else { $DeployPipeline }
 
     $endpoint = $null
     if (-not $creds.IsExistingServiceConnection) {
@@ -3753,7 +3787,7 @@ function Apply-AzDoEnvironmentConfiguration {
         Ensure-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'endpoint' -ResourceId $endpoint.id -PipelineId $pipelineForPermissions.id
     }
 
-    if (-not $EnvironmentConfiguration.IsDevelopmentEnvironment) {
+    if (-not $isDevelopmentEnvironment) {
         $azDoEnv = Ensure-AzDoEnvironment -Organization $OrganizationName -Project $ProjectName -EnvironmentName $EnvironmentConfiguration.ShortName -Description "Deployment environment for $($EnvironmentConfiguration.ShortName)"
         if ($azDoEnv -and $DeployPipeline) {
             Ensure-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'environment' -ResourceId $azDoEnv.id -PipelineId $DeployPipeline.id
@@ -3771,7 +3805,7 @@ function Apply-AzDoEnvironmentConfiguration {
     }
 
     $varGroup = $null
-    if ($EnvironmentConfiguration.IsDevelopmentEnvironment) {
+    if ($isDevelopmentEnvironment) {
         $varGroup = Ensure-AzDoVariableGroupExists -Organization $OrganizationName -Project $ProjectName -ProjectId $ProjectId -GroupName $groupName -Variables $variables
     }
     else {
