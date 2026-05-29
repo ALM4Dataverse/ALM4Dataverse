@@ -2825,7 +2825,7 @@ $repoPublishPlan = Get-RepoChangePublishPlan `
 
             if ($repoPublishPlan.BranchName -ne $script:mainRepoBranch) {
                 if ($repoPublishPlan.Mode -eq 'PullRequest') {
-                    & git ls-remote --exit-code --heads origin $script:mainRepoBranch 2>&1 | Out-Null
+                    & git -c "http.extraheader=AUTHORIZATION: bearer $azDevOpsAccessToken" -c credential.interactive=never ls-remote --exit-code --heads origin $script:mainRepoBranch 2>&1 | Out-Null
                     $targetBranchExistsOnOrigin = ($LASTEXITCODE -eq 0)
 
                     if (-not $targetBranchExistsOnOrigin) {

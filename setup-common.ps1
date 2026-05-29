@@ -2569,6 +2569,10 @@ function Invoke-WithSpectreStatus {
 
     Initialize-SpectreConsole
 
+    $scriptExecutionStarted = $false
+    $scriptExecutionCompleted = $false
+    $scriptExecutionResult = $null
+
     try {
         $statusDisplay = [Spectre.Console.AnsiConsole]::Status()
         $statusDisplay.AutoRefresh = $true
@@ -2591,6 +2595,7 @@ function Invoke-WithSpectreStatus {
             [System.Func[Spectre.Console.StatusContext, object]]{
                 param($context)
 
+                $scriptExecutionStarted = $true
                 $capturedOutput = @(& { & $ScriptBlock $context } 6>&1 5>&1 4>&1 3>&1 2>&1)
                 $capturedResult = $null
                 foreach ($entry in $capturedOutput) {
@@ -2612,6 +2617,8 @@ function Invoke-WithSpectreStatus {
                     }
                 }
 
+                $scriptExecutionCompleted = $true
+                $scriptExecutionResult = $capturedResult
                 return $capturedResult
             }
         )
@@ -2625,6 +2632,14 @@ function Invoke-WithSpectreStatus {
         }
 
         if (Test-IsUserInterruptException -Exception $_.Exception) {
+            throw
+        }
+
+        if ($CaptureOutputInPanel -and ($scriptExecutionStarted -or $scriptExecutionCompleted)) {
+            if ($scriptExecutionCompleted) {
+                return $scriptExecutionResult
+            }
+
             throw
         }
 
