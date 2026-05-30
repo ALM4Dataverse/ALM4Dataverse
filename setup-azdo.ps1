@@ -3868,8 +3868,8 @@ function Apply-AzDoEnvironmentConfiguration {
 
     $groupName = "Environment-$($EnvironmentConfiguration.ShortName)"
     $variables = @{
-        'CONNREF_example_uniquename' = 'connectionid'
-        'ENVVAR_example_uniquename'  = 'value'
+        'DATAVERSECONNREF_example_uniquename' = 'connectionid'
+        'DATAVERSEENVVAR_example_uniquename'  = 'value'
         'DataverseServiceAccountUPN' = $serviceAccountUPN
     }
 
