@@ -23,6 +23,11 @@ on:
         type: string
         default: ''
         description: 'Optional source branch/commit to build (for workflow_run callers, pass workflow_run.head_sha)'
+      source-branch:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional source branch name used for downstream repository_dispatch payloads'
       timeout-minutes:
         required: false
         type: number
@@ -194,7 +199,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ github.run_id }}
           BUILD_RUN_NAME: ${{ steps.build-number.outputs.run_name }}
-          BUILD_BRANCH: ${{ github.ref_name }}
+          BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
           BUILD_SOURCE_SHA: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -208,7 +213,13 @@ jobs:
             throw "Failed to resolve source commit SHA for repository_dispatch payload."
           }
 
-          $eventType = 'alm4dataverse-build-deploy'
+          $eventBranchToken = ([string]$env:BUILD_BRANCH).ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+          $eventBranchToken = $eventBranchToken.Trim('-')
+          if ([string]::IsNullOrWhiteSpace($eventBranchToken)) {
+            throw "Failed to resolve branch token for repository_dispatch event type from branch '$($env:BUILD_BRANCH)'."
+          }
+
+          $eventType = "alm4dataverse-build-deploy-$eventBranchToken"
           $payload = @{
             event_type = $eventType
             client_payload = @{

@@ -176,6 +176,12 @@ Behavior remains simple:
 - **`manual-gate-tag`**: every stage is triggered manually from **Actions** > **DEPLOY-main** > **Run workflow**; `target-environment` remains mandatory, while `build-run-name` can be supplied explicitly or left blank to use the latest successful BUILD from the selected branch.
 - **`environment-approval`**: when BUILD succeeds, it sends a `repository_dispatch` event and stage 1 starts automatically for matching branch workflows; later stages auto-chain only after the previous stage succeeds and any environment approval rules pass. For a manual replay, `target-environment` can be left blank to start from the first configured stage, or set to a specific environment name to jump directly to that stage.
 
+  The dispatch event type is branch-scoped using:
+  `alm4dataverse-build-deploy-{branch-token}`
+  where `{branch-token}` is the lowercase branch name with non-alphanumeric
+  characters replaced by `-` (for example `main` → `main`,
+  `feature/my-work` → `feature-my-work`).
+
 See [Deployment Gates for GitHub Free](#deployment-gates-for-github-free).
 
 If your default branch is not `main`:

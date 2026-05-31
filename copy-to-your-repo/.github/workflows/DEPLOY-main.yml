@@ -38,7 +38,7 @@ on:
           # Each option should have a matching deploy-* job below.
   # Add this trigger when using `promotion-mode: environment-approval`:
   # repository_dispatch:
-  #   types: [alm4dataverse-build-deploy]
+  #   types: [alm4dataverse-build-deploy-main]
 
 jobs:
   deploy-test:

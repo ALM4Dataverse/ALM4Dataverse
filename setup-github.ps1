@@ -2914,8 +2914,13 @@ function Update-DeployWorkflowInRepoClone {
     $lines.Add('')
     $lines.Add('on:')
     if ($PromotionMode -eq 'environment-approval') {
+        $dispatchBranchToken = ($Branch.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')
+        if ([string]::IsNullOrWhiteSpace($dispatchBranchToken)) {
+            throw "Could not derive repository_dispatch event type token from branch '$Branch'."
+        }
+
         $lines.Add('  repository_dispatch:')
-        $lines.Add("    types: ['alm4dataverse-build-deploy']")
+        $lines.Add("    types: ['alm4dataverse-build-deploy-$dispatchBranchToken']")
     }
     $lines.Add('  workflow_dispatch:')
     $lines.Add('    inputs:')
