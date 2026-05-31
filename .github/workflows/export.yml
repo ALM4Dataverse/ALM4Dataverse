@@ -385,11 +385,11 @@ jobs:
         shell: pwsh
         env:
           GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ secrets.WORKFLOW_DISPATCH_TOKEN || secrets.GH_WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           BUILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "A workflow dispatch token is required to trigger BUILD. Set a repository or environment secret named WORKFLOW_DISPATCH_TOKEN (recommended) or GH_WORKFLOW_TOKEN with workflow-dispatch permission."
+            throw "A workflow dispatch token is required to trigger BUILD."
           }
 
           $workflow = 'BUILD.yml'

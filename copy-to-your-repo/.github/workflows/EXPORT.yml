@@ -25,9 +25,4 @@ jobs:
       commit-message: ${{ inputs.commit-message }}
       timeout-minutes: 360
 
-    # Credentials are resolved automatically by the reusable workflow from either:
-    # 1) GitHub environment Dev-{branch} (default), or
-    # 2) repo-level prefixed secrets/variables (e.g. DEV_MAIN_* or PREFIX_*).
-    # The reusable export workflow also needs a workflow dispatch token secret
-    # (WORKFLOW_DISPATCH_TOKEN or GH_WORKFLOW_TOKEN) so it can trigger BUILD via GH CLI/API.
     secrets: inherit
