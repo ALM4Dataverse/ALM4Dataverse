@@ -3003,6 +3003,7 @@ $environmentBlock    uses: $SharedWorkflowRepository/.github/workflows/build.yml
     permissions:
       contents: write
       actions: write
+            id-token: write
 "@
 
     Set-Content -LiteralPath $buildWorkflowPath -Value $newContent.TrimStart("`r", "`n") -NoNewline
