@@ -3504,7 +3504,8 @@ function Get-GitRepoFileContentFromRemoteBranch {
     )
 
     $normalizedPath = $RelativePath.Replace('\\', '/')
-    $candidateRefs = @("origin/$Branch", $Branch)
+    $normalizedBranch = ConvertTo-NormalizedGitBranchName -Branch $Branch
+    $candidateRefs = @("origin/$normalizedBranch", $normalizedBranch) | Select-Object -Unique
     foreach ($candidateRef in $candidateRefs) {
         & git -C $RepoRoot rev-parse --verify --quiet "${candidateRef}^{commit}" 2>$null | Out-Null
         if ($LASTEXITCODE -ne 0) {
@@ -3514,6 +3515,43 @@ function Get-GitRepoFileContentFromRemoteBranch {
         $content = (& git -C $RepoRoot show "${candidateRef}:${normalizedPath}" 2>$null | Out-String)
         if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($content)) {
             return $content
+        }
+    }
+
+    return $null
+}
+
+function ConvertTo-NormalizedGitBranchName {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Branch
+    )
+
+    $normalizedBranch = [string]$Branch
+    while ($normalizedBranch -match '^origin/(.+)$') {
+        $normalizedBranch = [string]$Matches[1]
+    }
+
+    return $normalizedBranch.Trim()
+}
+
+function Resolve-GitExistingBranchRef {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$Branch
+    )
+
+    $normalizedBranch = ConvertTo-NormalizedGitBranchName -Branch $Branch
+    if ([string]::IsNullOrWhiteSpace($normalizedBranch)) {
+        return $null
+    }
+
+    $candidateRefs = @("origin/$normalizedBranch", $normalizedBranch)
+    foreach ($candidateRef in $candidateRefs) {
+        & git -C $RepoRoot rev-parse --verify --quiet "${candidateRef}^{commit}" 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            return $candidateRef
         }
     }
 
@@ -3550,13 +3588,19 @@ function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
 
     $branchRefs = @(& git -C $RepoRoot for-each-ref --format='%(refname:short)' refs/remotes/origin 2>$null)
     $branches = @($branchRefs | ForEach-Object {
-        $candidate = [string]$_
-        if ($candidate -match '^origin/(.+)$') { $Matches[1] } else { $candidate }
-    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'HEAD' } | Select-Object -Unique)
+        ConvertTo-NormalizedGitBranchName -Branch ([string]$_)
+    } | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'HEAD' -and $_ -ne 'origin'
+    } | Select-Object -Unique)
 
     $mappings = @()
     foreach ($branch in $branches) {
-        $pipelineFiles = @(& git -C $RepoRoot ls-tree -r --name-only "origin/$branch" 'pipelines' 2>$null)
+        $branchRef = Resolve-GitExistingBranchRef -RepoRoot $RepoRoot -Branch $branch
+        if ([string]::IsNullOrWhiteSpace($branchRef)) {
+            continue
+        }
+
+        $pipelineFiles = @(& git -C $RepoRoot ls-tree -r --name-only $branchRef 'pipelines' 2>$null)
         foreach ($pipelineFile in $pipelineFiles) {
             if ($pipelineFile -notmatch '^pipelines/DEPLOY-(.+)\.yml$') {
                 continue
