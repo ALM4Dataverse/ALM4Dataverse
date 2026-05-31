@@ -45,16 +45,14 @@ and credential locations.
 
 ---
 
-## Workflow dispatch token for EXPORT → BUILD
+## Repository dispatch token for EXPORT → BUILD
 
-The reusable `EXPORT` workflow can dispatch `BUILD` via the GitHub CLI/API after it
-pushes an export commit. To allow that, store a repository-level or environment-level
-secret named `WORKFLOW_DISPATCH_TOKEN` (or the legacy alias `GH_WORKFLOW_TOKEN`).
+The reusable `EXPORT` workflow triggers `BUILD` by sending a `repository_dispatch`
+event via the GitHub CLI/API after it pushes an export commit.
 
-Use a token that can dispatch workflows in this repository, for example:
-
-- a fine-grained personal access token with **Actions: read and write** access to the repository, or
-- a classic PAT with the `workflow` scope.
+By default, this uses `GITHUB_TOKEN`. If your repository requires a separate token,
+store one as a repository-level or environment-level secret named
+`WORKFLOW_DISPATCH_TOKEN` (or legacy alias `GH_WORKFLOW_TOKEN`).
 
 This token is separate from the Dataverse/Azure credentials shown below.
 

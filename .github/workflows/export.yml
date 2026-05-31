@@ -362,6 +362,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $didPush = $false
+          $pushedSha = ''
           git config user.email "${{ github.actor }}@users.noreply.github.com"
           if ($LASTEXITCODE -ne 0) { throw "git config user.email failed with exit code $LASTEXITCODE" }
           git config user.name "${{ github.actor }}"
@@ -376,29 +377,46 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE" }
             git push origin HEAD:${{ github.ref }}
             if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+            $pushedSha = (git rev-parse HEAD).Trim()
+            if ([string]::IsNullOrWhiteSpace($pushedSha)) {
+              throw "Failed to resolve pushed commit SHA"
+            }
             $didPush = $true
           }
           "pushed=$didPush" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "pushed_sha=$pushedSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Trigger BUILD workflow
+      - name: Trigger BUILD via repository_dispatch
         if: steps.commit-and-push.outputs.pushed == 'true'
         shell: pwsh
         env:
           GH_REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_DISPATCH_TOKEN || secrets.GH_WORKFLOW_TOKEN || github.token }}
           BUILD_WORKFLOW_REF: ${{ github.ref_name }}
+          BUILD_SOURCE_SHA: ${{ steps.commit-and-push.outputs.pushed_sha }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
-            throw "A workflow dispatch token is required to trigger BUILD."
+            throw "No token available for repository dispatch."
           }
 
-          $workflow = 'BUILD.yml'
-          Write-Host "Dispatching $workflow on ref '$($env:BUILD_WORKFLOW_REF)' for repo '$($env:GH_REPO)'..."
+          $eventType = 'alm4dataverse-export-build'
+          Write-Host "Dispatching repository event '$eventType' for repo '$($env:GH_REPO)' on branch '$($env:BUILD_WORKFLOW_REF)'..."
 
           $previousErrorActionPreference = $ErrorActionPreference
           try {
             $ErrorActionPreference = 'Continue'
-            $result = @(& gh workflow run $workflow --repo $env:GH_REPO --ref $env:BUILD_WORKFLOW_REF 2>&1)
+            $payload = @{
+              event_type = $eventType
+              client_payload = @{
+                branch      = $env:BUILD_WORKFLOW_REF
+                sha         = $env:BUILD_SOURCE_SHA
+                exported_by = "${{ github.actor }}"
+                exported_at = (Get-Date).ToUniversalTime().ToString('o')
+                run_id      = "${{ github.run_id }}"
+              }
+            } | ConvertTo-Json -Depth 10 -Compress
+
+            $result = @($payload | & gh api --method POST "repos/$($env:GH_REPO)/dispatches" --input - 2>&1)
             $exitCode = $LASTEXITCODE
           }
           finally {
@@ -407,7 +425,7 @@ jobs:
 
           if ($exitCode -ne 0) {
             $errorText = @($result | ForEach-Object { [string]$_ }) -join "`n"
-            throw "Failed to dispatch BUILD workflow: $errorText"
+            throw "Failed to send repository_dispatch event: $errorText"
           }
 
-          Write-Host "BUILD workflow dispatched successfully."
+          Write-Host "repository_dispatch event sent successfully."

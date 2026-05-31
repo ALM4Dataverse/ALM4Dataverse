@@ -15,12 +15,18 @@ on:
         required: true
         type: string
 
+permissions:
+  contents: write
+  id-token: write
+  actions: write
+
 jobs:
   export:
     uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/export.yml@stable
     permissions:
       contents: write
       id-token: write
+      actions: write
     with:
       commit-message: ${{ inputs.commit-message }}
       timeout-minutes: 360
