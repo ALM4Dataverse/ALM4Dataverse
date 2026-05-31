@@ -1,31 +1,24 @@
 name: BUILD
 
-# Triggers on every push to any branch.
-# Also supports manual runs and automatic runs after EXPORT completes.
+# Triggers on every push to any branch, including the commit pushed by EXPORT.
+# Also supports manual runs.
 # Packs Dataverse solutions into deployable artifacts and tags the source commit.
 #
 # See docs/usage/building-releases.md and docs/setup/github-setup.md
 
-run-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch) || github.ref_name, github.event.head_commit.timestamp || github.event.workflow_run.created_at || github.event.repository.updated_at || github.run_id, github.run_number) }}
+run-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, github.ref_name, github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
 
 on:
   push:
     branches:
       - '**'
   workflow_dispatch:
-  workflow_run:
-    workflows:
-      - EXPORT
-    types:
-      - completed
 
 jobs:
   build:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/build.yml@stable
     with:
-      build-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch) || github.ref_name, github.event.head_commit.timestamp || github.event.workflow_run.created_at || github.event.repository.updated_at || github.run_id, github.run_number) }}
-      source-ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      build-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, github.ref_name, github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
       timeout-minutes: 360
     permissions:
       contents: write

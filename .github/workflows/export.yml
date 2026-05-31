@@ -356,10 +356,12 @@ jobs:
             -EnvironmentName $devEnvLabel
 
       - name: Commit and push changes
+        id: commit-and-push
         shell: pwsh
         working-directory: ${{ github.workspace }}/self
         run: |
           $ErrorActionPreference = 'Stop'
+          $didPush = $false
           git config user.email "${{ github.actor }}@users.noreply.github.com"
           if ($LASTEXITCODE -ne 0) { throw "git config user.email failed with exit code $LASTEXITCODE" }
           git config user.name "${{ github.actor }}"
@@ -374,4 +376,38 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "git commit failed with exit code $LASTEXITCODE" }
             git push origin HEAD:${{ github.ref }}
             if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+            $didPush = $true
           }
+          "pushed=$didPush" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Trigger BUILD workflow
+        if: steps.commit-and-push.outputs.pushed == 'true'
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ secrets.WORKFLOW_DISPATCH_TOKEN || secrets.GH_WORKFLOW_TOKEN }}
+          BUILD_WORKFLOW_REF: ${{ github.ref_name }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "A workflow dispatch token is required to trigger BUILD. Set a repository or environment secret named WORKFLOW_DISPATCH_TOKEN (recommended) or GH_WORKFLOW_TOKEN with workflow-dispatch permission."
+          }
+
+          $workflow = 'BUILD.yml'
+          Write-Host "Dispatching $workflow on ref '$($env:BUILD_WORKFLOW_REF)' for repo '$($env:GH_REPO)'..."
+
+          $previousErrorActionPreference = $ErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            $result = @(& gh workflow run $workflow --repo $env:GH_REPO --ref $env:BUILD_WORKFLOW_REF 2>&1)
+            $exitCode = $LASTEXITCODE
+          }
+          finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+          }
+
+          if ($exitCode -ne 0) {
+            $errorText = @($result | ForEach-Object { [string]$_ }) -join "`n"
+            throw "Failed to dispatch BUILD workflow: $errorText"
+          }
+
+          Write-Host "BUILD workflow dispatched successfully."

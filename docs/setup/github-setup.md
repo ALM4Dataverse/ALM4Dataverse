@@ -566,12 +566,21 @@ On a **private repository with GitHub Free**:
 ### Write access for EXPORT and DEPLOY tags
 
 The EXPORT workflow commits and pushes solution changes back to the repository.
-The DEPLOY workflows push git tag gates and environment pointer tags after
-successful deployments.
+After a successful export commit, it uses the GitHub CLI/API to dispatch `BUILD.yml`
+on the same branch. The DEPLOY workflows push git tag gates and environment pointer
+tags after successful deployments.
 
 1. Go to **Settings** > **Actions** > **General**
 2. Under **Workflow permissions**, select **Read and write permissions**
 3. Click **Save**
+
+### Workflow dispatch token for EXPORT → BUILD
+
+To let `EXPORT` trigger `BUILD` via GitHub CLI/API after it pushes changes, add a
+repository-level or environment-level secret named `WORKFLOW_DISPATCH_TOKEN` (or
+the legacy alias `GH_WORKFLOW_TOKEN`). Use a token that can dispatch workflows in
+this repository, such as a fine-grained PAT with **Actions: read and write** access
+or a classic PAT with the `workflow` scope.
 
 Alternatively, each reusable workflow declares `permissions: contents: write` which
 overrides the default on a per-job basis.
@@ -593,7 +602,7 @@ Once configured:
 - **IMPORT** — go to **Actions** > **IMPORT** > **Run workflow** and click **Run workflow**.
 - **DEPLOY-main** — for `manual-gate-tag` mode, enter `target-environment` and optionally `build-run-name`; if left blank, the workflow uses the latest successful BUILD from the selected branch. In `environment-approval` mode, stage 1 starts automatically after BUILD succeeds and later stages auto-chain after prior-stage success plus any required approvals; for a manual replay, `target-environment` can be left blank to start from the first configured stage, while entering a value targets a specific stage.
 
-When `BUILD.yml` is triggered by `workflow_run` (after `EXPORT`), branch and source commit are resolved from `github.event.workflow_run.head_branch` and `github.event.workflow_run.head_sha`. This avoids default-branch (`main`) drift that can occur when using `github.ref_name` in `workflow_run` context.
+`EXPORT.yml` commits changes back to the same branch it was run from, then dispatches `BUILD.yml` via the GitHub CLI/API on that same branch. `BUILD.yml` still supports `push` and `workflow_dispatch`, but the export handoff is explicit so it does not depend on workflow-recursion behavior.
 
 ### Finding a BUILD run name for manual deploy (optional)
 

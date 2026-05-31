@@ -45,6 +45,21 @@ and credential locations.
 
 ---
 
+## Workflow dispatch token for EXPORT → BUILD
+
+The reusable `EXPORT` workflow can dispatch `BUILD` via the GitHub CLI/API after it
+pushes an export commit. To allow that, store a repository-level or environment-level
+secret named `WORKFLOW_DISPATCH_TOKEN` (or the legacy alias `GH_WORKFLOW_TOKEN`).
+
+Use a token that can dispatch workflows in this repository, for example:
+
+- a fine-grained personal access token with **Actions: read and write** access to the repository, or
+- a classic PAT with the `workflow` scope.
+
+This token is separate from the Dataverse/Azure credentials shown below.
+
+---
+
 ## Approach 1: Workload Identity Federation (OIDC)
 
 Store the following in each GitHub environment (Settings > Environments > {Environment Name}).
