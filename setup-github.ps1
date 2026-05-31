@@ -3012,6 +3012,7 @@ function Update-DeployWorkflowInRepoClone {
             $lines.Add("      previous-environment-name: '$prevEscaped'")
         }
         $lines.Add("      promotion-mode: $PromotionMode")
+        $lines.Add("      trigger-branch: '$Branch'")
         $lines.Add('      github-context-json: ${{ toJSON(github) }}')
         $lines.Add('      caller-inputs-json: ${{ toJSON(inputs) }}')
         $lines.Add('      timeout-minutes: 360')

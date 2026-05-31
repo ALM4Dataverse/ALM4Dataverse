@@ -162,6 +162,7 @@ To configure it, edit only:
 - `workflow_dispatch.inputs.target-environment`
 - the `deploy-*` jobs (one per environment, with `needs` chaining)
 - keep the context payload lines unchanged in each stage:
+  - `trigger-branch: <workflow-branch-name>`
   - `github-context-json: ${{ toJSON(github) }}`
   - `caller-inputs-json: ${{ toJSON(inputs) }}`
 
@@ -181,6 +182,9 @@ Behavior remains simple:
   where `{branch-token}` is the lowercase branch name with non-alphanumeric
   characters replaced by `-` (for example `main` → `main`,
   `feature/my-work` → `feature-my-work`).
+
+  Each DEPLOY stage must pass the matching branch via:
+  `trigger-branch: <workflow-branch-name>`.
 
 See [Deployment Gates for GitHub Free](#deployment-gates-for-github-free).
 

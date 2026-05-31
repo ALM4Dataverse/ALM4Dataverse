@@ -53,6 +53,7 @@ jobs:
       environment-name: TEST-main
       previous-environment-name: ''
       promotion-mode: manual-gate-tag
+      trigger-branch: main
       github-context-json: ${{ toJSON(github) }}
       caller-inputs-json: ${{ toJSON(inputs) }}
       timeout-minutes: 360
@@ -73,6 +74,7 @@ jobs:
       environment-name: PROD
       previous-environment-name: TEST-main
       promotion-mode: manual-gate-tag
+      trigger-branch: main
       github-context-json: ${{ toJSON(github) }}
       caller-inputs-json: ${{ toJSON(inputs) }}
       timeout-minutes: 360

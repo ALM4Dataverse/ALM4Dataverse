@@ -79,6 +79,14 @@ on:
             must prove previous stage success using computed gate tags.
           - environment-approval: stages can auto-chain via caller `needs` and
             GitHub environment protection rules.
+      trigger-branch:
+        required: false
+        type: string
+        default: ''
+        description: >
+          Branch name this DEPLOY workflow instance is responsible for when
+          handling repository_dispatch auto-promotion events (for example
+          `main` or `develop`).
       github-context-json:
         required: true
         type: string
@@ -104,11 +112,7 @@ jobs:
       (
         fromJSON(inputs.github-context-json).event_name == 'repository_dispatch' &&
         inputs.promotion-mode == 'environment-approval' &&
-        fromJSON(inputs.github-context-json).event.client_payload.branch == fromJSON(inputs.github-context-json).ref_name
-      ) || (
-        fromJSON(inputs.github-context-json).event_name == 'workflow_run' &&
-        inputs.promotion-mode == 'environment-approval' &&
-        fromJSON(inputs.github-context-json).event.workflow_run.conclusion == 'success'
+        fromJSON(inputs.github-context-json).event.client_payload.branch == inputs.trigger-branch
       ) || (
         fromJSON(inputs.github-context-json).event_name == 'workflow_dispatch' &&
         (
@@ -148,6 +152,7 @@ jobs:
           INPUT_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
           INPUT_PREVIOUS_ENVIRONMENT_NAME: ${{ inputs.previous-environment-name }}
           INPUT_PROMOTION_MODE: ${{ inputs.promotion-mode }}
+          INPUT_TRIGGER_BRANCH: ${{ inputs.trigger-branch }}
           INPUT_GITHUB_CONTEXT_JSON: ${{ inputs.github-context-json }}
           INPUT_CALLER_INPUTS_JSON: ${{ inputs.caller-inputs-json }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -405,15 +410,19 @@ jobs:
           }
 
           $eventName     = [string]$githubContext.event_name
-          $workflowRunId = [string]$githubContext.event.workflow_run.id
           $repositoryDispatchBuildRunId = [string]$githubContext.event.client_payload.build_run_id
           $repositoryDispatchBranch = [string]$githubContext.event.client_payload.branch
+          $triggerBranchInput = [string]$env:INPUT_TRIGGER_BRANCH
           $manualRunSpecifier = [string]$callerInputs.'build-run-name'
           if ([string]::IsNullOrWhiteSpace($manualRunSpecifier)) {
             $manualRunSpecifier = [string]$callerInputs.'build-run-id'
           }
           $targetEnv     = [string]$callerInputs.'target-environment'
           $workflowDispatchBranch = ''
+
+          if ($eventName -eq 'repository_dispatch' -and [string]::IsNullOrWhiteSpace($triggerBranchInput)) {
+            throw "repository_dispatch requires deploy input 'trigger-branch' to be set."
+          }
 
           if ($promotionMode -notin @('manual-gate-tag', 'environment-approval')) {
             throw "Unsupported promotion-mode '$promotionMode'. Use 'manual-gate-tag' or 'environment-approval'."
@@ -431,13 +440,6 @@ jobs:
               }
 
               $buildRun = Get-BuildRunById -RunId $repositoryDispatchBuildRunId
-            }
-            'workflow_run' {
-              if ([string]::IsNullOrWhiteSpace($workflowRunId)) {
-                throw "Resolved BUILD run ID is empty for event '$eventName'."
-              }
-
-              $buildRun = Get-BuildRunById -RunId $workflowRunId
             }
             'workflow_dispatch' {
               if ([string]::IsNullOrWhiteSpace($manualRunSpecifier)) {
