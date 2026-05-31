@@ -8,7 +8,7 @@ name: DEPLOY-main
 #   3. Set `promotion-mode` on each stage (or keep the default):
 #      - manual-gate-tag      (GitHub Free compatible)
 #      - environment-approval (auto-chain with environment approvals)
-#   4. Add the `workflow_run` trigger only when using environment-approval.
+#   4. Add the `repository_dispatch` trigger only when using environment-approval.
 #
 # See docs/setup/github-setup.md
 
@@ -37,10 +37,8 @@ on:
           # Add further environments here (UAT, STAGING, etc.) as needed.
           # Each option should have a matching deploy-* job below.
   # Add this trigger when using `promotion-mode: environment-approval`:
-  # workflow_run:
-  #   workflows: ['BUILD']
-  #   types: [completed]
-  #   branches: [main]
+  # repository_dispatch:
+  #   types: [alm4dataverse-build-deploy]
 
 jobs:
   deploy-test:

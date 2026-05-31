@@ -158,7 +158,7 @@ To configure it, edit only:
 - each stage's `promotion-mode` value:
   - `manual-gate-tag` (GitHub Free compatible; manual deployment + gate tag)
   - `environment-approval` (auto-chain after previous stage success; relies on environment protection rules)
-- the `workflow_run` trigger **only when using** `environment-approval`
+- the `repository_dispatch` trigger **only when using** `environment-approval`
 - `workflow_dispatch.inputs.target-environment`
 - the `deploy-*` jobs (one per environment, with `needs` chaining)
 - keep the context payload lines unchanged in each stage:
@@ -174,13 +174,13 @@ repository capability detection:
 Behavior remains simple:
 
 - **`manual-gate-tag`**: every stage is triggered manually from **Actions** > **DEPLOY-main** > **Run workflow**; `target-environment` remains mandatory, while `build-run-name` can be supplied explicitly or left blank to use the latest successful BUILD from the selected branch.
-- **`environment-approval`**: when BUILD succeeds on `main`, stage 1 starts automatically and later stages auto-chain only after the previous stage succeeds and any environment approval rules pass. For a manual replay, `target-environment` can be left blank to start from the first configured stage, or set to a specific environment name to jump directly to that stage.
+- **`environment-approval`**: when BUILD succeeds, it sends a `repository_dispatch` event and stage 1 starts automatically for matching branch workflows; later stages auto-chain only after the previous stage succeeds and any environment approval rules pass. For a manual replay, `target-environment` can be left blank to start from the first configured stage, or set to a specific environment name to jump directly to that stage.
 
 See [Deployment Gates for GitHub Free](#deployment-gates-for-github-free).
 
 If your default branch is not `main`:
 - Rename `DEPLOY-main.yml` to `DEPLOY-{branchname}.yml`
-- Update the `branches:` filter in the `workflow_run` trigger (if present)
+- Ensure your BUILD dispatch payload branch value matches the DEPLOY workflow branch name.
 
 ### Workflow job timeouts
 

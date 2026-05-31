@@ -186,3 +186,46 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "git tag failed with exit code $LASTEXITCODE" }
           git push origin "$tagName"
           if ($LASTEXITCODE -ne 0) { throw "git push tag failed with exit code $LASTEXITCODE" }
+
+      - name: Trigger DEPLOY via repository_dispatch
+        shell: pwsh
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_NAME: ${{ steps.build-number.outputs.run_name }}
+          BUILD_BRANCH: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+            throw "No token available for repository dispatch."
+          }
+
+          $sourceSha = (git rev-parse HEAD).Trim()
+          if ([string]::IsNullOrWhiteSpace($sourceSha)) {
+            throw "Failed to resolve source commit SHA for repository_dispatch payload."
+          }
+
+          $eventType = 'alm4dataverse-build-deploy'
+          $payload = @{
+            event_type = $eventType
+            client_payload = @{
+              branch         = $env:BUILD_BRANCH
+              sha            = $sourceSha
+              build_run_id   = $env:BUILD_RUN_ID
+              build_run_name = $env:BUILD_RUN_NAME
+              build_run_url  = "https://github.com/$($env:GH_REPO)/actions/runs/$($env:BUILD_RUN_ID)"
+              build_event    = "${{ github.event_name }}"
+              dispatched_at  = (Get-Date).ToUniversalTime().ToString('o')
+            }
+          } | ConvertTo-Json -Depth 10 -Compress
+
+          Write-Host "Dispatching repository event '$eventType' for repo '$($env:GH_REPO)' on branch '$($env:BUILD_BRANCH)'..."
+          $result = @($payload | & gh api --method POST "repos/$($env:GH_REPO)/dispatches" --input - 2>&1)
+          if ($LASTEXITCODE -ne 0) {
+            $errorText = @($result | ForEach-Object { [string]$_ }) -join "`n"
+            throw "Failed to send repository_dispatch event: $errorText"
+          }
+
+          Write-Host "repository_dispatch event sent successfully."

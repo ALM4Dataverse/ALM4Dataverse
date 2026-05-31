@@ -84,7 +84,7 @@ on:
         type: string
         description: >
           toJSON(github) from the caller workflow.
-          Used to resolve trigger type and workflow_run details.
+          Used to resolve trigger type and repository_dispatch details.
       caller-inputs-json:
         required: true
         type: string
@@ -102,6 +102,10 @@ jobs:
   deploy:
     if: >-
       (
+        fromJSON(inputs.github-context-json).event_name == 'repository_dispatch' &&
+        inputs.promotion-mode == 'environment-approval' &&
+        fromJSON(inputs.github-context-json).event.client_payload.branch == fromJSON(inputs.github-context-json).ref_name
+      ) || (
         fromJSON(inputs.github-context-json).event_name == 'workflow_run' &&
         inputs.promotion-mode == 'environment-approval' &&
         fromJSON(inputs.github-context-json).event.workflow_run.conclusion == 'success'
@@ -402,6 +406,8 @@ jobs:
 
           $eventName     = [string]$githubContext.event_name
           $workflowRunId = [string]$githubContext.event.workflow_run.id
+          $repositoryDispatchBuildRunId = [string]$githubContext.event.client_payload.build_run_id
+          $repositoryDispatchBranch = [string]$githubContext.event.client_payload.branch
           $manualRunSpecifier = [string]$callerInputs.'build-run-name'
           if ([string]::IsNullOrWhiteSpace($manualRunSpecifier)) {
             $manualRunSpecifier = [string]$callerInputs.'build-run-id'
@@ -419,6 +425,13 @@ jobs:
 
           $buildRun = $null
           switch ($eventName) {
+            'repository_dispatch' {
+              if ([string]::IsNullOrWhiteSpace($repositoryDispatchBuildRunId)) {
+                throw "repository_dispatch payload is missing client_payload.build_run_id."
+              }
+
+              $buildRun = Get-BuildRunById -RunId $repositoryDispatchBuildRunId
+            }
             'workflow_run' {
               if ([string]::IsNullOrWhiteSpace($workflowRunId)) {
                 throw "Resolved BUILD run ID is empty for event '$eventName'."
@@ -484,6 +497,9 @@ jobs:
           Write-Host "Resolved build run id: $buildRunId"
           Write-Host "Resolved build run name: $buildRunName"
           Write-Host "Resolved build run tag key: $buildRunTagKey"
+          if (-not [string]::IsNullOrWhiteSpace($repositoryDispatchBranch)) {
+            Write-Host "Resolved repository_dispatch branch: $repositoryDispatchBranch"
+          }
           if (-not [string]::IsNullOrWhiteSpace($workflowDispatchBranch)) {
             Write-Host "Resolved workflow_dispatch branch: $workflowDispatchBranch"
           }

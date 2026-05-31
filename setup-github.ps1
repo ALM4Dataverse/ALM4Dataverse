@@ -2757,7 +2757,7 @@ function Copy-WorkflowTemplatesToRepo {
         $isTempFile      = $false
 
         # Patch all shared workflow references (build/export/import/deploy/etc.) to the selected repository/ref.
-        # BUILD.yml workflow_run branch/SHA resolution is template-driven and is copied verbatim.
+        # BUILD.yml repository_dispatch branch/SHA resolution is template-driven and is copied verbatim.
         if ($normalizedRelativePath -like '.github/workflows/*.yml') {
             $content = Get-Content -LiteralPath $sourceFileToUse -Raw
             $updatedContent = [Regex]::Replace(
@@ -2905,7 +2905,7 @@ function Update-DeployWorkflowInRepoClone {
     $lines.Add('#   1. Add it to workflow_dispatch target-environment options.')
     $lines.Add('#   2. Add a deploy-* job and chain needs to the previous stage.')
     $lines.Add('#   3. Set previous-environment-name to the previous stage short name.')
-    $lines.Add('#   4. In environment-approval mode, keep the workflow_run trigger enabled.')
+    $lines.Add('#   4. In environment-approval mode, keep the repository_dispatch trigger enabled.')
     $lines.Add('')
     $lines.Add('permissions:')
     $lines.Add('  actions: read')
@@ -2914,10 +2914,8 @@ function Update-DeployWorkflowInRepoClone {
     $lines.Add('')
     $lines.Add('on:')
     if ($PromotionMode -eq 'environment-approval') {
-        $lines.Add('  workflow_run:')
-        $lines.Add("    workflows: ['BUILD']")
-        $lines.Add('    types: [completed]')
-        $lines.Add("    branches: [ '$Branch' ]")
+        $lines.Add('  repository_dispatch:')
+        $lines.Add("    types: ['alm4dataverse-build-deploy']")
     }
     $lines.Add('  workflow_dispatch:')
     $lines.Add('    inputs:')
