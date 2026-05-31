@@ -593,6 +593,8 @@ Once configured:
 - **IMPORT** — go to **Actions** > **IMPORT** > **Run workflow** and click **Run workflow**.
 - **DEPLOY-main** — for `manual-gate-tag` mode, enter `target-environment` and optionally `build-run-name`; if left blank, the workflow uses the latest successful BUILD from the selected branch. In `environment-approval` mode, stage 1 starts automatically after BUILD succeeds and later stages auto-chain after prior-stage success plus any required approvals; for a manual replay, `target-environment` can be left blank to start from the first configured stage, while entering a value targets a specific stage.
 
+When `BUILD.yml` is triggered by `workflow_run` (after `EXPORT`), branch and source commit are resolved from `github.event.workflow_run.head_branch` and `github.event.workflow_run.head_sha`. This avoids default-branch (`main`) drift that can occur when using `github.ref_name` in `workflow_run` context.
+
 ### Finding a BUILD run name for manual deploy (optional)
 
 1. Go to **Actions** and select the **BUILD** workflow

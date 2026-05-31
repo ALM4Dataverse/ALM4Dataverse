@@ -2757,6 +2757,7 @@ function Copy-WorkflowTemplatesToRepo {
         $isTempFile      = $false
 
         # Patch all shared workflow references (build/export/import/deploy/etc.) to the selected repository/ref.
+        # BUILD.yml workflow_run branch/SHA resolution is template-driven and is copied verbatim.
         if ($normalizedRelativePath -like '.github/workflows/*.yml') {
             $content = Get-Content -LiteralPath $sourceFileToUse -Raw
             $updatedContent = [Regex]::Replace(

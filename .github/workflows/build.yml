@@ -18,6 +18,11 @@ on:
         required: true
         type: string
         description: 'Exact BUILD name to use for the run title, deployment selection, and build-number step'
+      source-ref:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional source branch/commit to build (for workflow_run callers, pass workflow_run.head_sha)'
       timeout-minutes:
         required: false
         type: number
@@ -46,6 +51,7 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
           path: self
           fetch-depth: 1
 
