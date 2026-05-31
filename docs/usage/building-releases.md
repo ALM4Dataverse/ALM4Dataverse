@@ -31,9 +31,22 @@ To monitor:
 What happens:
 
 - Solution(s) are packed from the folders in source control at `solutions/uniquename` using PAC solution pack. A managed solution is generated and added to the build assets.
+- If `solutionCheck.enabled = $true` (globally and/or per-solution), each packed solution is validated with `pac solution check`.
+  - Multiple solutions are processed in parallel (`solutionCheck.maxParallel`, default `4`).
+  - Build failure threshold is controlled by `solutionCheck.failThreshold` (default `Critical`).
 - If you've configured any hook extensions in `alm-config.psd1`, these will be executed and can add to the build steps and the assets.
 - Any additional paths configured in `assets` will be copied to the build assets.
 - The configuration and scripts for the deployment process are also copied to the build assets to ensure that everything is frozen in time.
+
+Solution check report outputs:
+
+- In build artifacts under `solution-check/`
+  - `summary.md`
+  - `solution-check-summary.json`
+  - per-solution PAC logs/output
+- As a dedicated CI artifact named `solution-check-report` for quick access from pipeline/workflow results.
+
+If checks fail, the logs clearly state which solution breached the configured threshold and what the highest severity was.
 
 What to do next:
 

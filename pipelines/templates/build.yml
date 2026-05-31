@@ -38,9 +38,28 @@ stages:
 
         - task: PublishPipelineArtifact@1
           displayName: 'Publish Artifacts'
+          condition: succeededOrFailed()
           inputs:
             targetPath: '$(Build.ArtifactStagingDirectory)'
             artifact: 'artifacts'
+
+        - pwsh: |
+            if (Test-Path "$(Build.ArtifactStagingDirectory)/solution-check") {
+              Write-Host "##vso[task.setvariable variable=HasSolutionCheckReport]true"
+              Write-Host "Solution check report folder detected."
+            } else {
+              Write-Host "##vso[task.setvariable variable=HasSolutionCheckReport]false"
+              Write-Host "No solution check report folder found."
+            }
+          displayName: 'Detect Solution Check Report'
+          condition: succeededOrFailed()
+
+        - task: PublishPipelineArtifact@1
+          displayName: 'Publish Solution Check Report'
+          condition: and(succeededOrFailed(), eq(variables['HasSolutionCheckReport'], 'true'))
+          inputs:
+            targetPath: '$(Build.ArtifactStagingDirectory)/solution-check'
+            artifact: 'solution-check-report'
 
         - pwsh: |
             $ErrorActionPreference = 'Stop'

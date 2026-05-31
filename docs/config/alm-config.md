@@ -1,6 +1,6 @@
 # ALM Configuration (alm-config.psd1)
 
-The `alm-config.psd1` file in your repo is the central configuration file for the ALM4Dataverse pipeline system. It defines which solutions to deploy, assets to include, hook scripts to run, and dependencies required for the build, export, and deployment processes.
+The `alm-config.psd1` file in your repo is the central configuration file for the ALM4Dataverse pipeline system. It defines which solutions to deploy, assets to include, hook scripts to run, dependencies required for the build/export/deployment processes, and optional PAC solution validation settings.
 
 ## Location
 
@@ -26,6 +26,7 @@ solutions = @(
 - `name` (required): Unique solution name that matches your solution folder in the source directory
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
+- `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
 
 ### Assets
 
@@ -192,6 +193,91 @@ If a deployment job times out, the solution import may still be running inside D
 4. Once the import has completed (successfully or not), it is safe to retry the pipeline stage.
 
 > **Future improvement:** Automating the detection of an in-progress import and waiting for it to complete is a planned enhancement.
+
+### Solution Check (PAC `solution check`)
+
+`BUILD` can run `pac solution check` against packed solution zip files and fail the build based on a configurable severity threshold.
+
+Configuration supports **global** defaults and **per-solution** overrides:
+
+- Global settings are defined in top-level `solutionCheck`.
+- Per-solution settings are defined in `solutions[].solutionCheck`.
+- They are merged, so you can set shared defaults globally and only override what differs per solution.
+- Arrays (`excludedFiles`, `ruleLevelOverride`) are merged by concatenation.
+- `ruleSet = 'none'` means `--ruleSet` is omitted.
+
+#### Global example
+
+```powershell
+solutionCheck = @{
+    enabled = $true
+    geo = 'Europe'
+    failThreshold = 'Critical'
+    ruleSet = 'Solution Checker'
+    excludedFiles = @(
+        'CanvasApps/**/*.msapp'
+    )
+    ruleLevelOverride = @(
+        @{ Id = 'meta-remove-dup-reg'; OverrideLevel = 'Medium' }
+    )
+    maxParallel = 4
+}
+```
+
+#### Per-solution override example
+
+```powershell
+solutions = @(
+    @{
+        name = 'ContosoCore'
+        solutionCheck = @{
+            enabled = $true
+            failThreshold = 'High'
+            ruleSet = 'none'
+        }
+    },
+    @{
+        name = 'LegacySolution'
+        solutionCheck = @{
+            enabled = $false
+        }
+    }
+)
+```
+
+#### Settings reference
+
+| Setting | Scope | Description |
+|---|---|---|
+| `enabled` | Global + Solution | Enables/disables checker. Build runs checks only for solutions where merged `enabled` is `$true`. |
+| `geo` | Global + Solution | PAC checker geography, e.g. `Europe`, `UnitedStates`, `Japan`. |
+| `failThreshold` | Global + Solution | Build fails when findings include this severity or higher. Values: `Critical`, `High`, `Medium`, `Low`, `Informational`. Default: `Critical`. |
+| `ruleSet` | Global + Solution | PAC rule set (for example `Solution Checker`, `AppSource Certification`, or GUID). Use `none` to omit `--ruleSet`. |
+| `excludedFiles` | Global + Solution | One or more glob patterns. Patterns are expanded to concrete file paths before calling PAC `--excludedFiles`. |
+| `ruleLevelOverride` | Global + Solution | Rule override definitions. Supported formats: JSON file path, hashtable, or array of rule override objects. |
+| `maxParallel` | Global | Maximum number of solutions checked in parallel. Default: `4`. |
+
+#### Authentication behavior for solution check
+
+ALM4Dataverse uses:
+
+```text
+pac auth create --managedIdentity
+```
+
+This uses Default Azure Credential and is designed to pick up an existing Azure identity context (for example Azure CLI sign-in, managed identity, or workload identity federation). If no non-interactive Azure identity context is available, solution check fails with a clear error.
+
+> `connect.ps1` also initializes PAC auth unconditionally so future PAC-based operations can reuse the same behavior.
+
+#### Reports and failure visibility
+
+When solution checks run, build output includes `solution-check/` artifacts:
+
+- `solution-check/summary.md`
+- `solution-check/solution-check-summary.json`
+- per-solution logs and PAC output folders
+
+Azure DevOps and GitHub build templates upload a dedicated `solution-check-report` artifact for easy viewing.
 
 ## Advanced - Fork Configuration
 

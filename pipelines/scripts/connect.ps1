@@ -16,6 +16,10 @@ param(
     [string]$url
 )
 
+. (Join-Path $PSScriptRoot 'common.ps1')
+
+Initialize-PacAuthentication
+
 Write-Host "##[group] Connecting to Dataverse environment with URL: $url"
 Get-DataverseConnection -setasdefault -DefaultAzureCredential -Url $url | out-null
 Write-Host "Validating connection using WhoAmI..."

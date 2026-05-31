@@ -406,13 +406,25 @@ Edit the `alm-config.psd1` file in your main repository to list the solutions yo
         @{
             name = 'AnotherSolution'
             deployUnmanaged = $false
+         solutionCheck = @{ enabled = $true; failThreshold = 'High' }
         }
     )
+
+   # Optional global PAC solution check settings used by BUILD.
+   solutionCheck = @{
+      enabled = $true
+      geo = 'Europe'
+      failThreshold = 'Critical'
+      maxParallel = 4
+   }
 }
 ```
 
 - `name`: The unique name of your Dataverse solution
 - `deployUnmanaged`: Set to `$true` if you want to deploy as unmanaged (typically only for Dev), `$false` for managed
+- `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings
+
+If solution check is enabled, BUILD authenticates PAC using managed identity / existing Azure identity context and fails clearly if no non-interactive Azure sign-in context is available.
 
 ### 9.2 Configure Deployment Environments
 

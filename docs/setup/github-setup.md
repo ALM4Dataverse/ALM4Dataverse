@@ -143,11 +143,24 @@ Edit `alm-config.psd1` to list the solutions you want to manage:
 ```powershell
 @{
     solutions = @(
-        @{ name = 'YourSolutionUniqueName' }
-        @{ name = 'AnotherSolution' }
+    @{ name = 'YourSolutionUniqueName' }
+    @{
+      name = 'AnotherSolution'
+      solutionCheck = @{ enabled = $true; failThreshold = 'High' }
+    }
     )
+
+  # Optional global PAC solution check settings used by BUILD.
+  solutionCheck = @{
+    enabled = $true
+    geo = 'Europe'
+    failThreshold = 'Critical'
+    maxParallel = 4
+  }
 }
 ```
+
+If solution check is enabled, BUILD authenticates PAC using managed identity / existing Azure identity context and fails clearly if no non-interactive Azure sign-in context is available.
 
 ### Configure deployment environments in `DEPLOY-main.yml`
 

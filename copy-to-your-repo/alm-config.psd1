@@ -24,7 +24,26 @@
     # - serviceAccountUpnConfigKey: (optional) name of the environment configuration key containing
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'
+    # - solutionCheck: (optional) per-solution PAC checker settings merged with global solutionCheck
+    #   settings below. Use enabled = $false to skip checker for a specific solution.
     solutions = @(
+        # Example:
+        # @{
+        #   name = 'ContosoCore'
+        #   solutionCheck = @{
+        #     enabled = $true
+        #     # Use 'none' to omit --ruleSet.
+        #     ruleSet = 'none'
+        #     # Globs are expanded to concrete files before calling pac.
+        #     excludedFiles = @(
+        #       'CanvasApps/**/*.msapp'
+        #     )
+        #     ruleLevelOverride = @(
+        #       @{ Id = 'meta-remove-dup-reg'; OverrideLevel = 'Medium' }
+        #     )
+        #     failThreshold = 'High'
+        #   }
+        # }
     )
 
 
@@ -106,4 +125,31 @@
     # Timeout in seconds for each solution import operation (default: 10800).
     # Increase this value if solution imports time out in large or complex environments.
     # importTimeoutSeconds = 10800
+
+    # PAC solution check settings used by BUILD.
+    # Set enabled = $true globally or per-solution to activate checks.
+    # Per-solution settings are merged with these global settings.
+    #
+    # Supported severities for failThreshold and OverrideLevel:
+    # Critical, High, Medium, Low, Informational.
+    #
+    # ruleSet values:
+    # - 'Solution Checker' (default)
+    # - 'AppSource Certification'
+    # - GUID
+    # - 'none' (do not pass --ruleSet)
+    #
+    # solutionCheck = @{
+    #     enabled = $true
+    #     geo = 'Europe'
+    #     failThreshold = 'Critical'
+    #     ruleSet = 'Solution Checker'
+    #     excludedFiles = @(
+    #         'WebResources/**/*.png'
+    #     )
+    #     ruleLevelOverride = @(
+    #         @{ Id = 'meta-remove-dup-reg'; OverrideLevel = 'Medium' }
+    #     )
+    #     maxParallel = 4
+    # }
 }

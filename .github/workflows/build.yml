@@ -158,11 +158,22 @@ jobs:
             -ArtifactStagingDirectory "${{ github.workspace }}/artifacts"
 
       - name: Upload build artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: artifacts
           path: ${{ github.workspace }}/artifacts/
           retention-days: 90
+          if-no-files-found: warn
+
+      - name: Upload solution check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solution-check-report
+          path: ${{ github.workspace }}/artifacts/solution-check/
+          retention-days: 90
+          if-no-files-found: ignore
 
       - name: Tag source with build version
         shell: pwsh

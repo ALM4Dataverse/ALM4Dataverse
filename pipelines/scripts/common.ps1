@@ -6,6 +6,36 @@
     such as build.ps1, deploy.ps1, and export.ps1.
 #>
 
+function Merge-AlmConfigValue {
+    param(
+        $DefaultValue,
+        $OverrideValue
+    )
+
+    if ($null -eq $DefaultValue) {
+        return $OverrideValue
+    }
+
+    if ($null -eq $OverrideValue) {
+        return $DefaultValue
+    }
+
+    if ($DefaultValue -is [array] -and $OverrideValue -is [array]) {
+        return @(@($DefaultValue) + @($OverrideValue))
+    }
+
+    if ($DefaultValue -is [hashtable] -and $OverrideValue -is [hashtable]) {
+        $merged = @{}
+        foreach ($key in ($DefaultValue.Keys + $OverrideValue.Keys | Select-Object -Unique)) {
+            $merged[$key] = Merge-AlmConfigValue -DefaultValue $DefaultValue[$key] -OverrideValue $OverrideValue[$key]
+        }
+
+        return $merged
+    }
+
+    return $OverrideValue
+}
+
 function Get-AlmConfig {
     param(
         [string]$BaseDirectory = "."
@@ -28,50 +58,10 @@ function Get-AlmConfig {
 
     $mainConfig = Import-PowerShellDataFile -Path $configPath
 
-    function mergeConfigValue($defaultConfig, $mainConfig) {
-        if (-not $defaultConfig) {
-            return $mainConfig
-        }
-
-        if (-not $mainConfig) {
-            return $defaultConfig
-        }
-
-        # If both are arrays, concatenate them
-        if ($defaultConfig -is [array] -and $mainConfig -is [array]) {
-            return @(@($defaultConfig) + @($mainConfig))
-        }
-
-        # If neither is a hashtable, main value wins (primitive override)
-        if ($defaultConfig -isnot [hashtable] -or $mainConfig -isnot [hashtable]) {
-            return $mainConfig
-        }
-
-        $newValue = @{}
-        foreach ($subKey in $defaultConfig.Keys + $mainConfig.Keys | Select-Object -Unique) {
-            $newValue[$subKey] = mergeConfigValue $defaultConfig[$subKey] $mainConfig[$subKey]
-        }
-        return $newValue
-    }
-    
     # Merge configs: mainConfig overrides defaultConfig, arrays are concatenated
     foreach ($key in $mainConfig.Keys) {
         if ($defaultConfig.ContainsKey($key)) {
-            $defaultValue = $defaultConfig[$key]
-            $mainValue = $mainConfig[$key]
-            
-            # If both are arrays, concatenate them
-            if ($defaultValue -is [array] -and $mainValue -is [array]) {
-                $config[$key] = @(@($defaultValue) + @($mainValue)) 
-            }
-            # If both are hashtables, merge them
-            elseif ($defaultValue -is [hashtable] -and $mainValue -is [hashtable]) {
-                $config[$key] = mergeConfigValue $defaultValue $mainValue
-            }
-            # Otherwise, main value wins
-            else {
-                $config[$key] = $mainValue
-            }
+            $config[$key] = Merge-AlmConfigValue -DefaultValue $defaultConfig[$key] -OverrideValue $mainConfig[$key]
         }
         else {
             $config[$key] = $mainConfig[$key]
@@ -92,6 +82,58 @@ function Get-AlmConfig {
     
     return $config
 }
+
+    function Initialize-PacAuthentication {
+        param(
+            [string]$ProfileName = 'ALM4Dataverse-SolutionCheck',
+            [switch]$Quiet
+        )
+
+        $pacCommand = Get-Command pac -ErrorAction SilentlyContinue
+        if (-not $pacCommand) {
+            throw "Power Apps CLI (pac) is not available on PATH. Ensure installdependencies.ps1 has run in this job before calling scripts that require PAC authentication."
+        }
+
+        $pacPath = $pacCommand.Source
+
+        Write-Host "##[group]Authenticating Power Apps CLI using managed identity / Azure identity context"
+
+        $createArgs = @('auth', 'create', '--managedIdentity', '--name', $ProfileName)
+        $createOutput = @(& $pacPath @createArgs 2>&1)
+        $createExitCode = $LASTEXITCODE
+
+        if ($createExitCode -ne 0) {
+            $selectOutput = @(& $pacPath auth select --name $ProfileName 2>&1)
+            $selectExitCode = $LASTEXITCODE
+
+            if ($selectExitCode -ne 0) {
+                $createText = ($createOutput | ForEach-Object { [string]$_ }) -join "`n"
+                $selectText = ($selectOutput | ForEach-Object { [string]$_ }) -join "`n"
+                throw @(
+                    "Failed to establish PAC authentication using the existing Azure identity context.",
+                    "Expected an existing non-interactive Azure sign-in context (for example Azure CLI, managed identity, or workload identity).",
+                    "pac auth create output:",
+                    $createText,
+                    "pac auth select output:",
+                    $selectText
+                ) -join "`n"
+            }
+        }
+
+        $whoOutput = @(& $pacPath auth who 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            $whoText = ($whoOutput | ForEach-Object { [string]$_ }) -join "`n"
+            throw "PAC authentication validation failed (pac auth who).`n$whoText"
+        }
+
+        if (-not $Quiet) {
+            foreach ($line in $whoOutput) {
+                Write-Host $line
+            }
+        }
+
+        Write-Host "##[endgroup]"
+    }
 
 function Invoke-Hooks {
     param(
