@@ -90,6 +90,32 @@ function ConvertTo-SpectreMarkupLiteral {
     return ([string]$Text).Replace('[', '[[').Replace(']', ']]')
 }
 
+function Get-OptionalObjectPropertyValue {
+    [CmdletBinding()]
+    param(
+        [Parameter()][object]$InputObject,
+        [Parameter(Mandatory)][string]$PropertyName
+    )
+
+    if ($null -eq $InputObject) {
+        return $null
+    }
+
+    if ($InputObject -is [hashtable]) {
+        if ($InputObject.ContainsKey($PropertyName)) {
+            return $InputObject[$PropertyName]
+        }
+
+        return $null
+    }
+
+    if ($InputObject.PSObject -and $InputObject.PSObject.Properties.Name -contains $PropertyName) {
+        return $InputObject.$PropertyName
+    }
+
+    return $null
+}
+
 function Invoke-GenericStaticMethod {
     [CmdletBinding()]
     param(
