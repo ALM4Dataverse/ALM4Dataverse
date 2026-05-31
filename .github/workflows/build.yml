@@ -195,6 +195,7 @@ jobs:
           BUILD_RUN_ID: ${{ github.run_id }}
           BUILD_RUN_NAME: ${{ steps.build-number.outputs.run_name }}
           BUILD_BRANCH: ${{ github.ref_name }}
+          BUILD_SOURCE_SHA: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
 
@@ -202,7 +203,7 @@ jobs:
             throw "No token available for repository dispatch."
           }
 
-          $sourceSha = (git rev-parse HEAD).Trim()
+          $sourceSha = [string]$env:BUILD_SOURCE_SHA
           if ([string]::IsNullOrWhiteSpace($sourceSha)) {
             throw "Failed to resolve source commit SHA for repository_dispatch payload."
           }
