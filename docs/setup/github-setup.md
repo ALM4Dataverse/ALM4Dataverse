@@ -26,7 +26,7 @@ You call them from your own repository's workflow files, which you copy from the
 | `IMPORT.yml` | `import.yml` | Build from source, import into dev Dataverse |
 | `DEPLOY-main.yml` | `deploy.yml` | Deploy artifacts to each environment |
 
-During automated setup (`setup-github.ps1`), you are also prompted per branch whether to enable solution validation in `BUILD`. If enabled, setup associates the BUILD job with that branch's `Dev-<branch>` GitHub environment and wires reusable `build.yml` to run Dataverse connect/authentication before build validation.
+During automated setup (`setup-github.ps1`), you are also prompted whether to enable solution validation in `BUILD` globally. If enabled, setup configures one shared GitHub environment for BUILD validation and wires reusable `build.yml` to run Dataverse connect/authentication against that environment before build validation.
 
 ---
 

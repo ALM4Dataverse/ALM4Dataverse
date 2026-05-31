@@ -84,4 +84,4 @@ The easiest way to run setup is:
      - **Workload Identity Federation**: Modern approach using federated credentials (no secrets required)
      - When ALM4Dataverse extension mode is disabled, only **Service Principal with Secret** is available.
 12) For both the dev environment and all deployment environments, prompts you to select the Service Account (user account) you want to use. This must be pre-existing as no option to create one is provided.
-13) Prompts whether solution validation should run during `BUILD` per configured branch. If enabled, setup ensures the branch has a DEV environment configuration and wires `BUILD` to use that environment for connect/auth steps (same model as `EXPORT`).
+13) Prompts whether solution validation should run during `BUILD` globally. If enabled, setup configures one shared BUILD validation environment (Dataverse URL + auth + service account) and wires all generated `BUILD` pipelines to use that environment for connect/auth steps (same model as `EXPORT`).

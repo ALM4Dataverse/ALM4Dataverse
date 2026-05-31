@@ -1151,14 +1151,35 @@ function Select-FromMenu {
         $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
     }
 
+    $effectiveDisplayItems = @()
     foreach ($item in $effectiveItems) {
-        [void]$prompt.AddChoice($item)
+        $effectiveDisplayItems += [string](ConvertTo-SpectreMarkupLiteral -Text $item)
+    }
+
+    foreach ($displayItem in $effectiveDisplayItems) {
+        [void]$prompt.AddChoice($displayItem)
     }
 
     Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
 
     try {
-        $selectedValue = Show-SelectionPromptWithInterruptHandling -Prompt $prompt
+        $selectedDisplayValue = Show-SelectionPromptWithInterruptHandling -Prompt $prompt
+        Write-SetupDebug -Message "SelectionPrompt selected display value: '$selectedDisplayValue'"
+
+        $selectedEffectiveIndex = -1
+        for ($effectiveIndex = 0; $effectiveIndex -lt $effectiveDisplayItems.Count; $effectiveIndex++) {
+            if ($effectiveDisplayItems[$effectiveIndex] -ceq $selectedDisplayValue) {
+                $selectedEffectiveIndex = $effectiveIndex
+                break
+            }
+        }
+
+        if ($selectedEffectiveIndex -lt 0) {
+            Write-SetupDebug -Message "SelectionPrompt display value '$selectedDisplayValue' did not map to a known item."
+            return $null
+        }
+
+        $selectedValue = [string]$effectiveItems[$selectedEffectiveIndex]
         Write-SetupDebug -Message "SelectionPrompt selected value: '$selectedValue'"
 
         if ($singleChoiceCancelLabel -and $selectedValue -ceq $singleChoiceCancelLabel) {

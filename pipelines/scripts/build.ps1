@@ -370,7 +370,10 @@ function Invoke-SolutionCheck {
             }
         }
 
-        $resolvedExcludedFiles = Resolve-SolutionCheckExcludedFiles -SourceDirectory $SourceDirectory -SolutionName $solutionName -Patterns $excludedFilesRaw
+        $resolvedExcludedFiles = @()
+        if (@($excludedFilesRaw).Count -gt 0) {
+            $resolvedExcludedFiles = Resolve-SolutionCheckExcludedFiles -SourceDirectory $SourceDirectory -SolutionName $solutionName -Patterns $excludedFilesRaw
+        }
         $ruleOverrideFile = ConvertTo-SolutionCheckRuleOverrideFile -ReportRoot $solutionCheckRoot -SolutionName $solutionName -RuleLevelOverride $settings.ruleLevelOverride
 
         $plans.Add([pscustomobject]@{
