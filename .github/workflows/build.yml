@@ -28,6 +28,11 @@ on:
         type: string
         default: ''
         description: 'Optional source branch name used for downstream repository_dispatch payloads'
+      environment-name:
+        required: false
+        type: string
+        default: ''
+        description: 'Optional environment name to use for pre-build Dataverse connect and solution validation.'
       timeout-minutes:
         required: false
         type: number
@@ -48,9 +53,15 @@ jobs:
     permissions:
       contents: write  # push git tag
       actions: write   # upload artifacts
+      id-token: write  # optional OIDC token for Dataverse connect
     outputs:
       run-id: ${{ github.run_id }}
       run-name: ${{ steps.build-number.outputs.run_name }}
+    env:
+      AZURE_CLIENT_ID:     ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID:     ${{ vars.AZURE_TENANT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+      DATAVERSE_URL:       ${{ vars.DATAVERSE_URL }}
 
     steps:
       - name: Checkout source code
@@ -148,11 +159,195 @@ jobs:
           Write-Host "Exact build name: $buildNumber"
           Write-Host "Build number: $buildNumber"
 
-      - name: Install Dependencies and Build
+      - name: Resolve prefixed repo variables and secrets
+        if: inputs.environment-name != ''
+        shell: pwsh
+        env:
+          ALL_REPO_VARS_JSON: ${{ toJSON(vars) }}
+          ALL_REPO_SECRETS_JSON: ${{ toJSON(secrets) }}
+          RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+        run: |
+          function ConvertTo-HashtableSafe([string]$jsonText) {
+            if ([string]::IsNullOrWhiteSpace($jsonText)) {
+              return @{}
+            }
+
+            try {
+              $result = $jsonText | ConvertFrom-Json -AsHashtable
+              if ($null -eq $result) {
+                return @{}
+              }
+
+              return $result
+            } catch {
+              Write-Warning "Could not parse JSON context for prefixed mapping. Continuing without it."
+              return @{}
+            }
+          }
+
+          function Write-GitHubEnv([string]$name, [string]$value) {
+            $delimiter = "EOF_$([Guid]::NewGuid().ToString('N'))"
+            Add-Content -Path $env:GITHUB_ENV -Value "$name<<$delimiter"
+            Add-Content -Path $env:GITHUB_ENV -Value $value
+            Add-Content -Path $env:GITHUB_ENV -Value $delimiter
+          }
+
+          function Get-PrefixFromEnvironment([string]$environmentName) {
+            if ([string]::IsNullOrWhiteSpace($environmentName)) {
+              return ''
+            }
+
+            $normalized = ($environmentName.Trim().ToUpperInvariant() -replace '[^A-Z0-9]+', '_').Trim('_')
+            if ([string]::IsNullOrWhiteSpace($normalized)) {
+              return ''
+            }
+
+            return "$normalized`_"
+          }
+
+          $aliasTargets = @{
+            'DATAVERSE_SERVICE_ACCOUNT_UPN' = 'DATAVERSESERVICEACCOUNTUPN'
+            'DATAVERSE_CONN_REFS'           = 'DATAVERSE_CONNECTION_REFS'
+          }
+
+          $derivedPrefix   = Get-PrefixFromEnvironment $env:RESOLVED_ENVIRONMENT_NAME
+          $prefixCandidates = @('PREFIX_')
+          if (-not [string]::IsNullOrWhiteSpace($derivedPrefix) -and $derivedPrefix -ne 'PREFIX_') {
+            $prefixCandidates = @($derivedPrefix) + $prefixCandidates
+          }
+
+          $sources = @(
+            @{ Name = 'secrets';   Data = ConvertTo-HashtableSafe $env:ALL_REPO_SECRETS_JSON; IsSensitive = $true  },
+            @{ Name = 'variables'; Data = ConvertTo-HashtableSafe $env:ALL_REPO_VARS_JSON;    IsSensitive = $false }
+          )
+
+          $setCount = 0
+          foreach ($source in $sources) {
+            foreach ($entry in $source.Data.GetEnumerator()) {
+              $fullName = [string]$entry.Key
+
+              $matchedPrefix = $null
+              foreach ($candidate in $prefixCandidates) {
+                if ($fullName.StartsWith($candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+                  $matchedPrefix = $candidate
+                  break
+                }
+              }
+
+              if ($null -eq $matchedPrefix) {
+                continue
+              }
+
+              $targetName = $fullName.Substring($matchedPrefix.Length)
+              if ([string]::IsNullOrWhiteSpace($targetName)) {
+                continue
+              }
+
+              $targetNames = @($targetName)
+              if ($aliasTargets.ContainsKey($targetName)) {
+                $targetNames += $aliasTargets[$targetName]
+              }
+
+              $rawValue = $entry.Value
+              if ($null -eq $rawValue) {
+                continue
+              }
+
+              $valueText = if ($rawValue -is [string]) {
+                [string]$rawValue
+              } else {
+                $rawValue | ConvertTo-Json -Compress -Depth 50
+              }
+
+              if ([string]::IsNullOrWhiteSpace($valueText)) {
+                continue
+              }
+
+              foreach ($name in ($targetNames | Select-Object -Unique)) {
+                if (-not [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($name))) {
+                  continue
+                }
+
+                [System.Environment]::SetEnvironmentVariable($name, $valueText)
+                Write-GitHubEnv -name $name -value $valueText
+                if ($source.IsSensitive) {
+                  Write-Output "::add-mask::$valueText"
+                }
+
+                $setCount++
+                Write-Host "Mapped prefixed $($source.Name) '$fullName' -> '$name'"
+              }
+            }
+          }
+
+          Write-Host "Prefixed mapping complete. Variables set: $setCount"
+
+      - name: Validate authentication inputs
+        if: inputs.environment-name != ''
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
+            throw "AZURE_CLIENT_ID is required. Set GitHub environment variable AZURE_CLIENT_ID or provide a prefixed repo-level secret/variable."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:AZURE_TENANT_ID)) {
+            throw "AZURE_TENANT_ID is required. Set GitHub environment variable AZURE_TENANT_ID or provide a prefixed repo-level secret/variable."
+          }
+
+          $tenant = $env:AZURE_TENANT_ID.Trim()
+          $isGuid = $tenant -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+          $isDns  = $tenant -match '^[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}$'
+          if (-not ($isGuid -or $isDns)) {
+            throw "AZURE_TENANT_ID value '$tenant' is invalid. Use a tenant GUID or tenant domain (for example, contoso.onmicrosoft.com)."
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
+            throw "DATAVERSE_URL is required. Set GitHub environment variable DATAVERSE_URL or provide a prefixed repo-level variable."
+          }
+
+      - name: Set up Workload Identity Federation (if no client secret)
+        if: inputs.environment-name != ''
+        shell: pwsh
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_SECRET)) {
+            Write-Host "AZURE_CLIENT_SECRET is set; skipping OIDC token file setup."
+            exit 0
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_URL) -or [string]::IsNullOrWhiteSpace($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)) {
+            throw "OIDC token request variables are unavailable. Ensure 'permissions: id-token: write' is granted to this job."
+          }
+
+          $audience = 'api://AzureADTokenExchange'
+          $requestUrl = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)&audience=$([System.Uri]::EscapeDataString($audience))"
+          $headers = @{ Authorization = "bearer $($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)" }
+          $response = Invoke-RestMethod -Method Get -Uri $requestUrl -Headers $headers
+          $token = [string]$response.value
+          if ([string]::IsNullOrWhiteSpace($token)) {
+            throw "Received an empty OIDC token from GitHub."
+          }
+
+          $tokenPath = Join-Path $env:RUNNER_TEMP 'github-oidc-token.txt'
+          Set-Content -LiteralPath $tokenPath -Value $token -NoNewline
+
+          "AZURE_FEDERATED_TOKEN_FILE=$tokenPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Configured AZURE_FEDERATED_TOKEN_FILE for DefaultAzureCredential."
+
+      - name: Connect to Dataverse (optional)
+        if: inputs.environment-name != ''
         shell: pwsh
         working-directory: ${{ github.workspace }}/self
         run: |
           & "${{ github.workspace }}/alm/pipelines/scripts/installdependencies.ps1"
+          & "${{ github.workspace }}/alm/pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
+
+      - name: Install Dependencies and Build
+        shell: pwsh
+        working-directory: ${{ github.workspace }}/self
+        run: |
+          if ('${{ inputs.environment-name }}' -eq '') {
+            & "${{ github.workspace }}/alm/pipelines/scripts/installdependencies.ps1"
+          }
           & "${{ github.workspace }}/alm/pipelines/scripts/build.ps1" `
             -SourceDirectory "${{ github.workspace }}/self" `
             -ArtifactStagingDirectory "${{ github.workspace }}/artifacts"

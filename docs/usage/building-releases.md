@@ -31,6 +31,7 @@ To monitor:
 What happens:
 
 - Solution(s) are packed from the folders in source control at `solutions/uniquename` using PAC solution pack. A managed solution is generated and added to the build assets.
+- BUILD can optionally be associated with a Dataverse environment (typically `Dev-<branch>`). When configured, BUILD runs the same Dataverse connect/authentication flow as EXPORT before running build + solution validation.
 - If `solutionCheck.enabled = $true` (globally and/or per-solution), each packed solution is validated with `pac solution check`.
   - Multiple solutions are processed in parallel (`solutionCheck.maxParallel`, default `4`).
   - Build failure threshold is controlled by `solutionCheck.failThreshold` (default `Critical`).

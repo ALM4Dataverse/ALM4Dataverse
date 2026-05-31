@@ -11,3 +11,6 @@ resources:
 
 stages:
 - template: pipelines/templates/build.yml@ALM4Dataverse
+  parameters:
+    useAlm4DataverseExtension: true
+    buildEnvironmentName: ''

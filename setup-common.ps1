@@ -1990,6 +1990,72 @@ function Set-AlmConfigSolutionsInFile {
     return $hasChanges
 }
 
+function Set-AlmConfigSolutionCheckEnabledInFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][bool]$Enabled,
+        [Parameter()][switch]$CreateIfMissing,
+        [Parameter()][string]$TemplatePath
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+        if (-not $CreateIfMissing) {
+            throw "alm-config.psd1 not found: $ConfigPath"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($TemplatePath) -and (Test-Path -LiteralPath $TemplatePath)) {
+            Copy-Item -LiteralPath $TemplatePath -Destination $ConfigPath -Force
+        }
+        else {
+            Set-Content -LiteralPath $ConfigPath -Value "@{`n}`n" -NoNewline
+        }
+    }
+
+    $configContent = Get-Content -LiteralPath $ConfigPath -Raw
+    $enabledLiteral = if ($Enabled) { '$true' } else { '$false' }
+    $solutionCheckBlock = "@{`n        enabled = $enabledLiteral`n    }"
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($configContent, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        throw "Could not parse existing alm-config.psd1 '$ConfigPath': $($parseErrors[0].Message)"
+    }
+
+    $rootHashtable = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.HashtableAst]
+    }, $false)
+
+    if (-not $rootHashtable) {
+        throw "Could not find the root hashtable in '$ConfigPath'."
+    }
+
+    $solutionCheckEntry = $rootHashtable.KeyValuePairs | Where-Object {
+        $keyText = $_.Item1.Extent.Text.Trim()
+        $keyText -in @('solutionCheck', "'solutionCheck'", '"solutionCheck"')
+    } | Select-Object -First 1
+
+    if ($solutionCheckEntry) {
+        $valueExtent = $solutionCheckEntry.Item2.Extent
+        $updatedContent = $configContent.Substring(0, $valueExtent.StartOffset) + $solutionCheckBlock + $configContent.Substring($valueExtent.EndOffset)
+    }
+    else {
+        $insertOffset = $rootHashtable.Extent.EndOffset - 1
+        $lineEnding = if ($configContent -match "`r`n") { "`r`n" } else { "`n" }
+        $insertText = "$lineEnding    solutionCheck = $solutionCheckBlock$lineEnding"
+        $updatedContent = $configContent.Substring(0, $insertOffset) + $insertText + $configContent.Substring($insertOffset)
+    }
+
+    $hasChanges = ($updatedContent -ne $configContent)
+    if ($hasChanges) {
+        Set-Content -LiteralPath $ConfigPath -Value $updatedContent -NoNewline
+    }
+
+    return $hasChanges
+}
+
 function Select-ConfiguredDeploymentEnvironments {
     [CmdletBinding()]
     param(

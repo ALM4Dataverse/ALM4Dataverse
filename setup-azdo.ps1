@@ -3255,12 +3255,15 @@ function Update-AlmConfigInWorkingTree {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$Solutions,
+        [Parameter(Mandatory)][bool]$BuildValidationEnabled,
         [Parameter(Mandatory)][string]$RepoRoot
     )
 
     $configPath = Join-Path $RepoRoot 'alm-config.psd1'
     $templatePath = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'copy-to-your-repo\alm-config.psd1' } else { $null }
-    $changed = Set-AlmConfigSolutionsInFile -ConfigPath $configPath -Solutions $Solutions -CreateIfMissing -TemplatePath $templatePath
+    $solutionsChanged = Set-AlmConfigSolutionsInFile -ConfigPath $configPath -Solutions $Solutions -CreateIfMissing -TemplatePath $templatePath
+    $solutionCheckChanged = Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $BuildValidationEnabled -CreateIfMissing -TemplatePath $templatePath
+    $changed = ($solutionsChanged -or $solutionCheckChanged)
 
     if ($changed) {
         Write-Host 'Updated alm-config.psd1 in the working tree.' -ForegroundColor Green
@@ -3270,6 +3273,45 @@ function Update-AlmConfigInWorkingTree {
     }
 
     return $changed
+}
+
+function Update-AzDoBuildPipelineInWorkingTree {
+        [CmdletBinding()]
+        param(
+                [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$SharedRepositoryName,
+                [Parameter(Mandatory)][string]$BuildEnvironmentName,
+                [Parameter(Mandatory)][bool]$UseAlm4DataverseExtension
+        )
+
+        $buildPipelinePath = Join-Path $RepoRoot 'pipelines/BUILD.yml'
+        if (-not (Test-Path -LiteralPath $buildPipelinePath)) {
+                throw "Build pipeline file not found: $buildPipelinePath"
+        }
+
+        $extensionLiteral = if ($UseAlm4DataverseExtension) { 'true' } else { 'false' }
+        $escapedBuildEnvironmentName = ([string]$BuildEnvironmentName).Replace("'", "''")
+
+        $newContent = @"
+trigger:
+    branches:
+        include:
+        - '*'  # Support any branch name
+
+resources:
+    repositories:
+        - repository: ALM4Dataverse
+            type: git
+            name: $SharedRepositoryName
+
+stages:
+- template: pipelines/templates/build.yml@ALM4Dataverse
+    parameters:
+        useAlm4DataverseExtension: $extensionLiteral
+        buildEnvironmentName: '$escapedBuildEnvironmentName'
+"@
+
+        Set-Content -LiteralPath $buildPipelinePath -Value $newContent.TrimStart("`r", "`n") -NoNewline
 }
 
 #endregion
@@ -3795,6 +3837,7 @@ function New-AzDoBranchSetupState {
         [Parameter(Mandatory)][string]$BranchName,
         [Parameter()][object]$ExistingDevEnvironment,
         [Parameter()][array]$DeploymentEnvironments,
+        [Parameter()][bool]$BuildValidationEnabled = $false,
         [Parameter()][object]$PublishPlan
     )
 
@@ -3805,6 +3848,7 @@ function New-AzDoBranchSetupState {
         ExistingDevEnvironment      = $ExistingDevEnvironment
         DevEnvironmentConfiguration = $null
         DeploymentEnvironments      = $normalizedDeploymentEnvironments
+        BuildValidationEnabled      = $BuildValidationEnabled
         PublishPlan                 = $PublishPlan
     }
 }
@@ -4269,7 +4313,8 @@ function Publish-AzDoBranchSetupChanges {
         [Parameter(Mandatory)][string]$SharedRepositoryName,
         [Parameter(Mandatory)][bool]$UseAlm4DataverseExtension,
         [Parameter()][array]$Solutions,
-        [Parameter()][array]$DeploymentEnvironments
+        [Parameter()][array]$DeploymentEnvironments,
+        [Parameter()][bool]$BuildValidationEnabled = $false
     )
 
     Push-Location $RepoRoot
@@ -4370,9 +4415,15 @@ function Publish-AzDoBranchSetupChanges {
             -Branch $ConfiguredBranch `
             -UseAlm4DataverseExtension $UseAlm4DataverseExtension
 
-        if ($null -ne $Solutions) {
-            [void](Update-AlmConfigInWorkingTree -Solutions @($Solutions) -RepoRoot $RepoRoot)
-        }
+        $effectiveSolutions = if ($null -ne $Solutions) { @($Solutions) } else { @() }
+        [void](Update-AlmConfigInWorkingTree -Solutions $effectiveSolutions -BuildValidationEnabled $BuildValidationEnabled -RepoRoot $RepoRoot)
+
+        $buildEnvironmentName = if ($BuildValidationEnabled) { "Dev-$ConfiguredBranch" } else { '' }
+        Update-AzDoBuildPipelineInWorkingTree `
+            -RepoRoot $RepoRoot `
+            -SharedRepositoryName $SharedRepositoryName `
+            -BuildEnvironmentName $buildEnvironmentName `
+            -UseAlm4DataverseExtension $UseAlm4DataverseExtension
 
         [void](Update-DeployPipelineInWorkingTree -Environments @($DeploymentEnvironments) -RepoRoot $RepoRoot -Branch $ConfiguredBranch -UseAlm4DataverseExtension $UseAlm4DataverseExtension)
 
@@ -4579,6 +4630,7 @@ function Invoke-AzDoBranchAwareSetup {
                         DevEnvironmentConfiguration = $_.DevEnvironmentConfiguration
                         ExistingDevEnvironment      = $_.ExistingDevEnvironment
                         Environments                = @($_.DeploymentEnvironments)
+                        BuildValidationEnabled      = [bool]$_.BuildValidationEnabled
                     }
                 })
 
@@ -4702,6 +4754,9 @@ function Invoke-AzDoBranchAwareSetup {
                         $existingBranchState = $existingStateByBranch[$branchKey]
                         $existingBranchState.DevEnvironmentConfiguration = $selectedBranchMapping.DevEnvironmentConfiguration
                         $existingBranchState.DeploymentEnvironments = @($selectedBranchMapping.Environments)
+                        if ($selectedBranchMapping.PSObject.Properties.Name -contains 'BuildValidationEnabled') {
+                            $existingBranchState.BuildValidationEnabled = [bool]$selectedBranchMapping.BuildValidationEnabled
+                        }
                     }
                     if (-not $existingBranchState) {
                         $existingBranchState = $existingSetupState.BranchStates | Where-Object { $_.BranchName -ieq $branchName } | Select-Object -First 1
@@ -4725,6 +4780,7 @@ function Invoke-AzDoBranchAwareSetup {
                         -BranchName $branchName `
                         -ExistingDevEnvironment $(if ($existingBranchState) { $existingBranchState.ExistingDevEnvironment } else { $null }) `
                         -DeploymentEnvironments @($(if ($existingBranchState) { $existingBranchState.DeploymentEnvironments } else { @() })) `
+                        -BuildValidationEnabled $(if ($existingBranchState) { [bool]$existingBranchState.BuildValidationEnabled } else { $false }) `
                         -PublishPlan $publishPlan
                 }
 
@@ -4757,6 +4813,9 @@ function Invoke-AzDoBranchAwareSetup {
 
                     $existingBranchState.DevEnvironmentConfiguration = $mappedBranch.DevEnvironmentConfiguration
                     $existingBranchState.DeploymentEnvironments = @($mappedBranch.Environments)
+                    if ($mappedBranch.PSObject.Properties.Name -contains 'BuildValidationEnabled') {
+                        $existingBranchState.BuildValidationEnabled = [bool]$mappedBranch.BuildValidationEnabled
+                    }
                     $existingBranchState
                 })
 
@@ -4890,6 +4949,70 @@ function Invoke-AzDoBranchAwareSetup {
             }
         },
         [pscustomobject]@{
+            Name = 'Configure BUILD validation'
+            Action = {
+                Write-Section `
+                    -Message 'Configure solution validation during BUILD'
+                Write-SetupGuidance -Lines @(
+                    'When enabled for a branch, BUILD will run Dataverse connect first (same connection/auth flow as EXPORT) and then run solution validation.',
+                    'Each enabled branch needs a DEV environment configuration so setup can wire credentials and environment URL.'
+                ) -DocRelativePath 'docs/usage/building-releases.md' -Ref $ALM4DataverseRef -Header 'Build validation guidance'
+
+                foreach ($branchState in @($wizardState.BranchStates)) {
+                    $enablePrompt = "Enable solution validation during BUILD for branch '$($branchState.BranchName)'?"
+                    $enableBuildValidation = if ([bool]$branchState.BuildValidationEnabled) {
+                        Read-YesNo -Prompt $enablePrompt
+                    }
+                    else {
+                        Read-YesNo -Prompt $enablePrompt -DefaultNo
+                    }
+
+                    if (-not $enableBuildValidation) {
+                        $branchState.BuildValidationEnabled = $false
+                        continue
+                    }
+
+                    if (-not $branchState.DevEnvironmentConfiguration -and $branchState.ExistingDevEnvironment) {
+                        $branchState.DevEnvironmentConfiguration = $branchState.ExistingDevEnvironment
+                    }
+
+                    if (-not $branchState.DevEnvironmentConfiguration) {
+                        Write-Section `
+                            -Message "BUILD validation requires DEV environment configuration for branch '$($branchState.BranchName)'"
+
+                        $selectedDevEnvironment = Select-DataverseEnvironment -Prompt "Select the DEV environment for BUILD validation on branch '$($branchState.BranchName)'"
+                        if (-not $selectedDevEnvironment) {
+                            throw "BUILD validation was enabled for branch '$($branchState.BranchName)', but no DEV environment was selected."
+                        }
+
+                        $branchState.DevEnvironmentConfiguration = Invoke-WithErrorHandling -OperationName "Selecting DEV environment credentials for BUILD validation on branch '$($branchState.BranchName)'" -ScriptBlock {
+                            Get-AzDoEnvironmentConfiguration `
+                                -EnvironmentName "Dev-$($branchState.BranchName)" `
+                                -EnvironmentUrl (ConvertTo-NormalizedEnvironmentUrl -Url $selectedDevEnvironment.Endpoints['WebApplication']) `
+                                -FriendlyName $selectedDevEnvironment.FriendlyName `
+                                -ExistingCredentials $credentialsCache `
+                                -ExistingServiceAccounts $serviceAccountsCache `
+                                -TenantId $TenantId `
+                                -ProjectName $SelectedProject.Name `
+                                -OrganizationId $OrganizationId `
+                                -OrganizationName $OrganizationName `
+                                -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
+                                -IsDevelopmentEnvironment $true
+                        }
+
+                        if ($branchState.DevEnvironmentConfiguration -and -not ($credentialsCache | Where-Object { $_.ApplicationId -eq $branchState.DevEnvironmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $branchState.DevEnvironmentConfiguration.Credentials.TenantId })) {
+                            $credentialsCache += $branchState.DevEnvironmentConfiguration.Credentials
+                        }
+                        if ($branchState.DevEnvironmentConfiguration -and $serviceAccountsCache -notcontains $branchState.DevEnvironmentConfiguration.ServiceAccountUPN) {
+                            $serviceAccountsCache += $branchState.DevEnvironmentConfiguration.ServiceAccountUPN
+                        }
+                    }
+
+                    $branchState.BuildValidationEnabled = $true
+                }
+            }
+        },
+        [pscustomobject]@{
             Name = 'Select solutions'
             Action = {
                 Write-Section `
@@ -4964,6 +5087,7 @@ function Invoke-AzDoBranchAwareSetup {
                     'Main repository'      = $MainRepo.Name
                     'Shared repository'    = $SharedRepositoryName
                     'Configured branches'  = [string]$wizardState.BranchStates.Count
+                    'BUILD validation enabled branches' = [string]@($wizardState.BranchStates | Where-Object { $_.BuildValidationEnabled }).Count
                     'Solution source branch' = $(if ([string]::IsNullOrWhiteSpace($wizardState.SolutionSourceBranch)) { '<none>' } else { $wizardState.SolutionSourceBranch })
                     'Solutions selected'   = [string]$(if ($wizardState.SolutionData) { @($wizardState.SolutionData.Solutions).Count } else { 0 })
                     'Extension mode'       = $(if ($UseAlm4DataverseExtension) { 'ALM4Dataverse extension enabled' } else { 'ALM4Dataverse extension disabled' })
@@ -5045,7 +5169,8 @@ try {
                 -SharedRepositoryName $sharedRepoName `
                 -UseAlm4DataverseExtension $script:useAlm4DataverseExtension `
                 -Solutions $(if ($solutionData) { @($solutions) } else { $null }) `
-                -DeploymentEnvironments @($branchState.DeploymentEnvironments)
+                -DeploymentEnvironments @($branchState.DeploymentEnvironments) `
+                -BuildValidationEnabled ([bool]$branchState.BuildValidationEnabled)
         }
 
         $repoPublishResults += $publishResult
