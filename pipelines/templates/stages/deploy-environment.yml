@@ -146,7 +146,7 @@ stages:
                     $environmentTag = 'deployed/${{ parameters.environmentName }}'
 
                     Write-Host "Fetching build version tag '$versionTag' from origin"
-                    git fetch --force origin "refs/tags/$versionTag:refs/tags/$versionTag"
+                    git fetch --force origin "refs/tags/${versionTag}:refs/tags/${versionTag}"
                     if ($LASTEXITCODE -ne 0) {
                       throw "Failed to fetch build version tag '$versionTag' from origin"
                     }

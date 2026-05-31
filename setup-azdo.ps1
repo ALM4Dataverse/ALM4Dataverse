@@ -1211,16 +1211,15 @@ function Select-AzDoMainRepository {
     if (-not [string]::IsNullOrWhiteSpace($SharedRepositoryName)) {
         $repoNames = @($repoNames | Where-Object { $_ -ne $SharedRepositoryName })
     }
-    $menu = @('Create a new repository' + $repoNames)
+    $menu = @('Create a new repository') + @($repoNames)
 
     Write-Host "Select the repository where you want to set up pipelines:" -ForegroundColor Green
 
     $selectedIndex = Select-FromMenu `
-        -Title "Select the repo" `
+        -Title "Select the main repository" `
         -Items $menu `
         -PromptGuidanceLines @(
-            'Choose the primary application repository where ALM4Dataverse pipeline and config files should be generated.',
-            'Use Create a new repository when this project does not already have a target repo for ALM automation.'
+            'Choose the primary application repository where your solutions and other assets will be stored.'
         ) `
         -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
         -PromptGuidanceRef $ALM4DataverseRef
@@ -3507,6 +3506,11 @@ function Get-GitRepoFileContentFromRemoteBranch {
     $normalizedPath = $RelativePath.Replace('\\', '/')
     $candidateRefs = @("origin/$Branch", $Branch)
     foreach ($candidateRef in $candidateRefs) {
+        & git -C $RepoRoot rev-parse --verify --quiet "${candidateRef}^{commit}" 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+
         $content = (& git -C $RepoRoot show "${candidateRef}:${normalizedPath}" 2>$null | Out-String)
         if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($content)) {
             return $content
@@ -4334,7 +4338,7 @@ function Get-AzDoPublishSummaryText {
         $summaryParts += "$($pullRequestResults.Count) pull request branch update(s)"
     }
 
-    return ($summaryParts -join ' • ')
+    return ($summaryParts -join ' - ')
 }
 
 function Apply-AzDoEnvironmentConfiguration {

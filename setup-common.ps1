@@ -387,7 +387,7 @@ function Show-EnvironmentConfigurationOverview {
     Show-SpectreMetricCards -Cards @(
         @{ Label = 'Environments'; AccentColor = 'yellow3'; Value = [string]$items.Count; Detail = 'Configured stages' },
         @{ Label = 'Pending setup'; AccentColor = $(if ($pendingCount -gt 0) { 'red3_1' } else { 'green3_1' }); Value = [string]$pendingCount; Detail = $(if ($pendingCount -gt 0) { 'Need credentials or service accounts' } else { 'Ready for apply' }) },
-        @{ Label = 'Auth mode'; AccentColor = 'deepskyblue1'; Value = $authMix; Detail = "WIF: $wifCount • Secret: $secretCount" },
+        @{ Label = 'Auth mode'; AccentColor = 'deepskyblue1'; Value = $authMix; Detail = "WIF: $wifCount - Secret: $secretCount" },
         @{ Label = 'Service accounts'; AccentColor = 'mediumpurple3'; Value = [string]$uniqueServiceAccounts.Count; Detail = 'Unique automation owners' }
     )
 }
@@ -545,10 +545,10 @@ function New-SetupTipsPanel {
     Initialize-SpectreConsole
 
     $tipLines = @(
-        '• Use Up and Down arrows to move through prompts.',
-        '• Press Enter to confirm the highlighted option.',
-        '• Longer lists automatically enable search so you can type to filter.',
-        '• The wizard navigation menu appears after each step so you can go back before applying changes.'
+        '- Use Up and Down arrows to move through prompts.',
+        '- Press Enter to confirm the highlighted option.',
+        '- Longer lists automatically enable search so you can type to filter.',
+        '- The wizard navigation menu appears after each step so you can go back before applying changes.'
     )
 
     return (New-SpectrePanel -Content ([Spectre.Console.Markup]::new(('[grey]' + (($tipLines | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '[/]' + [Environment]::NewLine + '[grey]') + '[/]'))) -Header 'Controls and flow' -BorderColor 'grey42' -Expand)
@@ -826,7 +826,7 @@ function Show-SetupStatusBarAtBottom {
     $statusText = ($segments -join '  -  ')
 
     if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)) {
-        $markup = '[black on grey]' + (($segments | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '  •  ') + '[/]'
+        $markup = '[black on grey]' + (($segments | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '  -  ') + '[/]'
         [Spectre.Console.AnsiConsole]::MarkupLine($markup)
     }
 }
@@ -1732,7 +1732,7 @@ function Get-CredentialSummaryText {
 
     if ($Credentials.PSObject.Properties.Name -contains 'IsExistingServiceConnection' -and $Credentials.IsExistingServiceConnection) {
         if (-not [string]::IsNullOrWhiteSpace($name)) {
-            return "Existing service connection • $name"
+            return "Existing service connection - $name"
         }
         return 'Existing service connection'
     }
@@ -1743,7 +1743,7 @@ function Get-CredentialSummaryText {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($name)) {
-        return "$authType • $name"
+        return "$authType - $name"
     }
 
     return $authType
@@ -3039,7 +3039,7 @@ function Show-SetupCompletionScreen {
                     $nextStepLabel = $nextStepUrl
                 }
 
-                "• [link=$nextStepUrl]$(ConvertTo-SpectreMarkupLiteral -Text $nextStepLabel)[/]"
+                "- [link=$nextStepUrl]$(ConvertTo-SpectreMarkupLiteral -Text $nextStepLabel)[/]"
             }
         ) -join [Environment]::NewLine
 

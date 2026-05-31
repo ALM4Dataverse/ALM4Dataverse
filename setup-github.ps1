@@ -3300,7 +3300,7 @@ function Get-GitHubPublishSummaryText {
         $summaryParts += "$($pullRequestResults.Count) pull request branch update(s)"
     }
 
-    return ($summaryParts -join ' • ')
+    return ($summaryParts -join ' - ')
 }
 
 function Invoke-GitHubBranchAwareSetup {
@@ -4480,8 +4480,8 @@ foreach ($repo in $repos) {
 
 
 $repoSelection = Select-FromMenu -Title "Select the repository to set up ALM4Dataverse in" -Items $repoMenuItems -PromptGuidanceLines @(
-    'Choose the target repository for ALM4Dataverse workflow and configuration updates.',
-    'You can use an existing repository or create a new one in this step.'
+    'Choose the target repository for ALM4Dataverse shared workflows.',
+    'This must be a separate repository from your main application repository.'
 ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
 if ($null -eq $repoSelection) {
     throw "No repository selected."
