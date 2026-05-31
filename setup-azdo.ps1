@@ -1872,22 +1872,34 @@ function Ensure-AzDoYamlPipelineDefinition {
         [Parameter(Mandatory)][object]$Repository,
         [Parameter(Mandatory)][string]$DefinitionName,
         [Parameter(Mandatory)][string]$YamlPath,
+        [Parameter(Mandatory)][string]$DefinitionBranch,
         [Parameter(Mandatory)][int]$QueueId,
         [Parameter()][string]$FolderPath = '\'
     )
 
     $YamlPath = $YamlPath.TrimStart('/')
 
+    $normalizedDefinitionBranch = [string]$DefinitionBranch
+    if ([string]::IsNullOrWhiteSpace($normalizedDefinitionBranch)) {
+        throw "DefinitionBranch cannot be empty for pipeline '$DefinitionName'."
+    }
+
+    $normalizedDefinitionBranch = $normalizedDefinitionBranch.Trim()
+    if ($normalizedDefinitionBranch -match '^refs/heads/(.+)$') {
+        $normalizedDefinitionBranch = [string]$Matches[1]
+    }
+
+    if ([string]::IsNullOrWhiteSpace($normalizedDefinitionBranch)) {
+        throw "DefinitionBranch cannot be empty for pipeline '$DefinitionName'."
+    }
+
+    $definitionBranchRef = "refs/heads/$normalizedDefinitionBranch"
+
     $existing = @(Get-VSTeamBuildDefinition -ProjectName $Project) | Where-Object { $_.name -eq $DefinitionName -and $_.path -eq $FolderPath }
     $def = $existing | Select-Object -First 1
 
     if (-not $def) {
         Write-Host "Creating pipeline '$DefinitionName' (YAML: $YamlPath)..." -ForegroundColor Yellow
-
-        $repoBranch = 'refs/heads/main'
-        if ($Repository.defaultBranch) {
-            $repoBranch = $Repository.defaultBranch
-        }
 
         # Use Invoke-VSTeamRequest since VSTeam build definition commands require JSON files
         $body = @{
@@ -1900,7 +1912,7 @@ function Ensure-AzDoYamlPipelineDefinition {
                 id            = $Repository.Id
                 name          = $Repository.Name
                 type          = 'TfsGit'
-                defaultBranch = $repoBranch
+                defaultBranch = $definitionBranchRef
             }
             process     = @{
                 type         = 2
@@ -1939,6 +1951,15 @@ function Ensure-AzDoYamlPipelineDefinition {
         $needsUpdate = $true
     }
 
+    if ($full.repository -and $full.repository.PSObject.Properties.Name -contains 'defaultBranch') {
+        if ($full.repository.defaultBranch -ne $definitionBranchRef) {
+            $needsUpdate = $true
+        }
+    }
+    else {
+        $needsUpdate = $true
+    }
+
     if (-not $needsUpdate) {
         Write-Host "Pipeline '$DefinitionName' already exists and points at '$YamlPath'."
         return
@@ -1948,9 +1969,7 @@ function Ensure-AzDoYamlPipelineDefinition {
 
     $def.repository.name = $Repository.Name
     $def.repository.id = $Repository.Id
-    if ($Repository.defaultBranch) {
-        $def.repository.defaultBranch = $Repository.defaultBranch
-    }
+    $def.repository.defaultBranch = $definitionBranchRef
     $def.process.yamlFilename = $YamlPath
 
     # Use Invoke-VSTeamRequest since VSTeam update commands require JSON files
@@ -1975,9 +1994,19 @@ function Ensure-AzDoPipelinesForMainRepo {
     $queueId = Get-AzDoDefaultAgentQueueId -Organization $Organization -Project $Project
     Write-Host "Using agent queue id: $queueId" -ForegroundColor DarkGray
 
+    $defaultBranchName = 'main'
+    if ($Repository.defaultBranch) {
+        $defaultBranchName = ConvertFrom-GitRefToBranchName -Ref $Repository.defaultBranch
+    }
+
     foreach ($yaml in $YamlFiles) {
         $name = [System.IO.Path]::GetFileNameWithoutExtension($yaml)
-        Ensure-AzDoYamlPipelineDefinition -Organization $Organization -Project $Project -Repository $Repository -DefinitionName $name -YamlPath $yaml -QueueId $queueId -FolderPath $FolderPath
+        $definitionBranchName = $defaultBranchName
+        if ($yaml -match '^pipelines/DEPLOY-(.+)\.yml$') {
+            $definitionBranchName = [string]$Matches[1]
+        }
+
+        Ensure-AzDoYamlPipelineDefinition -Organization $Organization -Project $Project -Repository $Repository -DefinitionName $name -YamlPath $yaml -DefinitionBranch $definitionBranchName -QueueId $queueId -FolderPath $FolderPath
     }
 }
 
