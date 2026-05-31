@@ -1,4 +1,3 @@
-
 [CmdletBinding()]
 param(
     [Parameter()]
@@ -47,18 +46,10 @@ else {
     __SETUP_COMMON_LIB__
 }
 
-$script:setupPhaseNames = @('Connect', 'Repository', 'Configure', 'DEV env', 'Deployment envs')
-
 #region Initialization
 
-Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 0
 Write-Section `
-    -Message "Initialising setup" `
-    -GuidanceLines @(
-        'Prepare prerequisite modules, helper functions, and runtime defaults for GitHub setup.',
-        'Review any warnings here before authentication starts.'
-    ) `
-    -GuidanceDocRelativePath 'README.md'
+    -Message "Initialising setup" 
 
 $TempModuleRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ALM4Dataverse\Modules"
 New-DirectoryIfMissing -Path $TempModuleRoot
@@ -163,27 +154,37 @@ function Invoke-GhApi {
 
     $ghArgs = @('api', '--method', $Method, $Endpoint)
     
-    if ($Body) {
-        $json = $Body | ConvertTo-Json -Depth 10 -Compress
-        $ghArgs += @('--input', '-')
-        
-        $result = $json | & gh @ghArgs 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+
+        if ($Body) {
+            $json = $Body | ConvertTo-Json -Depth 10 -Compress
+            $ghArgs += @('--input', '-')
+
+            $result = @($json | & gh @ghArgs 2>&1)
+        }
+        else {
+            $result = @(& gh @ghArgs 2>&1)
+        }
+
+        $ghExitCode = $LASTEXITCODE
     }
-    else {
-        $result = & gh @ghArgs 2>&1
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
-    
-    if ($LASTEXITCODE -ne 0) {
-        $errText = $result -join "`n"
+
+    if ($ghExitCode -ne 0) {
+        $errText = @($result | ForEach-Object { [string]$_ }) -join "`n"
         if ($AllowNotFound -and ($errText -match '404' -or $errText -match 'Not Found')) {
             return $null
         }
-        throw "gh api call failed (HTTP $LASTEXITCODE): $errText"
+        throw "gh api call failed (exit code $ghExitCode): $errText"
     }
     
     if ($result) {
         try {
-            return $result | ConvertFrom-Json
+            return (@($result) -join [Environment]::NewLine) | ConvertFrom-Json
         }
         catch {
             return $result
@@ -269,12 +270,20 @@ function Set-GitHubEnvironmentSecret {
     # when sending strings over stdin, which would corrupt client secret values.
     $normalizedSecretValue = ($SecretValue -replace "[\r\n]+$", "")
 
-    $result = & gh secret set $SecretName `
-        --repo "$Owner/$Repo" `
-        --env $EnvironmentName `
-        --body $normalizedSecretValue 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $result = @(& gh secret set $SecretName `
+            --repo "$Owner/$Repo" `
+            --env $EnvironmentName `
+            --body $normalizedSecretValue 2>&1)
+        $setExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
-    if ($LASTEXITCODE -ne 0) {
+    if ($setExitCode -ne 0) {
         throw "Failed to set secret '$SecretName': $($result -join "`n")"
     }
     Write-Host "Set secret '$SecretName'." -ForegroundColor DarkGray
@@ -296,12 +305,20 @@ function Set-GitHubEnvironmentVariable {
 
     Write-Host "Setting variable '$VariableName' in environment '$EnvironmentName'..." -ForegroundColor DarkGray
 
-    $result = & gh variable set $VariableName `
-        --repo "$Owner/$Repo" `
-        --env $EnvironmentName `
-        --body $VariableValue 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $result = @(& gh variable set $VariableName `
+            --repo "$Owner/$Repo" `
+            --env $EnvironmentName `
+            --body $VariableValue 2>&1)
+        $setExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
-    if ($LASTEXITCODE -ne 0) {
+    if ($setExitCode -ne 0) {
         throw "Failed to set variable '$VariableName': $($result -join "`n")"
     }
     Write-Host "Set variable '$VariableName'." -ForegroundColor DarkGray
@@ -326,11 +343,19 @@ function Set-GitHubRepoSecret {
     # when sending strings over stdin, which would corrupt client secret values.
     $normalizedSecretValue = ($SecretValue -replace "[\r\n]+$", "")
 
-    $result = & gh secret set $SecretName `
-        --repo "$Owner/$Repo" `
-        --body $normalizedSecretValue 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $result = @(& gh secret set $SecretName `
+            --repo "$Owner/$Repo" `
+            --body $normalizedSecretValue 2>&1)
+        $setExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
-    if ($LASTEXITCODE -ne 0) {
+    if ($setExitCode -ne 0) {
         throw "Failed to set repo secret '$SecretName': $($result -join "`n")"
     }
     Write-Host "Set repo-level secret '$SecretName'." -ForegroundColor DarkGray
@@ -351,11 +376,19 @@ function Set-GitHubRepoVariable {
 
     Write-Host "Setting repo-level variable '$VariableName'..." -ForegroundColor DarkGray
 
-    $result = & gh variable set $VariableName `
-        --repo "$Owner/$Repo" `
-        --body $VariableValue 2>&1
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $result = @(& gh variable set $VariableName `
+            --repo "$Owner/$Repo" `
+            --body $VariableValue 2>&1)
+        $setExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
-    if ($LASTEXITCODE -ne 0) {
+    if ($setExitCode -ne 0) {
         throw "Failed to set repo variable '$VariableName': $($result -join "`n")"
     }
     Write-Host "Set repo-level variable '$VariableName'." -ForegroundColor DarkGray
@@ -476,11 +509,20 @@ function Get-GitHubRepoList {
     [CmdletBinding()]
     param()
 
-    $result = & gh repo list --json nameWithOwner,name,owner,defaultBranchRef --limit 100 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $result = @(& gh repo list --json nameWithOwner,name,owner,defaultBranchRef --limit 100 2>&1)
+        $listExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($listExitCode -ne 0) {
         throw "Failed to list repositories: $($result -join "`n")"
     }
-    return $result | ConvertFrom-Json
+    return (@($result) -join [Environment]::NewLine) | ConvertFrom-Json
 }
 
 function Get-GitHubRepo {
@@ -494,11 +536,20 @@ function Get-GitHubRepo {
         [Parameter(Mandatory)][string]$Repo
     )
 
-    $result = & gh repo view "$Owner/$Repo" --json nameWithOwner,name,owner,defaultBranchRef 2>&1
-    if ($LASTEXITCODE -ne 0) {
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $result = @(& gh repo view "$Owner/$Repo" --json nameWithOwner,name,owner,defaultBranchRef 2>&1)
+        $viewExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($viewExitCode -ne 0) {
         throw "Failed to get repository '$Owner/$Repo': $($result -join "`n")"
     }
-    return $result | ConvertFrom-Json
+    return (@($result) -join [Environment]::NewLine) | ConvertFrom-Json
 }
 
 function Ensure-GitHubSharedWorkflowAccessPolicy {
@@ -697,15 +748,35 @@ function Get-GitHubDeployWorkflowBranchMappingsFromRepoClone {
         [Parameter(Mandatory)][string]$RepoRoot
     )
 
-    $branchRefs = @(& git -C $RepoRoot for-each-ref --format='%(refname:short)' refs/remotes/origin 2>$null)
+    $branchRefs = @(& git -C $RepoRoot for-each-ref --format='%(refname:short)' refs/remotes/origin/* 2>$null)
     $branches = @($branchRefs | ForEach-Object {
         $candidate = [string]$_
-        if ($candidate -match '^origin/(.+)$') { $Matches[1] } else { $candidate }
-    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'HEAD' } | Select-Object -Unique)
+        if ($candidate -match '^origin/(.+)$') { $candidate = $Matches[1] }
+
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            return $null
+        }
+
+        if ($candidate -in @('HEAD', 'origin')) {
+            return $null
+        }
+
+        if ($candidate -match '^origin/') {
+            return $null
+        }
+
+        return $candidate
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
 
     $mappings = @()
     foreach ($branch in $branches) {
-        $workflowFiles = @(& git -C $RepoRoot ls-tree -r --name-only "origin/$branch" '.github/workflows' 2>$null)
+        $remoteRef = "origin/$branch"
+        & git -C $RepoRoot rev-parse --verify $remoteRef 2>$null | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            continue
+        }
+
+        $workflowFiles = @(& git -C $RepoRoot ls-tree -r --name-only $remoteRef '.github/workflows' 2>$null)
         foreach ($workflowFile in $workflowFiles) {
             if ($workflowFile -notmatch '^\.github/workflows/DEPLOY-(.+)\.yml$') {
                 continue
@@ -1144,28 +1215,90 @@ function Get-GitHubForkSyncState {
         [Parameter(Mandatory)][string]$DefaultBranch
     )
 
-    & gh repo clone $ForkFullName $WorkRoot 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to clone repository '$ForkFullName'."
+    if (Test-Path -LiteralPath $WorkRoot) {
+        try {
+            Remove-Item -LiteralPath $WorkRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        catch {
+            # Best effort cleanup before clone.
+        }
     }
 
-    & git -C $WorkRoot checkout $DefaultBranch 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        & git -C $WorkRoot checkout -b $DefaultBranch "origin/$DefaultBranch" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to check out repository default branch '$DefaultBranch'."
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $cloneOutput = @(& gh repo clone $ForkFullName $WorkRoot 2>&1)
+        $cloneExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($cloneExitCode -ne 0) {
+        $cloneErrorDetails = @($cloneOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $cloneErrorMessage = if ($cloneErrorDetails.Count -gt 0) { $cloneErrorDetails[-1] } else { "Exit code: $cloneExitCode" }
+        throw "Failed to clone repository '$ForkFullName'. $cloneErrorMessage"
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $checkoutOutput = @(& git -C $WorkRoot checkout $DefaultBranch 2>&1)
+        $checkoutExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($checkoutExitCode -ne 0) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $checkoutOutput = @(& git -C $WorkRoot checkout -b $DefaultBranch "origin/$DefaultBranch" 2>&1)
+            $checkoutExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($checkoutExitCode -ne 0) {
+            $checkoutErrorDetails = @($checkoutOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $checkoutErrorMessage = if ($checkoutErrorDetails.Count -gt 0) { $checkoutErrorDetails[-1] } else { "Exit code: $checkoutExitCode" }
+            throw "Failed to check out repository default branch '$DefaultBranch'. $checkoutErrorMessage"
         }
     }
 
     & git -C $WorkRoot remote remove upstream 2>$null | Out-Null
-    & git -C $WorkRoot remote add upstream $UpstreamGitSource 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to add upstream remote '$UpstreamGitSource'."
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $addRemoteOutput = @(& git -C $WorkRoot remote add upstream $UpstreamGitSource 2>&1)
+        $addRemoteExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 
-    & git -C $WorkRoot fetch upstream 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to fetch upstream remote.'
+    if ($addRemoteExitCode -ne 0) {
+        $addRemoteErrorDetails = @($addRemoteOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $addRemoteErrorMessage = if ($addRemoteErrorDetails.Count -gt 0) { $addRemoteErrorDetails[-1] } else { "Exit code: $addRemoteExitCode" }
+        throw "Failed to add upstream remote '$UpstreamGitSource'. $addRemoteErrorMessage"
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $fetchUpstreamOutput = @(& git -C $WorkRoot fetch upstream 2>&1)
+        $fetchUpstreamExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($fetchUpstreamExitCode -ne 0) {
+        $fetchUpstreamErrorDetails = @($fetchUpstreamOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $fetchUpstreamErrorMessage = if ($fetchUpstreamErrorDetails.Count -gt 0) { $fetchUpstreamErrorDetails[-1] } else { "Exit code: $fetchUpstreamExitCode" }
+        throw "Failed to fetch upstream remote. $fetchUpstreamErrorMessage"
     }
 
     $upstreamRef = Resolve-GitTargetRefFromRemote -RemoteName 'upstream' -Ref $Reference -RepositoryPath $WorkRoot
@@ -1176,11 +1309,41 @@ function Get-GitHubForkSyncState {
 
     $canonicalUpstreamSource = Resolve-UpstreamGitRemoteSource -ConfiguredSource $UpstreamFullName -GitHubFullName $UpstreamFullName
     if (-not [string]::IsNullOrWhiteSpace($canonicalUpstreamSource)) {
-        & git -C $WorkRoot remote remove upstream-github 2>$null | Out-Null
-        & git -C $WorkRoot remote add upstream-github $canonicalUpstreamSource 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            & git -C $WorkRoot fetch upstream-github $DefaultBranch 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+        $remoteNames = @(& git -C $WorkRoot remote 2>$null)
+        $hasCanonicalUpstreamRemote = (@($remoteNames | ForEach-Object { [string]$_ } | Where-Object { $_ -eq 'upstream-github' }).Count -gt 0)
+        if ($hasCanonicalUpstreamRemote) {
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                [void](& git -C $WorkRoot remote remove upstream-github 2>&1)
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+        }
+
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            [void](& git -C $WorkRoot remote add upstream-github $canonicalUpstreamSource 2>&1)
+            $addCanonicalRemoteExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        if ($addCanonicalRemoteExitCode -eq 0) {
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                [void](& git -C $WorkRoot fetch upstream-github $DefaultBranch 2>&1)
+                $fetchCanonicalRemoteExitCode = $LASTEXITCODE
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
+            }
+
+            if ($fetchCanonicalRemoteExitCode -eq 0) {
                 $canonicalUpstreamHash = (& git -C $WorkRoot rev-parse "upstream-github/$DefaultBranch").Trim()
                 $matchesCanonicalUpstreamDefault = ($localHash -eq $canonicalUpstreamHash)
             }
@@ -1340,20 +1503,21 @@ function Ensure-GitHubForkForSharedWorkflows {
         return -not $forkFullNameMap.ContainsKey($repoFullName.ToLowerInvariant())
     })
 
+    $menuItems += 'Create a new repository'
+    $menuActions += @{ Type = 'CreateNew' }
+
     foreach ($repo in $nonForkRepos) {
         $menuItems += "Use existing repository: $($repo.full_name)"
         $menuActions += @{ Type = 'UseExisting'; FullName = $repo.full_name }
     }
 
-    $menuItems += 'Create a new repository'
-    $menuActions += @{ Type = 'CreateNew' }
+  
 
     $selection = Select-FromMenu `
         -Title "Select shared workflow repository" `
         -Items $menuItems `
         -PromptGuidanceLines @(
-            'Choose the repository that will host reusable ALM4Dataverse workflow templates.',
-            'Prefer a repository that your target repositories can read and that you can keep synced to upstream.'
+            'Choose or create a repository that will host the reusable ALM4Dataverse workflow templates.'
         ) `
         -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
         -PromptGuidanceRef $ALM4DataverseRef
@@ -1391,7 +1555,10 @@ function Ensure-GitHubForkForSharedWorkflows {
             'Public (fork)',
             'Private'
         )
-        $creationModeSelection = Select-FromMenu -Title "How should '$selectedSharedRepositoryFullName' be created?" -Items $creationModeItems
+        $creationModeSelection = Select-FromMenu -Title "How should '$selectedSharedRepositoryFullName' be created?" -Items $creationModeItems -PromptGuidanceLines @(
+            'Choose whether the shared workflow repository should be public (fork style) or private.',
+            'Pick an option that target repositories can access for reusable workflow calls.'
+        ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $creationModeSelection) {
             throw 'No shared workflow repository type selected.'
         }
@@ -1464,13 +1631,21 @@ function Ensure-GitHubForkForSharedWorkflows {
         else {
             if ($createdNewSharedRepository -or $forkSyncState.MatchesCanonicalUpstreamDefault) {
                 Invoke-WithErrorHandling -OperationName "Aligning shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Aligning shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
-                    & git -C $workRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                    if ($LASTEXITCODE -ne 0) {
-                        throw "Failed to align shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'."
-                    }
+                    $previousErrorActionPreference = $ErrorActionPreference
+                    try {
+                        $ErrorActionPreference = 'Continue'
 
-                    & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
-                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                        & git -C $workRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Failed to align shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'."
+                        }
+
+                        & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
+                        if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                    }
+                    finally {
+                        $ErrorActionPreference = $previousErrorActionPreference
+                    }
                 } | Out-Null
 
                 Write-Host "Shared workflow repository aligned successfully."
@@ -1480,11 +1655,19 @@ function Ensure-GitHubForkForSharedWorkflows {
             if ($forkSyncState.CanFastForward) {
                 if (Read-YesNo -Prompt "Updates are available from upstream (fast-forward). Update '$selectedSharedRepositoryFullName'?" ) {
                     Invoke-WithErrorHandling -OperationName "Fast-forwarding shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Fast-forwarding shared workflow repository '$selectedSharedRepositoryFullName'..." -CaptureOutputInPanel -ScriptBlock {
-                        & git -C $workRoot merge --ff-only $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                        if ($LASTEXITCODE -ne 0) { throw 'Git merge failed.' }
+                        $previousErrorActionPreference = $ErrorActionPreference
+                        try {
+                            $ErrorActionPreference = 'Continue'
 
-                        & git -C $workRoot push origin $defaultBranch 2>&1 | Out-Host
-                        if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                            & git -C $workRoot merge --ff-only $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                            if ($LASTEXITCODE -ne 0) { throw 'Git merge failed.' }
+
+                            & git -C $workRoot push origin $defaultBranch 2>&1 | Out-Host
+                            if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                        }
+                        finally {
+                            $ErrorActionPreference = $previousErrorActionPreference
+                        }
                     } | Out-Null
 
                     Write-Host "Shared workflow repository updated successfully."
@@ -1500,31 +1683,50 @@ function Ensure-GitHubForkForSharedWorkflows {
                         "Reset '$selectedSharedRepositoryFullName' '$defaultBranch' to ref '$Reference' (force push)",
                         "Leave '$selectedSharedRepositoryFullName' unchanged"
                     )
-                    $divergedSelection = Select-FromMenu -Title "Shared workflow repository '$selectedSharedRepositoryFullName' has diverged from upstream. Choose how to update it." -Items $divergedMenuItems
+                    $divergedSelection = Select-FromMenu -Title "Shared workflow repository '$selectedSharedRepositoryFullName' has diverged from upstream. Choose how to update it." -Items $divergedMenuItems -PromptGuidanceLines @(
+                        'Choose how to reconcile divergence between your shared repository and upstream templates.',
+                        'Rebase preserves local commits, reset force-aligns to upstream, and leave keeps the current state.'
+                    ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
 
                     switch ($divergedSelection) {
                         0 {
                             Invoke-WithErrorHandling -OperationName "Rebasing shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Rebasing shared workflow repository '$selectedSharedRepositoryFullName' onto '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
-                                & git -C $workRoot rebase $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                                if ($LASTEXITCODE -ne 0) {
-                                    throw "Git rebase failed - resolve conflicts manually in '$selectedSharedRepositoryFullName'."
-                                }
+                                $previousErrorActionPreference = $ErrorActionPreference
+                                try {
+                                    $ErrorActionPreference = 'Continue'
 
-                                & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
-                                if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                                    & git -C $workRoot rebase $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                                    if ($LASTEXITCODE -ne 0) {
+                                        throw "Git rebase failed - resolve conflicts manually in '$selectedSharedRepositoryFullName'."
+                                    }
+
+                                    & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
+                                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                                }
+                                finally {
+                                    $ErrorActionPreference = $previousErrorActionPreference
+                                }
                             } | Out-Null
 
                             Write-Host "Shared workflow repository updated successfully."
                         }
                         1 {
                             Invoke-WithErrorHandling -OperationName "Resetting shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Resetting shared workflow repository '$selectedSharedRepositoryFullName' to '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
-                                & git -C $workRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                                if ($LASTEXITCODE -ne 0) {
-                                    throw "Failed to reset shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'."
-                                }
+                                $previousErrorActionPreference = $ErrorActionPreference
+                                try {
+                                    $ErrorActionPreference = 'Continue'
 
-                                & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
-                                if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                                    & git -C $workRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                                    if ($LASTEXITCODE -ne 0) {
+                                        throw "Failed to reset shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'."
+                                    }
+
+                                    & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
+                                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                                }
+                                finally {
+                                    $ErrorActionPreference = $previousErrorActionPreference
+                                }
                             } | Out-Null
 
                             Write-Host "Shared workflow repository updated successfully."
@@ -1576,7 +1778,10 @@ function New-GitHubRepositoryInteractive {
     }
 
     $visibilityItems = @('Private', 'Public')
-    $visibilitySelection = Select-FromMenu -Title "Select repository visibility" -Items $visibilityItems
+    $visibilitySelection = Select-FromMenu -Title "Select repository visibility" -Items $visibilityItems -PromptGuidanceLines @(
+        'Choose whether the new repository should be private or public.',
+        'Private is recommended unless you intentionally want public visibility.'
+    ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
     if ($null -eq $visibilitySelection) {
         throw "No repository visibility selected."
     }
@@ -1798,7 +2003,10 @@ function Get-GitHubCredentialsForEnvironment {
         "Best practice: use a separate App Registration per environment and prefer Workload Identity Federation where possible."
     ) -DocRelativePath 'docs/config/github-secrets.md' -Ref $ALM4DataverseRef -Header 'App registration guidance'
     
-    $selection = Select-FromMenu -Title "Select App Registration credentials for '$EnvironmentName'" -Items $menuItems
+    $selection = Select-FromMenu -Title "Select App Registration credentials for '$EnvironmentName'" -Items $menuItems -PromptGuidanceLines @(
+        'Select existing credentials or create a new App Registration for this environment.',
+        'Prefer workload identity federation where possible to avoid client-secret rotation overhead.'
+    ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
     if ($null -eq $selection) { throw "No credential selected." }
 
     $action = $menuActions[$selection]
@@ -1812,7 +2020,10 @@ function Get-GitHubCredentialsForEnvironment {
                 'Generate a new client secret now'
             )
 
-            $secretHandlingSelection = Select-FromMenu -Title "How should setup handle the existing client secret for '$EnvironmentName'?" -Items $secretHandlingItems
+            $secretHandlingSelection = Select-FromMenu -Title "How should setup handle the existing client secret for '$EnvironmentName'?" -Items $secretHandlingItems -PromptGuidanceLines @(
+                'Choose whether to keep the existing secret or rotate it now.',
+                'Rotate when policy requires periodic renewal or the current secret is no longer trusted.'
+            ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
             if ($null -eq $secretHandlingSelection) {
                 throw 'No client secret handling option selected.'
             }
@@ -1851,7 +2062,10 @@ function Get-GitHubCredentialsForEnvironment {
             "Workload Identity Federation (recommended, no secrets)",
             "Service Principal with Secret (traditional)"
         )
-        $authTypeSelection = Select-FromMenu -Title "Select authentication type for the new App Registration" -Items $authTypeItems
+        $authTypeSelection = Select-FromMenu -Title "Select authentication type for the new App Registration" -Items $authTypeItems -PromptGuidanceLines @(
+            'Choose between workload identity federation and client-secret authentication.',
+            'Workload identity federation is recommended when supported because it removes shared secret management.'
+        ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
         
         $authType = if ($authTypeSelection -eq 0) { 'WIF' } else { 'Secret' }
@@ -1891,7 +2105,10 @@ function Get-GitHubCredentialsForEnvironment {
             "Workload Identity Federation (recommended, no secrets)",
             "Service Principal with Secret (traditional)"
         )
-        $authTypeSelection = Select-FromMenu -Title "Select authentication type" -Items $authTypeItems
+        $authTypeSelection = Select-FromMenu -Title "Select authentication type" -Items $authTypeItems -PromptGuidanceLines @(
+            'Choose the authentication mode for the provided App Registration details.',
+            'Use secret-based auth only when workload identity federation is not suitable for your scenario.'
+        ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
         
         $authType = if ($authTypeSelection -eq 0) { 'WIF' } else { 'Secret' }
@@ -2511,12 +2728,7 @@ function Copy-WorkflowTemplatesToRepo {
     }
 
     Write-Section `
-        -Message "Syncing workflow files into repository" `
-        -GuidanceLines @(
-            'Template workflows are copied into the repository and references are rewritten to your shared workflow source.',
-            'Branch-specific DEPLOY files are generated from the selected branch mappings.'
-        ) `
-        -GuidanceDocRelativePath 'docs/setup/github-setup.md'
+        -Message "Syncing workflow files into repository"
     Write-Host "Source: $SourceRoot" -ForegroundColor DarkGray
     Write-Host "Target: $TargetRoot" -ForegroundColor DarkGray
 
@@ -2821,7 +3033,9 @@ function Publish-GitHubRepoChanges {
     )
 
     Push-Location $RepoRoot
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = 'Continue'
         & git add -A
         if ($LASTEXITCODE -ne 0) { throw 'Git add failed.' }
 
@@ -2829,6 +3043,10 @@ function Publish-GitHubRepoChanges {
         $hasChanges = ($LASTEXITCODE -ne 0)
 
         if (-not $hasChanges) {
+            Write-Host "No content changes detected, but ensuring branch '$($PublishPlan.BranchName)' exists on origin..." -ForegroundColor Yellow
+            & git push -u origin $PublishPlan.BranchName 2>&1
+            if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+
             Write-Host 'No changes to commit; repository already contains the required files.' -ForegroundColor Green
             return [pscustomobject]@{
                 HasChanges     = $false
@@ -2888,6 +3106,7 @@ function Publish-GitHubRepoChanges {
         }
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
 }
@@ -2910,7 +3129,9 @@ function Publish-GitHubBranchSetupChanges {
     )
 
     Push-Location $RepoRoot
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
+        $ErrorActionPreference = 'Continue'
         & git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune 2>&1 | Out-Null
         if ($LASTEXITCODE -ne 0) {
             throw 'Failed to refresh remote branches before publishing.'
@@ -3042,6 +3263,7 @@ function Publish-GitHubBranchSetupChanges {
         return Publish-GitHubRepoChanges -RepoRoot $RepoRoot -PublishPlan $PublishPlan
     }
     finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         Pop-Location
     }
 }
@@ -3494,13 +3716,7 @@ function Invoke-GitHubBranchAwareSetup {
                     foreach ($branchState in @($wizardState.BranchStates)) {
                         $branchName = [string]$branchState.BranchName
                         Write-Section `
-                            -Message "Configure DEV environment for branch '$branchName'" `
-                            -GuidanceLines @(
-                                "Choose whether branch '$branchName' should own a DEV Dataverse environment.",
-                                'Branches with DEV environments can be used for solution discovery later in setup.'
-                            ) `
-                            -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-                            -GuidanceRef $ALM4DataverseRef
+                            -Message "Configure DEV environment for branch '$branchName'"
 
                         if ($UseGitHubEnvironments) {
                             Write-Host "Preparing GitHub environment 'Dev-$branchName' for the DEV Dataverse environment." -ForegroundColor Green
@@ -3618,13 +3834,7 @@ function Invoke-GitHubBranchAwareSetup {
                     foreach ($branchState in @($wizardState.BranchStates)) {
                         $branchName = [string]$branchState.BranchName
                         Write-Section `
-                            -Message "Configure deployment environments for branch '$branchName'" `
-                            -GuidanceLines @(
-                                "Select deployment targets for branch '$branchName' in promotion order.",
-                                'The final order becomes the stage sequence in the generated DEPLOY workflow.'
-                            ) `
-                            -GuidanceDocRelativePath 'docs/usage/deploying.md' `
-                            -GuidanceRef $ALM4DataverseRef
+                            -Message "Configure deployment environments for branch '$branchName'"
 
                         $excludedDevUrl = if ($branchState.DevEnvironmentConfiguration) { $branchState.DevEnvironmentConfiguration.Url } else { $null }
                         $initialDeploymentEnvironments = @()
@@ -3854,13 +4064,7 @@ function Invoke-GitHubBranchAwareSetup {
                 Name = 'Configure solutions'
                 Action = {
                     Write-Section `
-                        -Message 'Configure Solutions (alm-config.psd1)' `
-                        -GuidanceLines @(
-                            'Select unmanaged solutions to include in source control for this repository.',
-                            'The selected set and order are written into alm-config.psd1.'
-                        ) `
-                        -GuidanceDocRelativePath 'docs/config/alm-config.md' `
-                        -GuidanceRef $ALM4DataverseRef
+                        -Message 'Configure Solutions (alm-config.psd1)'
 
                     $candidateBranches = @($wizardState.BranchStates | Where-Object { $_.DevEnvironmentConfiguration })
                     if ($candidateBranches.Count -eq 0) {
@@ -3883,7 +4087,10 @@ function Invoke-GitHubBranchAwareSetup {
                             }
                             "Use branch '$($_.BranchName)' ($friendlyName) for solution discovery"
                         })
-                        $branchSelection = Select-FromMenu -Title 'Select which configured branch should provide the DEV environment for solution discovery' -Items $branchMenuItems
+                        $branchSelection = Select-FromMenu -Title 'Select which configured branch should provide the DEV environment for solution discovery' -Items $branchMenuItems -PromptGuidanceLines @(
+                            'Choose the branch whose DEV environment should be used for solution discovery.',
+                            'Use the branch that currently reflects your source-controlled customization baseline.'
+                        ) -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' -PromptGuidanceRef $ALM4DataverseRef
                         if ($null -eq $branchSelection) {
                             throw 'No solution source branch selected.'
                         }
@@ -3905,13 +4112,7 @@ function Invoke-GitHubBranchAwareSetup {
                 Name = 'Review choices'
                 Action = {
                     Write-Section `
-                        -Message 'Review setup choices' `
-                        -GuidanceLines @(
-                            'Review branch mappings, publish plans, and environment settings before applying changes.',
-                            'Use Back now if anything needs adjustment before commits or pull requests are created.'
-                        ) `
-                        -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-                        -GuidanceRef $ALM4DataverseRef
+                        -Message 'Review setup choices'
 
                     $allConfiguredEnvironments = @()
                     foreach ($branchState in @($wizardState.BranchStates)) {
@@ -4103,15 +4304,8 @@ function Invoke-GitHubBranchAwareSetup {
 #  MAIN SETUP FLOW
 # ─────────────────────────────────────────────────────────────
 
-Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 0
 Write-Section `
-    -Message "Authenticating with GitHub" `
-    -GuidanceLines @(
-        'Authenticate with the GitHub account that can manage workflows and repository settings.',
-        'Use the account that should own or maintain ALM4Dataverse automation in this repo.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Authenticating with GitHub"
 
 $ghStatusProbe = Invoke-WithSpectreStatus -Status 'Checking GitHub CLI authentication status...' -ScriptBlock {
     $output = @(& gh auth status --hostname github.com 2>&1)
@@ -4186,13 +4380,7 @@ if ($script:ghUserId) {
 }
 
 Write-Section `
-    -Message "Authenticating with Azure" `
-    -GuidanceLines @(
-        'Authenticate with an Entra identity that can manage app registrations and Dataverse access.',
-        'This identity is used to configure service principals, secrets/WIF, and Dataverse users.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Authenticating with Azure"
 
 Write-Host "To enable automated setup, we need to authenticate with Azure." -ForegroundColor Green
 Write-Host ""
@@ -4254,15 +4442,8 @@ if ([string]::IsNullOrWhiteSpace($TenantId)) {
 Assert-ValidTenantIdentifier -TenantIdentifier $TenantId -Source 'Resolved Azure tenant ID'
 
 # ─────────────────────────────────────────────────────────────
-Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 1
 Write-Section `
-    -Message "Ensuring Shared Workflow Repository" `
-    -GuidanceLines @(
-        'Validate or create the shared workflow repository used by generated workflow references.',
-        'Keep this repository accessible so downstream workflow calls succeed.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Ensuring Shared Workflow Repository"
 
 $upstreamWorkflowRepoFullName = Resolve-GitHubRepoFullNameFromSource -Source $upstreamRepo -Fallback 'ALM4Dataverse/ALM4Dataverse'
 $upstreamGitSource = Resolve-UpstreamGitRemoteSource -ConfiguredSource $upstreamRepo -GitHubFullName $upstreamWorkflowRepoFullName
@@ -4272,13 +4453,7 @@ Write-Host "Using ALM4Dataverse ref: $ALM4DataverseRef" -ForegroundColor DarkGra
 
 # ─────────────────────────────────────────────────────────────
 Write-Section `
-    -Message "Select GitHub Repository" `
-    -GuidanceLines @(
-        'Choose the target repository for ALM4Dataverse workflow and configuration updates.',
-        'You can use an existing repository or create a new one in this step.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Select GitHub Repository"
 
 $repos = @(Invoke-WithSpectreStatus -Status 'Fetching repositories you have write access to...' -ScriptBlock {
     Get-GitHubRepoList
@@ -4289,15 +4464,20 @@ $repos = @($repos | Sort-Object -Property nameWithOwner)
 $repoMenuItems = @()
 $repoMenuActions = @()
 
+
+$repoMenuItems += 'Create a new repository'
+$repoMenuActions += @{ Type = 'CreateNew' }
+
 foreach ($repo in $repos) {
     $repoMenuItems += "Use existing repository: $($repo.nameWithOwner)"
     $repoMenuActions += @{ Type = 'UseExisting'; Repo = $repo }
 }
 
-$repoMenuItems += 'Create a new repository'
-$repoMenuActions += @{ Type = 'CreateNew' }
 
-$repoSelection = Select-FromMenu -Title "Select the repository to set up ALM4Dataverse in" -Items $repoMenuItems
+$repoSelection = Select-FromMenu -Title "Select the repository to set up ALM4Dataverse in" -Items $repoMenuItems -PromptGuidanceLines @(
+    'Choose the target repository for ALM4Dataverse workflow and configuration updates.',
+    'You can use an existing repository or create a new one in this step.'
+) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
 if ($null -eq $repoSelection) {
     throw "No repository selected."
 }
@@ -4325,39 +4505,87 @@ if ($selectedRepo.defaultBranchRef -and $selectedRepo.defaultBranchRef.name) {
 }
 Write-Host "Default branch: $defaultBranch"
 
-$cloneRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-GH-" + [guid]::NewGuid().ToString('n'))
-New-DirectoryIfMissing -Path $cloneRoot
+$cloneRoot = $null
 
 Write-Section `
-    -Message "Cloning Repository" `
-    -GuidanceLines @(
-        'A temporary local clone is created so setup can generate and validate file updates safely.',
-        'All commits/PRs are prepared from this working copy.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Cloning Repository"
 
-Invoke-WithErrorHandling -OperationName "Cloning repository" -ScriptBlock {
-    Write-Host "Cloning $repoFullName to $cloneRoot..." -ForegroundColor Yellow
-    & gh repo clone $repoFullName $cloneRoot -- --depth 1 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "gh repo clone failed." }
+    $cloneRoot = Invoke-WithErrorHandling -OperationName "Cloning repository" -ScriptBlock {
+    $attemptCloneRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-GH-" + [guid]::NewGuid().ToString('n'))
+    Write-Host "Cloning $repoFullName to $attemptCloneRoot..." -ForegroundColor Yellow
 
-    & git -C $cloneRoot fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "git fetch failed while retrieving remote branches." }
-} -StatusMessage 'Cloning the selected repository...' -CaptureOutputInPanel | Out-Null
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $cloneOutput = @(& gh repo clone $repoFullName $attemptCloneRoot -- --depth 1 2>&1)
+        $cloneExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
-Push-Location $cloneRoot
-try {
-    & git checkout $defaultBranch 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        & git checkout -b $defaultBranch 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) {
-            throw "Failed to check out repository base branch '$defaultBranch'."
+    if ($cloneExitCode -ne 0) {
+        $cloneErrorDetails = @($cloneOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $cloneErrorMessage = if ($cloneErrorDetails.Count -gt 0) { $cloneErrorDetails[-1] } else { "Exit code: $cloneExitCode" }
+        throw "gh repo clone failed. $cloneErrorMessage"
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $fetchOutput = @(& git -C $attemptCloneRoot fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune 2>&1)
+        $fetchExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($fetchExitCode -ne 0) {
+        $fetchErrorDetails = @($fetchOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $fetchErrorMessage = if ($fetchErrorDetails.Count -gt 0) { $fetchErrorDetails[-1] } else { "Exit code: $fetchExitCode" }
+        throw "git fetch failed while retrieving remote branches. $fetchErrorMessage"
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        [void](& git -C $attemptCloneRoot reset --hard HEAD 2>&1)
+        [void](& git -C $attemptCloneRoot clean -fd 2>&1)
+
+        $checkoutOutput = @(& git -C $attemptCloneRoot checkout -f $defaultBranch 2>&1)
+        $checkoutExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+
+    if ($checkoutExitCode -ne 0) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $checkoutOutput = @(& git -C $attemptCloneRoot checkout -B $defaultBranch "origin/$defaultBranch" 2>&1)
+            $checkoutExitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
         }
     }
-}
-finally {
-    Pop-Location
+
+    if ($checkoutExitCode -ne 0) {
+        $checkoutErrorDetails = @($checkoutOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $checkoutErrorMessage = if ($checkoutErrorDetails.Count -gt 0) { $checkoutErrorDetails[-1] } else { "Exit code: $checkoutExitCode" }
+        throw "Failed to check out repository base branch '$defaultBranch'. $checkoutErrorMessage"
+    }
+
+    return [pscustomobject]@{
+        CloneRoot = $attemptCloneRoot
+    }
+} -StatusMessage 'Cloning the selected repository...' -CaptureOutputInPanel
+
+$cloneRoot = if ($cloneRoot -and $cloneRoot.PSObject.Properties.Name -contains 'CloneRoot') { [string]$cloneRoot.CloneRoot } else { [string]$cloneRoot }
+
+if ([string]::IsNullOrWhiteSpace($cloneRoot)) {
+    throw 'Clone operation did not produce a working directory path.'
 }
 
 $existingSetupState = Invoke-WithSpectreStatus -Status 'Inspecting the existing repository configuration...' -ScriptBlock {
@@ -4409,13 +4637,7 @@ if ($existingSetupState.SharedWorkflowReference) {
 
 # ─────────────────────────────────────────────────────────────
 Write-Section `
-    -Message "Ensuring Shared Workflow Repository" `
-    -GuidanceLines @(
-        'Reconfirm shared workflow source and policy settings before branch-aware setup executes.',
-        'This ensures generated workflow references resolve at runtime.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Ensuring Shared Workflow Repository"
 
 $sharedWorkflowRepo = Invoke-WithErrorHandling -OperationName "Ensuring shared workflow repository" -ScriptBlock {
     Ensure-GitHubForkForSharedWorkflows `
@@ -4492,22 +4714,6 @@ if (-not [string]::IsNullOrWhiteSpace($environmentCapabilities.Message)) {
 
 Write-Host "DEPLOY workflow promotion mode: $deploymentPromotionMode" -ForegroundColor DarkGray
 
-$deploymentModeGuidance = @()
-if ($useGitHubEnvironments) {
-    $deploymentModeGuidance += "Setup will store credentials in GitHub environments for each selected Dataverse environment."
-    if ($enableEnvironmentApprovals) {
-        $deploymentModeGuidance += "Required reviewers are available, so DEPLOY stages can auto-chain using environment approvals."
-    }
-    else {
-        $deploymentModeGuidance += "Required reviewers are unavailable, so DEPLOY will use manual-gate-tag promotion even though environment-scoped credentials are available."
-    }
-}
-else {
-    $deploymentModeGuidance += "Setup will fall back to prefixed repository-level credentials because GitHub environments are unavailable for this repository."
-    $deploymentModeGuidance += "That keeps the workflows usable on lower GitHub plans, but promotion remains manual with gate tags."
-}
-Write-SetupGuidance -Lines $deploymentModeGuidance -DocRelativePath 'docs/setup/github-setup.md' -Ref $ALM4DataverseRef -Header 'Credential storage and promotion guidance'
-
 $githubSetupResult = Invoke-GitHubBranchAwareSetup `
     -CloneRoot $cloneRoot `
     -RepoOwner $repoOwner `
@@ -4543,15 +4749,8 @@ foreach ($branchState in @($branchStates)) {
 try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
 
 # ─────────────────────────────────────────────────────────────
-Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 3
 Write-Section `
-    -Message "Configure Dev Environment Credentials" `
-    -GuidanceLines @(
-        'Apply DEV environment credentials for branches that have DEV configuration.',
-        'These settings are required for EXPORT and branch-specific build discovery behavior.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-variables.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Configure Dev Environment Credentials"
 
 $devBranchStates = @($branchStates | Where-Object { $_.DevEnvironmentConfiguration })
 if ($devBranchStates.Count -eq 0) {
@@ -4561,13 +4760,7 @@ else {
     foreach ($branchState in $devBranchStates) {
         $devEnvironmentConfiguration = $branchState.DevEnvironmentConfiguration
         Write-Section `
-            -Message "Apply DEV environment configuration for branch '$($branchState.BranchName)'" `
-            -GuidanceLines @(
-                "Apply DEV credentials and Dataverse access settings for branch '$($branchState.BranchName)'.",
-                'Failures here usually indicate permission gaps or tenant/environment mismatches.'
-            ) `
-            -GuidanceDocRelativePath 'docs/setup/github-variables.md' `
-            -GuidanceRef $ALM4DataverseRef
+            -Message "Apply DEV environment configuration for branch '$($branchState.BranchName)'"
         if ($useGitHubEnvironments) {
             Write-Host "Setting up GitHub environment '$($devEnvironmentConfiguration.ShortName)' for branch '$($branchState.BranchName)'." -ForegroundColor Green
         }
@@ -4590,15 +4783,8 @@ else {
 }
 
 # ─────────────────────────────────────────────────────────────
-Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 4
 Write-Section `
-    -Message "Configure Deployment Environment Credentials" `
-    -GuidanceLines @(
-        'Apply deployment environment credentials, service accounts, and approval metadata.',
-        'These values are consumed by DEPLOY workflows during promotion stages.'
-    ) `
-    -GuidanceDocRelativePath 'docs/setup/github-variables.md' `
-    -GuidanceRef $ALM4DataverseRef
+    -Message "Configure Deployment Environment Credentials"
 
 if ($useGitHubEnvironments) {
     Write-Host "Configuring GitHub environment credentials for deployment stages." -ForegroundColor Green
@@ -4615,13 +4801,7 @@ else {
     foreach ($branchState in @($branchStates)) {
         foreach ($env in @($branchState.DeploymentEnvironments)) {
             Write-Section `
-                -Message "Applying environment configuration '$($env.ShortName)' for branch '$($branchState.BranchName)'" `
-                -GuidanceLines @(
-                    "Apply credentials and security settings for deployment environment '$($env.ShortName)' on branch '$($branchState.BranchName)'.",
-                    'Confirm this environment has the intended Dataverse URL and service-account owner.'
-                ) `
-                -GuidanceDocRelativePath 'docs/setup/github-variables.md' `
-                -GuidanceRef $ALM4DataverseRef
+                -Message "Applying environment configuration '$($env.ShortName)' for branch '$($branchState.BranchName)'"
             Write-Host "Dataverse URL: $($env.Url)" -ForegroundColor DarkGray
             Write-Host ""
 
@@ -4641,7 +4821,6 @@ else {
 }
 
 # ─────────────────────────────────────────────────────────────
-Set-SetupPhaseContext -PhaseNames $script:setupPhaseNames -CurrentPhaseIndex 4
 Show-SetupCompletionScreen `
     -Heading 'GitHub Actions setup completed successfully!' `
     -AccessLabel 'Open your GitHub Actions page' `

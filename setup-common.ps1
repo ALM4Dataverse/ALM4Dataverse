@@ -90,6 +90,49 @@ function ConvertTo-SpectreMarkupLiteral {
     return ([string]$Text).Replace('[', '[[').Replace(']', ']]')
 }
 
+function Invoke-GenericStaticMethod {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][Type]$Type,
+        [Parameter(Mandatory)][string]$MethodName,
+        [Parameter(Mandatory)][Type[]]$GenericTypeArguments,
+        [Parameter()][object[]]$Arguments = @()
+    )
+
+    $bindingFlags = [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static
+    $candidateMethods = @(
+        $Type.GetMethods($bindingFlags) | Where-Object {
+            $_.Name -eq $MethodName -and
+            $_.IsGenericMethodDefinition -and
+            $_.GetGenericArguments().Count -eq $GenericTypeArguments.Count -and
+            $_.GetParameters().Count -eq $Arguments.Count
+        }
+    )
+
+    if ($candidateMethods.Count -eq 0) {
+        throw "Could not find generic static method '$MethodName' on type '$($Type.FullName)' that accepts $($Arguments.Count) argument(s)."
+    }
+
+    $firstInvocationError = $null
+    foreach ($method in $candidateMethods) {
+        try {
+            $closedMethod = $method.MakeGenericMethod($GenericTypeArguments)
+            return $closedMethod.Invoke($null, $Arguments)
+        }
+        catch {
+            if (-not $firstInvocationError) {
+                $firstInvocationError = $_.Exception
+            }
+        }
+    }
+
+    if ($firstInvocationError) {
+        throw $firstInvocationError
+    }
+
+    throw "Unable to invoke generic static method '$MethodName' on type '$($Type.FullName)'."
+}
+
 function Test-SetupDebugEnabled {
     [CmdletBinding()]
     param()
@@ -502,7 +545,7 @@ function New-SetupTipsPanel {
     Initialize-SpectreConsole
 
     $tipLines = @(
-        '• Use ↑ and ↓ to move through prompts.',
+        '• Use Up and Down arrows to move through prompts.',
         '• Press Enter to confirm the highlighted option.',
         '• Longer lists automatically enable search so you can type to filter.',
         '• The wizard navigation menu appears after each step so you can go back before applying changes.'
@@ -599,7 +642,11 @@ function Confirm-SetupReviewAction {
         [Parameter()][string]$Title = 'Review complete. Apply the configuration or cancel setup.'
     )
 
-    $selection = Select-FromMenu -Title $Title -Items @($ApplyLabel, $CancelLabel)
+    $selection = Select-FromMenu -Title $Title -Items @($ApplyLabel, $CancelLabel) -PromptGuidanceLines @(
+                'Are you ready to apply the changes?'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/config/alm-config.md'
+
     if ($null -eq $selection) {
         throw 'Setup cancelled by user.'
     }
@@ -609,39 +656,6 @@ function Confirm-SetupReviewAction {
     }
 }
 
-function Get-DefaultSetupPromptGuidance {
-    [CmdletBinding()]
-    param(
-        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind
-    )
-
-    return @(switch ($PromptKind) {
-        'Menu' {
-            @(
-                'Choose the option that matches the outcome you want at this step.',
-                'When unsure, prefer the more reviewable path (for example pull request / keep existing) to reduce accidental changes.'
-            )
-        }
-        'Text' {
-            @(
-                'Enter the exact value this step needs, then continue.',
-                'Use the default only if it reflects your intended long-term naming or behavior.'
-            )
-        }
-        'YesNo' {
-            @(
-                'Choose Yes to apply the described action now, or No to keep the current state unchanged.',
-                'Use No when you want to review impacts before setup writes or reconfigures resources.'
-            )
-        }
-        'Secret' {
-            @(
-                'Enter the requested sensitive value from the source system.',
-                'Input is hidden, so paste carefully and confirm you copied the secret value (not an ID or display name).'
-            )
-        }
-    })
-}
 
 function Show-SetupPromptGuidance {
     [CmdletBinding()]
@@ -656,12 +670,9 @@ function Show-SetupPromptGuidance {
     )
 
     $effectiveGuidanceLines = @($GuidanceLines)
-    if ($effectiveGuidanceLines.Count -eq 0) {
-        $effectiveGuidanceLines = Get-DefaultSetupPromptGuidance -PromptKind $PromptKind
-    }
-
+    
     if (
-        $effectiveGuidanceLines.Count -eq 0 -and
+        @($effectiveGuidanceLines).Count -eq 0 -and
         [string]::IsNullOrWhiteSpace($DocRelativePath)
     ) {
         return
@@ -812,7 +823,7 @@ function Show-SetupStatusBarAtBottom {
         return
     }
 
-    $statusText = ($segments -join '  •  ')
+    $statusText = ($segments -join '  -  ')
 
     if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)) {
         $markup = '[black on grey]' + (($segments | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '  •  ') + '[/]'
@@ -1422,7 +1433,7 @@ function Write-SetupGuidance {
     $contentLines = @()
     foreach ($line in @($Lines)) {
         if (-not [string]::IsNullOrWhiteSpace($line)) {
-            $contentLines += "• $(ConvertTo-SpectreMarkupLiteral -Text $line)"
+            $contentLines += "- $(ConvertTo-SpectreMarkupLiteral -Text $line)"
         }
     }
 
@@ -1489,7 +1500,11 @@ function Read-TextWithDefault {
         if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
             Show-SetupStatusBarAtBottom -PromptKind 'Text'
             try {
-                $value = [Spectre.Console.AnsiConsole]::Ask[string]((Get-SetupPromptInlineText -PromptKind 'Text' -PromptText $Prompt), $DefaultValue)
+                $value = Invoke-GenericStaticMethod `
+                    -Type ([Spectre.Console.AnsiConsole]) `
+                    -MethodName 'Ask' `
+                    -GenericTypeArguments ([Type[]]@([string])) `
+                    -Arguments @((Get-SetupPromptInlineText -PromptKind 'Text' -PromptText $Prompt), $DefaultValue)
             }
             finally {
                 Clear-SetupStatusBarAtBottom
@@ -1784,28 +1799,23 @@ function Select-OrderedSolutions {
         Write-Section `
             -Message 'Configure solution order' `
             -GuidanceLines @(
-                'Build the ordered solution list that should be stored in source control.',
-                'Keep dependency order accurate because pipelines use this sequence during import/export operations.'
+                'Select the solution(s) you want to manage in this repo.',
+                'Order is important. If solution A depends on solution B, then B should be earlier in the list than A. This ensures that deployment processes them in the correct sequence.'
             ) `
             -GuidanceDocRelativePath 'docs/config/alm-config.md'
-        Write-SetupGuidance -Lines @(
-            'Use this menu to build the ordered list of unmanaged Dataverse solutions that should be kept in source control.',
-            'The order matters because setup writes it into `alm-config.psd1` and later automation uses that sequence.'
-        ) -DocRelativePath 'docs/config/alm-config.md' -Header 'Solution list guidance'
 
         if ($selectedSolutions.Count -eq 0) {
             [Spectre.Console.AnsiConsole]::MarkupLine('[grey]No solutions selected yet.[/]')
         }
         else {
             [Spectre.Console.AnsiConsole]::MarkupLine('[bold green]Selected solutions (dependency order)[/]')
-            $table = New-SpectreTable -Columns @('#', 'Friendly name', 'Unique name', 'Version')
+            $table = New-SpectreTable -Columns @('#', 'Friendly name', 'Unique name')
             for ($solutionIndex = 0; $solutionIndex -lt $selectedSolutions.Count; $solutionIndex++) {
                 $solution = $selectedSolutions[$solutionIndex]
                 Add-SpectreTableRow -Table $table -Cells @(
                     [string]($solutionIndex + 1),
                     [string]$solution.friendlyname,
-                    [string]$solution.uniquename,
-                    [string]$solution.version
+                    [string]$solution.uniquename
                 )
             }
 
@@ -1849,8 +1859,7 @@ function Select-OrderedSolutions {
                 $solMenu = @($available | ForEach-Object { "$($_.friendlyname) ($($_.uniquename))" })
 
                 $solIndex = Select-FromMenu -Title 'Select a solution to add' -Items $solMenu -PromptGuidanceLines @(
-                    'Choose the next unmanaged solution to add to the source-controlled list.',
-                    'Start with the lowest-level dependencies so the final order matches how solutions should be processed.'
+                    'Choose the next unmanaged solution to add to the list.'
                 ) -PromptGuidanceDocRelativePath 'docs/config/alm-config.md'
                 if ($null -ne $solIndex -and $solIndex -lt $available.Count) {
                     $selectedSolutions += $available[$solIndex]
@@ -2686,16 +2695,24 @@ function Resolve-DevelopmentDefaultAlm4DataverseRef {
         }
 
         try {
-            $branch = (& git -C $repoPath branch --show-current 2>$null).Trim()
-            if (-not [string]::IsNullOrWhiteSpace($branch)) {
-                Write-Host "Development mode: Using current local branch '$branch' as ALM4DataverseRef" -ForegroundColor Yellow
-                return $branch
-            }
+            $previousErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
 
-            $commit = (& git -C $repoPath rev-parse HEAD 2>$null).Trim()
-            if ($commit -match '^[0-9a-f]{40}$') {
-                Write-Host "Development mode: Repository is in detached HEAD; using commit '$commit' as ALM4DataverseRef" -ForegroundColor Yellow
-                return $commit
+                $branch = (& git -C $repoPath branch --show-current 2>$null).Trim()
+                if (-not [string]::IsNullOrWhiteSpace($branch)) {
+                    Write-Host "Development mode: Using current local branch '$branch' as ALM4DataverseRef" -ForegroundColor Yellow
+                    return $branch
+                }
+
+                $commit = (& git -C $repoPath rev-parse HEAD 2>$null).Trim()
+                if ($commit -match '^[0-9a-f]{40}$') {
+                    Write-Host "Development mode: Repository is in detached HEAD; using commit '$commit' as ALM4DataverseRef" -ForegroundColor Yellow
+                    return $commit
+                }
+            }
+            finally {
+                $ErrorActionPreference = $previousErrorActionPreference
             }
         }
         catch {
