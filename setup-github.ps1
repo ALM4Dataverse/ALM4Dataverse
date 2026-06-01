@@ -2964,9 +2964,9 @@ function Update-BuildWorkflowInRepoClone {
     $escapedBuildEnvironmentName = ([string]$BuildEnvironmentName).Replace("'", "''")
     $environmentBlock = if ($BuildValidationEnabled -and -not [string]::IsNullOrWhiteSpace($BuildEnvironmentName)) {
 @"
-    environment:
-      name: $escapedBuildEnvironmentName
-      deployment: false
+        environment:
+            name: $escapedBuildEnvironmentName
+            deployment: false
 "@
     }
     else {
@@ -2980,7 +2980,7 @@ function Update-BuildWorkflowInRepoClone {
         ''
     }
 
-    $newContent = @"
+        $newContent = @"
 name: BUILD
 
 # Triggers on every push to any branch.
@@ -2992,26 +2992,27 @@ name: BUILD
 run-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
 
 on:
-  push:
-    branches:
-      - '**'
-  workflow_dispatch:
-  repository_dispatch:
-    types:
-      - alm4dataverse-export-build
+    push:
+        branches:
+            - '**'
+    workflow_dispatch:
+    repository_dispatch:
+        types:
+            - alm4dataverse-export-build
 
 jobs:
-  build:
-$environmentBlock    uses: $SharedWorkflowRepository/.github/workflows/build.yml@$SharedWorkflowReference
-    with:
-      build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
-      source-branch: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
-      source-ref: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
-      environment-name: '$environmentInput'
-      timeout-minutes: 360
-    permissions:
-      contents: write
-      actions: write
+    build:
+$environmentBlock
+        uses: $SharedWorkflowRepository/.github/workflows/build.yml@$SharedWorkflowReference
+        with:
+            build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
+            source-branch: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
+            source-ref: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
+            environment-name: '$environmentInput'
+            timeout-minutes: 360
+        permissions:
+            contents: write
+            actions: write
             id-token: write
 "@
 
