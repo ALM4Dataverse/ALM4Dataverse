@@ -19,10 +19,6 @@ on:
 
 jobs:
   build:
-    # Optional: uncomment to associate BUILD with a GitHub environment.
-    # environment:
-    #   name: Dev-main
-    #   deployment: false
     uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/build.yml@stable
     with:
       build-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}

@@ -2962,16 +2962,6 @@ function Update-BuildWorkflowInRepoClone {
     }
 
     $escapedBuildEnvironmentName = ([string]$BuildEnvironmentName).Replace("'", "''")
-    $environmentBlock = if ($BuildValidationEnabled -and -not [string]::IsNullOrWhiteSpace($BuildEnvironmentName)) {
-@"
-        environment:
-            name: $escapedBuildEnvironmentName
-            deployment: false
-"@
-    }
-    else {
-        ''
-    }
 
     $environmentInput = if ($BuildValidationEnabled -and -not [string]::IsNullOrWhiteSpace($BuildEnvironmentName)) {
         $escapedBuildEnvironmentName
@@ -3002,7 +2992,6 @@ on:
 
 jobs:
     build:
-$environmentBlock
         uses: $SharedWorkflowRepository/.github/workflows/build.yml@$SharedWorkflowReference
         with:
             build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
