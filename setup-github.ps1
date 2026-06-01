@@ -3532,6 +3532,7 @@ function Invoke-GitHubBranchAwareSetup {
             SolutionSourceBranch = $null
             BranchEnvironmentMappingCompleted = $false
             BuildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnabled')
+            BuildValidationEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnvironmentName')
             BuildValidationEnvironmentConfiguration = (Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'ExistingBuildValidationEnvironment')
         }
 
@@ -4248,6 +4249,7 @@ function Invoke-GitHubBranchAwareSetup {
 
                     if (-not $enableBuildValidation) {
                         $wizardState.BuildValidationEnabled = $false
+                        $wizardState.BuildValidationEnvironmentName = ''
                         $wizardState.BuildValidationEnvironmentConfiguration = $null
                         return
                     }
@@ -4255,6 +4257,9 @@ function Invoke-GitHubBranchAwareSetup {
                     $existingBuildValidationEnvironment = $wizardState.BuildValidationEnvironmentConfiguration
                     $existingBuildValidationEnvironmentUrl = [string](Get-OptionalObjectPropertyValue -InputObject $existingBuildValidationEnvironment -PropertyName 'Url')
                     $existingBuildValidationEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $existingBuildValidationEnvironment -PropertyName 'ShortName')
+                    if ([string]::IsNullOrWhiteSpace($existingBuildValidationEnvironmentName)) {
+                        $existingBuildValidationEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $wizardState -PropertyName 'BuildValidationEnvironmentName')
+                    }
                     $existingBuildValidationEnvironmentCredential = Get-OptionalObjectPropertyValue -InputObject $existingBuildValidationEnvironment -PropertyName 'Credentials'
                     $existingBuildValidationServiceAccountUPN = [string](Get-OptionalObjectPropertyValue -InputObject $existingBuildValidationEnvironment -PropertyName 'ServiceAccountUPN')
 
@@ -4276,6 +4281,8 @@ function Invoke-GitHubBranchAwareSetup {
                         throw 'A GitHub environment name is required for global BUILD validation.'
                     }
 
+                    $wizardState.BuildValidationEnvironmentName = $buildValidationEnvironmentName
+
                     $wizardState.BuildValidationEnvironmentConfiguration = Get-GitHubEnvironmentConfiguration `
                         -EnvironmentName $buildValidationEnvironmentName `
                         -EnvironmentUrl (ConvertTo-NormalizedEnvironmentUrl -Url $selectedBuildEnvironment.Endpoints['WebApplication']) `
@@ -4292,6 +4299,10 @@ function Invoke-GitHubBranchAwareSetup {
                     }
                     if ($wizardState.BuildValidationEnvironmentConfiguration -and $cachedServiceAccounts -notcontains $wizardState.BuildValidationEnvironmentConfiguration.ServiceAccountUPN) {
                         $cachedServiceAccounts += $wizardState.BuildValidationEnvironmentConfiguration.ServiceAccountUPN
+                    }
+
+                    if ($wizardState.BuildValidationEnvironmentConfiguration -and -not [string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName)) {
+                        $wizardState.BuildValidationEnvironmentName = [string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName
                     }
 
                     $wizardState.BuildValidationEnabled = $true
@@ -4374,7 +4385,7 @@ function Invoke-GitHubBranchAwareSetup {
                         'Promotion mode'           = $DeploymentPromotionMode
                         'Configured branches'      = [string]$wizardState.BranchStates.Count
                         'BUILD validation'         = $(if ($wizardState.BuildValidationEnabled) { 'Enabled' } else { 'Disabled' })
-                        'BUILD validation environment' = $(if ($wizardState.BuildValidationEnvironmentConfiguration) { $wizardState.BuildValidationEnvironmentConfiguration.ShortName } else { '<none>' })
+                        'BUILD validation environment' = $(if (-not [string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationEnvironmentName)) { [string]$wizardState.BuildValidationEnvironmentName } elseif ($wizardState.BuildValidationEnvironmentConfiguration) { $wizardState.BuildValidationEnvironmentConfiguration.ShortName } else { '<none>' })
                         'Solution source branch'   = $(if ([string]::IsNullOrWhiteSpace($wizardState.SolutionSourceBranch)) { '<none>' } else { $wizardState.SolutionSourceBranch })
                         'Solutions selected'       = [string]$(if ($wizardState.SolutionResult) { @($wizardState.SolutionResult.Solutions).Count } else { 0 })
                     })
@@ -4464,6 +4475,14 @@ function Invoke-GitHubBranchAwareSetup {
             $publishBranchStates += $removedBranchState
         }
 
+        $buildValidationEnvironmentNameForPublish = ''
+        if (-not [string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationEnvironmentName)) {
+            $buildValidationEnvironmentNameForPublish = [string]$wizardState.BuildValidationEnvironmentName
+        }
+        elseif ($wizardState.BuildValidationEnvironmentConfiguration -and -not [string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName)) {
+            $buildValidationEnvironmentNameForPublish = [string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName
+        }
+
         $defaultBranchDeployWorkflowDefinitions = @()
         foreach ($configuredBranchState in @($wizardState.BranchStates)) {
             $defaultBranchDeployWorkflowDefinitions += [pscustomobject]@{
@@ -4511,7 +4530,7 @@ function Invoke-GitHubBranchAwareSetup {
                         -DeploymentEnvironments @($branchState.DeploymentEnvironments) `
                         -DeployWorkflowBranchDefinitions $deployDefinitionsForBranchPublish `
                         -BuildValidationEnabled ([bool]$wizardState.BuildValidationEnabled) `
-                        -BuildValidationEnvironmentName $(if ($wizardState.BuildValidationEnvironmentConfiguration) { [string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName } else { '' }) `
+                        -BuildValidationEnvironmentName $buildValidationEnvironmentNameForPublish `
                         -SkipDeployWorkflow:$isRemovedBranch
             }
 
@@ -4530,6 +4549,7 @@ function Invoke-GitHubBranchAwareSetup {
             SolutionResult       = $wizardState.SolutionResult
             SolutionSourceBranch = $wizardState.SolutionSourceBranch
             BuildValidationEnabled = [bool]$wizardState.BuildValidationEnabled
+            BuildValidationEnvironmentName = [string]$wizardState.BuildValidationEnvironmentName
             BuildValidationEnvironmentConfiguration = $wizardState.BuildValidationEnvironmentConfiguration
             PublishResults       = @($publishResults)
         }

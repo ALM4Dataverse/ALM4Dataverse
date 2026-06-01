@@ -50,6 +50,9 @@ jobs:
   build:
     runs-on: windows-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
+    environment:
+      name: ${{ inputs.environment-name }}
+      deployment: false
     permissions:
       contents: write  # push git tag
       actions: write   # upload artifacts
