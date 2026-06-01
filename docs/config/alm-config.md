@@ -643,6 +643,27 @@ The baseline and candidate each use the deployment script and configuration
 packaged with their own build. If resolving, downloading, or deploying the
 baseline fails, BUILD fails and does not deploy the candidate.
 
+### Package Deployer Build
+
+Use `buildPackageDeployer` to control Package Deployer package generation during `BUILD`.
+
+```powershell
+buildPackageDeployer = $true
+```
+
+When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeployer.pdpkg.zip` exists in the artifact staging directory:
+
+- If the package zip already exists, it is reused.
+- If the package zip is missing, it is auto-generated via `dotnet publish` from `ALM4Dataverse.PackageDeployer.csproj`.
+- If enabled but the Package Deployer project is missing, the build fails with a clear error.
+
+When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
+
+- If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
+- Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).
+
+Default: `$false`.
+
 ### Solution Check (PAC `solution check`)
 
 `BUILD` can run `pac solution check` against packed solution zip files and fail the build based on a configurable severity threshold.

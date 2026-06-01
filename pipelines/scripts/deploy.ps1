@@ -68,7 +68,79 @@ Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSetti
 $powerPlatformEnvironmentContext = @{}
 Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
 
-Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
+$packageDeployerEnabled = $false
+if ($solutionsConfig.ContainsKey('buildPackageDeployer') -and $null -ne $solutionsConfig.buildPackageDeployer) {
+    $packageDeployerEnabled = [bool]$solutionsConfig.buildPackageDeployer
+}
+
+$insidePackageDeployer = $false
+if (-not [string]::IsNullOrWhiteSpace($env:ALM4DATAVERSE_IN_PACKAGE_DEPLOY)) {
+    $insidePackageDeployer = @('1', 'true', 'yes', 'on') -contains $env:ALM4DATAVERSE_IN_PACKAGE_DEPLOY.Trim().ToLowerInvariant()
+}
+
+$packagePath = Join-Path $ArtifactsPath 'ALM4Dataverse.PackageDeployer.pdpkg.zip'
+
+if ($packageDeployerEnabled -and -not $UseUnmanagedSolutions -and -not $insidePackageDeployer) {
+    if (-not (Test-Path $packagePath -PathType Leaf)) {
+        throw "Package Deployer deploy path is enabled (buildPackageDeployer = `$true), but package '$packagePath' was not found in build artifacts. Ensure build.ps1 generated it before deployment."
+    }
+
+    $pac = Get-Command pac -ErrorAction SilentlyContinue
+    if (-not $pac) {
+        throw 'Power Apps CLI (pac) was not found on PATH.'
+    }
+
+    $settingsEntries = New-Object System.Collections.Generic.List[string]
+
+    Get-ChildItem Env: | Where-Object { $_.Name -like 'DataverseConnRef_*' -or $_.Name -like 'DataverseEnvVar_*' } | ForEach-Object {
+        if (-not [string]::IsNullOrWhiteSpace($_.Value)) {
+            $settingsEntries.Add("$($_.Name)=$($_.Value)")
+        }
+    }
+
+    $serviceAccountKeys = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $null = $serviceAccountKeys.Add('DataverseServiceAccountUpn')
+    foreach ($solutionConfig in $solutionsConfig.solutions) {
+        if ($solutionConfig.PSObject.Properties.Name -contains 'serviceAccountUpnConfigKey' -and -not [string]::IsNullOrWhiteSpace([string]$solutionConfig.serviceAccountUpnConfigKey)) {
+            $null = $serviceAccountKeys.Add(([string]$solutionConfig.serviceAccountUpnConfigKey))
+        }
+    }
+
+    foreach ($serviceAccountKey in $serviceAccountKeys) {
+        $serviceAccountValue = [System.Environment]::GetEnvironmentVariable($serviceAccountKey)
+        if (-not [string]::IsNullOrWhiteSpace($serviceAccountValue)) {
+            $settingsEntries.Add("$serviceAccountKey=$serviceAccountValue")
+        }
+    }
+
+    $pacArguments = @('package', 'deploy', '--package', $packagePath)
+    if ($settingsEntries.Count -gt 0) {
+        $pacArguments += @('--settings', ($settingsEntries -join '|'))
+    }
+
+    Write-Host "##[section]Deploying via Package Deployer package: $packagePath"
+    $packageDeployOutput = @(& $pac.Source @pacArguments 2>&1)
+    foreach ($line in $packageDeployOutput) {
+        Write-Host $line
+    }
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "pac package deploy failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Host "##[section]Deployment completed successfully via Package Deployer package."
+    return
+}
+
+if ($packageDeployerEnabled -and $UseUnmanagedSolutions) {
+    Write-Host "##[section]Package Deployer deployment is enabled, but UseUnmanagedSolutions was requested. Falling back to script-based unmanaged deployment."
+}
+
+if ($packageDeployerEnabled -and $insidePackageDeployer) {
+    Write-Host "##[debug]Detected in-package deployment context. Running script-based deployment steps inside deployment package."
+}
+
+Invoke-Hooks -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }

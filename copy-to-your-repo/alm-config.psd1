@@ -271,6 +271,11 @@
         baselineRelease = ''
     }
 
+    # Build Package Deployer package during BUILD.
+    # When true, build.ps1 generates ALM4Dataverse.PackageDeployer.pdpkg.zip
+    # if it is not already present in the artifact staging directory.
+    # buildPackageDeployer = $true
+
     # PAC solution check settings used by BUILD.
     # Set enabled = $true globally or per-solution to activate checks.
     # Per-solution settings are merged with these global settings.

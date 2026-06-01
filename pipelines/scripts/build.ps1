@@ -1179,28 +1179,48 @@ Write-Host "##[endgroup]"
 
 Write-Host "##[section]Build completed successfully!"
 
-Invoke-Hook -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
+Invoke-Hooks -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }
 
-# Build Package Deployer package if the project exists
-$pdProjectPath = Join-Path $PSScriptRoot ".." ".." "ALM4Dataverse.PackageDeployer" "ALM4Dataverse.PackageDeployer.csproj"
-if (Test-Path $pdProjectPath) {
-    Write-Host "##[section]Building Package Deployer package"
-    $pdProjectPath = Resolve-Path $pdProjectPath | Select-Object -ExpandProperty Path
-    $pdPublishDir = Join-Path $ArtifactStagingDirectory "packagedeployer"
-
-    dotnet publish $pdProjectPath `
-        -c Release `
-        -o $pdPublishDir `
-        "-p:BuildArtifactsPath=$ArtifactStagingDirectory"
-
-    if ($LASTEXITCODE -ne 0) {
-        throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
-    }
-
-    $pdpkgZip = Join-Path $ArtifactStagingDirectory "ALM4Dataverse.PackageDeployer.pdpkg.zip"
-    Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
-    Write-Host "Package Deployer package created: $pdpkgZip"
+# Build Package Deployer package when enabled and artifact is not already present
+$packageDeployerEnabled = $false
+if ($config.ContainsKey('buildPackageDeployer') -and $null -ne $config.buildPackageDeployer) {
+    $packageDeployerEnabled = [bool]$config.buildPackageDeployer
 }
+
+$pdpkgZip = Join-Path $ArtifactStagingDirectory "ALM4Dataverse.PackageDeployer.pdpkg.zip"
+$pdProjectPath = Join-Path $PSScriptRoot ".." ".." "ALM4Dataverse.PackageDeployer" "ALM4Dataverse.PackageDeployer.csproj"
+if ($packageDeployerEnabled) {
+    if (Test-Path $pdpkgZip) {
+        Write-Host "##[section]Package Deployer package already exists: $pdpkgZip"
+    }
+    else {
+        Write-Host "##[section]Building Package Deployer package"
+
+        if (-not (Test-Path $pdProjectPath)) {
+            throw "Package Deployer build is enabled (buildPackageDeployer = `$true), but project was not found at '$pdProjectPath'."
+        }
+
+        $pdProjectPath = Resolve-Path $pdProjectPath | Select-Object -ExpandProperty Path
+        $pdPublishDir = Join-Path $ArtifactStagingDirectory "packagedeployer"
+
+        dotnet publish $pdProjectPath `
+            -c Release `
+            -o $pdPublishDir `
+            "-p:BuildArtifactsPath=$ArtifactStagingDirectory"
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
+        }
+
+        Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
+        Write-Host "Package Deployer package created: $pdpkgZip"
+    }
+}
+else {
+    Write-Host "##[section]Package Deployer build skipped (buildPackageDeployer is false)."
+}
+
+Write-Host "##[section]Build completed successfully!"

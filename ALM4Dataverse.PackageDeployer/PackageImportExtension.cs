@@ -105,6 +105,10 @@ namespace ALM4Dataverse.PackageDeployer
                 PackageLog.Log($"Setting env var from runtime setting: {setting.Key}");
             }
 
+            // Marker consumed by deploy.ps1 to avoid re-entering pac package deploy
+            // when the script is already running inside a deployment package.
+            env["ALM4DATAVERSE_IN_PACKAGE_DEPLOY"] = "true";
+
             // Forward CrmSvc access token so the connect script can use it as a fallback.
             // The Rnwood module's Get-DataverseConnection will use DefaultAzureCredential,
             // which picks up AZURE_* env vars. If those aren't set, having the current

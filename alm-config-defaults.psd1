@@ -47,6 +47,11 @@
         versionCollisionGuard = $true
     }
 
+    # Build Package Deployer package during BUILD.
+    # When enabled, build.ps1 creates ALM4Dataverse.PackageDeployer.pdpkg.zip
+    # if it does not already exist in the artifact staging directory.
+    buildPackageDeployer = $false
+
     # PAC solution check configuration used during BUILD.
     # Set enabled = $true globally or per-solution to activate checks.
     solutionCheck = @{
