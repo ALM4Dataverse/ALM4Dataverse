@@ -2925,16 +2925,25 @@ function Update-AlmConfigInRepoClone {
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][array]$Solutions,
+        [Parameter()][AllowNull()][array]$Solutions,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled,
         [Parameter(Mandatory)][string]$RepoRoot
     )
 
     $configPath = Join-Path $RepoRoot 'alm-config.psd1'
     $templatePath = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'copy-to-your-repo\alm-config.psd1' } else { $null }
-    [void](Set-AlmConfigSolutionsInFile -ConfigPath $configPath -Solutions $Solutions -CreateIfMissing -TemplatePath $templatePath)
+
+    $effectiveSolutions = @()
+    if ($null -ne $Solutions) {
+        $effectiveSolutions = @($Solutions)
+        [void](Set-AlmConfigSolutionsInFile -ConfigPath $configPath -Solutions $effectiveSolutions -CreateIfMissing -TemplatePath $templatePath)
+    }
+    else {
+        Write-Host 'Skipping solution list updates in alm-config.psd1 because solution selection was not run.' -ForegroundColor Yellow
+    }
+
     [void](Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $BuildValidationEnabled -CreateIfMissing -TemplatePath $templatePath)
-    Write-Host "Updated alm-config.psd1 with $($Solutions.Count) solution(s); solutionCheck.enabled=$BuildValidationEnabled."
+    Write-Host "Updated alm-config.psd1 with $($effectiveSolutions.Count) solution(s); solutionCheck.enabled=$BuildValidationEnabled."
 }
 
 function Update-BuildWorkflowInRepoClone {
@@ -3282,7 +3291,7 @@ function Publish-GitHubBranchSetupChanges {
         [Parameter(Mandatory)][string]$SharedWorkflowRepository,
         [Parameter(Mandatory)][string]$SharedWorkflowReference,
         [Parameter(Mandatory)][string]$PromotionMode,
-        [Parameter()][array]$Solutions,
+        [Parameter()][AllowNull()][array]$Solutions,
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][array]$DeployWorkflowBranchDefinitions,
         [Parameter()][bool]$BuildValidationEnabled = $false,
@@ -3377,8 +3386,7 @@ function Publish-GitHubBranchSetupChanges {
             -SharedWorkflowRef $SharedWorkflowReference `
             -SkipDeployWorkflow:$SkipDeployWorkflow
 
-        $effectiveSolutions = if ($Solutions) { @($Solutions) } else { @() }
-        Update-AlmConfigInRepoClone -Solutions $effectiveSolutions -BuildValidationEnabled $BuildValidationEnabled -RepoRoot $RepoRoot
+        Update-AlmConfigInRepoClone -Solutions $Solutions -BuildValidationEnabled $BuildValidationEnabled -RepoRoot $RepoRoot
 
         $buildEnvironmentName = if ($BuildValidationEnabled) { [string]$BuildValidationEnvironmentName } else { '' }
         Update-BuildWorkflowInRepoClone `
