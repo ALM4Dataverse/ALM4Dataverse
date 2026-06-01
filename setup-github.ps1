@@ -3286,7 +3286,7 @@ function Publish-GitHubBranchSetupChanges {
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][array]$DeployWorkflowBranchDefinitions,
         [Parameter()][bool]$BuildValidationEnabled = $false,
-        [Parameter()][string]$BuildValidationEnvironmentName = '',
+        [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = '',
         [Parameter()][switch]$SkipDeployWorkflow
     )
 
