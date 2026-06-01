@@ -336,20 +336,13 @@ jobs:
           "AZURE_FEDERATED_TOKEN_FILE=$tokenPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           Write-Host "Configured AZURE_FEDERATED_TOKEN_FILE for DefaultAzureCredential."
 
-      - name: Connect to Dataverse (optional)
-        if: inputs.environment-name != ''
-        shell: pwsh
-        working-directory: ${{ github.workspace }}/self
-        run: |
-          & "${{ github.workspace }}/alm/pipelines/scripts/installdependencies.ps1"
-          & "${{ github.workspace }}/alm/pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
-
       - name: Install Dependencies and Build
         shell: pwsh
         working-directory: ${{ github.workspace }}/self
         run: |
-          if ('${{ inputs.environment-name }}' -eq '') {
-            & "${{ github.workspace }}/alm/pipelines/scripts/installdependencies.ps1"
+          & "${{ github.workspace }}/alm/pipelines/scripts/installdependencies.ps1"
+          if ('${{ inputs.environment-name }}' -ne '') {
+            & "${{ github.workspace }}/alm/pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
           }
           & "${{ github.workspace }}/alm/pipelines/scripts/build.ps1" `
             -SourceDirectory "${{ github.workspace }}/self" `
