@@ -3025,6 +3025,11 @@ function Update-DeployWorkflowInRepoClone {
 
     $deployFilePath = Join-Path $RepoRoot ".github/workflows/DEPLOY-$Branch.yml"
 
+    $deployDirectory = Split-Path -Parent $deployFilePath
+    if (-not (Test-Path -LiteralPath $deployDirectory)) {
+        New-Item -ItemType Directory -Path $deployDirectory -Force | Out-Null
+    }
+
     if (-not $DeploymentEnvironments -or $DeploymentEnvironments.Count -eq 0) {
         if (Test-Path -LiteralPath $deployFilePath) {
             Remove-Item -LiteralPath $deployFilePath -Force
@@ -3035,10 +3040,6 @@ function Update-DeployWorkflowInRepoClone {
         }
 
         return
-    }
-
-    if (-not (Test-Path -LiteralPath $deployFilePath)) {
-        throw "Deploy workflow file not found: $deployFilePath"
     }
 
     $usesRef = "$SharedWorkflowRepository/.github/workflows/deploy.yml@$SharedWorkflowRef"
@@ -3406,15 +3407,6 @@ function Publish-GitHubBranchSetupChanges {
 
                 if ([string]::IsNullOrWhiteSpace($workflowBranchName)) {
                     continue
-                }
-
-                if ($workflowBranchName -ne $ConfiguredBranch -and $workflowDeploymentEnvironments.Count -gt 0) {
-                    Copy-WorkflowTemplatesToRepo `
-                        -SourceRoot $CopyRoot `
-                        -TargetRoot $RepoRoot `
-                        -Branch $workflowBranchName `
-                        -SharedWorkflowRepository $SharedWorkflowRepository `
-                        -SharedWorkflowRef $SharedWorkflowReference
                 }
 
                 Update-DeployWorkflowInRepoClone `

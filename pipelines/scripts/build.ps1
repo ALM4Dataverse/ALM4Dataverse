@@ -311,8 +311,6 @@ function Invoke-SolutionCheck {
         New-Item -ItemType Directory -Path $solutionCheckRoot -Force | Out-Null
     }
 
-    Initialize-PacAuthentication -Quiet
-
     $maxParallel = 4
     if ($globalSolutionCheck.ContainsKey('maxParallel') -and $null -ne $globalSolutionCheck.maxParallel) {
         $maxParallel = [int]$globalSolutionCheck.maxParallel
