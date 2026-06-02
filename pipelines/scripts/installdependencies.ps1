@@ -430,13 +430,31 @@ function Test-IsWindowsMsiPacLauncher {
 function Get-PacCandidatePaths {
     $candidates = New-Object System.Collections.Generic.List[string]
 
+    $msiDefaultRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI'
+
+    foreach ($candidate in @(
+        (Join-Path $msiDefaultRoot 'pac.cmd'),
+        (Join-Path $msiDefaultRoot 'pac.launcher.exe'),
+        (Join-Path $msiDefaultRoot 'pac.exe')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate) -and -not $candidates.Contains($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+
     foreach ($candidate in @(
         (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.exe'),
         (Join-Path $env:ProgramFiles 'Microsoft Power Platform CLI\pac.exe'),
+        (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.cmd'),
+        (Join-Path $env:ProgramFiles 'Microsoft Power Platform CLI\pac.cmd'),
         (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.exe'),
         (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Power Platform CLI\pac.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.cmd'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Power Platform CLI\pac.cmd'),
         (Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI\pac.exe'),
-        (Join-Path $env:LOCALAPPDATA 'PowerAppsCLI\pac.exe')
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI\pac.cmd'),
+        (Join-Path $env:LOCALAPPDATA 'PowerAppsCLI\pac.exe'),
+        (Join-Path $env:LOCALAPPDATA 'PowerAppsCLI\pac.cmd')
     )) {
         if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate) -and -not $candidates.Contains($candidate)) {
             $candidates.Add($candidate)
