@@ -1,10 +1,14 @@
-<?xml version="1.0" encoding="utf-16"?>
+<?xml version="1.0" encoding="utf-8"?>
 <configdatastorage
     installsampledata="false"
-    waitforsampledatatoinstall="false"
+    waitforsampledatatoinstall="true"
     agentdesktopzipfile=""
     agentdesktopexename=""
     crmmigdataimportfile="">
   <solutions>
   </solutions>
+  <filestoimport>
+  </filestoimport>
+  <filesmapstoimport>
+  </filesmapstoimport>
 </configdatastorage>
