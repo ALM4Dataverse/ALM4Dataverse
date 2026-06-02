@@ -567,6 +567,9 @@ pacCliVersion = '2.13.1'
 - `'prerelease'`: Installs the latest prerelease version
 - Specific version (for example `'2.13.1'`): Installs that exact version
 
+> On Windows runners, ALM4Dataverse uses the PAC MSI install/update path. In that case,
+> prefer `''` or an exact full-framework CLI version (for example `1.50.1`).
+
 For reproducible builds/deployments, pin an explicit version.
 
 > [!NOTE]
@@ -661,6 +664,9 @@ When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using 
 
 - If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
 - Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).
+- Build artifacts are trimmed to the minimum required for package-based deployment: `alm/`, `alm-config.psd1`, `modules/`, `scriptDependencies.lock.json`, and `ALM4Dataverse.PackageDeployer.pdpkg.zip`.
+
+On Windows runners, `installdependencies.ps1` uses the official Power Platform CLI MSI install/update method and then applies the configured `pacCliVersion` using `pac install`.
 
 Default: `$false`.
 

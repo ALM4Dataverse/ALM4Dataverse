@@ -55,22 +55,35 @@ function Get-PacCliInstalledPackageVersion {
     # Missing tools/path or an unmatched listing return ''; strip NuGet build metadata.
     param(
         [Parameter(Mandatory = $true)]
-        [string]$PacToolPath
+        [string]$PacPath
     )
 
-    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-    if (-not $dotnet) {
+    if (-not (Test-Path $PacPath)) {
         return ''
     }
 
-    if (-not (Test-Path $PacToolPath)) {
-        return ''
+    $versionOutput = @(& $PacPath --version 2>&1)
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in $versionOutput) {
+            $lineText = [string]$line
+            if ($lineText -match '(?i)^\s*Version\s*:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?(?:\s|$)') {
+                return $Matches[1]
+            }
+        }
+
+        $versionText = ($versionOutput | ForEach-Object { [string]$_ }) -join "`n"
+        if ($versionText -match '(?im)^\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?\s*$') {
+            return $Matches[1]
+        }
     }
 
-    $toolListOutput = @(& $dotnet.Source tool list --tool-path $PacToolPath 2>&1)
-    foreach ($line in $toolListOutput) {
-        if ($line -match '^\s*microsoft\.powerapps\.cli\.tool\s+(\S+)\s+') {
-            return $Matches[1].Split('+')[0]
+    $helpOutput = @(& $PacPath 2>&1)
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in $helpOutput) {
+            $lineText = [string]$line
+            if ($lineText -match '(?i)^\s*Version\s*:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?(?:\s|$)') {
+                return $Matches[1]
+            }
         }
     }
 
@@ -1153,11 +1166,15 @@ foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     }
 }
 
-$pacToolPath = Join-Path $HOME '.alm4dataverse/tools'
-$resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
+$pacCommand = Get-Command pac -ErrorAction SilentlyContinue
+if (-not $pacCommand) {
+    throw "Unable to resolve PAC CLI executable from PATH. Ensure installdependencies.ps1 has installed PAC before build.ps1 runs."
+}
+
+$resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacPath $pacCommand.Source
 
 if ([string]::IsNullOrWhiteSpace($resolvedPacVersion)) {
-    throw "Unable to resolve installed PAC CLI package version from 'dotnet tool list --tool-path $pacToolPath'. Ensure installdependencies.ps1 has installed Microsoft.PowerApps.CLI.Tool before build.ps1 runs."
+    throw "Unable to resolve installed PAC CLI version from pac output. Ensure installdependencies.ps1 has installed PAC before build.ps1 runs."
 }
 
 $lockConfig.pacCliVersion = $resolvedPacVersion
@@ -1204,20 +1221,51 @@ if ($packageDeployerEnabled) {
         }
 
         $pdProjectPath = Resolve-Path $pdProjectPath | Select-Object -ExpandProperty Path
-        $pdPublishDir = Join-Path $ArtifactStagingDirectory "packagedeployer"
-
-        dotnet publish $pdProjectPath `
-            -c Release `
-            -o $pdPublishDir `
-            "-p:BuildArtifactsPath=$ArtifactStagingDirectory"
-
-        if ($LASTEXITCODE -ne 0) {
-            throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
+        $legacyPublishDir = Join-Path $ArtifactStagingDirectory "packagedeployer"
+        if (Test-Path $legacyPublishDir) {
+            Remove-Item -Path $legacyPublishDir -Recurse -Force
         }
 
-        Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
-        Write-Host "Package Deployer package created: $pdpkgZip"
+        $pdPublishDir = Join-Path ([System.IO.Path]::GetTempPath()) ("alm4dataverse-packagedeployer-" + [guid]::NewGuid().ToString('N'))
+
+        try {
+            dotnet publish $pdProjectPath `
+                -c Release `
+                -o $pdPublishDir `
+                "-p:BuildArtifactsPath=$ArtifactStagingDirectory"
+
+            if ($LASTEXITCODE -ne 0) {
+                throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
+            }
+
+            Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
+            Write-Host "Package Deployer package created: $pdpkgZip"
+        }
+        finally {
+            if (Test-Path $pdPublishDir) {
+                Remove-Item -Path $pdPublishDir -Recurse -Force
+            }
+        }
     }
+
+    Write-Host "##[group]Trimming artifacts for package-based deployment"
+    $requiredArtifactItems = @(
+        'alm',
+        'alm-config.psd1',
+        'modules',
+        'scriptDependencies.lock.json',
+        'ALM4Dataverse.PackageDeployer.pdpkg.zip'
+    )
+
+    Get-ChildItem -Path $ArtifactStagingDirectory -Force | ForEach-Object {
+        if ($requiredArtifactItems -contains $_.Name) {
+            return
+        }
+
+        Write-Host "Removing non-essential artifact item: $($_.FullName)"
+        Remove-Item -Path $_.FullName -Recurse -Force
+    }
+    Write-Host "##[endgroup]"
 }
 else {
     Write-Host "##[section]Package Deployer build skipped (buildPackageDeployer is false)."
