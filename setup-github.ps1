@@ -4387,7 +4387,7 @@ function Publish-GitHubBranchSetupChange {
             -RepoRoot $RepoRoot `
             -SharedWorkflowRepository $SharedWorkflowRepository `
             -SharedWorkflowReference $SharedWorkflowReference `
-            -BuildEnvironmentName $buildEnvironmentName `
+            -BuildEnvironmentName:$buildEnvironmentName `
             -BuildValidationEnabled $BuildValidationEnabled
 
         if (-not $SkipDeployWorkflow) {

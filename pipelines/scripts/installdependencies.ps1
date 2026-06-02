@@ -266,7 +266,9 @@ if (Test-Path $lockFile) {
 
 # If bundled modules directory exists (self-contained/offline mode), use those directly
 $bundledModulesDir = Join-Path (Get-Location) 'modules'
+$usingBundledModules = $false
 if (Test-Path $bundledModulesDir) {
+    $usingBundledModules = $true
     Write-Host "Using bundled modules from $bundledModulesDir"
     $env:PSModulePath = "$bundledModulesDir;$env:PSModulePath"
     foreach ($module in $config.scriptDependencies.Keys) {
@@ -274,11 +276,9 @@ if (Test-Path $bundledModulesDir) {
         $loadedModule = Get-Module -Name $module
         Write-Host "Loaded bundled $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
     }
-    Write-Host "Dependencies loaded from bundled modules"
-    Write-Host "##[endgroup]"
-    return
 }
 
+if (-not $usingBundledModules) {
 foreach ($module in $config.scriptDependencies.Keys) {
 
     $version = $config.scriptDependencies[$module]
@@ -321,6 +321,11 @@ foreach ($module in $config.scriptDependencies.Keys) {
 
     $loadedModule = Get-Module -Name $module
     Write-Host "Loaded $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
+}
+}
+
+if ($usingBundledModules) {
+    Write-Host "Dependencies loaded from bundled modules"
 }
 
 function Get-PacCliInstalledPackageVersion {
