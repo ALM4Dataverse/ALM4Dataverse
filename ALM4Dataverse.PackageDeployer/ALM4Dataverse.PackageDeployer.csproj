@@ -17,6 +17,28 @@
     <Reference Include="System.ComponentModel.Composition" />
   </ItemGroup>
 
+  <Target Name="CopyPackageMetadataToBuildOutput" AfterTargets="Build">
+    <Copy SourceFiles="PkgAssets\ImportConfig.xml"
+          DestinationFiles="$(TargetDir)ImportConfig.xml"
+          SkipUnchangedFiles="true"
+          Condition="Exists('PkgAssets\ImportConfig.xml')" />
+    <Copy SourceFiles="PkgAssets\manifest.ppkg.json"
+          DestinationFiles="$(TargetDir)manifest.ppkg.json"
+          SkipUnchangedFiles="true"
+          Condition="Exists('PkgAssets\manifest.ppkg.json')" />
+  </Target>
+
+  <Target Name="CopyPackageMetadataToPublishOutput" AfterTargets="Publish">
+    <Copy SourceFiles="PkgAssets\ImportConfig.xml"
+          DestinationFiles="$(PublishDir)ImportConfig.xml"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != '' and Exists('PkgAssets\ImportConfig.xml')" />
+    <Copy SourceFiles="PkgAssets\manifest.ppkg.json"
+          DestinationFiles="$(PublishDir)manifest.ppkg.json"
+          SkipUnchangedFiles="true"
+          Condition="'$(PublishDir)' != '' and Exists('PkgAssets\manifest.ppkg.json')" />
+  </Target>
+
   <!-- Static PkgAssets content (ImportConfig.xml, manifest.ppkg.json) -->
   <ItemGroup>
     <None Include="PkgAssets\**\*">

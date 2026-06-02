@@ -1258,6 +1258,23 @@ if ($packageDeployerEnabled) {
             }
 
             Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
+
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $packageZip = [System.IO.Compression.ZipFile]::OpenRead($pdpkgZip)
+            try {
+                $zipEntryNames = @($packageZip.Entries | ForEach-Object { $_.FullName })
+                if (-not ($zipEntryNames -contains 'ImportConfig.xml')) {
+                    throw "Package Deployer package '$pdpkgZip' is missing ImportConfig.xml at the archive root."
+                }
+
+                if (-not ($zipEntryNames -contains 'manifest.ppkg.json')) {
+                    throw "Package Deployer package '$pdpkgZip' is missing manifest.ppkg.json at the archive root."
+                }
+            }
+            finally {
+                $packageZip.Dispose()
+            }
+
             Write-Host "Package Deployer package created: $pdpkgZip"
         }
         finally {
