@@ -134,14 +134,19 @@ function Parse-SolutionCheckSeverityCounts {
 
     foreach ($severity in @('Critical', 'High', 'Medium', 'Low', 'Informational')) {
         $escaped = [regex]::Escape($severity)
-        $versionOutput = @(& $PacPath --version 2>&1)
-        $versionText = ($versionOutput | ForEach-Object { [string]$_ }) -join "`n"
-        if ($versionText -match '(?im)^\s*Version\s*:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?\b') {
-            return $Matches[1]
+        $matches = [regex]::Matches($ConsoleText, "(?im)\b$escaped\b(?:\s+issues?)?\s*[:=]\s*(\d+)\b")
+        foreach ($match in $matches) {
+            $counts[$severity] += [int]$match.Groups[1].Value
         }
-        if ($versionText -match '(?im)^\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?\s*$') {
-            return $Matches[1]
-        }
+    }
+
+    return $counts
+}
+
+function Resolve-SolutionCheckExcludedFiles {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SourceDirectory,
 
         [Parameter(Mandatory = $true)]
         [string]$SolutionName,
