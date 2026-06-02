@@ -90,6 +90,12 @@ if ($packageDeployerEnabled -and -not $UseUnmanagedSolutions -and -not $insidePa
         throw 'Power Apps CLI (pac) was not found on PATH.'
     }
 
+    $targetEnvironment = [string]$env:DATAVERSE_URL
+    if ([string]::IsNullOrWhiteSpace($targetEnvironment)) {
+        throw "DATAVERSE_URL is required for package deployment. pac package deploy needs an explicit --environment value to avoid relying on profile defaults."
+    }
+    $targetEnvironment = $targetEnvironment.Trim()
+
     $settingsEntries = New-Object System.Collections.Generic.List[string]
 
     Get-ChildItem Env: | Where-Object { $_.Name -like 'DataverseConnRef_*' -or $_.Name -like 'DataverseEnvVar_*' } | ForEach-Object {
@@ -113,19 +119,26 @@ if ($packageDeployerEnabled -and -not $UseUnmanagedSolutions -and -not $insidePa
         }
     }
 
-    $pacArguments = @('package', 'deploy', '--package', $packagePath)
+    $pacArguments = @('package', 'deploy', '--package', $packagePath, '--environment', $targetEnvironment)
     if ($settingsEntries.Count -gt 0) {
         $pacArguments += @('--settings', ($settingsEntries -join '|'))
     }
 
     Write-Host "##[section]Deploying via Package Deployer package: $packagePath"
+    Write-Host "##[debug]Package deploy environment: $targetEnvironment"
     $packageDeployOutput = @(& $pac.Source @pacArguments 2>&1)
+    $packageDeployExitCode = $LASTEXITCODE
     foreach ($line in $packageDeployOutput) {
         Write-Host $line
     }
+    $packageDeployText = ($packageDeployOutput | ForEach-Object { [string]$_ }) -join "`n"
 
-    if ($LASTEXITCODE -ne 0) {
-        throw "pac package deploy failed with exit code $LASTEXITCODE"
+    if ($packageDeployExitCode -ne 0) {
+        throw "pac package deploy failed with exit code $packageDeployExitCode`n$packageDeployText"
+    }
+
+    if ($packageDeployText -match '(?im)^\s*error\s*:') {
+        throw "pac package deploy reported an error in output despite zero exit code.`n$packageDeployText"
     }
 
     Write-Host "##[section]Deployment completed successfully via Package Deployer package."
