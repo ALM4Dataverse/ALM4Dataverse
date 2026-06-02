@@ -686,6 +686,25 @@ if ($packageDeployerEnabled) {
                 throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
             }
 
+            $rootImportConfigPath = Join-Path $pdPublishDir 'ImportConfig.xml'
+            if (-not (Test-Path $rootImportConfigPath -PathType Leaf)) {
+                $pkgAssetsImportConfigPath = Join-Path $pdPublishDir 'PkgAssets' 'ImportConfig.xml'
+                if (Test-Path $pkgAssetsImportConfigPath -PathType Leaf) {
+                    Copy-Item -Path $pkgAssetsImportConfigPath -Destination $rootImportConfigPath -Force
+                }
+                else {
+                    throw "Package Deployer publish output is missing ImportConfig.xml. Expected '$rootImportConfigPath' or '$pkgAssetsImportConfigPath'."
+                }
+            }
+
+            $rootManifestPath = Join-Path $pdPublishDir 'manifest.ppkg.json'
+            if (-not (Test-Path $rootManifestPath -PathType Leaf)) {
+                $pkgAssetsManifestPath = Join-Path $pdPublishDir 'PkgAssets' 'manifest.ppkg.json'
+                if (Test-Path $pkgAssetsManifestPath -PathType Leaf) {
+                    Copy-Item -Path $pkgAssetsManifestPath -Destination $rootManifestPath -Force
+                }
+            }
+
             Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
             Write-Host "Package Deployer package created: $pdpkgZip"
         }
