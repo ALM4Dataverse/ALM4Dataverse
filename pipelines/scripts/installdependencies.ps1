@@ -431,9 +431,9 @@ if (-not (Test-Path $pacToolPath)) {
     New-Item -ItemType Directory -Path $pacToolPath -Force | Out-Null
 }
 
-$isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+$isWindowsOS = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 
-if ($isWindows) {
+if ($isWindowsOS) {
     Write-Host "Installing PAC CLI on Windows using MSI method with version specifier: '$pacCliVersion'"
 
     $pacPath = Resolve-PacExecutablePath
@@ -518,7 +518,7 @@ else {
         $env:PATH = "$pacToolPath$pathSeparator$env:PATH"
     }
 
-    $pacExecutableName = if ($isWindows) { 'pac.exe' } else { 'pac' }
+    $pacExecutableName = if ($isWindowsOS) { 'pac.exe' } else { 'pac' }
     $pacExePath = Join-Path $pacToolPath $pacExecutableName
     if (Test-Path $pacExePath) {
         & dotnet @updateArgs
