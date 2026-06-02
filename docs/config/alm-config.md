@@ -134,6 +134,9 @@ pacCliVersion = '2.7.4'
 - `'prerelease'`: Installs the latest prerelease version
 - Specific version (for example `'2.7.4'`): Installs that exact version
 
+> On Windows runners, ALM4Dataverse uses the PAC MSI install/update path. In that case,
+> prefer `''` or an exact full-framework CLI version (for example `1.50.1`).
+
 For reproducible builds/deployments, pin an explicit version.
 
 > **Azure DevOps note**
@@ -193,6 +196,30 @@ If a deployment job times out, the solution import may still be running inside D
 4. Once the import has completed (successfully or not), it is safe to retry the pipeline stage.
 
 > **Future improvement:** Automating the detection of an in-progress import and waiting for it to complete is a planned enhancement.
+
+### Package Deployer Build
+
+Use `buildPackageDeployer` to control Package Deployer package generation during `BUILD`.
+
+```powershell
+buildPackageDeployer = $true
+```
+
+When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeployer.pdpkg.zip` exists in the artifact staging directory:
+
+- If the package zip already exists, it is reused.
+- If the package zip is missing, it is auto-generated via `dotnet publish` from `ALM4Dataverse.PackageDeployer.csproj`.
+- If enabled but the Package Deployer project is missing, the build fails with a clear error.
+
+When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
+
+- If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
+- Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).
+- Build artifacts are trimmed to the minimum required for package-based deployment: `alm/`, `alm-config.psd1`, `modules/`, `scriptDependencies.lock.json`, and `ALM4Dataverse.PackageDeployer.pdpkg.zip`.
+
+On Windows runners, `installdependencies.ps1` uses the official Power Platform CLI MSI install/update method and then applies the configured `pacCliVersion` using `pac install`.
+
+Default: `$false`.
 
 ### Solution Check (PAC `solution check`)
 

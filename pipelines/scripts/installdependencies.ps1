@@ -30,6 +30,21 @@ if (Test-Path $lockFile) {
     Write-Host "Using pinned versions from lock file"
 }
 
+# If bundled modules directory exists (self-contained/offline mode), use those directly
+$bundledModulesDir = Join-Path (Get-Location) 'modules'
+$usingBundledModules = $false
+if (Test-Path $bundledModulesDir) {
+    $usingBundledModules = $true
+    Write-Host "Using bundled modules from $bundledModulesDir"
+    $env:PSModulePath = "$bundledModulesDir;$env:PSModulePath"
+    foreach ($module in $config.scriptDependencies.Keys) {
+        Import-Module $module -ErrorAction Stop
+        $loadedModule = Get-Module -Name $module
+        Write-Host "Loaded bundled $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
+    }
+}
+
+if (-not $usingBundledModules) {
 foreach ($module in $config.scriptDependencies.Keys) {
 
     $version = $config.scriptDependencies[$module]
@@ -71,26 +86,44 @@ foreach ($module in $config.scriptDependencies.Keys) {
     $loadedModule = Get-Module -Name $module
     Write-Host "Loaded $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
 }
+}
+
+if ($usingBundledModules) {
+    Write-Host "Dependencies loaded from bundled modules"
+}
 
 function Get-PacCliInstalledPackageVersion {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$PacToolPath
+        [string]$PacPath
     )
 
-    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-    if (-not $dotnet) {
+    if (-not (Test-Path $PacPath)) {
         return ''
     }
 
-    if (-not (Test-Path $PacToolPath)) {
-        return ''
+    $versionOutput = @(& $PacPath --version 2>&1)
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in $versionOutput) {
+            $lineText = [string]$line
+            if ($lineText -match '(?i)^\s*Version\s*:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?(?:\s|$)') {
+                return $Matches[1]
+            }
+        }
+
+        $versionText = ($versionOutput | ForEach-Object { [string]$_ }) -join "`n"
+        if ($versionText -match '(?im)^\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?\s*$') {
+            return $Matches[1]
+        }
     }
 
-    $toolListOutput = @(& $dotnet.Source tool list --tool-path $PacToolPath 2>&1)
-    foreach ($line in $toolListOutput) {
-        if ($line -match '^\s*microsoft\.powerapps\.cli\.tool\s+(\S+)\s+') {
-            return $Matches[1].Split('+')[0]
+    $helpOutput = @(& $PacPath 2>&1)
+    if ($LASTEXITCODE -eq 0) {
+        foreach ($line in $helpOutput) {
+            $lineText = [string]$line
+            if ($lineText -match '(?i)^\s*Version\s*:\s*(\d+\.\d+\.\d+(?:-[0-9A-Za-z][0-9A-Za-z\.-]*)?)(?:\+[0-9A-Za-z\.-]+)?(?:\s|$)') {
+                return $Matches[1]
+            }
         }
     }
 
@@ -116,7 +149,99 @@ function Resolve-PacCliVersionSpecifier {
         return $trimmed
     }
 
-    throw "pacCliVersion '$RawValue' is invalid. Use '', 'prerelease', or an exact NuGet version like '2.7.4' or '2.7.4-preview.1'."
+    throw "pacCliVersion '$RawValue' is invalid. Use '', 'prerelease', or an exact CLI version like '1.50.1' or '2.7.4-preview.1'."
+}
+
+function Test-IsWindowsMsiPacLauncher {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PacPath
+    )
+
+    if (-not (Test-Path $PacPath)) {
+        return $false
+    }
+
+    $installHelpOutput = @(& $PacPath install --help 2>&1)
+    $installHelpText = ($installHelpOutput | ForEach-Object { [string]$_ }) -join "`n"
+    if ($installHelpText -match '(?im)not a valid command|not understood in this context') {
+        return $false
+    }
+
+    $bannerOutput = @(& $PacPath 2>&1)
+    $bannerText = ($bannerOutput | ForEach-Object { [string]$_ }) -join "`n"
+    if ($bannerText -match '(?im)\.NET\s+Framework') {
+        return $true
+    }
+
+    if ($installHelpText -match '(?im)\binstall\s+latest\b|\bmanage\s+versions\b') {
+        return $true
+    }
+
+    return $false
+}
+
+function Get-PacCandidatePaths {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    $msiDefaultRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI'
+
+    foreach ($candidate in @(
+        (Join-Path $msiDefaultRoot 'pac.cmd'),
+        (Join-Path $msiDefaultRoot 'pac.launcher.exe'),
+        (Join-Path $msiDefaultRoot 'pac.exe')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate) -and -not $candidates.Contains($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+
+    foreach ($candidate in @(
+        (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft Power Platform CLI\pac.exe'),
+        (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.cmd'),
+        (Join-Path $env:ProgramFiles 'Microsoft Power Platform CLI\pac.cmd'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Power Platform CLI\pac.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.cmd'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Power Platform CLI\pac.cmd'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI\pac.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI\pac.cmd'),
+        (Join-Path $env:LOCALAPPDATA 'PowerAppsCLI\pac.exe'),
+        (Join-Path $env:LOCALAPPDATA 'PowerAppsCLI\pac.cmd')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate) -and -not $candidates.Contains($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+
+    $pacCommand = Get-Command pac -ErrorAction SilentlyContinue
+    if ($pacCommand -and -not [string]::IsNullOrWhiteSpace($pacCommand.Source) -and -not $candidates.Contains($pacCommand.Source)) {
+        $candidates.Add($pacCommand.Source)
+    }
+
+    $wherePac = Get-Command where.exe -ErrorAction SilentlyContinue
+    if ($wherePac) {
+        $whereOutput = @(& $wherePac.Source pac 2>$null)
+        foreach ($line in $whereOutput) {
+            $path = ([string]$line).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path) -and -not $candidates.Contains($path)) {
+                $candidates.Add($path)
+            }
+        }
+    }
+
+    return @($candidates.ToArray())
+}
+
+function Resolve-PacWindowsMsiExecutablePath {
+    foreach ($candidate in (Get-PacCandidatePaths)) {
+        if (Test-IsWindowsMsiPacLauncher -PacPath $candidate) {
+            return $candidate
+        }
+    }
+
+    return ''
 }
 
 $pacCliVersion = ''
@@ -126,69 +251,126 @@ if ($config.ContainsKey('pacCliVersion') -and $null -ne $config.pacCliVersion) {
 
 $pacCliVersion = Resolve-PacCliVersionSpecifier -RawValue $pacCliVersion
 
-$pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
-if (-not (Test-Path $pacToolPath)) {
-    New-Item -ItemType Directory -Path $pacToolPath -Force | Out-Null
-}
+$isWindowsOS = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 
-$installArgs = @('tool', 'install', 'Microsoft.PowerApps.CLI.Tool', '--tool-path', $pacToolPath)
-$updateArgs = @('tool', 'update', 'Microsoft.PowerApps.CLI.Tool', '--tool-path', $pacToolPath)
+if ($isWindowsOS) {
+    Write-Host "Installing PAC CLI on Windows using MSI method with version specifier: '$pacCliVersion'"
 
-if ($pacCliVersion -eq 'prerelease') {
-    $installArgs += '--prerelease'
-    $updateArgs += '--prerelease'
-}
-elseif (-not [string]::IsNullOrWhiteSpace($pacCliVersion)) {
-    $installArgs += @('--version', $pacCliVersion)
-    $updateArgs += @('--version', $pacCliVersion)
-}
+    $msiPath = Join-Path ([System.IO.Path]::GetTempPath()) "powerapps-cli-1.0.msi"
+    Invoke-WebRequest -Uri 'https://aka.ms/PowerAppsCLI' -OutFile $msiPath
 
-Write-Host "Installing PAC CLI with version specifier: '$pacCliVersion'"
-
-$dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
-if (-not $dotnet) {
-    throw "dotnet command not found in PATH. dotnet is required to install PAC CLI."
-}
-
-$pacExePath = Join-Path $pacToolPath 'pac.exe'
-if (Test-Path $pacExePath) {
-    & dotnet @updateArgs
-    if (-not $?) {
-        Write-Host "PAC CLI update failed. Reinstalling..."
-        & dotnet tool uninstall Microsoft.PowerApps.CLI.Tool --tool-path $pacToolPath | Out-Null
-        & dotnet @installArgs
+    $msiArguments = @('/i', "`"$msiPath`"", '/qn', '/norestart')
+    $msiProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArguments -Wait -PassThru
+    if ($msiProcess.ExitCode -ne 0) {
+        throw "Power Platform CLI MSI installation failed with exit code $($msiProcess.ExitCode)."
     }
+
+    $pacPath = Resolve-PacWindowsMsiExecutablePath
+    if ([string]::IsNullOrWhiteSpace($pacPath)) {
+        $known = Get-PacCandidatePaths
+        $knownText = if ($known.Count -gt 0) { $known -join ', ' } else { '<none>' }
+        throw "Power Platform CLI MSI installation completed but MSI launcher pac.exe could not be resolved. PAC candidates found: $knownText"
+    }
+
+    $pacDirectory = Split-Path -Parent $pacPath
+    if (-not (($env:PATH -split ';') -contains $pacDirectory)) {
+        $env:PATH = "$pacDirectory;$env:PATH"
+    }
+    if ($env:GITHUB_PATH) {
+        $pacDirectory | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+    }
+    if ($env:TF_BUILD -eq 'True') {
+        Write-Host "##vso[task.prependpath]$pacDirectory"
+    }
+
+    if ($pacCliVersion -eq 'prerelease') {
+        throw "pacCliVersion 'prerelease' is not supported with Windows MSI installation. Use '' (latest) or an exact version."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($pacCliVersion)) {
+        & $pacPath install latest
+    }
+    else {
+        & $pacPath install $pacCliVersion
+    }
+
+    if (-not $?) {
+        throw "Failed to install PAC CLI version '$pacCliVersion' via Windows MSI method."
+    }
+
+    $pacVersion = Get-PacCliInstalledPackageVersion -PacPath $pacPath
+    if ([string]::IsNullOrWhiteSpace($pacVersion)) {
+        throw "PAC CLI installation completed but the installed version could not be resolved from pac output."
+    }
+
+    Write-Host "Installed PAC CLI version $pacVersion"
 }
 else {
-    & dotnet @installArgs
-}
+    $pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+    if (-not (Test-Path $pacToolPath)) {
+        New-Item -ItemType Directory -Path $pacToolPath -Force | Out-Null
+    }
 
-if (-not $?) {
-    throw "Failed to install PAC CLI."
-}
+    $installArgs = @('tool', 'install', 'Microsoft.PowerApps.CLI.Tool', '--tool-path', $pacToolPath)
+    $updateArgs = @('tool', 'update', 'Microsoft.PowerApps.CLI.Tool', '--tool-path', $pacToolPath)
 
-if (-not (($env:PATH -split ';') -contains $pacToolPath)) {
-    $env:PATH = "$pacToolPath;$env:PATH"
-}
+    if ($pacCliVersion -eq 'prerelease') {
+        $installArgs += '--prerelease'
+        $updateArgs += '--prerelease'
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($pacCliVersion)) {
+        $installArgs += @('--version', $pacCliVersion)
+        $updateArgs += @('--version', $pacCliVersion)
+    }
 
-if ($env:GITHUB_PATH) {
-    $pacToolPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-}
+    Write-Host "Installing PAC CLI with version specifier: '$pacCliVersion'"
 
-if ($env:TF_BUILD -eq 'True') {
-    Write-Host "##vso[task.prependpath]$pacToolPath"
-}
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) {
+        throw "dotnet command not found in PATH. dotnet is required to install PAC CLI."
+    }
 
-if (-not (Test-Path $pacExePath)) {
-    throw "PAC CLI installation completed but pac.exe was not found at $pacExePath"
-}
+    $pacExePath = Join-Path $pacToolPath 'pac.exe'
+    if (Test-Path $pacExePath) {
+        & dotnet @updateArgs
+        if (-not $?) {
+            Write-Host "PAC CLI update failed. Reinstalling..."
+            & dotnet tool uninstall Microsoft.PowerApps.CLI.Tool --tool-path $pacToolPath | Out-Null
+            & dotnet @installArgs
+        }
+    }
+    else {
+        & dotnet @installArgs
+    }
 
-$pacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
+    if (-not $?) {
+        throw "Failed to install PAC CLI."
+    }
 
-if ([string]::IsNullOrWhiteSpace($pacVersion)) {
-    throw "PAC CLI installation completed but the installed package version could not be resolved from 'dotnet tool list --tool-path $pacToolPath'."
+    if (-not (($env:PATH -split ';') -contains $pacToolPath)) {
+        $env:PATH = "$pacToolPath;$env:PATH"
+    }
+
+    if ($env:GITHUB_PATH) {
+        $pacToolPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+    }
+
+    if ($env:TF_BUILD -eq 'True') {
+        Write-Host "##vso[task.prependpath]$pacToolPath"
+    }
+
+    if (-not (Test-Path $pacExePath)) {
+        throw "PAC CLI installation completed but pac.exe was not found at $pacExePath"
+    }
+
+    $pacVersion = Get-PacCliInstalledPackageVersion -PacPath $pacExePath
+
+    if ([string]::IsNullOrWhiteSpace($pacVersion)) {
+        throw "PAC CLI installation completed but the installed version could not be resolved from pac output."
+    }
+
+    Write-Host "Installed PAC CLI version $pacVersion"
 }
-Write-Host "Installed PAC CLI version $pacVersion"
 
 Write-Host "Dependencies Installed"
 Write-Host "##[endgroup]"

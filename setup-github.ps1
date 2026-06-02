@@ -2952,7 +2952,7 @@ function Update-BuildWorkflowInRepoClone {
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$SharedWorkflowRepository,
         [Parameter(Mandatory)][string]$SharedWorkflowReference,
-        [Parameter(Mandatory)][string]$BuildEnvironmentName,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$BuildEnvironmentName,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled
     )
 
@@ -3384,7 +3384,7 @@ function Publish-GitHubBranchSetupChanges {
             -RepoRoot $RepoRoot `
             -SharedWorkflowRepository $SharedWorkflowRepository `
             -SharedWorkflowReference $SharedWorkflowReference `
-            -BuildEnvironmentName $buildEnvironmentName `
+            -BuildEnvironmentName:$buildEnvironmentName `
             -BuildValidationEnabled $BuildValidationEnabled
 
         if (-not $SkipDeployWorkflow) {

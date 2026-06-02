@@ -5,11 +5,17 @@
 
     # Power Apps CLI version used by pipeline scripts.
     # Supports: '' (latest stable), 'prerelease', or an exact version.
+    # Note: On Windows MSI installs, use '' or an exact full-framework CLI version (for example 1.50.1).
     pacCliVersion = '2.7.4'
 
     # Timeout in seconds for each solution import operation.
     # Increase this value if solution imports time out in large or complex environments.
     importTimeoutSeconds = 10800
+
+    # Build Package Deployer package during BUILD.
+    # When enabled, build.ps1 creates ALM4Dataverse.PackageDeployer.pdpkg.zip
+    # if it does not already exist in the artifact staging directory.
+    buildPackageDeployer = $false
 
     # PAC solution check configuration used during BUILD.
     # Set enabled = $true globally or per-solution to activate checks.

@@ -93,7 +93,6 @@ function Get-AlmConfig {
         if (-not $pacCommand) {
             throw "Power Apps CLI (pac) is not available on PATH. Ensure installdependencies.ps1 has run in this job before calling scripts that require PAC authentication."
         }
-
         $pacPath = $pacCommand.Source
 
         Write-Host "##[group]Authenticating Power Apps CLI using managed identity / Azure identity context"
