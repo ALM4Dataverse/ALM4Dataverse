@@ -180,9 +180,9 @@ if ($config.ContainsKey('pacCliVersion') -and $null -ne $config.pacCliVersion) {
 
 $pacCliVersion = Resolve-PacCliVersionSpecifier -RawValue $pacCliVersion
 
-$isWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+$isWindowsOS = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
 
-if ($isWindows) {
+if ($isWindowsOS) {
     Write-Host "Installing PAC CLI on Windows using MSI method with version specifier: '$pacCliVersion'"
 
     $pacPath = Resolve-PacExecutablePath
