@@ -398,14 +398,73 @@ function Resolve-PacCliVersionSpecifier {
     throw "pacCliVersion '$RawValue' is invalid. Use '', 'prerelease', or an exact CLI version like '1.50.1' or '2.7.4-preview.1'."
 }
 
-function Resolve-PacWindowsMsiExecutablePath {
-    $candidatePaths = @(
-        (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.exe'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.exe')
+function Test-IsWindowsMsiPacLauncher {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$PacPath
     )
 
-    foreach ($candidate in $candidatePaths) {
-        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+    if (-not (Test-Path $PacPath)) {
+        return $false
+    }
+
+    $installHelpOutput = @(& $PacPath install --help 2>&1)
+    $installHelpText = ($installHelpOutput | ForEach-Object { [string]$_ }) -join "`n"
+    if ($installHelpText -match '(?im)not a valid command|not understood in this context') {
+        return $false
+    }
+
+    $bannerOutput = @(& $PacPath 2>&1)
+    $bannerText = ($bannerOutput | ForEach-Object { [string]$_ }) -join "`n"
+    if ($bannerText -match '(?im)\.NET\s+Framework') {
+        return $true
+    }
+
+    if ($installHelpText -match '(?im)\binstall\s+latest\b|\bmanage\s+versions\b') {
+        return $true
+    }
+
+    return $false
+}
+
+function Get-PacCandidatePaths {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    foreach ($candidate in @(
+        (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft Power Platform CLI\pac.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Power Platform CLI\pac.exe'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI\pac.exe'),
+        (Join-Path $env:LOCALAPPDATA 'PowerAppsCLI\pac.exe')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate) -and -not $candidates.Contains($candidate)) {
+            $candidates.Add($candidate)
+        }
+    }
+
+    $pacCommand = Get-Command pac -ErrorAction SilentlyContinue
+    if ($pacCommand -and -not [string]::IsNullOrWhiteSpace($pacCommand.Source) -and -not $candidates.Contains($pacCommand.Source)) {
+        $candidates.Add($pacCommand.Source)
+    }
+
+    $wherePac = Get-Command where.exe -ErrorAction SilentlyContinue
+    if ($wherePac) {
+        $whereOutput = @(& $wherePac.Source pac 2>$null)
+        foreach ($line in $whereOutput) {
+            $path = ([string]$line).Trim()
+            if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path) -and -not $candidates.Contains($path)) {
+                $candidates.Add($path)
+            }
+        }
+    }
+
+    return @($candidates.ToArray())
+}
+
+function Resolve-PacWindowsMsiExecutablePath {
+    foreach ($candidate in (Get-PacCandidatePaths)) {
+        if (Test-IsWindowsMsiPacLauncher -PacPath $candidate) {
             return $candidate
         }
     }
@@ -441,7 +500,9 @@ if ($isWindowsOS) {
 
     $pacPath = Resolve-PacWindowsMsiExecutablePath
     if ([string]::IsNullOrWhiteSpace($pacPath)) {
-        throw "Power Platform CLI MSI installation completed but pac.exe could not be resolved in the MSI install location."
+        $known = Get-PacCandidatePaths
+        $knownText = if ($known.Count -gt 0) { $known -join ', ' } else { '<none>' }
+        throw "Power Platform CLI MSI installation completed but MSI launcher pac.exe could not be resolved. PAC candidates found: $knownText"
     }
 
     $pacDirectory = Split-Path -Parent $pacPath
