@@ -398,16 +398,10 @@ function Resolve-PacCliVersionSpecifier {
     throw "pacCliVersion '$RawValue' is invalid. Use '', 'prerelease', or an exact CLI version like '1.50.1' or '2.7.4-preview.1'."
 }
 
-function Resolve-PacExecutablePath {
-    $pacCommand = Get-Command pac -ErrorAction SilentlyContinue
-    if ($pacCommand) {
-        return $pacCommand.Source
-    }
-
+function Resolve-PacWindowsMsiExecutablePath {
     $candidatePaths = @(
         (Join-Path $env:ProgramFiles 'Power Platform CLI\pac.exe'),
-        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.exe'),
-        (Join-Path $HOME '.alm4dataverse\tools\pac.exe')
+        (Join-Path ${env:ProgramFiles(x86)} 'Power Platform CLI\pac.exe')
     )
 
     foreach ($candidate in $candidatePaths) {
@@ -436,21 +430,18 @@ $isWindowsOS = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform
 if ($isWindowsOS) {
     Write-Host "Installing PAC CLI on Windows using MSI method with version specifier: '$pacCliVersion'"
 
-    $pacPath = Resolve-PacExecutablePath
+    $msiPath = Join-Path ([System.IO.Path]::GetTempPath()) "powerapps-cli-1.0.msi"
+    Invoke-WebRequest -Uri 'https://aka.ms/PowerAppsCLI' -OutFile $msiPath
+
+    $msiArguments = @('/i', "`"$msiPath`"", '/qn', '/norestart')
+    $msiProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArguments -Wait -PassThru
+    if ($msiProcess.ExitCode -ne 0) {
+        throw "Power Platform CLI MSI installation failed with exit code $($msiProcess.ExitCode)."
+    }
+
+    $pacPath = Resolve-PacWindowsMsiExecutablePath
     if ([string]::IsNullOrWhiteSpace($pacPath)) {
-        $msiPath = Join-Path ([System.IO.Path]::GetTempPath()) "powerapps-cli-1.0.msi"
-        Invoke-WebRequest -Uri 'https://aka.ms/PowerAppsCLI' -OutFile $msiPath
-
-        $msiArguments = @('/i', "`"$msiPath`"", '/qn', '/norestart')
-        $msiProcess = Start-Process -FilePath 'msiexec.exe' -ArgumentList $msiArguments -Wait -PassThru
-        if ($msiProcess.ExitCode -ne 0) {
-            throw "Power Platform CLI MSI installation failed with exit code $($msiProcess.ExitCode)."
-        }
-
-        $pacPath = Resolve-PacExecutablePath
-        if ([string]::IsNullOrWhiteSpace($pacPath)) {
-            throw "Power Platform CLI MSI installation completed but pac.exe could not be resolved on PATH or known install locations."
-        }
+        throw "Power Platform CLI MSI installation completed but pac.exe could not be resolved in the MSI install location."
     }
 
     $pacDirectory = Split-Path -Parent $pacPath
