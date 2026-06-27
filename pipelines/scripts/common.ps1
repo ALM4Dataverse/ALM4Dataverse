@@ -185,3 +185,113 @@ function Invoke-Hooks {
         }
     }
 }
+
+function Get-SolutionFormat {
+    <#
+    .SYNOPSIS
+        Detects whether a solution folder uses YAML or XML source control format.
+    .DESCRIPTION
+        Returns 'Yaml' when solutions/<SolutionName>/solution.yml is present,
+        'Xml' when Other/Solution.xml is present, or $null for an empty/unknown folder.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionFolder,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionName
+    )
+
+    if (Test-Path (Join-Path $SolutionFolder 'solutions' $SolutionName 'solution.yml')) {
+        return 'Yaml'
+    }
+
+    if (Test-Path (Join-Path $SolutionFolder 'Other' 'Solution.xml')) {
+        return 'Xml'
+    }
+
+    return $null
+}
+
+function Get-SolutionVersion {
+    <#
+    .SYNOPSIS
+        Reads the solution version from the unpacked solution folder.
+    .DESCRIPTION
+        For YAML format reads the Version field from solutions/<SolutionName>/solution.yml.
+        For XML format reads the Version attribute from Other/Solution.xml.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionFolder,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionName,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Yaml', 'Xml')]
+        [string]$Format
+    )
+
+    if ($Format -eq 'Yaml') {
+        $yamlPath = Join-Path $SolutionFolder 'solutions' $SolutionName 'solution.yml'
+        $lines = Get-Content -Path $yamlPath
+        foreach ($line in $lines) {
+            if ($line -match '^\s*Version:\s*(.+?)\s*$') {
+                return [version]$Matches[1]
+            }
+        }
+        throw "Could not find Version field in '$yamlPath'."
+    }
+    else {
+        $xmlPath = Join-Path $SolutionFolder 'Other' 'Solution.xml'
+        [xml]$xml = Get-Content -Path $xmlPath
+        return [version]$xml.ImportExportXml.SolutionManifest.Version
+    }
+}
+
+function Set-SolutionVersion {
+    <#
+    .SYNOPSIS
+        Writes a new version into the unpacked solution folder.
+    .DESCRIPTION
+        For YAML format updates the Version field in solutions/<SolutionName>/solution.yml.
+        For XML format updates the Version attribute in Other/Solution.xml.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionFolder,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionName,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('Yaml', 'Xml')]
+        [string]$Format,
+
+        [Parameter(Mandatory = $true)]
+        [version]$Version
+    )
+
+    if ($Format -eq 'Yaml') {
+        $yamlPath = Join-Path $SolutionFolder 'solutions' $SolutionName 'solution.yml'
+        $lines = Get-Content -Path $yamlPath
+        $lines = $lines | ForEach-Object {
+            if ($_ -match '^(\s*Version:\s*)\S+(.*)$') {
+                "$($Matches[1])$($Version.ToString())$($Matches[2])"
+            }
+            else {
+                $_
+            }
+        }
+        Set-Content -Path $yamlPath -Value $lines
+        Write-Host "##[debug]Updated YAML solution version to $Version in '$yamlPath'"
+    }
+    else {
+        $xmlPath = Join-Path $SolutionFolder 'Other' 'Solution.xml'
+        [xml]$xml = Get-Content -Path $xmlPath
+        $xml.ImportExportXml.SolutionManifest.Version = $Version.ToString()
+        $xml.Save($xmlPath)
+        Write-Host "##[debug]Updated XML solution version to $Version in '$xmlPath'"
+    }
+}

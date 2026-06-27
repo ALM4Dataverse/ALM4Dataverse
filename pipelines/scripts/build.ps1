@@ -551,12 +551,29 @@ foreach ($solution in $config.solutions) {
     
     Write-Host "##[group]Building solution: $solutionName"
     
-    Write-Host "Packing solution: $solutionName (Managed)"
+    Write-Host "Packing solution: $solutionName"
 
-    Compress-DataverseSolutionFile -Verbose `
-        -Path "$SourceDirectory/solutions/$solutionName" `
-        -OutputPath "$ArtifactStagingDirectory/solutions/${solutionName}.zip" `
-        -PackageType Both
+    $mapFile = $null
+    if ($solution.mapFile) {
+        $mapFile = Join-Path $SourceDirectory ([string]$solution.mapFile)
+        if (-not (Test-Path $mapFile)) {
+            Write-Host "##[warning]Map file not found for solution '$solutionName': $mapFile"
+            $mapFile = $null
+        }
+        else {
+            Write-Host "##[debug]Using map file: $mapFile"
+        }
+    }
+
+    $packArgs = @{
+        Verbose    = $true
+        Path       = "$SourceDirectory/solutions/$solutionName"
+        OutputPath = "$ArtifactStagingDirectory/solutions/${solutionName}.zip"
+        PackageType = 'Both'
+    }
+    if ($mapFile) { $packArgs['MapFile'] = $mapFile }
+
+    Compress-DataverseSolutionFile @packArgs
     
     Write-Host "##[endgroup]"
 }

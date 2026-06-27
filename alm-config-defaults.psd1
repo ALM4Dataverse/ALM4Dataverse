@@ -7,6 +7,12 @@
     # Supports: '' (latest stable), 'prerelease', or an exact version.
     pacCliVersion = '2.7.4'
 
+    # Source control format used when exporting/unpacking solutions.
+    # 'Yaml': YAML source control format (default). Requires Microsoft.PowerApps.CLI 2.4.1+.
+    # 'Xml' : Legacy XML format.
+    # Can be overridden per-solution in the solutions array.
+    sourceFormat = 'Yaml'
+
     # Timeout in seconds for each solution import operation.
     # Increase this value if solution imports time out in large or complex environments.
     importTimeoutSeconds = 10800
