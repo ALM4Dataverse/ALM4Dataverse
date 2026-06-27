@@ -24,12 +24,22 @@
     # - serviceAccountUpnConfigKey: (optional) name of the environment configuration key containing
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'
+    # - sourceFormat: (optional) source control format for this solution. Overrides the global
+    #   sourceFormat setting. Values: 'Yaml' (default) or 'Xml'.
+    #   'Yaml' uses the YAML source control format written by Dataverse Git integration /
+    #   pac solution clone (requires Microsoft.PowerApps.CLI 2.4.1+).
+    #   'Xml' uses the legacy XML format with Other\Solution.xml.
+    # - mapFile: (optional) path to a solution packager mapping XML file, relative to the
+    #   repo root. Passed as --map to pac solution pack and pac solution unpack.
+    #   Use this to remap component source folders for both build and export operations.
     # - solutionCheck: (optional) per-solution PAC checker settings merged with global solutionCheck
     #   settings below. Use enabled = $false to skip checker for a specific solution.
     solutions = @(
         # Example:
         # @{
         #   name = 'ContosoCore'
+        #   sourceFormat = 'Yaml'
+        #   mapFile = 'solutions/ContosoCore/map.xml'
         #   solutionCheck = @{
         #     enabled = $true
         #     # Use 'none' to omit --ruleSet.
@@ -125,6 +135,13 @@
     # Timeout in seconds for each solution import operation (default: 10800).
     # Increase this value if solution imports time out in large or complex environments.
     # importTimeoutSeconds = 10800
+
+    # Default source control format for all solutions (can be overridden per-solution).
+    # 'Yaml' (default): YAML source control format from Dataverse Git integration /
+    #   pac solution clone. Requires Microsoft.PowerApps.CLI 2.4.1+.
+    # 'Xml': legacy XML format with Other\Solution.xml.
+    # If your existing solutions are in XML format, set this to 'Xml'.
+    # sourceFormat = 'Yaml'
 
     # PAC solution check settings used by BUILD.
     # Set enabled = $true globally or per-solution to activate checks.
