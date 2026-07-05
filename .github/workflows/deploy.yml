@@ -105,6 +105,21 @@ on:
         type: number
         default: 360
         description: 'Job timeout in minutes (matches Azure DevOps default)'
+      keyvault-name:
+        required: false
+        type: string
+        default: ''
+        description: >
+          Optional Azure Key Vault name. When set with keyvault-secret-mapping-json,
+          the workflow fetches mapped secrets before deployment scripts run.
+      keyvault-secret-mapping-json:
+        required: false
+        type: string
+        default: '{}'
+        description: >
+          Optional JSON object mapping target environment variable name to Azure
+          Key Vault secret name. Example:
+          {"DATAVERSESERVICEACCOUNTUPN":"dataverse-service-upn"}.
 
 jobs:
   deploy:
@@ -688,6 +703,104 @@ jobs:
           }
 
           Write-Host "Prefixed mapping complete. Variables set: $setCount"
+
+      - name: Validate optional Key Vault secret mappings
+        shell: pwsh
+        env:
+          KEYVAULT_NAME: ${{ inputs.keyvault-name }}
+          KEYVAULT_SECRET_MAPPING_JSON: ${{ inputs.keyvault-secret-mapping-json }}
+        run: |
+          $mappingText = $env:KEYVAULT_SECRET_MAPPING_JSON
+          if ([string]::IsNullOrWhiteSpace($mappingText)) {
+            $mappingText = '{}'
+          }
+
+          try {
+            $mapping = $mappingText | ConvertFrom-Json -AsHashtable
+          } catch {
+            throw "keyvault-secret-mapping-json must be valid JSON object text."
+          }
+
+          if ($null -eq $mapping) {
+            $mapping = @{}
+          }
+
+          $hasMappings = $mapping.Count -gt 0
+          $hasVaultName = -not [string]::IsNullOrWhiteSpace($env:KEYVAULT_NAME)
+
+          if ($hasMappings -and -not $hasVaultName) {
+            throw "keyvault-name is required when keyvault-secret-mapping-json contains mappings."
+          }
+
+          if (-not $hasMappings -and $hasVaultName) {
+            Write-Host "keyvault-name is set but no keyvault-secret-mapping-json entries were provided. Skipping Key Vault fetch."
+          }
+
+      - name: Azure login for Key Vault (client secret)
+        if: >-
+          inputs.keyvault-name != '' &&
+          inputs.keyvault-secret-mapping-json != '{}' &&
+          env.AZURE_CLIENT_SECRET != ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+          client-secret: ${{ env.AZURE_CLIENT_SECRET }}
+
+      - name: Azure login for Key Vault (OIDC)
+        if: >-
+          inputs.keyvault-name != '' &&
+          inputs.keyvault-secret-mapping-json != '{}' &&
+          env.AZURE_CLIENT_SECRET == ''
+        uses: azure/login@v2
+        with:
+          client-id: ${{ env.AZURE_CLIENT_ID }}
+          tenant-id: ${{ env.AZURE_TENANT_ID }}
+
+      - name: Fetch mapped Key Vault secrets
+        if: >-
+          inputs.keyvault-name != '' &&
+          inputs.keyvault-secret-mapping-json != '{}'
+        shell: pwsh
+        env:
+          KEYVAULT_NAME: ${{ inputs.keyvault-name }}
+          KEYVAULT_SECRET_MAPPING_JSON: ${{ inputs.keyvault-secret-mapping-json }}
+        run: |
+          function Write-GitHubEnv([string]$name, [string]$value) {
+            $delimiter = "EOF_$([Guid]::NewGuid().ToString('N'))"
+            Add-Content -Path $env:GITHUB_ENV -Value "$name<<$delimiter"
+            Add-Content -Path $env:GITHUB_ENV -Value $value
+            Add-Content -Path $env:GITHUB_ENV -Value $delimiter
+          }
+
+          $mapping = $env:KEYVAULT_SECRET_MAPPING_JSON | ConvertFrom-Json -AsHashtable
+          if ($null -eq $mapping -or $mapping.Count -eq 0) {
+            Write-Host "No Key Vault mappings provided. Skipping."
+            exit 0
+          }
+
+          foreach ($entry in $mapping.GetEnumerator()) {
+            $targetEnvVar = [string]$entry.Key
+            $secretName = [string]$entry.Value
+            if ([string]::IsNullOrWhiteSpace($targetEnvVar) -or [string]::IsNullOrWhiteSpace($secretName)) {
+              throw "Each keyvault-secret-mapping-json entry must include non-empty target env var and secret name."
+            }
+
+            $secretValue = az keyvault secret show `
+              --vault-name $env:KEYVAULT_NAME `
+              --name $secretName `
+              --query value `
+              --output tsv
+
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($secretValue)) {
+              throw "Failed to fetch Key Vault secret '$secretName' from vault '$($env:KEYVAULT_NAME)'."
+            }
+
+            [System.Environment]::SetEnvironmentVariable($targetEnvVar, $secretValue)
+            Write-GitHubEnv -name $targetEnvVar -value $secretValue
+            Write-Output "::add-mask::$secretValue"
+            Write-Host "Mapped Key Vault secret '$secretName' -> '$targetEnvVar'"
+          }
 
       - name: Validate authentication inputs
         shell: pwsh

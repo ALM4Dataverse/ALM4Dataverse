@@ -298,6 +298,40 @@ object that maps each Dataverse environment variable schema name to its value:
 
 ---
 
+## Optional: Azure Key Vault secret mapping for DEPLOY
+
+The reusable `deploy.yml` workflow can optionally fetch extra secrets from Azure Key Vault and map them to runtime environment variables before deployment scripts run.
+
+Configure this per stage in `DEPLOY-main.yml`:
+
+```yaml
+with:
+  environment-name: PROD
+  previous-environment-name: TEST-main
+  promotion-mode: manual-gate-tag
+  trigger-branch: main
+  github-context-json: ${{ toJSON(github) }}
+  caller-inputs-json: ${{ toJSON(inputs) }}
+  keyvault-name: contoso-kv-prod
+  keyvault-secret-mapping-json: '{"DATAVERSESERVICEACCOUNTUPN":"dataverse-service-upn","CustomApiKey":"contoso-api-key"}'
+```
+
+In this example:
+- `keyvault-secret-mapping-json` maps `{ targetEnvVarName: keyVaultSecretName }`
+- `dataverse-service-upn` becomes `DATAVERSESERVICEACCOUNTUPN` for downstream scripts
+- `contoso-api-key` becomes `CustomApiKey`
+
+### Key Vault permissions for the deployment identity
+
+Grant the Azure identity used by the deployment workflow (`AZURE_CLIENT_ID` / federated credential or client secret app registration) permission to read secrets from the vault:
+
+- **RBAC model (recommended)**: assign **Key Vault Secrets User** on the vault scope
+- **Access policy model**: grant **Get** and **List** secret permissions
+
+Apply least-privilege access and scope to only the required vault(s).
+
+---
+
 ## How credentials flow to the PowerShell scripts
 
 The ALM4Dataverse PowerShell scripts use the following OS environment variables:

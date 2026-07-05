@@ -7,6 +7,15 @@ parameters:
   - name: timeoutInMinutes
     type: number
     default: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
+  - name: keyVaultName
+    type: string
+    default: ''
+  - name: keyVaultServiceConnection
+    type: string
+    default: ''
+  - name: keyVaultSecrets
+    type: object
+    default: {}
 
 stages:
   - stage: Deploy_${{ replace(replace(replace(replace(replace(replace(parameters.environmentName, ' ', '_'), '-', '_'), '.', '_'), '(', '_'), ')', '_'), '/', '_') }}
@@ -53,6 +62,49 @@ stages:
                     inputs:
                       authenticationType: 'PowerPlatformSPN'
                       PowerPlatformSPN: '${{ parameters.environmentName }}'
+
+                - pwsh: |
+                    $keyVaultSecretsJson = @'
+                    ${{ convertToJson(parameters.keyVaultSecrets) }}
+                    '@
+                    $keyVaultSecrets = $keyVaultSecretsJson | ConvertFrom-Json -AsHashtable
+                    $hasSecretMappings = $null -ne $keyVaultSecrets -and $keyVaultSecrets.Count -gt 0
+                    $keyVaultName = '${{ parameters.keyVaultName }}'
+                    $keyVaultServiceConnection = '${{ parameters.keyVaultServiceConnection }}'
+
+                    if ($hasSecretMappings -and [string]::IsNullOrWhiteSpace($keyVaultName)) {
+                      throw "keyVaultName must be set when keyVaultSecrets mappings are configured."
+                    }
+
+                    if ($hasSecretMappings -and [string]::IsNullOrWhiteSpace($keyVaultServiceConnection)) {
+                      throw "keyVaultServiceConnection must be set when keyVaultSecrets mappings are configured."
+                    }
+
+                    if (-not $hasSecretMappings -and (
+                      -not [string]::IsNullOrWhiteSpace($keyVaultName) -or
+                      -not [string]::IsNullOrWhiteSpace($keyVaultServiceConnection))) {
+                      Write-Host "Key Vault settings provided without keyVaultSecrets mappings. No Key Vault secrets will be fetched."
+                    }
+                  displayName: 'Validate optional Key Vault secret mappings'
+
+                - ${{ each secretMapping in parameters.keyVaultSecrets }}:
+                  - task: AzureKeyVault@2
+                    displayName: 'Fetch Key Vault secret ${{ secretMapping.Value }}'
+                    inputs:
+                      azureSubscription: '${{ parameters.keyVaultServiceConnection }}'
+                      KeyVaultName: '${{ parameters.keyVaultName }}'
+                      SecretsFilter: '${{ secretMapping.Value }}'
+                      RunAsPreJob: false
+
+                  - pwsh: |
+                      $secretValue = '${{ format('$({0})', secretMapping.Value) }}'
+                      if ([string]::IsNullOrWhiteSpace($secretValue) -or $secretValue -match '^\$\(.+\)$') {
+                        throw "Key Vault secret '${{ secretMapping.Value }}' was not resolved."
+                      }
+
+                      Write-Host "##vso[task.setvariable variable=${{ secretMapping.Key }};issecret=true]$secretValue"
+                      Write-Host "Mapped Key Vault secret '${{ secretMapping.Value }}' -> '${{ secretMapping.Key }}'"
+                    displayName: 'Map Key Vault secret to ${{ secretMapping.Key }}'
                 
                 - pwsh: |
                     & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/installdependencies.ps1"

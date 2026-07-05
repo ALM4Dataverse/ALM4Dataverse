@@ -72,6 +72,35 @@ See [Service Principal Setup](../setup/azdo-manual-setup.md#4-service-principal-
 - **Dedicated Service Principals**: Create separate service principals for each environment (e.g. separate app registrations for Dev, TEST, UAT, and PROD).
 - **Client Secret Rotation**: Rotate client secrets periodically and track expiration dates to prevent authentication failures.
 
+## Optional: Azure Key Vault secret mapping for DEPLOY
+
+The `deploy-environment.yml` stage template can optionally fetch extra secrets from Azure Key Vault and map them to runtime environment variables **before** ALM4Dataverse deploy scripts run.
+
+```yaml
+- template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
+  parameters:
+    environmentName: PROD
+    keyVaultName: contoso-kv-prod
+    keyVaultServiceConnection: Contoso-Shared-Azure
+    keyVaultSecrets:
+      DATAVERSESERVICEACCOUNTUPN: dataverse-service-upn
+      CustomApiKey: contoso-api-key
+```
+
+In this example:
+- `keyVaultSecrets` maps `{ targetEnvVarName: keyVaultSecretName }`
+- `dataverse-service-upn` is fetched from Key Vault and exposed to scripts as `DATAVERSESERVICEACCOUNTUPN`
+- `contoso-api-key` is exposed as `CustomApiKey`
+
+### Key Vault permissions for the deployment identity
+
+Grant the identity used by `keyVaultServiceConnection` permission to read secrets from the target Key Vault:
+
+- **RBAC model (recommended)**: assign **Key Vault Secrets User** on the vault scope
+- **Access policy model**: grant **Get** and **List** secret permissions
+
+Use least privilege and scope access to only the vault required by that deployment stage.
+
 ## Reference
 
 - [Manual Setup Guide - Service Principal Setup](../setup/azdo-manual-setup.md#4-service-principal-setup)

@@ -315,6 +315,9 @@ jobs:
       promotion-mode: manual-gate-tag
       github-context-json: ${{ toJSON(github) }}
       caller-inputs-json: ${{ toJSON(inputs) }}
+      # Optional Azure Key Vault mapping:
+      # keyvault-name: contoso-kv-test
+      # keyvault-secret-mapping-json: '{"DATAVERSESERVICEACCOUNTUPN":"dataverse-service-upn"}'
 
   deploy-prod:
     needs: deploy-test
@@ -326,6 +329,9 @@ jobs:
       promotion-mode: manual-gate-tag
       github-context-json: ${{ toJSON(github) }}
       caller-inputs-json: ${{ toJSON(inputs) }}
+      # Optional Azure Key Vault mapping:
+      # keyvault-name: contoso-kv-prod
+      # keyvault-secret-mapping-json: '{"DATAVERSESERVICEACCOUNTUPN":"dataverse-service-upn","CustomApiKey":"contoso-api-key"}'
     secrets: inherit
 ```
 

@@ -57,6 +57,9 @@ jobs:
       github-context-json: ${{ toJSON(github) }}
       caller-inputs-json: ${{ toJSON(inputs) }}
       timeout-minutes: 360
+      # Optional: fetch additional secrets from Azure Key Vault before deploy scripts run
+      # keyvault-name: contoso-kv-prod
+      # keyvault-secret-mapping-json: '{"DATAVERSESERVICEACCOUNTUPN":"dataverse-service-upn","CustomApiKey":"contoso-api-key"}'
     secrets: inherit
 
   deploy-prod:
@@ -78,4 +81,7 @@ jobs:
       github-context-json: ${{ toJSON(github) }}
       caller-inputs-json: ${{ toJSON(inputs) }}
       timeout-minutes: 360
+      # Optional: fetch additional secrets from Azure Key Vault before deploy scripts run
+      # keyvault-name: contoso-kv-prod
+      # keyvault-secret-mapping-json: '{"DATAVERSESERVICEACCOUNTUPN":"dataverse-service-upn","CustomApiKey":"contoso-api-key"}'
     secrets: inherit

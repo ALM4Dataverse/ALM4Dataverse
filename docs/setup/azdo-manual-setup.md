@@ -443,6 +443,12 @@ stages:
   - template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
     parameters:
       environmentName: PROD
+      # Optional Azure Key Vault secret mapping:
+      # keyVaultName: contoso-kv-prod
+      # keyVaultServiceConnection: Contoso-Shared-Azure
+      # keyVaultSecrets:
+      #   DATAVERSESERVICEACCOUNTUPN: dataverse-service-upn
+      #   CustomApiKey: contoso-api-key
 ```
 
 Add or remove stages based on your environment structure. The environments will deploy in sequence (TEST first, then UAT, then PROD).

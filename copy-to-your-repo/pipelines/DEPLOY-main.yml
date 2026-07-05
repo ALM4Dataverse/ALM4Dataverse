@@ -24,3 +24,9 @@ stages:
   #   parameters:
   #     environmentName: Test-main
   #     useAlm4DataverseExtension: true
+  #     # Optional: fetch additional secrets from Azure Key Vault before deploy scripts run
+  #     # keyVaultName: 'contoso-kv-prod'
+  #     # keyVaultServiceConnection: 'Contoso-Shared-Azure'
+  #     # keyVaultSecrets:
+  #     #   DATAVERSESERVICEACCOUNTUPN: 'dataverse-service-upn'
+  #     #   CustomApiKey: 'contoso-api-key'
