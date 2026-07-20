@@ -17,6 +17,7 @@ jobs:
       timeout-minutes: 360
     permissions:
       id-token: write
+      contents: read
     # Credentials are resolved automatically by the reusable workflow from either:
     # 1) GitHub environment Dev-{branch} (default), or
     # 2) repo-level prefixed secrets/variables (e.g. DEV_MAIN_* or PREFIX_*).
