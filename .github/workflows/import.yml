@@ -66,6 +66,7 @@ jobs:
       cancel-in-progress: false
     permissions:
       id-token: write  # request OIDC token for Workload Identity Federation
+      contents: read
     env:
       AZURE_CLIENT_ID:     ${{ vars.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID:     ${{ vars.AZURE_TENANT_ID }}
