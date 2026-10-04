@@ -36,6 +36,12 @@ stages:
           inputs:
             AddToolsToPath: false
 
+        - task: UseDotNet@2
+          displayName: 'Install .NET SDK'
+          inputs:
+            packageType: 'sdk'
+            version: '10.x'
+
         - ${{ if ne(parameters.buildEnvironmentName, '') }}:
           - ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
             - task: ALM4Dataverse.alm4dataverse-azdo-extensions.alm4dataverse-set-connection-variables.ALM4DataverseSetConnectionVariables@1

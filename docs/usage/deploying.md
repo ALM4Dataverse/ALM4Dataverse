@@ -59,6 +59,7 @@ What happens for each deployment stage:
   This defaults to the triggering instance when the deployment job starts automatically, or can be selected manually when triggering manually.
 - **The name of the deployment job matches the release number.**
 - **Environment settings are read from the configuration associated with the environment** (Azure DevOps: variable group; GitHub Actions: GitHub environment secrets/variables or prefixed repo-level secrets), matching with those required by each solution.
+- **Optional Package Deployer path**: when `buildPackageDeployer = $true`, deployment uses `ALM4Dataverse.PackageDeployer.pdpkg.zip` from build artifacts for the standard managed deployment path.
 - **Solutions are deployed if needed in the configured dependency order**:
   - If the solution is already present with the same version, the import is skipped.
   - If the solution is not currently present in the environment, the 'Import' method is used
