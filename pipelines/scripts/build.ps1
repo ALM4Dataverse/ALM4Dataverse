@@ -669,6 +669,7 @@ if ($packageDeployerEnabled) {
         }
 
         $pdProjectPath = Resolve-Path $pdProjectPath | Select-Object -ExpandProperty Path
+        $pdProjectDirectory = Split-Path $pdProjectPath -Parent
         $legacyPublishDir = Join-Path $ArtifactStagingDirectory "packagedeployer"
         if (Test-Path $legacyPublishDir) {
             Remove-Item -Path $legacyPublishDir -Recurse -Force
@@ -677,6 +678,8 @@ if ($packageDeployerEnabled) {
         $pdPublishDir = Join-Path ([System.IO.Path]::GetTempPath()) ("alm4dataverse-packagedeployer-" + [guid]::NewGuid().ToString('N'))
 
         try {
+            Get-ChildItem -Path (Join-Path $pdProjectDirectory 'bin') -Filter '*.pdpkg.zip' -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+
             dotnet publish $pdProjectPath `
                 -c Release `
                 -o $pdPublishDir `
@@ -686,37 +689,30 @@ if ($packageDeployerEnabled) {
                 throw "dotnet publish for Package Deployer failed with exit code $LASTEXITCODE"
             }
 
-            $rootImportConfigPath = Join-Path $pdPublishDir 'ImportConfig.xml'
-            if (-not (Test-Path $rootImportConfigPath -PathType Leaf)) {
-                $pkgAssetsImportConfigPath = Join-Path $pdPublishDir 'PkgAssets' 'ImportConfig.xml'
-                if (Test-Path $pkgAssetsImportConfigPath -PathType Leaf) {
-                    Copy-Item -Path $pkgAssetsImportConfigPath -Destination $rootImportConfigPath -Force
-                }
-                else {
-                    throw "Package Deployer publish output is missing ImportConfig.xml. Expected '$rootImportConfigPath' or '$pkgAssetsImportConfigPath'."
-                }
+            $generatedPackage = Get-ChildItem -Path (Join-Path $pdProjectDirectory 'bin') -Filter '*.pdpkg.zip' -Recurse -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending |
+                Select-Object -First 1
+
+            if ($null -eq $generatedPackage) {
+                throw "dotnet publish completed, but no PDPackage-generated .pdpkg.zip was found under '$pdProjectDirectory\bin'."
             }
 
-            $rootManifestPath = Join-Path $pdPublishDir 'manifest.ppkg.json'
-            if (-not (Test-Path $rootManifestPath -PathType Leaf)) {
-                $pkgAssetsManifestPath = Join-Path $pdPublishDir 'PkgAssets' 'manifest.ppkg.json'
-                if (Test-Path $pkgAssetsManifestPath -PathType Leaf) {
-                    Copy-Item -Path $pkgAssetsManifestPath -Destination $rootManifestPath -Force
-                }
-            }
-
-            Compress-Archive -Path "$pdPublishDir/*" -DestinationPath $pdpkgZip -Force
+            Copy-Item -Path $generatedPackage.FullName -Destination $pdpkgZip -Force
 
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $packageZip = [System.IO.Compression.ZipFile]::OpenRead($pdpkgZip)
             try {
                 $zipEntryNames = @($packageZip.Entries | ForEach-Object { $_.FullName })
-                if (-not ($zipEntryNames -contains 'ImportConfig.xml')) {
-                    throw "Package Deployer package '$pdpkgZip' is missing ImportConfig.xml at the archive root."
+                if (-not ($zipEntryNames -contains '[Content_Types].xml')) {
+                    throw "Package Deployer package '$pdpkgZip' is missing [Content_Types].xml at the archive root."
                 }
 
-                if (-not ($zipEntryNames -contains 'manifest.ppkg.json')) {
-                    throw "Package Deployer package '$pdpkgZip' is missing manifest.ppkg.json at the archive root."
+                if (-not ($zipEntryNames -contains 'PkgAssets/ImportConfig.xml')) {
+                    throw "Package Deployer package '$pdpkgZip' is missing PkgAssets/ImportConfig.xml."
+                }
+
+                if (-not ($zipEntryNames -contains 'PkgAssets/manifest.ppkg.json')) {
+                    throw "Package Deployer package '$pdpkgZip' is missing PkgAssets/manifest.ppkg.json."
                 }
             }
             finally {
