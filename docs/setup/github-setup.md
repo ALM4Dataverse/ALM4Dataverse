@@ -21,10 +21,11 @@ actions directly, keeping job-level configuration in the consuming repository.
 
 | Your workflow | Composite action used | Purpose |
 |---|---|---|
-| `BUILD.yml` | `.github/actions/build` | Pack solutions, upload artifacts, tag commit |
+| `BUILD.yml` | `.github/actions/build` | Pack solutions, upload artifacts, tag commit, create a Release |
 | `EXPORT.yml` | `.github/actions/export` | Export from dev Dataverse, commit to repo |
 | `IMPORT.yml` | `.github/actions/import` | Build from source, import into dev Dataverse |
-| `DEPLOY-main.yml` | `.github/actions/deploy` | Deploy artifacts to each environment |
+| `DEPLOY-main.yml` | `.github/actions/deploy` | Deploy Release assets or BUILD artifacts to each environment |
+| `CLEANUP-RELEASES.yml` | `cleanup-releases.yml` | Remove deleted-branch Releases and cap Releases per branch |
 
 During automated setup (`setup-github.ps1`), you are also prompted whether to enable solution validation in `BUILD` globally. If enabled, setup configures one shared GitHub environment for BUILD validation and wires the build action to run Dataverse connect/authentication against that environment before build validation.
 
@@ -133,7 +134,8 @@ your-repo/
 │       ├── BUILD.yml
 │       ├── EXPORT.yml
 │       ├── IMPORT.yml
-│       └── DEPLOY-main.yml   ← all environments; auto-chain with environment approvals by default
+│       ├── DEPLOY-main.yml   ← all environments; auto-chain with environment approvals by default
+│       └── CLEANUP-RELEASES.yml
 ├── alm-config.psd1
 └── data/
 ```
@@ -195,6 +197,16 @@ Behavior remains simple:
 
 - **`manual-gate-tag`**: every stage is triggered manually from **Actions** > **DEPLOY-main** > **Run workflow**; `target-environment` remains mandatory, while `build-run-name` can be supplied explicitly or left blank to use the latest successful BUILD from the selected branch.
 - **`environment-approval`**: when BUILD succeeds, it sends a `repository_dispatch` event and stage 1 starts automatically for matching branch workflows; later stages auto-chain only after the previous stage succeeds and any environment approval rules pass. For a manual replay, `target-environment` can be left blank to start from the first configured stage, or set to a specific environment name to jump directly to that stage.
+
+Each successful BUILD creates a GitHub Release with `artifacts.zip` and an
+optional `solution-check-report.zip`. Manual deployment continues to use the
+legacy `build-run-name` input; it accepts a Release tag, BUILD name, or numeric
+BUILD run ID. The reusable deploy action verifies that the caller, BUILD, and
+Release branches agree before deployment.
+
+`CLEANUP-RELEASES.yml` removes managed Releases from deleted branches and keeps
+at most 10 Releases per branch by default. Before deletion it preserves build
+metadata in an annotated `alm4dataverse/metadata/<release-tag>` tag.
 
   The dispatch event type is branch-scoped using:
   `alm4dataverse-build-deploy-{branch-token}`

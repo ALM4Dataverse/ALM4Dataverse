@@ -3,6 +3,7 @@ name: BUILD
 # Triggers on every push to any branch.
 # Also supports manual runs and repository_dispatch from EXPORT.
 # Packs Dataverse solutions into deployable artifacts and tags the source commit.
+# and publishes the same artifacts as GitHub Release assets.
 #
 # See docs/usage/building-releases.md and docs/setup/github-setup.md
 

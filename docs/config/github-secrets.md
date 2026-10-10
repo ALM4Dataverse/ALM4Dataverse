@@ -55,6 +55,14 @@ store one as a repository-level or environment-level secret named
 
 This token is separate from the Dataverse/Azure credentials shown below.
 
+## Release and cleanup permissions
+
+The BUILD caller needs `contents: write` to create the build tag and GitHub
+Release, plus `actions: write` to publish the existing Actions artifacts. DEPLOY
+needs `actions: read` for the BUILD fallback and `contents: write` for deployment
+gate tags. `CLEANUP-RELEASES` needs `contents: write` to delete managed Releases
+and create durable `alm4dataverse/metadata/` tags before deletion.
+
 ---
 
 ## Approach 1: Workload Identity Federation (OIDC)
