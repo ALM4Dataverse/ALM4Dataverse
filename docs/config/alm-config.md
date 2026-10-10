@@ -168,7 +168,7 @@ Increase this value if solution imports time out in large or complex environment
 > | **Paid parallel jobs (Microsoft-hosted)** | Up to 360 minutes (6 hours) |
 > | **Self-hosted agents** | No enforced maximum |
 >
-> GitHub reusable workflows (`build.yml`, `export.yml`, `import.yml`, `deploy.yml`) also default to `timeout-minutes: 360`, and the copied caller workflows pass this value explicitly.
+> GitHub composite-action caller jobs set `timeout-minutes: 360` explicitly in the copied workflows.
 >
 > The `DEPLOY` template exposes `timeoutInMinutes` as a parameter so you can override the default per-environment:
 >

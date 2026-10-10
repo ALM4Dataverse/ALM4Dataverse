@@ -12,13 +12,24 @@ on:
 
 jobs:
   import:
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/import.yml@stable
-    with:
-      timeout-minutes: 360
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment:
+      name: ${{ format('Dev-{0}', github.ref_name) }}
+      deployment: false
+    concurrency:
+      group: ${{ format('alm4dataverse-environment-{0}', format('Dev-{0}', github.ref_name)) }}
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
-    # Credentials are resolved automatically by the reusable workflow from either:
+    steps:
+      - name: Import Dataverse solutions
+        uses: ALM4Dataverse/ALM4Dataverse/.github/actions/import@main
+        with:
+          environment-name: ${{ format('Dev-{0}', github.ref_name) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}
+    # Credentials are resolved automatically from either:
     # 1) GitHub environment Dev-{branch} (default), or
     # 2) repo-level prefixed secrets/variables (e.g. DEV_MAIN_* or PREFIX_*).
-    secrets: inherit

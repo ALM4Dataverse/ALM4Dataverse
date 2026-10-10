@@ -1,3 +1,4 @@
+param($context)
 ### Phase 1 - Upsert new and updated records
 
 <# Example - uncomment and enter your table name

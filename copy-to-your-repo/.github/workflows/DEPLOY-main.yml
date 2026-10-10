@@ -5,14 +5,19 @@ name: DEPLOY-main
 # Keep this simple:
 #   1. Add one deploy-* job per environment.
 #   2. For each higher stage set `needs` to the previous stage.
-#   3. Set `promotion-mode` on each stage (or keep the default):
-#      - manual-gate-tag      (GitHub Free compatible)
-#      - environment-approval (auto-chain with environment approvals)
-#   4. Add the `repository_dispatch` trigger only when using environment-approval.
+#   3. This template defaults to `environment-approval`:
+#      - keep `promotion-mode: environment-approval` on every stage.
+#      - keep the `repository_dispatch` trigger enabled.
+#      - configure GitHub environment protection rules for approvals.
+#   4. To switch to `manual-gate-tag` (GitHub Free compatible):
+#      - change `promotion-mode` on every stage.
+#      - remove the `repository_dispatch` trigger.
+#      - make `target-environment` a required choice input again.
+#      - change each stage condition to the manual `workflow_dispatch` form.
 #
 # See docs/setup/github-setup.md
 
-run-name: ${{ github.event_name == 'workflow_dispatch' && format('Deploy {0} <- {1}', github.event.inputs['target-environment'], github.event.inputs['build-run-name'] || format('latest from {0}', github.ref_name)) || format('Deploy auto <- run {0}', github.run_id) }}
+run-name: ${{ github.event_name == 'workflow_dispatch' && format('Deploy {0} <- {1}', github.event.inputs['target-environment'] || 'auto', github.event.inputs['build-run-name'] || format('latest from {0}', github.ref_name)) || format('Deploy auto <- run {0}', github.run_id) }}
 
 permissions:
   actions: read
@@ -27,55 +32,88 @@ on:
         required: false
         type: string
       target-environment:
-        description: 'Target environment to deploy to'
-        # Make this not required when using `promotion-mode: environment-approval`:
-        required: true
-        type: choice
-        options:
-          - TEST-main
-          - PROD
-          # Add further environments here (UAT, STAGING, etc.) as needed.
-          # Each option should have a matching deploy-* job below.
-  # Add this trigger when using `promotion-mode: environment-approval`:
-  # repository_dispatch:
-  #   types: [alm4dataverse-build-deploy-main]
+        description: 'Optional target environment. Leave blank to start from TEST-main or set a specific stage.'
+        required: false
+        type: string
+        # For manual-gate-tag, make this required, change the type to choice,
+        # and restore TEST-main/PROD as the options.
+  repository_dispatch:
+    types: [alm4dataverse-build-deploy-main]
 
 jobs:
   deploy-test:
     # First stage in the chain.
-    # In manual-gate-tag mode this stage is manual too.
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
+    # Starts automatically from BUILD or can be replayed manually.
+    if: >-
+      (
+        github.event_name == 'repository_dispatch' &&
+        github.event.client_payload.branch == 'main'
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        (
+          inputs.target-environment == 'TEST-main' ||
+          inputs.target-environment == ''
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: TEST-main
+    concurrency:
+      group: alm4dataverse-environment-TEST-main
+      cancel-in-progress: true
     permissions:
       actions: read
       contents: write
       id-token: write
-    with:
-      environment-name: TEST-main
-      previous-environment-name: ''
-      promotion-mode: manual-gate-tag
-      trigger-branch: main
-      github-context-json: ${{ toJSON(github) }}
-      caller-inputs-json: ${{ toJSON(inputs) }}
-      timeout-minutes: 360
-    secrets: inherit
+    steps:
+      - name: Deploy to TEST-main
+        uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
+        with:
+          environment-name: TEST-main
+          previous-environment-name: ''
+          promotion-mode: environment-approval
+          trigger-branch: main
+          github-context-json: ${{ toJSON(github) }}
+          caller-inputs-json: ${{ toJSON(inputs) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}
 
   deploy-prod:
     # Higher stage example.
     # Allow manual targeted deploys even when prior jobs are skipped in this run,
     # but do not bypass failed prerequisite stages on automatic runs.
     needs: deploy-test
-    if: ${{ github.event_name == 'workflow_dispatch' || needs['deploy-test'].result == 'success' }}
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
+    if: >-
+      (
+        github.event_name == 'repository_dispatch' &&
+        github.event.client_payload.branch == 'main' &&
+        needs['deploy-test'].result == 'success'
+      ) || (
+        github.event_name == 'workflow_dispatch' &&
+        (
+          inputs.target-environment == 'PROD' ||
+          (inputs.target-environment == '' && needs['deploy-test'].result == 'success')
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment: PROD
+    concurrency:
+      group: alm4dataverse-environment-PROD
+      cancel-in-progress: true
     permissions:
       actions: read
       contents: write
       id-token: write
-    with:
-      environment-name: PROD
-      previous-environment-name: TEST-main
-      promotion-mode: manual-gate-tag
-      trigger-branch: main
-      github-context-json: ${{ toJSON(github) }}
-      caller-inputs-json: ${{ toJSON(inputs) }}
-      timeout-minutes: 360
-    secrets: inherit
+    steps:
+      - name: Deploy to PROD
+        uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
+        with:
+          environment-name: PROD
+          previous-environment-name: TEST-main
+          promotion-mode: environment-approval
+          trigger-branch: main
+          github-context-json: ${{ toJSON(github) }}
+          caller-inputs-json: ${{ toJSON(inputs) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}

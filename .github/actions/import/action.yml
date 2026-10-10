@@ -1,0 +1,97 @@
+name: Import
+description: Build the current source and import unmanaged solutions into Dataverse.
+
+inputs:
+  environment-name:
+    description: GitHub environment used for credentials and prefixed values.
+    required: false
+    default: ''
+  all-repo-vars-json:
+    description: JSON representation of the caller repository variables.
+    required: false
+    default: '{}'
+  all-repo-secrets-json:
+    description: JSON representation of the caller repository secrets.
+    required: false
+    default: '{}'
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+      with:
+        path: self
+        fetch-depth: 1
+
+    - name: Resolve dependency cache keys
+      id: dependency-cache
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      run: |
+        & "${{ github.action_path }}/../../../pipelines/scripts/resolvedependencycache.ps1" `
+          -BaseDirectory "${{ github.workspace }}/self" `
+          -AlmScriptsRoot "${{ github.action_path }}/../../../pipelines/scripts"
+
+    - name: Cache PowerShell modules
+      if: steps.dependency-cache.outputs.module_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.module_cache_key }}
+        path: |
+          ~/.local/share/powershell/Modules
+
+    - name: Cache PAC CLI
+      if: steps.dependency-cache.outputs.pac_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
+        path: ~/.alm4dataverse/tools
+
+    - name: Resolve prefixed repo variables and secrets
+      shell: pwsh
+      env:
+        ALL_REPO_VARS_JSON: ${{ inputs.all-repo-vars-json }}
+        ALL_REPO_SECRETS_JSON: ${{ inputs.all-repo-secrets-json }}
+        RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name != '' && inputs.environment-name || format('Dev-{0}', github.ref_name) }}
+      run: |
+        & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
+
+    - name: Validate authentication inputs
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}/../common/validate-auth.ps1" -RequireServiceAccount
+
+    - name: Log in to Azure
+      uses: azure/login@v3
+      env:
+        AZURE_CORE_OUTPUT: none
+      with:
+        client-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_CLIENT_ID || '' }}
+        tenant-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_TENANT_ID || '' }}
+        creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
+        allow-no-subscriptions: true
+
+    - name: Install dependencies, connect, and import
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      run: |
+        if (-not [string]::IsNullOrEmpty($env:DATAVERSE_CONNECTION_REFS)) {
+          $connRefs = $env:DATAVERSE_CONNECTION_REFS | ConvertFrom-Json
+          foreach ($prop in $connRefs.PSObject.Properties) {
+            [System.Environment]::SetEnvironmentVariable("DataverseConnRef_$($prop.Name)", $prop.Value)
+          }
+        }
+
+        if (-not [string]::IsNullOrEmpty($env:DATAVERSE_ENV_VARS)) {
+          $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
+          foreach ($prop in $envVars.PSObject.Properties) {
+            [System.Environment]::SetEnvironmentVariable("DataverseEnvVar_$($prop.Name)", $prop.Value)
+          }
+        }
+
+        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
+        & "${{ github.action_path }}/../../../pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
+        & "${{ github.action_path }}/../../../pipelines/scripts/import.ps1" `
+          -SourceDirectory "${{ github.workspace }}/self" `
+          -ArtifactStagingDirectory "${{ runner.temp }}/import-staging"
