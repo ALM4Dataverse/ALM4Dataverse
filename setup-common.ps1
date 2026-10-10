@@ -5,6 +5,132 @@ function New-DirectoryIfMissing {
     }
 }
 
+function Expand-SetupConsoleArchive {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ArchivePath,
+        [Parameter(Mandatory)][string]$DestinationPath
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $DestinationPath)
+}
+
+function Get-SetupConsoleDependencyAssemblyPath {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PackageRoot,
+        [Parameter(Mandatory)][string]$PackageName,
+        [Parameter(Mandatory)][string]$PackageVersion,
+        [Parameter(Mandatory)][string]$TargetFramework,
+        [Parameter(Mandatory)][string]$AssemblyName
+    )
+
+    $expandedRoot = Join-Path $PackageRoot "$PackageName.$PackageVersion"
+    $packagePath = Join-Path $PackageRoot "$PackageName.$PackageVersion.nupkg"
+    $assemblyPath = Join-Path $expandedRoot "lib\$TargetFramework\$AssemblyName.dll"
+    $packageUrl = "https://www.nuget.org/api/v2/package/$PackageName/$PackageVersion"
+
+    if (-not (Test-Path -LiteralPath $assemblyPath)) {
+        if (Test-Path -LiteralPath $expandedRoot) {
+            Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        if (-not (Test-Path -LiteralPath $packagePath)) {
+            try {
+                if ($PSVersionTable.PSVersion.Major -lt 6) {
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                }
+            }
+            catch {
+                # Non-fatal; continue.
+            }
+
+            Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
+        }
+
+        try {
+            Expand-SetupConsoleArchive -ArchivePath $packagePath -DestinationPath $expandedRoot
+        }
+        catch {
+            Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
+            Expand-SetupConsoleArchive -ArchivePath $packagePath -DestinationPath $expandedRoot
+        }
+
+        if (-not (Test-Path -LiteralPath $assemblyPath)) {
+            Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
+            Expand-SetupConsoleArchive -ArchivePath $packagePath -DestinationPath $expandedRoot
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath $assemblyPath)) {
+        throw "Could not locate $AssemblyName.dll after extracting package $PackageName version $PackageVersion."
+    }
+
+    return $assemblyPath
+}
+
+function Initialize-SetupConsoleFrameworkDependencies {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$PackageRoot
+    )
+
+    if ($PSVersionTable.PSEdition -eq 'Core') {
+        return
+    }
+
+    # Spectre.Console 0.49.1 targets netstandard2.0 and depends on the .NET
+    # Framework builds of these packages when running in Windows PowerShell.
+    $dependencies = @(
+        [pscustomobject]@{
+            PackageName      = 'System.Runtime.CompilerServices.Unsafe'
+            PackageVersion   = '4.5.3'
+            TargetFramework  = 'net461'
+            AssemblyName     = 'System.Runtime.CompilerServices.Unsafe'
+        },
+        [pscustomobject]@{
+            PackageName      = 'System.Buffers'
+            PackageVersion   = '4.5.1'
+            TargetFramework  = 'net461'
+            AssemblyName     = 'System.Buffers'
+        },
+        [pscustomobject]@{
+            PackageName      = 'System.Numerics.Vectors'
+            PackageVersion   = '4.5.0'
+            TargetFramework  = 'net46'
+            AssemblyName     = 'System.Numerics.Vectors'
+        },
+        [pscustomobject]@{
+            PackageName      = 'System.Memory'
+            PackageVersion   = '4.5.5'
+            TargetFramework  = 'net461'
+            AssemblyName     = 'System.Memory'
+        }
+    )
+
+    foreach ($dependency in $dependencies) {
+        $assemblyPath = Get-SetupConsoleDependencyAssemblyPath `
+            -PackageRoot $PackageRoot `
+            -PackageName $dependency.PackageName `
+            -PackageVersion $dependency.PackageVersion `
+            -TargetFramework $dependency.TargetFramework `
+            -AssemblyName $dependency.AssemblyName
+
+        $alreadyLoaded = [AppDomain]::CurrentDomain.GetAssemblies() | Where-Object {
+            $_.GetName().Name -eq $dependency.AssemblyName
+        } | Select-Object -First 1
+
+        if (-not $alreadyLoaded) {
+            Add-Type -Path $assemblyPath -ErrorAction Stop
+        }
+    }
+}
+
 function Initialize-SetupConsoleCancellationSupport {
     [CmdletBinding()]
     param()
@@ -113,7 +239,11 @@ function Initialize-SpectreConsole {
         # Continue and load the assembly from the NuGet package.
     }
 
-    $spectreVersion = '0.53.1'
+    # Spectre.Console 0.50+ uses a System.Memory build that references .NET 8
+    # framework assemblies. That works in PowerShell 7, but Windows PowerShell
+    # 5.1 runs on .NET Framework and cannot load those references. Keep the
+    # historically compatible package for Windows PowerShell.
+    $spectreVersion = if ($PSVersionTable.PSEdition -eq 'Core') { '0.53.1' } else { '0.49.1' }
     $packageRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'ALM4Dataverse\SpectreConsole'
     $expandedRoot = Join-Path $packageRoot $spectreVersion
     $packagePath = Join-Path $packageRoot "Spectre.Console.$spectreVersion.nupkg"
@@ -147,7 +277,7 @@ function Initialize-SpectreConsole {
         }
 
         try {
-            Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+            Expand-SetupConsoleArchive -ArchivePath $packagePath -DestinationPath $expandedRoot
         }
         catch {
             # A partially downloaded archive can remain in the cache. Remove it and
@@ -155,7 +285,7 @@ function Initialize-SpectreConsole {
             Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
-            Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+            Expand-SetupConsoleArchive -ArchivePath $packagePath -DestinationPath $expandedRoot
         }
 
         $hasExtractedAssembly = $null -ne (Get-ChildItem -LiteralPath $expandedRoot -Recurse -Filter 'Spectre.Console.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
@@ -163,7 +293,7 @@ function Initialize-SpectreConsole {
             Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
             Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
-            Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+            Expand-SetupConsoleArchive -ArchivePath $packagePath -DestinationPath $expandedRoot
         }
     }
 
@@ -192,6 +322,7 @@ function Initialize-SpectreConsole {
         throw "Could not locate Spectre.Console.dll after extracting package version $spectreVersion."
     }
 
+    Initialize-SetupConsoleFrameworkDependencies -PackageRoot $packageRoot
     Add-Type -Path $spectreAssemblyPath -ErrorAction Stop
     $script:SpectreConsoleInitialized = $true
     $script:SpectreConsoleAssemblyPath = $spectreAssemblyPath
