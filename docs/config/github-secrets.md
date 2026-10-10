@@ -3,10 +3,9 @@
 This document describes every secret and variable used by the ALM4Dataverse GitHub
 Actions workflows, and how they map to each of the three credential approaches.
 
-> The reusable workflows do **not** accept credential/value `workflow_call` inputs
-> (for example `dataverse-url`, `dataverse-connection-refs`, `dataverse-env-vars`)
-> or secret inputs (`azure-client-id`, `azure-tenant-id`, etc.). Configure values
-> using GitHub environment variables/secrets or prefixed repo-level secrets/variables.
+> The composite actions receive caller repository variables and secrets through JSON
+> inputs. The shared resolver maps standard runtime names and prefixed repository
+> names into the environment used by the ALM scripts.
 
 ---
 
@@ -47,7 +46,7 @@ and credential locations.
 
 ## Repository dispatch token for EXPORT → BUILD
 
-The reusable `EXPORT` workflow triggers `BUILD` by sending a `repository_dispatch`
+The composite `EXPORT` action triggers `BUILD` by sending a `repository_dispatch`
 event via the GitHub CLI/API after it pushes an export commit.
 
 By default, this uses `GITHUB_TOKEN`. If your repository requires a separate token,
@@ -108,7 +107,7 @@ to the corresponding App Registration:
 
 **Approach 3 (prefixed global secrets) — WIF subject:**
 
-The current reusable workflows still run in a GitHub environment context when using
+The copied caller jobs still run in a GitHub environment context when using
 prefixed repo-level secrets/variables:
 
 - `EXPORT.yml` / `IMPORT.yml`: default environment is `Dev-{branch}`
@@ -207,9 +206,9 @@ the GitHub environment.
 Store the following as repository-level secrets and variables
 (Settings > Secrets and variables > Actions).
 
-The reusable workflows automatically map prefixed names to the unprefixed runtime
-variables expected by the PowerShell scripts. No per-workflow `secrets:` mapping is
-required in `EXPORT.yml`, `IMPORT.yml`, or `DEPLOY-main.yml`.
+The composite actions automatically map prefixed names to the unprefixed runtime
+variables expected by the PowerShell scripts. The copied jobs pass repository variable
+and secret JSON to the actions; no per-variable mapping is required.
 
 Use an environment-specific prefix in each name.  The recommended prefix format is
 `{ENV}_{BRANCH}_` for branch-scoped environments or `{ENV}_` for shared environments.
@@ -307,20 +306,16 @@ The ALM4Dataverse PowerShell scripts use the following OS environment variables:
 | `AZURE_CLIENT_ID` | GitHub environment variable, or auto-mapped from prefixed repo secret/variable |
 | `AZURE_TENANT_ID` | GitHub environment variable, or auto-mapped from prefixed repo secret/variable |
 | `AZURE_CLIENT_SECRET` | GitHub environment secret, or auto-mapped from prefixed repo secret |
-| `AZURE_FEDERATED_TOKEN_FILE` | Set by the WIF setup step — picked up by `DefaultAzureCredential` (WIF auth only) |
 | `DATAVERSE_URL` | GitHub environment variable, or auto-mapped from prefixed repo variable |
 | `DATAVERSESERVICEACCOUNTUPN` | GitHub environment variable/secret, or auto-mapped from prefixed repo secret/variable |
 | `DataverseConnRef_<name>` | GitHub environment variable (direct), prefixed repo variable auto-mapped, **or** expanded from prefixed JSON |
 | `DataverseEnvVar_<name>` | GitHub environment variable (direct), prefixed repo variable auto-mapped, **or** expanded from prefixed JSON |
 
-**WIF flow**: when `AZURE_CLIENT_SECRET` is absent, the reusable workflow requests a
-short-lived OIDC token from GitHub's token endpoint, writes it to a temp file under
-`$RUNNER_TEMP`, and sets `AZURE_FEDERATED_TOKEN_FILE`.  `DefaultAzureCredential`
-then uses its `WorkloadIdentityCredential` to exchange this token for an Entra ID
-access token — no secrets are stored anywhere.
-
-**Client secret flow**: when `AZURE_CLIENT_SECRET` is present, `DefaultAzureCredential`
-uses `EnvironmentCredential` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
+The composite actions use one `azure/login@v3` step for both credential flows. When
+`AZURE_CLIENT_SECRET` is absent, Azure Login uses `AZURE_CLIENT_ID` and
+`AZURE_TENANT_ID` for GitHub OIDC. When it is present, the action supplies Azure
+Login's `creds` JSON input, and `DefaultAzureCredential` also uses
+`EnvironmentCredential` with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and
 `AZURE_CLIENT_SECRET`.
 
 ---

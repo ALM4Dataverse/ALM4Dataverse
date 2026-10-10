@@ -555,8 +555,8 @@ function Get-GitHubRepo {
 function Ensure-GitHubSharedWorkflowAccessPolicy {
     <#
     .SYNOPSIS
-        Ensures a private shared workflow repository has its Actions access policy configured
-        to allow other repositories owned by the same user or organization to use its reusable workflows.
+        Ensures a private shared action repository has its Actions access policy configured
+        to allow other repositories owned by the same user or organization to use its composite actions.
     #>
     [CmdletBinding()]
     param(
@@ -571,22 +571,22 @@ function Ensure-GitHubSharedWorkflowAccessPolicy {
     }
 
     if (-not $repoDetails.private) {
-        Write-Host "Shared workflow repository '$Owner/$Repo' is public; no Actions access policy configuration required." -ForegroundColor DarkGray
+        Write-Host "Shared action repository '$Owner/$Repo' is public; no Actions access policy configuration required." -ForegroundColor DarkGray
         return
     }
 
-    # Private repo: set access_level so other repos owned by the same user/org can call its reusable workflows.
+    # Private repo: set access_level so other repos owned by the same user/org can use its composite actions.
     # See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/enabling-features-for-your-repository/managing-github-actions-settings-for-a-repository#allowing-access-to-components-in-a-private-repository
     $ownerType = $repoDetails.owner.type
     $accessLevel = if ($ownerType -eq 'Organization') { 'organization' } else { 'user' }
 
     $currentPolicy = Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/permissions/access" -AllowNotFound
     if ($currentPolicy -and $currentPolicy.access_level -eq $accessLevel) {
-        Write-Host "Shared workflow repository '$Owner/$Repo' Actions access policy is already set to '$accessLevel'." -ForegroundColor DarkGray
+        Write-Host "Shared action repository '$Owner/$Repo' Actions access policy is already set to '$accessLevel'." -ForegroundColor DarkGray
         return
     }
 
-    Write-Host "Setting Actions access policy on '$Owner/$Repo' to '$accessLevel' so its reusable workflows are accessible from other private repositories..." -ForegroundColor Yellow
+    Write-Host "Setting Actions access policy on '$Owner/$Repo' to '$accessLevel' so its composite actions are accessible from other private repositories..." -ForegroundColor Yellow
     Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/permissions/access" -Method 'PUT' -Body @{ access_level = $accessLevel } | Out-Null
     Write-Host "Actions access policy set to '$accessLevel' on '$Owner/$Repo'." -ForegroundColor Green
 }
@@ -663,7 +663,7 @@ function Get-GitHubWorkflowReferenceFromRepoClone {
         }
 
         $content = Get-Content -LiteralPath $candidateFile -Raw
-        $match = [regex]::Match($content, 'uses:\s*([^/\s]+/[^/\s]+)/\.github/workflows/[A-Za-z0-9._-]+@([^\s''"`]+)')
+        $match = [regex]::Match($content, 'uses:\s*([^/\s]+/[^/\s]+)/\.github/(?:workflows/[A-Za-z0-9._-]+|actions/[A-Za-z0-9._-]+)@([^\s''"`]+)')
         if ($match.Success) {
             return [pscustomobject]@{
                 Repository = $match.Groups[1].Value
@@ -1638,7 +1638,7 @@ function Ensure-GitHubForkForSharedWorkflows {
         )
         $creationModeSelection = Select-FromMenu -Title "How should '$selectedSharedRepositoryFullName' be created?" -Items $creationModeItems -PromptGuidanceLines @(
             'Choose whether the shared workflow repository should be public (fork style) or private.',
-            'Pick an option that target repositories can access for reusable workflow calls.'
+            'Pick an option that target repositories can access for shared composite actions.'
         ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $creationModeSelection) {
             throw 'No shared workflow repository type selected.'
@@ -2837,16 +2837,16 @@ function Copy-WorkflowTemplatesToRepo {
         $sourceFileToUse = $file.FullName
         $isTempFile      = $false
 
-        # Patch all shared workflow references (build/export/import/deploy/etc.) to the selected repository/ref.
+        # Patch all shared action references (build/export/import/deploy/etc.) to the selected repository/ref.
         # BUILD.yml repository_dispatch branch/SHA resolution is template-driven and is copied verbatim.
         if ($normalizedRelativePath -like '.github/workflows/*.yml') {
             $content = Get-Content -LiteralPath $sourceFileToUse -Raw
             $updatedContent = [Regex]::Replace(
                 $content,
-                'ALM4Dataverse/ALM4Dataverse/\.github/workflows/([A-Za-z0-9._-]+)@[A-Za-z0-9._/\-]+',
+                'ALM4Dataverse/ALM4Dataverse/\.github/actions/([A-Za-z0-9._-]+)@[A-Za-z0-9._/\-]+',
                 {
                     param($m)
-                    return "$SharedWorkflowRepository/.github/workflows/$($m.Groups[1].Value)@$SharedWorkflowRef"
+                    return "$SharedWorkflowRepository/.github/actions/$($m.Groups[1].Value)@$SharedWorkflowRef"
                 }
             )
 
@@ -2970,7 +2970,16 @@ function Update-BuildWorkflowInRepoClone {
         ''
     }
 
-        $newContent = @"
+    $environmentBlock = ''
+    if ($BuildValidationEnabled -and -not [string]::IsNullOrWhiteSpace($BuildEnvironmentName)) {
+        $environmentBlock = @"
+        environment:
+            name: '$escapedBuildEnvironmentName'
+            deployment: false
+"@
+    }
+
+    $newContent = @"
 name: BUILD
 
 # Triggers on every push to any branch.
@@ -2992,17 +3001,22 @@ on:
 
 jobs:
     build:
-        uses: $SharedWorkflowRepository/.github/workflows/build.yml@$SharedWorkflowReference
-        with:
-            build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
-            source-branch: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
-            source-ref: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
-            environment-name: '$environmentInput'
-            timeout-minutes: 360
-        permissions:
+        runs-on: ubuntu-latest
+        timeout-minutes: 360
+$environmentBlock        permissions:
             contents: write
             actions: write
             id-token: write
+        steps:
+            - name: Build Dataverse solutions
+              uses: $SharedWorkflowRepository/.github/actions/build@$SharedWorkflowReference
+              with:
+                build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
+                source-branch: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
+                source-ref: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
+                environment-name: '$environmentInput'
+                all-repo-vars-json: `${{ toJSON(vars) }}
+                all-repo-secrets-json: `${{ toJSON(secrets) }}
 "@
 
     Set-Content -LiteralPath $buildWorkflowPath -Value $newContent.TrimStart("`r", "`n") -NoNewline
@@ -3042,7 +3056,7 @@ function Update-DeployWorkflowInRepoClone {
         return
     }
 
-    $usesRef = "$SharedWorkflowRepository/.github/workflows/deploy.yml@$SharedWorkflowRef"
+    $usesRef = "$SharedWorkflowRepository/.github/actions/deploy@$SharedWorkflowRef"
 
     $lines = New-Object System.Collections.Generic.List[string]
 
@@ -3060,7 +3074,9 @@ function Update-DeployWorkflowInRepoClone {
     $lines.Add('#   1. Add it to workflow_dispatch target-environment options.')
     $lines.Add('#   2. Add a deploy-* job and chain needs to the previous stage.')
     $lines.Add('#   3. Set previous-environment-name to the previous stage short name.')
-    $lines.Add('#   4. In environment-approval mode, keep the repository_dispatch trigger enabled.')
+    if ($PromotionMode -eq 'environment-approval') {
+        $lines.Add('#   4. In environment-approval mode, keep the repository_dispatch trigger enabled.')
+    }
     $lines.Add('')
     $lines.Add('permissions:')
     $lines.Add('  actions: read')
@@ -3113,6 +3129,7 @@ function Update-DeployWorkflowInRepoClone {
     for ($i = 0; $i -lt $DeploymentEnvironments.Count; $i++) {
         $envName = [string]$DeploymentEnvironments[$i].ShortName
         $envNameEscaped = $envName.Replace("'", "''")
+        $branchEscaped = $Branch.Replace("'", "''")
 
         $baseJobId = ('deploy-' + (($envName.ToLowerInvariant() -replace '[^a-z0-9]+', '-').Trim('-')))
         if ([string]::IsNullOrWhiteSpace($baseJobId) -or $baseJobId -eq 'deploy-') {
@@ -3133,6 +3150,24 @@ function Update-DeployWorkflowInRepoClone {
             if ($PromotionMode -eq 'manual-gate-tag') {
                 $lines.Add('    # Manual-gate-tag mode requires an explicit workflow_dispatch, even for stage 1.')
             }
+
+            if ($PromotionMode -eq 'environment-approval') {
+                $lines.Add('    if: >-')
+                $lines.Add('      (')
+                $lines.Add("        github.event_name == 'repository_dispatch' &&")
+                $lines.Add("        '$PromotionMode' == 'environment-approval' &&")
+                $lines.Add("        github.event.client_payload.branch == '$branchEscaped'")
+                $lines.Add('      ) || (')
+                $lines.Add('        github.event_name == ''workflow_dispatch'' &&')
+                $lines.Add('        (')
+                $lines.Add("          inputs.target-environment == '$envNameEscaped' ||")
+                $lines.Add("          ('$PromotionMode' == 'environment-approval' && inputs.target-environment == '')")
+                $lines.Add('        )')
+                $lines.Add('      )')
+            }
+            else {
+                $lines.Add("    if: `${{ github.event_name == 'workflow_dispatch' && inputs.target-environment == '$envNameEscaped' }}")
+            }
         }
         else {
             $lines.Add("    needs: $previousJobId")
@@ -3141,37 +3176,51 @@ function Update-DeployWorkflowInRepoClone {
             if ($PromotionMode -eq 'environment-approval') {
                 $lines.Add('    if: >-')
                 $lines.Add('      (')
-                $lines.Add("        github.event_name == 'workflow_dispatch' &&")
-                $lines.Add(("        inputs.target-environment == '{0}'" -f $envNameEscaped))
+                $lines.Add("        github.event_name == 'repository_dispatch' &&")
+                $lines.Add("        '$PromotionMode' == 'environment-approval' &&")
+                $lines.Add("        github.event.client_payload.branch == '$branchEscaped' &&")
+                $lines.Add("        needs['{0}'].result == 'success'" -f $previousJobId)
                 $lines.Add('      ) || (')
-                $lines.Add(("        (github.event_name != 'workflow_dispatch' || inputs.target-environment == '') && needs['{0}'].result == 'success'" -f $previousJobId))
+                $lines.Add("        github.event_name == 'workflow_dispatch' &&")
+                $lines.Add('        (')
+                $lines.Add(("          inputs.target-environment == '{0}' ||" -f $envNameEscaped))
+                $lines.Add(("          ('$PromotionMode' == 'environment-approval' && inputs.target-environment == '' && needs['{0}'].result == 'success')" -f $previousJobId))
+                $lines.Add('        )')
                 $lines.Add('      )')
             }
             else {
-                $lines.Add(('    if: ${{{{ github.event_name == ''workflow_dispatch'' || needs[''{0}''].result == ''success'' }}}}' -f $previousJobId))
+                $lines.Add("    if: `${{ github.event_name == 'workflow_dispatch' && inputs.target-environment == '$envNameEscaped' }}")
             }
         }
 
-        $lines.Add("    uses: $usesRef")
+        $lines.Add('    runs-on: ubuntu-latest')
+        $lines.Add('    timeout-minutes: 360')
+        $lines.Add("    environment: '$envNameEscaped'")
+        $lines.Add('    concurrency:')
+        $lines.Add("      group: alm4dataverse-environment-$envNameEscaped")
+        $lines.Add('      cancel-in-progress: true')
         $lines.Add('    permissions:')
         $lines.Add('      actions: read')
         $lines.Add('      contents: write')
         $lines.Add('      id-token: write')
-        $lines.Add('    with:')
-        $lines.Add("      environment-name: '$envNameEscaped'")
+        $lines.Add('    steps:')
+        $lines.Add("      - name: Deploy to $envNameEscaped")
+        $lines.Add("        uses: $usesRef")
+        $lines.Add('        with:')
+        $lines.Add("          environment-name: '$envNameEscaped'")
         if ($i -eq 0) {
-            $lines.Add("      previous-environment-name: ''")
+            $lines.Add("          previous-environment-name: ''")
         }
         else {
             $prevEscaped = $previousEnvName.Replace("'", "''")
-            $lines.Add("      previous-environment-name: '$prevEscaped'")
+            $lines.Add("          previous-environment-name: '$prevEscaped'")
         }
-        $lines.Add("      promotion-mode: $PromotionMode")
-        $lines.Add("      trigger-branch: '$Branch'")
-        $lines.Add('      github-context-json: ${{ toJSON(github) }}')
-        $lines.Add('      caller-inputs-json: ${{ toJSON(inputs) }}')
-        $lines.Add('      timeout-minutes: 360')
-        $lines.Add('    secrets: inherit')
+        $lines.Add("          promotion-mode: $PromotionMode")
+        $lines.Add("          trigger-branch: '$branchEscaped'")
+        $lines.Add('          github-context-json: ${{ toJSON(github) }}')
+        $lines.Add('          caller-inputs-json: ${{ toJSON(inputs) }}')
+        $lines.Add('          all-repo-vars-json: ${{ toJSON(vars) }}')
+        $lines.Add('          all-repo-secrets-json: ${{ toJSON(secrets) }}')
         $lines.Add('')
 
         $previousJobId = $jobId

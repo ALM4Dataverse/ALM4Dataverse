@@ -103,7 +103,6 @@ foreach ($solution in $solutions) {
         -TimeoutSeconds $importTimeoutSeconds `
         -EnvironmentVariables $environmentVariables `
         -ConnectionReferences $connectionReferences `
-        -PublishWorkflows `
         -OverwriteUnmanagedCustomizations:(-not $UseUnmanagedSolutions) `
         -SkipIfSameVersion `
         -UseUpdateIfVersionMajorMinorMatches:(-not $UseUnmanagedSolutions)

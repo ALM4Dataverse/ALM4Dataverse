@@ -603,7 +603,7 @@ foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     }
 }
 
-$pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+$pacToolPath = Join-Path $HOME '.alm4dataverse/tools'
 $resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
 
 if ([string]::IsNullOrWhiteSpace($resolvedPacVersion)) {

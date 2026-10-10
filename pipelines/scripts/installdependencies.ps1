@@ -126,7 +126,7 @@ if ($config.ContainsKey('pacCliVersion') -and $null -ne $config.pacCliVersion) {
 
 $pacCliVersion = Resolve-PacCliVersionSpecifier -RawValue $pacCliVersion
 
-$pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+$pacToolPath = Join-Path $HOME '.alm4dataverse/tools'
 if (-not (Test-Path $pacToolPath)) {
     New-Item -ItemType Directory -Path $pacToolPath -Force | Out-Null
 }
@@ -150,8 +150,9 @@ if (-not $dotnet) {
     throw "dotnet command not found in PATH. dotnet is required to install PAC CLI."
 }
 
-$pacExePath = Join-Path $pacToolPath 'pac.exe'
-if (Test-Path $pacExePath) {
+$pacExecutableName = if ($IsWindows) { 'pac.exe' } else { 'pac' }
+$pacExecutablePath = Join-Path $pacToolPath $pacExecutableName
+if (Test-Path $pacExecutablePath) {
     & dotnet @updateArgs
     if (-not $?) {
         Write-Host "PAC CLI update failed. Reinstalling..."
@@ -167,8 +168,9 @@ if (-not $?) {
     throw "Failed to install PAC CLI."
 }
 
-if (-not (($env:PATH -split ';') -contains $pacToolPath)) {
-    $env:PATH = "$pacToolPath;$env:PATH"
+$pathSeparator = [System.IO.Path]::PathSeparator
+if (-not (($env:PATH -split [regex]::Escape([string]$pathSeparator)) -contains $pacToolPath)) {
+    $env:PATH = "$pacToolPath$pathSeparator$env:PATH"
 }
 
 if ($env:GITHUB_PATH) {
@@ -179,8 +181,8 @@ if ($env:TF_BUILD -eq 'True') {
     Write-Host "##vso[task.prependpath]$pacToolPath"
 }
 
-if (-not (Test-Path $pacExePath)) {
-    throw "PAC CLI installation completed but pac.exe was not found at $pacExePath"
+if (-not (Test-Path $pacExecutablePath)) {
+    throw "PAC CLI installation completed but $pacExecutableName was not found at $pacExecutablePath"
 }
 
 $pacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
