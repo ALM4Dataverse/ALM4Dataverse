@@ -4,14 +4,26 @@
 ```mermaid
 flowchart LR
     A[Repository Branch<br/>&lt;branchname&gt;] --> B[BUILD Pipeline]
-    B --> C[BUILD job assets<br/>&lt;reponame&gt;-&lt;branchname&gt;-&lt;date&gt;-&lt;seq&gt;]
+    B --> C[BUILD Actions artifacts]
+    B --> D[GitHub Release<br/>v&lt;build-name&gt;]
 
     style A fill:#e1f5fe
     style C fill:#f3e5f5
+    style D fill:#f3e5f5
     style B fill:#fff3e0
 ```
 
-The `BUILD` pipeline collates a numbered 'release' by extracting and building the assets required to deploy from source control. This can then be used later to deploy to any number of environments using the exact same, unchanged assets.
+The `BUILD` pipeline collates a numbered release by extracting and building the assets required to deploy from source control. This can then be used later to deploy to any number of environments using the exact same, unchanged assets.
+
+On GitHub Actions, each successful branch BUILD publishes the same separate
+deployment archives as both Actions artifacts and GitHub Release assets:
+
+- `artifacts.zip` — the deployment artifacts, including solutions, configured
+  assets, scripts, configuration, and dependency locks.
+- `solution-check-report.zip` — published when a solution-check report exists.
+
+The Release is not a different deployment package. Existing Actions artifacts
+remain available for compatibility and fallback deployments.
 
 The `BUILD` job triggers automatically when any changes are made in the associated repo, including when `EXPORT` completes (unless no changes were found).
 
@@ -27,6 +39,7 @@ To monitor:
 1) Navigate to the **Actions** tab of your repository.
 2) Select the **BUILD** workflow from the left panel.
 3) Select the running workflow run. Wait until it is shown as successful (green checkmark).
+4) Open the repository's **Releases** page and find the Release for the build tag.
 
 What happens:
 
@@ -51,5 +64,13 @@ If checks fail, the logs clearly state which solution breached the configured th
 
 What to do next:
 
-- The `DEPLOY-<branchname>` pipeline triggers automatically if the job completes successfully.
-  See [Deploying](deploying.md) for information.
+- The `DEPLOY-<branchname>` workflow uses the Release assets first and falls back
+  to the BUILD artifact when needed. See [Deploying](deploying.md) for information.
+
+## GitHub Release cleanup
+
+The copied `CLEANUP-RELEASES.yml` workflow runs on branch deletion, daily, and
+manually. It removes managed build Releases from deleted branches and keeps at
+most 10 Releases per branch by default, including the default branch. Before an
+old Release is deleted, its branch, build name, source commit, and BUILD run ID
+are preserved in an annotated `alm4dataverse/metadata/<release-tag>` tag.

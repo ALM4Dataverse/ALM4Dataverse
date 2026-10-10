@@ -1,0 +1,31 @@
+name: CLEANUP-RELEASES
+
+# Removes Releases created by BUILD from deleted branches and caps the number
+# retained per source branch, including the default branch.
+
+on:
+  delete:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      max-releases-per-branch:
+        description: 'Keep at most this many newest build Releases per source branch'
+        required: false
+        default: 10
+        type: number
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alm4dataverse-release-cleanup
+  cancel-in-progress: true
+
+jobs:
+  cleanup:
+    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/cleanup-releases.yml@main
+    permissions:
+      contents: write
+    with:
+      max-releases-per-branch: ${{ inputs.max-releases-per-branch || 10 }}
