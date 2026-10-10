@@ -1,0 +1,180 @@
+name: Export
+description: Export Dataverse solutions, commit the unpacked changes, and request a build.
+
+inputs:
+  commit-message:
+    description: Commit message for exported changes.
+    required: true
+  environment-name:
+    description: GitHub environment used for credentials and prefixed values.
+    required: false
+    default: ''
+  dev-environment-label:
+    description: Label passed to the export script.
+    required: false
+    default: ''
+  workflow-dispatch-token:
+    description: Optional token used to send the build repository_dispatch event.
+    required: false
+    default: ''
+  all-repo-vars-json:
+    description: JSON representation of the caller repository variables.
+    required: false
+    default: '{}'
+  all-repo-secrets-json:
+    description: JSON representation of the caller repository secrets.
+    required: false
+    default: '{}'
+
+outputs:
+  pushed:
+    description: Whether the export committed and pushed changes.
+    value: ${{ steps.commit-and-push.outputs.pushed }}
+  pushed-sha:
+    description: SHA of the pushed export commit.
+    value: ${{ steps.commit-and-push.outputs.pushed_sha }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+      with:
+        path: self
+        persist-credentials: true
+        fetch-depth: 1
+
+    - name: Resolve dependency cache keys
+      id: dependency-cache
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      run: |
+        & "${{ github.action_path }}/../../../pipelines/scripts/resolvedependencycache.ps1" `
+          -BaseDirectory "${{ github.workspace }}/self" `
+          -AlmScriptsRoot "${{ github.action_path }}/../../../pipelines/scripts"
+
+    - name: Cache PowerShell modules
+      if: steps.dependency-cache.outputs.module_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.module_cache_key }}
+        path: |
+          ~/.local/share/powershell/Modules
+
+    - name: Cache PAC CLI
+      if: steps.dependency-cache.outputs.pac_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
+        path: ~/.alm4dataverse/tools
+
+    - name: Resolve prefixed repo variables and secrets
+      shell: pwsh
+      env:
+        ALL_REPO_VARS_JSON: ${{ inputs.all-repo-vars-json }}
+        ALL_REPO_SECRETS_JSON: ${{ inputs.all-repo-secrets-json }}
+        RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name != '' && inputs.environment-name || format('Dev-{0}', github.ref_name) }}
+      run: |
+        & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
+
+    - name: Validate authentication inputs
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}/../common/validate-auth.ps1"
+
+    - name: Log in to Azure
+      uses: azure/login@v3
+      env:
+        AZURE_CORE_OUTPUT: none
+      with:
+        client-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_CLIENT_ID || '' }}
+        tenant-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_TENANT_ID || '' }}
+        creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
+        allow-no-subscriptions: true
+
+    - name: Install dependencies, connect, and export
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      env:
+        DEV_ENVIRONMENT_LABEL: ${{ inputs.dev-environment-label }}
+      run: |
+        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
+        $devEnvLabel = $env:DEV_ENVIRONMENT_LABEL
+        if ([string]::IsNullOrWhiteSpace($devEnvLabel)) {
+          $devEnvLabel = "Dev-$env:GITHUB_REF_NAME"
+        }
+        & "${{ github.action_path }}/../../../pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
+        & "${{ github.action_path }}/../../../pipelines/scripts/export.ps1" `
+          -SourceDirectory "${{ github.workspace }}/self" `
+          -ArtifactStagingDirectory "${{ runner.temp }}/export-staging" `
+          -TempDirectory "${{ runner.temp }}/export-temp" `
+          -EnvironmentName $devEnvLabel
+
+    - name: Commit and push changes
+      id: commit-and-push
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      env:
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $didPush = $false
+        $pushedSha = ''
+        git config user.email "${{ github.actor }}@users.noreply.github.com"
+        if ($LASTEXITCODE -ne 0) { throw 'git config user.email failed' }
+        git config user.name "${{ github.actor }}"
+        if ($LASTEXITCODE -ne 0) { throw 'git config user.name failed' }
+        git add .
+        if ($LASTEXITCODE -ne 0) { throw 'git add failed' }
+        $status = git status --porcelain
+        if ([string]::IsNullOrEmpty($status)) {
+          Write-Host 'No changes to commit'
+        }
+        else {
+          git commit -m $env:COMMIT_MESSAGE
+          if ($LASTEXITCODE -ne 0) { throw 'git commit failed' }
+          git push origin "HEAD:$env:GITHUB_REF"
+          if ($LASTEXITCODE -ne 0) { throw 'git push failed' }
+          $pushedSha = (git rev-parse HEAD).Trim()
+          if ([string]::IsNullOrWhiteSpace($pushedSha)) {
+            throw 'Failed to resolve pushed commit SHA'
+          }
+          $didPush = $true
+        }
+        "pushed=$didPush" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "pushed_sha=$pushedSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    - name: Trigger BUILD via repository_dispatch
+      if: steps.commit-and-push.outputs.pushed == 'true'
+      shell: pwsh
+      env:
+        GH_REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.workflow-dispatch-token != '' && inputs.workflow-dispatch-token || github.token }}
+        BUILD_WORKFLOW_REF: ${{ github.ref_name }}
+        BUILD_SOURCE_SHA: ${{ steps.commit-and-push.outputs.pushed_sha }}
+        EXPORT_ACTOR: ${{ github.actor }}
+        EXPORT_RUN_ID: ${{ github.run_id }}
+      run: |
+        if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+          throw 'No token available for repository dispatch.'
+        }
+
+        $eventType = 'alm4dataverse-export-build'
+        $payload = @{
+          event_type = $eventType
+          client_payload = @{
+            branch      = $env:BUILD_WORKFLOW_REF
+            sha         = $env:BUILD_SOURCE_SHA
+            exported_by = $env:EXPORT_ACTOR
+            exported_at = (Get-Date).ToUniversalTime().ToString('o')
+            run_id      = $env:EXPORT_RUN_ID
+          }
+        } | ConvertTo-Json -Depth 10 -Compress
+
+        $result = @($payload | & gh api --method POST "repos/$($env:GH_REPO)/dispatches" --input - 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+          $errorText = @($result | ForEach-Object { [string]$_ }) -join "`n"
+          throw "Failed to send repository_dispatch event: $errorText"
+        }
+
+        Write-Host 'repository_dispatch event sent successfully.'

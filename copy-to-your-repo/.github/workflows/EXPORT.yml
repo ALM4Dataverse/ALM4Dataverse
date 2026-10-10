@@ -22,13 +22,24 @@ permissions:
 
 jobs:
   export:
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/export.yml@stable
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    environment:
+      name: ${{ format('Dev-{0}', github.ref_name) }}
+      deployment: false
+    concurrency:
+      group: ${{ format('alm4dataverse-environment-{0}', format('Dev-{0}', github.ref_name)) }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
       actions: write
-    with:
-      commit-message: ${{ inputs.commit-message }}
-      timeout-minutes: 360
-
-    secrets: inherit
+    steps:
+      - name: Export Dataverse solutions
+        uses: ALM4Dataverse/ALM4Dataverse/.github/actions/export@main
+        with:
+          commit-message: ${{ inputs.commit-message }}
+          environment-name: ${{ format('Dev-{0}', github.ref_name) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          workflow-dispatch-token: ${{ secrets.WORKFLOW_DISPATCH_TOKEN || secrets.GH_WORKFLOW_TOKEN || github.token }}

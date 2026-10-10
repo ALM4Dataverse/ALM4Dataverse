@@ -1,0 +1,214 @@
+name: Build Dataverse solutions
+description: Build, validate, publish, and tag Dataverse solution artifacts.
+
+inputs:
+  build-name:
+    description: Exact build name used for the run and source tag.
+    required: true
+  source-ref:
+    description: Optional source branch or commit to build.
+    required: false
+    default: ''
+  source-branch:
+    description: Optional source branch used for downstream repository_dispatch payloads.
+    required: false
+    default: ''
+  environment-name:
+    description: Optional GitHub environment used for build validation.
+    required: false
+    default: ''
+  all-repo-vars-json:
+    description: JSON representation of the caller repository variables.
+    required: false
+    default: '{}'
+  all-repo-secrets-json:
+    description: JSON representation of the caller repository secrets.
+    required: false
+    default: '{}'
+
+outputs:
+  run-id:
+    description: Internal numeric GitHub Actions run ID for this build.
+    value: ${{ github.run_id }}
+  run-name:
+    description: Exact build name used for deployment selection.
+    value: ${{ inputs.build-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Checkout source code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
+        path: self
+        fetch-depth: 1
+
+    - name: Resolve dependency cache keys
+      id: dependency-cache
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      run: |
+        & "${{ github.action_path }}/../../../pipelines/scripts/resolvedependencycache.ps1" `
+          -BaseDirectory "${{ github.workspace }}/self" `
+          -AlmScriptsRoot "${{ github.action_path }}/../../../pipelines/scripts"
+
+    - name: Cache PowerShell modules
+      if: steps.dependency-cache.outputs.module_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.module_cache_key }}
+        path: |
+          ~/.local/share/powershell/Modules
+
+    - name: Cache PAC CLI
+      if: steps.dependency-cache.outputs.pac_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
+        path: ~/.alm4dataverse/tools
+
+    - name: Set build number
+      id: build-number
+      shell: pwsh
+      env:
+        BUILD_NAME: ${{ inputs.build-name }}
+      run: |
+        echo "BUILD_NUMBER=$env:BUILD_NAME" >> $env:GITHUB_ENV
+        "run_name=$env:BUILD_NAME" >> $env:GITHUB_OUTPUT
+        Write-Host "Exact build name: $env:BUILD_NAME"
+
+    - name: Resolve prefixed repo variables and secrets
+      if: inputs.environment-name != ''
+      shell: pwsh
+      env:
+        ALL_REPO_VARS_JSON: ${{ inputs.all-repo-vars-json }}
+        ALL_REPO_SECRETS_JSON: ${{ inputs.all-repo-secrets-json }}
+        RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+      run: |
+        & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
+
+    - name: Validate authentication inputs
+      if: inputs.environment-name != ''
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}/../common/validate-auth.ps1"
+
+    - name: Log in to Azure with GitHub OIDC
+      if: inputs.environment-name != ''
+      uses: azure/login@v3
+      env:
+        AZURE_CORE_OUTPUT: none
+      with:
+        client-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_CLIENT_ID || '' }}
+        tenant-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_TENANT_ID || '' }}
+        creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
+        allow-no-subscriptions: true
+
+    - name: Install dependencies and build
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      env:
+        BUILD_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+      run: |
+        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
+        if (-not [string]::IsNullOrWhiteSpace($env:BUILD_ENVIRONMENT_NAME)) {
+          & "${{ github.action_path }}/../../../pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
+        }
+        & "${{ github.action_path }}/../../../pipelines/scripts/build.ps1" `
+          -SourceDirectory "${{ github.workspace }}/self" `
+          -ArtifactStagingDirectory "${{ github.workspace }}/artifacts"
+
+    - name: Upload build artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: artifacts
+        path: ${{ github.workspace }}/artifacts/
+        retention-days: 90
+        if-no-files-found: warn
+
+    - name: Upload solution check report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: solution-check-report
+        path: ${{ github.workspace }}/artifacts/solution-check/
+        retention-days: 90
+        if-no-files-found: ignore
+
+    - name: Tag source with build version
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $rawBuildNumber = $env:BUILD_NUMBER
+        $sanitizedBuildNumber = $rawBuildNumber `
+          -replace '[^a-zA-Z0-9._/-]', '-' `
+          -replace '\.{2,}', '-' `
+          -replace '/{2,}', '/'
+        $sanitizedBuildNumber = $sanitizedBuildNumber.Trim('/', '.')
+        if ($sanitizedBuildNumber.EndsWith('.lock')) {
+          $sanitizedBuildNumber = $sanitizedBuildNumber -replace '\.lock$', '-lock'
+        }
+        if ([string]::IsNullOrWhiteSpace($sanitizedBuildNumber)) {
+          throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
+        }
+        $tagName = "v$sanitizedBuildNumber"
+        git config user.email "${{ github.actor }}@users.noreply.github.com"
+        if ($LASTEXITCODE -ne 0) { throw 'git config user.email failed' }
+        git config user.name "${{ github.actor }}"
+        if ($LASTEXITCODE -ne 0) { throw 'git config user.name failed' }
+        git tag -a "$tagName" -m "Build version $sanitizedBuildNumber"
+        if ($LASTEXITCODE -ne 0) { throw 'git tag failed' }
+        git push origin "$tagName"
+        if ($LASTEXITCODE -ne 0) { throw 'git push tag failed' }
+
+    - name: Trigger DEPLOY via repository_dispatch
+      shell: pwsh
+      env:
+        GH_REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
+        BUILD_RUN_ID: ${{ github.run_id }}
+        BUILD_RUN_NAME: ${{ steps.build-number.outputs.run_name }}
+        BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
+        BUILD_SOURCE_SHA: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
+        BUILD_EVENT: ${{ github.event_name }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
+          throw 'No token available for repository dispatch.'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($env:BUILD_SOURCE_SHA)) {
+          throw 'Failed to resolve source commit SHA for repository_dispatch payload.'
+        }
+
+        $eventBranchToken = ([string]$env:BUILD_BRANCH).ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+        $eventBranchToken = $eventBranchToken.Trim('-')
+        if ([string]::IsNullOrWhiteSpace($eventBranchToken)) {
+          throw "Failed to resolve branch token for repository_dispatch event type from branch '$($env:BUILD_BRANCH)'."
+        }
+
+        $eventType = "alm4dataverse-build-deploy-$eventBranchToken"
+        $payload = @{
+          event_type = $eventType
+          client_payload = @{
+            branch         = $env:BUILD_BRANCH
+            sha            = $env:BUILD_SOURCE_SHA
+            build_run_id   = $env:BUILD_RUN_ID
+            build_run_name = $env:BUILD_RUN_NAME
+            build_run_url  = "https://github.com/$($env:GH_REPO)/actions/runs/$($env:BUILD_RUN_ID)"
+            build_event    = $env:BUILD_EVENT
+            dispatched_at  = (Get-Date).ToUniversalTime().ToString('o')
+          }
+        } | ConvertTo-Json -Depth 10 -Compress
+
+        $result = @($payload | & gh api --method POST "repos/$($env:GH_REPO)/dispatches" --input - 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+          $errorText = @($result | ForEach-Object { [string]$_ }) -join "`n"
+          throw "Failed to send repository_dispatch event: $errorText"
+        }
+
+        Write-Host 'repository_dispatch event sent successfully.'

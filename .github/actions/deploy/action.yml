@@ -1,0 +1,184 @@
+name: Deploy
+description: Resolve a BUILD run, download its artifacts, deploy them, and publish deployment gate tags.
+
+inputs:
+  environment-name:
+    description: Target Dataverse and GitHub environment name.
+    required: true
+  previous-environment-name:
+    description: Previous promotion stage name.
+    required: false
+    default: ''
+  promotion-mode:
+    description: Promotion strategy.
+    required: false
+    default: manual-gate-tag
+  trigger-branch:
+    description: Branch handled by repository_dispatch promotion events.
+    required: false
+    default: ''
+  github-context-json:
+    description: JSON representation of the caller GitHub context.
+    required: true
+  caller-inputs-json:
+    description: JSON representation of the caller workflow inputs.
+    required: true
+  all-repo-vars-json:
+    description: JSON representation of the caller repository variables.
+    required: false
+    default: '{}'
+  all-repo-secrets-json:
+    description: JSON representation of the caller repository secrets.
+    required: false
+    default: '{}'
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve deployment execution context
+      id: resolve
+      shell: pwsh
+      env:
+        INPUT_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+        INPUT_PREVIOUS_ENVIRONMENT_NAME: ${{ inputs.previous-environment-name }}
+        INPUT_PROMOTION_MODE: ${{ inputs.promotion-mode }}
+        INPUT_TRIGGER_BRANCH: ${{ inputs.trigger-branch }}
+        INPUT_GITHUB_CONTEXT_JSON: ${{ inputs.github-context-json }}
+        INPUT_CALLER_INPUTS_JSON: ${{ inputs.caller-inputs-json }}
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        & "${{ github.action_path }}/../common/resolve-deployment.ps1"
+
+    - name: Check deployment gate tag
+      if: steps.resolve.outputs.required_gate_tag != ''
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $gateTag = '${{ steps.resolve.outputs.required_gate_tag }}'
+        $repo = $env:GITHUB_REPOSITORY
+        $out = gh api "/repos/$repo/git/refs/tags/$gateTag" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+          Write-Error "Deployment gate check failed: the tag '$gateTag' does not exist."
+          exit 1
+        }
+
+        Write-Host "Gate tag '$gateTag' found."
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4.1.3
+      with:
+        name: artifacts
+        run-id: ${{ steps.resolve.outputs.build_run_id }}
+        github-token: ${{ github.token }}
+        repository: ${{ github.repository }}
+        path: artifacts
+
+    - name: Resolve dependency cache keys
+      id: dependency-cache
+      shell: pwsh
+      working-directory: artifacts
+      run: |
+        & "./alm/pipelines/scripts/resolvedependencycache.ps1" `
+          -BaseDirectory "." `
+          -AlmScriptsRoot "./alm/pipelines/scripts"
+
+    - name: Cache PowerShell modules
+      if: steps.dependency-cache.outputs.module_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.module_cache_key }}
+        path: |
+          ~/.local/share/powershell/Modules
+
+    - name: Cache PAC CLI
+      if: steps.dependency-cache.outputs.pac_cache_enabled == 'true'
+      uses: actions/cache@v4
+      with:
+        key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
+        path: ~/.alm4dataverse/tools
+
+    - name: Resolve prefixed repo variables and secrets
+      shell: pwsh
+      env:
+        ALL_REPO_VARS_JSON: ${{ inputs.all-repo-vars-json }}
+        ALL_REPO_SECRETS_JSON: ${{ inputs.all-repo-secrets-json }}
+        RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+      run: |
+        & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
+
+    - name: Validate authentication inputs
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}/../common/validate-auth.ps1" -RequireServiceAccount
+
+    - name: Log in to Azure
+      uses: azure/login@v3
+      env:
+        AZURE_CORE_OUTPUT: none
+      with:
+        client-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_CLIENT_ID || '' }}
+        tenant-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_TENANT_ID || '' }}
+        creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
+        allow-no-subscriptions: true
+
+    - name: Install dependencies, connect, and deploy
+      shell: pwsh
+      working-directory: artifacts
+      run: |
+        if (-not [string]::IsNullOrEmpty($env:DATAVERSE_CONNECTION_REFS)) {
+          $connRefs = $env:DATAVERSE_CONNECTION_REFS | ConvertFrom-Json
+          foreach ($prop in $connRefs.PSObject.Properties) {
+            [System.Environment]::SetEnvironmentVariable("DataverseConnRef_$($prop.Name)", $prop.Value)
+          }
+        }
+
+        if (-not [string]::IsNullOrEmpty($env:DATAVERSE_ENV_VARS)) {
+          $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
+          foreach ($prop in $envVars.PSObject.Properties) {
+            [System.Environment]::SetEnvironmentVariable("DataverseEnvVar_$($prop.Name)", $prop.Value)
+          }
+        }
+
+        & "./alm/pipelines/scripts/installdependencies.ps1"
+        & "./alm/pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
+        & "./alm/pipelines/scripts/deploy.ps1" -ArtifactsPath "."
+
+    - name: Push deployment tags
+      if: steps.resolve.outputs.success_gate_tag != ''
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $successTag = '${{ steps.resolve.outputs.success_gate_tag }}'
+        $environmentPointerTag = '${{ steps.resolve.outputs.environment_pointer_tag }}'
+        $buildRunId = '${{ steps.resolve.outputs.build_run_id }}'
+        $repo = $env:GITHUB_REPOSITORY
+
+        $sha = (gh api "/repos/$repo/actions/runs/$buildRunId" --jq '.head_sha').Trim()
+        if ([string]::IsNullOrWhiteSpace($sha)) {
+          throw "Could not resolve HEAD SHA for run $buildRunId."
+        }
+
+        $out = gh api --method POST "/repos/$repo/git/refs" `
+                      --field "ref=refs/tags/$successTag" `
+                      --field "sha=$sha" 2>&1
+        if ($LASTEXITCODE -ne 0 -and "$out" -notmatch '"already exists"|Reference already exists') {
+          throw "Failed to push gate tag '$successTag': $out"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($environmentPointerTag)) {
+          $delOut = gh api --method DELETE "/repos/$repo/git/refs/tags/$environmentPointerTag" 2>&1
+          if ($LASTEXITCODE -ne 0 -and "$delOut" -notmatch '"Not Found"|404|Reference does not exist|422') {
+            throw "Unexpected error deleting pointer tag '$environmentPointerTag': $delOut"
+          }
+
+          $createOut = gh api --method POST "/repos/$repo/git/refs" `
+                              --field "ref=refs/tags/$environmentPointerTag" `
+                              --field "sha=$sha" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create environment pointer tag '$environmentPointerTag': $createOut"
+          }
+        }

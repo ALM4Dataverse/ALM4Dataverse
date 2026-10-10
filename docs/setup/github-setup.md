@@ -15,18 +15,18 @@ This guide describes how to set up ALM4Dataverse for use with GitHub Actions.
 
 ## Overview
 
-ALM4Dataverse provides four reusable workflows hosted in the ALM4Dataverse repository.
-You call them from your own repository's workflow files, which you copy from the
-`copy-to-your-repo/.github/workflows/` folder.
+ALM4Dataverse provides four composite actions hosted in the ALM4Dataverse repository.
+The ordinary caller workflows in `copy-to-your-repo/.github/workflows/` invoke these
+actions directly, keeping job-level configuration in the consuming repository.
 
-| Your workflow | Reusable workflow called | Purpose |
+| Your workflow | Composite action used | Purpose |
 |---|---|---|
-| `BUILD.yml` | `build.yml` | Pack solutions, upload artifacts, tag commit |
-| `EXPORT.yml` | `export.yml` | Export from dev Dataverse, commit to repo |
-| `IMPORT.yml` | `import.yml` | Build from source, import into dev Dataverse |
-| `DEPLOY-main.yml` | `deploy.yml` | Deploy artifacts to each environment |
+| `BUILD.yml` | `.github/actions/build` | Pack solutions, upload artifacts, tag commit |
+| `EXPORT.yml` | `.github/actions/export` | Export from dev Dataverse, commit to repo |
+| `IMPORT.yml` | `.github/actions/import` | Build from source, import into dev Dataverse |
+| `DEPLOY-main.yml` | `.github/actions/deploy` | Deploy artifacts to each environment |
 
-During automated setup (`setup-github.ps1`), you are also prompted whether to enable solution validation in `BUILD` globally. If enabled, setup configures one shared GitHub environment for BUILD validation and wires reusable `build.yml` to run Dataverse connect/authentication against that environment before build validation.
+During automated setup (`setup-github.ps1`), you are also prompted whether to enable solution validation in `BUILD` globally. If enabled, setup configures one shared GitHub environment for BUILD validation and wires the build action to run Dataverse connect/authentication against that environment before build validation.
 
 ---
 
@@ -82,7 +82,7 @@ OIDC tokens with no secrets to manage or rotate.
 > **Examples** for repo `MyOrg/MyApp`:
 > - Environment-based: `repo:MyOrg/MyApp:environment:TEST-main`
 
-ALM4Dataverse reusable workflows run within a named GitHub environment across all
+ALM4Dataverse caller jobs run within a named GitHub environment across all
 credential approaches:
 
 - `EXPORT` / `IMPORT` default to `Dev-{branch}` when `environment-name` is not passed.
@@ -133,7 +133,7 @@ your-repo/
 │       ├── BUILD.yml
 │       ├── EXPORT.yml
 │       ├── IMPORT.yml
-│       └── DEPLOY-main.yml   ← all environments; manual from stage 1 by default
+│       └── DEPLOY-main.yml   ← all environments; auto-chain with environment approvals by default
 ├── alm-config.psd1
 └── data/
 ```
@@ -168,12 +168,16 @@ If solution check is enabled, BUILD authenticates PAC using managed identity / e
 
 `DEPLOY-main.yml` uses one **stage/job per environment**.
 
+The copied template defaults to `environment-approval`: BUILD starts the first stage
+through `repository_dispatch`, later stages auto-chain, and GitHub environment
+protection rules can pause a stage for approval.
+
 To configure it, edit only:
 
 - each stage's `promotion-mode` value:
+  - `environment-approval` (default; auto-chain after previous stage success; relies on environment protection rules)
   - `manual-gate-tag` (GitHub Free compatible; manual deployment + gate tag)
-  - `environment-approval` (auto-chain after previous stage success; relies on environment protection rules)
-- the `repository_dispatch` trigger **only when using** `environment-approval`
+- the `repository_dispatch` trigger (keep it for `environment-approval`; remove it for `manual-gate-tag`)
 - `workflow_dispatch.inputs.target-environment`
 - the `deploy-*` jobs (one per environment, with `needs` chaining)
 - keep the context payload lines unchanged in each stage:
@@ -211,26 +215,31 @@ If your default branch is not `main`:
 
 ALM4Dataverse aligns GitHub Actions timeout defaults with the Azure DevOps templates:
 
-- Reusable workflows (`build.yml`, `export.yml`, `import.yml`, `deploy.yml`) default to `timeout-minutes: 360`.
-- Copied workflow stubs (`BUILD.yml`, `EXPORT.yml`, `IMPORT.yml`, `DEPLOY-*.yml`) pass `timeout-minutes: 360` explicitly.
+- Copied workflow jobs (`BUILD.yml`, `EXPORT.yml`, `IMPORT.yml`, `DEPLOY-*.yml`) set `timeout-minutes: 360` explicitly.
 
 GitHub-hosted runners enforce a maximum of 360 minutes per job, so this value uses the full hosted-runner limit.
 
-You can override per workflow/stage by editing the caller workflow `with:` block.
+You can override the timeout per workflow/stage by editing the caller job's `timeout-minutes` value.
 
 Example (single-stage override):
 
 ```yaml
 jobs:
   deploy-prod:
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-    with:
-      environment-name: PROD
-      previous-environment-name: TEST-main
-      promotion-mode: manual-gate-tag
-      github-context-json: ${{ toJSON(github) }}
-      caller-inputs-json: ${{ toJSON(inputs) }}
-      timeout-minutes: 120
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    environment: PROD
+    steps:
+      - uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
+        with:
+          environment-name: PROD
+          previous-environment-name: TEST-main
+          promotion-mode: manual-gate-tag
+          trigger-branch: main
+          github-context-json: ${{ toJSON(github) }}
+          caller-inputs-json: ${{ toJSON(inputs) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}
 ```
 
 ---
@@ -240,10 +249,10 @@ jobs:
 ALM4Dataverse supports three approaches for per-environment credentials.
 They can be mixed: use whichever fits each environment.
 
-Reusable workflows do **not** take credential/value `workflow_call` inputs (for example
-`dataverse-url`, `dataverse-connection-refs`, `dataverse-env-vars`) or secret inputs
-(`azure-client-id`, `azure-tenant-id`, etc.). Values are resolved from GitHub
-environment variables/secrets or prefixed repo-level secrets/variables.
+Composite actions receive credential/value data from the caller job through the
+`all-repo-vars-json` and `all-repo-secrets-json` inputs. The shared resolver maps both
+standard runtime names and prefixed repository names. You do not need to add
+per-credential action inputs.
 
 See [GitHub Secrets & Variables Reference](../config/github-secrets.md) for the full
 list of secrets and variables required for each approach.
@@ -302,42 +311,58 @@ In the environment settings, you can add:
 
 #### 1.4 Configure your DEPLOY workflow (WIF)
 
-`DEPLOY-main.yml` uses explicit stage jobs and calls the reusable `deploy.yml`
-workflow for each environment:
+  `DEPLOY-main.yml` uses explicit stage jobs and invokes the deploy composite action
+for each environment:
 
 ```yaml
 jobs:
   deploy-test:
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-    with:
-      environment-name: TEST-main
-      previous-environment-name: ''
-      promotion-mode: manual-gate-tag
-      github-context-json: ${{ toJSON(github) }}
-      caller-inputs-json: ${{ toJSON(inputs) }}
+    runs-on: ubuntu-latest
+    environment: TEST-main
+    steps:
+      - uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
+        with:
+          environment-name: TEST-main
+          previous-environment-name: ''
+          promotion-mode: environment-approval
+          trigger-branch: main
+          github-context-json: ${{ toJSON(github) }}
+          caller-inputs-json: ${{ toJSON(inputs) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}
 
   deploy-prod:
     needs: deploy-test
-    if: ${{ github.event_name == 'workflow_dispatch' || needs['deploy-test'].result == 'success' }}
-    uses: ALM4Dataverse/ALM4Dataverse/.github/workflows/deploy.yml@stable
-    with:
-      environment-name: PROD
-      previous-environment-name: TEST-main
-      promotion-mode: manual-gate-tag
-      github-context-json: ${{ toJSON(github) }}
-      caller-inputs-json: ${{ toJSON(inputs) }}
-    secrets: inherit
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.target-environment == 'PROD' }}
+    runs-on: ubuntu-latest
+    environment: PROD
+    steps:
+      - uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
+        with:
+          environment-name: PROD
+          previous-environment-name: TEST-main
+          promotion-mode: manual-gate-tag
+          trigger-branch: main
+          github-context-json: ${{ toJSON(github) }}
+          caller-inputs-json: ${{ toJSON(inputs) }}
+          all-repo-vars-json: ${{ toJSON(vars) }}
+          all-repo-secrets-json: ${{ toJSON(secrets) }}
 ```
 
-To switch promotion strategy, change only:
+To switch to `manual-gate-tag`, update the copied template as follows:
 
 ```yaml
-promotion-mode: manual-gate-tag   # or environment-approval
+promotion-mode: manual-gate-tag
 ```
 
-- `manual-gate-tag` (default): every stage requires a manual trigger; higher environment(s) must also satisfy the previous-stage gate tag.
-- `environment-approval`: auto-chain to each next stage; approval handled by
-  GitHub environment protection rules.
+- change `promotion-mode` on every stage;
+- remove the `repository_dispatch` trigger;
+- make `target-environment` a required choice input with one option per stage; and
+- use manual `workflow_dispatch` conditions for the stage jobs.
+
+`environment-approval` (default) auto-chains to each next stage; approval is handled
+by GitHub environment protection rules. `manual-gate-tag` requires a manual trigger
+for each stage and uses the previous-stage gate tag.
 
 See [Deployment Gates for GitHub Free](#deployment-gates-for-github-free) for full details.
 
@@ -380,8 +405,8 @@ Example:
 
 #### 2.3 Configure your DEPLOY workflow (client secret)
 
-The YAML structure is identical to Approach 1 — `secrets: inherit` passes both
-`AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` (see [1.4](#14-configure-your-deploy-workflow-wif)).
+The copied jobs map `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` from the selected
+GitHub environment into the action step (see [1.4](#14-configure-your-deploy-workflow-wif)).
 
 ---
 
@@ -391,9 +416,9 @@ Store all credentials as repository-level secrets/variables using a naming conve
 that includes the environment name as a prefix.  This approach works on **all GitHub
 licence levels** including GitHub Free on private repositories.
 
-The reusable workflows auto-map prefixed names to the unprefixed runtime variables used
-by ALM4Dataverse scripts. You keep `secrets: inherit` and do not manually map prefixed
-secret names in the workflow YAML.
+The composite actions auto-map prefixed names to the unprefixed runtime variables used
+by ALM4Dataverse scripts. The copied jobs pass the repository variables and secrets JSON
+to the action; you do not manually map each prefixed name in the workflow YAML.
 
 This is also the automatic fallback used by `setup-github.ps1` when GitHub environment
 approval rules are not available for the selected repository.
@@ -451,11 +476,9 @@ The prefix is matched from the effective environment name (for example `Dev-main
 
 #### 3.2 Configure workflows for prefixed credentials
 
-No extra credential wiring is needed in the copied workflow stubs:
-
-- `EXPORT.yml`: keep `secrets: inherit` (no prefixed `secrets:` block)
-- `IMPORT.yml`: keep `secrets: inherit` (no prefixed `secrets:` block)
-- `DEPLOY-main.yml`: keep the default stage jobs with `secrets: inherit`
+No extra per-credential wiring is needed in the copied workflow stubs. Keep the
+environment variables and `all-repo-vars-json` / `all-repo-secrets-json` action inputs
+generated by the templates.
 
 The same two deployment promotion strategies still apply exactly as shown in
 [1.4](#14-configure-your-deploy-workflow-wif); the only difference is where values
@@ -608,13 +631,12 @@ If your repository policy requires a separate token, add a repository-level or
 environment-level secret named `WORKFLOW_DISPATCH_TOKEN` (or legacy alias
 `GH_WORKFLOW_TOKEN`).
 
-Alternatively, each reusable workflow declares `permissions: contents: write` which
-overrides the default on a per-job basis.
+The copied caller jobs declare the required `contents: write` permission explicitly.
 
 ### Actions read for DEPLOY (artifact download)
 
-The DEPLOY workflow downloads artifacts from the BUILD workflow run.  The reusable
-workflow declares `permissions: actions: read`, which is granted automatically by the
+The DEPLOY workflow downloads artifacts from the BUILD workflow run. The copied deploy
+jobs declare `permissions: actions: read`, which is granted automatically by the
 caller's `GITHUB_TOKEN` on all plans.
 
 ---
@@ -661,7 +683,7 @@ deployed/PROD                                      ← PROD currently points at 
 
 ## References
 
-- [GitHub Actions reusable workflows](https://docs.github.com/en/actions/using-workflows/reusing-workflows)
+- [GitHub Actions composite actions](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action)
 - [GitHub Environments and deployment protection rules](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
 - [GitHub Actions billing and usage limits](https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions)
 - [GitHub REST API — Git refs](https://docs.github.com/en/rest/git/refs)
