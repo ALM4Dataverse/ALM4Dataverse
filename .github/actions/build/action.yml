@@ -33,6 +33,12 @@ outputs:
   run-name:
     description: Exact build name used for deployment selection.
     value: ${{ inputs.build-name }}
+  release-tag:
+    description: Git tag used by the GitHub Release for this build.
+    value: ${{ steps.tag-source.outputs.tag_name }}
+  release-url:
+    description: URL of the GitHub Release created for this build.
+    value: ${{ steps.create-release.outputs.release_url }}
 
 runs:
   using: composite
@@ -121,23 +127,28 @@ runs:
 
     - name: Upload build artifacts
       if: always()
+      id: upload-build-artifacts
       uses: actions/upload-artifact@v4
       with:
         name: artifacts
         path: ${{ github.workspace }}/artifacts/
         retention-days: 90
+        overwrite: true
         if-no-files-found: warn
 
     - name: Upload solution check report
       if: always()
+      id: upload-solution-check-report
       uses: actions/upload-artifact@v4
       with:
         name: solution-check-report
         path: ${{ github.workspace }}/artifacts/solution-check/
         retention-days: 90
+        overwrite: true
         if-no-files-found: ignore
 
     - name: Tag source with build version
+      id: tag-source
       shell: pwsh
       working-directory: ${{ github.workspace }}/self
       run: |
@@ -155,14 +166,146 @@ runs:
           throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
         }
         $tagName = "v$sanitizedBuildNumber"
+        $sourceCommit = (git rev-parse HEAD).Trim()
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
+          throw "Could not resolve the source commit for build tag '$tagName'."
+        }
+
         git config user.email "${{ github.actor }}@users.noreply.github.com"
         if ($LASTEXITCODE -ne 0) { throw 'git config user.email failed' }
         git config user.name "${{ github.actor }}"
         if ($LASTEXITCODE -ne 0) { throw 'git config user.name failed' }
-        git tag -a "$tagName" -m "Build version $sanitizedBuildNumber"
-        if ($LASTEXITCODE -ne 0) { throw 'git tag failed' }
-        git push origin "$tagName"
-        if ($LASTEXITCODE -ne 0) { throw 'git push tag failed' }
+
+        $existingTag = @(git ls-remote --tags origin "refs/tags/$tagName" "refs/tags/$tagName^{}" 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+          throw "Could not query whether build tag '$tagName' already exists."
+        }
+
+        if ($existingTag.Count -gt 0) {
+          git fetch --force origin "refs/tags/$tagName:refs/tags/$tagName"
+          if ($LASTEXITCODE -ne 0) { throw "Could not fetch existing build tag '$tagName'." }
+          $existingCommit = (git rev-list -n 1 "$tagName^{commit}").Trim()
+          if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($existingCommit)) {
+            throw "Could not resolve existing build tag '$tagName' to a commit."
+          }
+          if ($existingCommit -ine $sourceCommit) {
+            throw "Build tag '$tagName' already points to commit '$existingCommit', not '$sourceCommit'. Refusing to overwrite it."
+          }
+          Write-Host "Build tag '$tagName' already points to this source commit; continuing as an idempotent rerun."
+        }
+        else {
+          git tag -a "$tagName" -m "Build version $sanitizedBuildNumber"
+          if ($LASTEXITCODE -ne 0) { throw 'git tag failed' }
+          git push origin "$tagName"
+          if ($LASTEXITCODE -ne 0) { throw 'git push tag failed' }
+        }
+
+        "tag_name=$tagName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "source_sha=$sourceCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    - name: Download artifact archives for GitHub Release
+      id: release-assets
+      if: success()
+      shell: pwsh
+      env:
+        GH_REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ github.token }}
+        BUILD_ARTIFACT_ID: ${{ steps.upload-build-artifacts.outputs.artifact-id }}
+        SOLUTION_CHECK_ARTIFACT_ID: ${{ steps.upload-solution-check-report.outputs.artifact-id }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+
+        if ([string]::IsNullOrWhiteSpace($env:BUILD_ARTIFACT_ID)) {
+          throw "The BUILD artifact upload did not return an artifact ID."
+        }
+
+        $releaseAssetDirectory = Join-Path $env:RUNNER_TEMP 'alm4dataverse-release-assets'
+        New-Item -ItemType Directory -Path $releaseAssetDirectory -Force | Out-Null
+
+        function Download-ArtifactArchive {
+          param([Parameter(Mandatory)][string]$ArtifactId, [Parameter(Mandatory)][string]$OutputPath)
+          $uri = "https://api.github.com/repos/$($env:GH_REPO)/actions/artifacts/$ArtifactId/zip"
+          $headers = @{
+            Authorization = "Bearer $($env:GH_TOKEN)"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          Invoke-WebRequest -Method Get -Uri $uri -Headers $headers -OutFile $OutputPath
+          if (-not (Test-Path -LiteralPath $OutputPath) -or (Get-Item -LiteralPath $OutputPath).Length -eq 0) {
+            throw "GitHub returned an empty artifact archive for '$ArtifactId'."
+          }
+        }
+
+        $artifactsPath = Join-Path $releaseAssetDirectory 'artifacts.zip'
+        Download-ArtifactArchive -ArtifactId $env:BUILD_ARTIFACT_ID -OutputPath $artifactsPath
+        $reportPath = ''
+        if (-not [string]::IsNullOrWhiteSpace($env:SOLUTION_CHECK_ARTIFACT_ID)) {
+          $reportPath = Join-Path $releaseAssetDirectory 'solution-check-report.zip'
+          Download-ArtifactArchive -ArtifactId $env:SOLUTION_CHECK_ARTIFACT_ID -OutputPath $reportPath
+        }
+        "artifacts_path=$artifactsPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "solution_check_report_path=$reportPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+    - name: Create GitHub Release
+      id: create-release
+      if: success()
+      uses: actions/github-script@v7
+      env:
+        RELEASE_TAG: ${{ steps.tag-source.outputs.tag_name }}
+        RELEASE_NAME: ${{ steps.build-number.outputs.run_name }}
+        BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
+        BUILD_SOURCE_SHA: ${{ steps.tag-source.outputs.source_sha }}
+        BUILD_RUN_ID: ${{ github.run_id }}
+        BUILD_RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        ARTIFACTS_ASSET_PATH: ${{ steps.release-assets.outputs.artifacts_path }}
+        SOLUTION_CHECK_REPORT_ASSET_PATH: ${{ steps.release-assets.outputs.solution_check_report_path }}
+      with:
+        script: |
+          const fs = require('fs');
+          const tagName = process.env.RELEASE_TAG;
+          const branchName = process.env.BUILD_BRANCH;
+          const branchMarker = `<!-- alm4dataverse-build-branch:${encodeURIComponent(branchName)} -->`;
+          const body = [
+            branchMarker,
+            `Build: ${process.env.RELEASE_NAME}`,
+            `Branch: ${branchName}`,
+            `Source commit: ${process.env.BUILD_SOURCE_SHA}`,
+            `BUILD run: [${process.env.BUILD_RUN_ID}](${process.env.BUILD_RUN_URL})`,
+            '',
+            'Release assets are the same archives uploaded by the BUILD workflow:',
+            '- `artifacts.zip`',
+            '- `solution-check-report.zip` (when a solution-check report was produced)',
+          ].join('\n');
+          const assets = [
+            { path: process.env.ARTIFACTS_ASSET_PATH, name: 'artifacts.zip' },
+            { path: process.env.SOLUTION_CHECK_REPORT_ASSET_PATH, name: 'solution-check-report.zip' },
+          ].filter(asset => asset.path && fs.existsSync(asset.path));
+          if (assets.length === 0) throw new Error('No artifact archives were available for the GitHub Release.');
+
+          let release;
+          try {
+            release = (await github.rest.repos.getReleaseByTag({ owner: context.repo.owner, repo: context.repo.repo, tag: tagName })).data;
+            const existingBody = String(release.body || '');
+            const runMatch = existingBody.match(/^BUILD run:\s*\[(\d+)\]\s*\(/im);
+            const commitMatch = existingBody.match(/^Source commit:\s*(\S+)\s*$/im);
+            if (!existingBody.includes(branchMarker) || !runMatch || runMatch[1] !== process.env.BUILD_RUN_ID || (commitMatch && commitMatch[1].toLowerCase() !== process.env.BUILD_SOURCE_SHA.toLowerCase())) {
+              throw new Error(`Existing GitHub Release for tag ${tagName} is not owned by this BUILD run.`);
+            }
+            release = (await github.rest.repos.updateRelease({ owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, name: process.env.RELEASE_NAME, body, draft: false, prerelease: false })).data;
+          }
+          catch (error) {
+            if (error.status !== 404) throw error;
+            release = (await github.rest.repos.createRelease({ owner: context.repo.owner, repo: context.repo.repo, tag_name: tagName, target_commitish: process.env.BUILD_SOURCE_SHA, name: process.env.RELEASE_NAME, body, draft: false, prerelease: false })).data;
+          }
+
+          const existingAssets = await github.paginate(github.rest.repos.listReleaseAssets, { owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, per_page: 100 });
+          for (const asset of assets) {
+            const oldAsset = existingAssets.find(item => item.name === asset.name);
+            if (oldAsset) await github.rest.repos.deleteReleaseAsset({ owner: context.repo.owner, repo: context.repo.repo, asset_id: oldAsset.id });
+            const fileContent = fs.readFileSync(asset.path);
+            await github.rest.repos.uploadReleaseAsset({ owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, name: asset.name, data: fileContent });
+          }
+          core.setOutput('release_url', release.html_url);
 
     - name: Trigger DEPLOY via repository_dispatch
       shell: pwsh
@@ -172,7 +315,8 @@ runs:
         BUILD_RUN_ID: ${{ github.run_id }}
         BUILD_RUN_NAME: ${{ steps.build-number.outputs.run_name }}
         BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
-        BUILD_SOURCE_SHA: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
+        BUILD_RELEASE_TAG: ${{ steps.tag-source.outputs.tag_name }}
+        BUILD_SOURCE_SHA: ${{ steps.tag-source.outputs.source_sha }}
         BUILD_EVENT: ${{ github.event_name }}
       run: |
         $ErrorActionPreference = 'Stop'
@@ -199,6 +343,7 @@ runs:
             sha            = $env:BUILD_SOURCE_SHA
             build_run_id   = $env:BUILD_RUN_ID
             build_run_name = $env:BUILD_RUN_NAME
+              release_tag    = $env:BUILD_RELEASE_TAG
             build_run_url  = "https://github.com/$($env:GH_REPO)/actions/runs/$($env:BUILD_RUN_ID)"
             build_event    = $env:BUILD_EVENT
             dispatched_at  = (Get-Date).ToUniversalTime().ToString('o')
