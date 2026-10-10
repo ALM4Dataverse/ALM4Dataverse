@@ -3286,7 +3286,7 @@ function Update-AzDoBuildPipelineInWorkingTree {
         param(
                 [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$SharedRepositoryName,
-                [Parameter(Mandatory)][string]$BuildEnvironmentName,
+                [Parameter(Mandatory)][AllowEmptyString()][string]$BuildEnvironmentName,
                 [Parameter(Mandatory)][bool]$UseAlm4DataverseExtension
         )
 
@@ -4387,7 +4387,7 @@ function Publish-AzDoBranchSetupChanges {
         [Parameter()][AllowNull()][array]$Solutions,
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][bool]$BuildValidationEnabled = $false,
-        [Parameter()][string]$BuildValidationEnvironmentName = ''
+        [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = ''
     )
 
     Push-Location $RepoRoot

@@ -64,16 +64,25 @@ For each GitHub environment, add a federated credential to the App Registration 
 | Field | Value |
 |---|---|
 | Issuer | `https://token.actions.githubusercontent.com` |
-| Subject identifier | `repo:{owner}/{repo}:environment:{environment-name}` |
+| Subject identifier | `repo:{owner}@{owner-id}/{repo}@{repo-id}:environment:{environment-name}` |
 | Audience | `api://AzureADTokenExchange` |
 
-**Examples** for repo `MyOrg/MyApp`:
+**Examples** for repo `MyOrg/MyApp` with owner ID `123456` and repository ID `456789`:
 
 | Environment | Subject identifier |
 |---|---|
-| `Dev-main` | `repo:MyOrg/MyApp:environment:Dev-main` |
-| `TEST-main` | `repo:MyOrg/MyApp:environment:TEST-main` |
-| `PROD` | `repo:MyOrg/MyApp:environment:PROD` |
+| `Dev-main` | `repo:MyOrg@123456/MyApp@456789:environment:Dev-main` |
+| `TEST-main` | `repo:MyOrg@123456/MyApp@456789:environment:TEST-main` |
+| `PROD` | `repo:MyOrg@123456/MyApp@456789:environment:PROD` |
+
+The numeric IDs are the GitHub `repository_owner_id` and `repository_id` values.
+They are included when the repository uses GitHub's immutable subject claims. The
+automated setup script reads the repository setting and configures the matching subject;
+existing repositories retain the legacy format unless immutable subjects are enabled.
+
+For an existing legacy repository, setup offers to enable immutable subjects when WIF
+is selected. Review the [GitHub changelog](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories)
+first because other repository consumers that trust legacy subjects may need updates.
 
 > ℹ️ GitHub Environments (for storing secrets/variables) are available on all plans. Environment *protection rules* (required reviewers, wait timers) require Pro/Team/Enterprise for private repositories.
 
