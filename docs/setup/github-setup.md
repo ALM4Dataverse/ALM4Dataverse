@@ -77,10 +77,21 @@ OIDC tokens with no secrets to manage or rotate.
 
 | Workflow scenario | Subject identifier |
 |---|---|
-| Default ALM4Dataverse workflows (Approach 1, 2, and 3) | `repo:{owner}/{repo}:environment:{environment-name}` |
+| Default ALM4Dataverse workflows (Approach 1, 2, and 3) | `repo:{owner}@{owner-id}/{repo}@{repo-id}:environment:{environment-name}` |
 
-> **Examples** for repo `MyOrg/MyApp`:
-> - Environment-based: `repo:MyOrg/MyApp:environment:TEST-main`
+> **Examples** for repo `MyOrg/MyApp` with owner ID `123456` and repository ID `456789`:
+> - Environment-based: `repo:MyOrg@123456/MyApp@456789:environment:TEST-main`
+
+The numeric IDs are the GitHub `repository_owner_id` and `repository_id` values.
+The automated setup script retrieves them from GitHub and checks the repository's
+`use_immutable_subject` setting so the configured credential matches the subject
+format that GitHub will issue. Existing repositories retain the legacy format unless
+immutable subjects have been explicitly enabled.
+
+When WIF is selected for an existing legacy repository, automated setup offers to
+enable immutable subjects. Review the [GitHub changelog](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories)
+first: other workflows or applications in the same repository that trust legacy
+subjects may need their cloud credentials updated.
 
 ALM4Dataverse caller jobs run within a named GitHub environment across all
 credential approaches:
