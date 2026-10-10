@@ -5,6 +5,97 @@ function New-DirectoryIfMissing {
     }
 }
 
+function Initialize-SetupConsoleCancellationSupport {
+    [CmdletBinding()]
+    param()
+
+    $typeName = 'ALM4Dataverse.SetupConsoleCancellation'
+    $cancellationType = ([System.Management.Automation.PSTypeName]$typeName).Type
+    if ($null -ne $cancellationType) {
+        return $cancellationType
+    }
+
+    $typeDefinition = @(
+        'using System;'
+        'using System.Threading;'
+        'namespace ALM4Dataverse {'
+        '    public static class SetupConsoleCancellation {'
+        '        private static readonly object SyncRoot = new object();'
+        '        private static readonly ConsoleCancelEventHandler CancelHandler = OnCancel;'
+        '        private static CancellationTokenSource ActiveSource;'
+        ''
+        '        public static CancellationTokenSource Start() {'
+        '            lock (SyncRoot) {'
+        '                if (ActiveSource != null) {'
+        '                    throw new InvalidOperationException("A setup console cancellation handler is already active.");'
+        '                }'
+        ''
+        '                var source = new CancellationTokenSource();'
+        '                ActiveSource = source;'
+        '                try {'
+        '                    Console.CancelKeyPress += CancelHandler;'
+        '                }'
+        '                catch {'
+        '                    ActiveSource = null;'
+        '                    source.Dispose();'
+        '                    return null;'
+        '                }'
+        ''
+        '                return source;'
+        '            }'
+        '        }'
+        ''
+        '        public static void Stop(CancellationTokenSource source) {'
+        '            if (source == null) {'
+        '                return;'
+        '            }'
+        ''
+        '            lock (SyncRoot) {'
+        '                if (object.ReferenceEquals(ActiveSource, source)) {'
+        '                    ActiveSource = null;'
+        '                    try {'
+        '                        Console.CancelKeyPress -= CancelHandler;'
+        '                    }'
+        '                    catch {'
+        '                    }'
+        '                }'
+        '            }'
+        ''
+        '            source.Dispose();'
+        '        }'
+        ''
+        '        private static void OnCancel(object sender, ConsoleCancelEventArgs eventArgs) {'
+        '            CancellationTokenSource source;'
+        '            lock (SyncRoot) {'
+        '                source = ActiveSource;'
+        '            }'
+        ''
+        '            if (source == null) {'
+        '                return;'
+        '            }'
+        ''
+        '            eventArgs.Cancel = true;'
+        '            try {'
+        '                source.Cancel();'
+        '            }'
+        '            catch (ObjectDisposedException) {'
+        '            }'
+        '            catch {'
+        '            }'
+        '        }'
+        '    }'
+        '}'
+    ) -join [Environment]::NewLine
+
+    Add-Type -TypeDefinition $typeDefinition -ErrorAction Stop
+    $cancellationType = ([System.Management.Automation.PSTypeName]$typeName).Type
+    if ($null -eq $cancellationType) {
+        throw "Could not initialize setup console cancellation support type '$typeName'."
+    }
+
+    return $cancellationType
+}
+
 function Initialize-SpectreConsole {
     [CmdletBinding()]
     param()
@@ -29,7 +120,19 @@ function Initialize-SpectreConsole {
 
     New-DirectoryIfMissing -Path $packageRoot
 
-    if (-not (Test-Path -LiteralPath $expandedRoot)) {
+    $hasExtractedAssembly = $false
+    if (Test-Path -LiteralPath $expandedRoot) {
+        $hasExtractedAssembly = $null -ne (Get-ChildItem -LiteralPath $expandedRoot -Recurse -Filter 'Spectre.Console.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+    }
+
+    if (-not $hasExtractedAssembly) {
+        # An interrupted or otherwise incomplete extraction can leave the destination
+        # directory behind. Do not treat that directory as a valid cache entry.
+        if (Test-Path -LiteralPath $expandedRoot) {
+            Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+
+        $packageUrl = "https://www.nuget.org/api/v2/package/Spectre.Console/$spectreVersion"
         if (-not (Test-Path -LiteralPath $packagePath)) {
             try {
                 if ($PSVersionTable.PSVersion.Major -lt 6) {
@@ -40,11 +143,28 @@ function Initialize-SpectreConsole {
                 # Non-fatal; continue.
             }
 
-            $packageUrl = "https://www.nuget.org/api/v2/package/Spectre.Console/$spectreVersion"
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
         }
 
-        Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+        try {
+            Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+        }
+        catch {
+            # A partially downloaded archive can remain in the cache. Remove it and
+            # retry once so a transient download does not permanently break setup.
+            Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
+            Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+        }
+
+        $hasExtractedAssembly = $null -ne (Get-ChildItem -LiteralPath $expandedRoot -Recurse -Filter 'Spectre.Console.dll' -File -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if (-not $hasExtractedAssembly) {
+            Remove-Item -LiteralPath $expandedRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $packagePath -Force -ErrorAction SilentlyContinue
+            Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
+            Expand-Archive -LiteralPath $packagePath -DestinationPath $expandedRoot -Force
+        }
     }
 
     $candidateFrameworks = if ($PSVersionTable.PSEdition -eq 'Core') {
@@ -64,7 +184,7 @@ function Initialize-SpectreConsole {
     }
 
     if (-not $spectreAssemblyPath) {
-        $spectreAssemblyPath = Get-ChildItem -Path $expandedRoot -Recurse -Filter 'Spectre.Console.dll' -File |
+        $spectreAssemblyPath = Get-ChildItem -LiteralPath $expandedRoot -Recurse -Filter 'Spectre.Console.dll' -File |
             Select-Object -ExpandProperty FullName -First 1
     }
 
@@ -927,31 +1047,25 @@ function Show-SelectionPromptWithInterruptHandling {
 
     Initialize-SpectreConsole
 
-    $cancellationTokenSource = [System.Threading.CancellationTokenSource]::new()
-    $cancellationState = [pscustomobject]@{
-        Cancelled           = $false
-        TokenSourceDisposed = $false
-    }
-
-    $cancelHandler = [System.ConsoleCancelEventHandler]{
-        param($sender, $eventArgs)
-
-        $eventArgs.Cancel = $true
-        $cancellationState.Cancelled = $true
-
-        if (-not $cancellationState.TokenSourceDisposed -and -not $cancellationTokenSource.IsCancellationRequested) {
-            $cancellationTokenSource.Cancel()
-        }
-    }
-
+    $cancellationSupportType = Initialize-SetupConsoleCancellationSupport
+    $cancellationTokenSource = $null
     $handlerAttached = $false
     try {
-        $handlerAttached = Add-SetupConsoleCancelHandler -Handler $cancelHandler
+        $startMethod = $cancellationSupportType.GetMethod(
+            'Start',
+            [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static
+        )
+        $cancellationTokenSource = $startMethod.Invoke($null, [object[]]@())
+        $handlerAttached = $null -ne $cancellationTokenSource
+
+        if ($null -eq $cancellationTokenSource) {
+            $cancellationTokenSource = [System.Threading.CancellationTokenSource]::new()
+        }
 
         return $Prompt.ShowAsync([Spectre.Console.AnsiConsole]::Console, $cancellationTokenSource.Token).GetAwaiter().GetResult()
     }
     catch {
-        if ($cancellationState.Cancelled -or (Test-IsUserInterruptException -Exception $_.Exception)) {
+        if (($cancellationTokenSource -and $cancellationTokenSource.IsCancellationRequested) -or (Test-IsUserInterruptException -Exception $_.Exception)) {
             throw ([System.OperationCanceledException]::new('Setup cancelled by user.'))
         }
 
@@ -960,15 +1074,19 @@ function Show-SelectionPromptWithInterruptHandling {
     finally {
         if ($handlerAttached) {
             try {
-                Remove-SetupConsoleCancelHandler -Handler $cancelHandler
+                $stopMethod = $cancellationSupportType.GetMethod(
+                    'Stop',
+                    [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static
+                )
+                [void]$stopMethod.Invoke($null, [object[]]@($cancellationTokenSource))
             }
             catch {
                 # Ignore cleanup failures.
             }
         }
-
-        $cancellationState.TokenSourceDisposed = $true
-        $cancellationTokenSource.Dispose()
+        elseif ($null -ne $cancellationTokenSource) {
+            $cancellationTokenSource.Dispose()
+        }
     }
 }
 
