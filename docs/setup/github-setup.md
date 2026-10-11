@@ -32,6 +32,9 @@ During automated setup (`setup-github.ps1`), you are also prompted whether to en
 
 ## Prerequisites
 
+When running `setup-github.ps1`, GitHub CLI (`gh`) is downloaded automatically to a temporary setup
+directory if it is not already installed. The downloaded CLI is available for that setup session only.
+
 ### 1. GitHub repository
 
 Create or use an existing GitHub repository for your Dataverse application source code.
