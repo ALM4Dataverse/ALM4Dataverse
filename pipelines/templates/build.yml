@@ -160,6 +160,8 @@ stages:
 
           - pwsh: |
               $ErrorActionPreference = 'Stop'
+              & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
+
               $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
               if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
                 $environmentUrl = '$(BuildTools.EnvironmentUrl)'
