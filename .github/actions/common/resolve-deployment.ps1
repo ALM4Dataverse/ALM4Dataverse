@@ -260,11 +260,9 @@ function Find-LatestManagedReleaseForBranch {
                 Release = $release
                 Metadata = $metadata
                 BuildRunId = [long]$metadata.RunId
-                ReleaseId = [long]$release.id
             }
             if ($null -eq $latestMatch -or
-                $match.BuildRunId -gt $latestMatch.BuildRunId -or
-                ($match.BuildRunId -eq $latestMatch.BuildRunId -and $match.ReleaseId -gt $latestMatch.ReleaseId)) {
+                $match.BuildRunId -gt $latestMatch.BuildRunId) {
                 $latestMatch = $match
             }
         }
