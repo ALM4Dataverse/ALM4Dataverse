@@ -3302,21 +3302,21 @@ function Update-AzDoBuildPipelineInWorkingTree {
 
         $newContent = @"
 trigger:
-    branches:
-        include:
-        - '*'  # Support any branch name
+  branches:
+    include:
+    - '*'  # Support any branch name
 
 resources:
-    repositories:
-        - repository: ALM4Dataverse
-            type: git
-            name: $SharedRepositoryName
+  repositories:
+  - repository: ALM4Dataverse
+    type: git
+    name: $SharedRepositoryName
 
 stages:
 - template: pipelines/templates/build.yml@ALM4Dataverse
-    parameters:
-        useAlm4DataverseExtension: $extensionLiteral
-        buildEnvironmentName: '$escapedBuildEnvironmentName'
+  parameters:
+    useAlm4DataverseExtension: $extensionLiteral
+    buildEnvironmentName: '$escapedBuildEnvironmentName'
 "@
 
         Set-Content -LiteralPath $buildPipelinePath -Value $newContent.TrimStart("`r", "`n") -NoNewline
