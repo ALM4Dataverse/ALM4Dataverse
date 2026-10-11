@@ -215,7 +215,9 @@ Accepted values:
   environment is separate from the BUILD validation target.
 - A fixed successful build identifier. Azure DevOps accepts the numeric BUILD
   run ID or exact build number. GitHub Actions accepts a numeric BUILD run ID
-  or the corresponding GitHub Release tag.
+  or the corresponding GitHub Release tag. A GitHub run ID is resolved to its
+  Release tag, and the baseline is downloaded from that Release's
+  `artifacts.zip` asset rather than the expiring Actions artifact.
 
 The baseline and candidate each use the deployment script and configuration
 packaged with their own build. If resolving, downloading, or deploying the

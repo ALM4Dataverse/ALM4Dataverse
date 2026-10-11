@@ -83,7 +83,9 @@ Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
 - Use `@<environment-name>` to resolve the most recently successfully
   deployed BUILD run recorded for that deployment environment.
 - Use a fixed build identifier: an Azure DevOps BUILD run ID or build number;
-  or a GitHub BUILD run ID or GitHub Release tag.
+  or a GitHub BUILD run ID or GitHub Release tag. GitHub resolves a run ID to
+  its Release and downloads the durable `artifacts.zip` asset, not the
+  expiring Actions artifact.
 
 Automated setup asks for a baseline source deployment environment separately
 from the Dataverse validation target. It also offers a no-baseline choice.
@@ -99,11 +101,12 @@ build. If more than one successful build matches that commit, configure a
 fixed build identifier to avoid guessing which package was deployed.
 
 GitHub release cleanup keeps Releases referenced by active deployment pointers,
-so their packaged baseline assets remain available. Azure DevOps baseline
-artifacts must still be retained by the project’s pipeline retention policy.
-If a fixed identifier or a selected environment’s baseline artifact has expired
-or been removed, BUILD fails with a resolution/download error; choose a
-retained baseline or adjust retention.
+so their packaged baseline assets remain available. A fixed GitHub baseline
+Release must also be retained (cleanup may remove an old Release that is no
+longer an active deployment). Azure DevOps baseline artifacts must be retained
+by the project’s pipeline retention policy. If the referenced Release or
+pipeline artifact has been removed, BUILD fails with a resolution/download
+error; choose a retained baseline or adjust retention.
 
 ### PAC Solution Checker
 

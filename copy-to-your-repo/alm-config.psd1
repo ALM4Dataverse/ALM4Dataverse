@@ -129,6 +129,7 @@
     # Optional BUILD validation baseline.
     # Empty string deploys only the current build; an Azure DevOps BUILD run ID
     # or build number, or GitHub BUILD run ID/release tag selects a fixed baseline.
+    # GitHub run IDs resolve to Release assets, not expiring Actions artifacts.
     # '@environment-name' selects the most recently successful BUILD release
     # deployed to that environment.
     buildValidation = @{

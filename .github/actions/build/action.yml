@@ -191,6 +191,7 @@ runs:
           throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
         }
         $tagName = $sanitizedBuildNumber
+        $tagRef = "refs/tags/$tagName"
         $sourceCommit = (git rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
           throw "Could not resolve the source commit for build tag '$tagName'."
@@ -201,13 +202,13 @@ runs:
         git config user.name "${{ github.actor }}"
         if ($LASTEXITCODE -ne 0) { throw 'git config user.name failed' }
 
-        $existingTag = @(git ls-remote --tags origin "refs/tags/$tagName" "refs/tags/$tagName^{}" 2>&1)
+        $existingTag = @(git ls-remote --tags origin $tagRef "$tagRef^{}" 2>&1)
         if ($LASTEXITCODE -ne 0) {
           throw "Could not query whether build tag '$tagName' already exists."
         }
 
         if ($existingTag.Count -gt 0) {
-          git fetch --force origin "refs/tags/$tagName:refs/tags/$tagName"
+          git fetch --force origin "$($tagRef):$tagRef"
           if ($LASTEXITCODE -ne 0) { throw "Could not fetch existing build tag '$tagName'." }
           $existingCommit = (git rev-list -n 1 "$tagName^{commit}").Trim()
           if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($existingCommit)) {

@@ -108,11 +108,44 @@ function Find-UniqueReleaseForCommit {
     return $null
 }
 
+function Find-ReleaseForRunId {
+    param([Parameter(Mandatory)][string]$RunId)
+
+    $matchingReleases = @()
+    for ($page = 1; $page -le 100; $page++) {
+        $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
+        if ($releases.Count -eq 0) {
+            break
+        }
+        foreach ($release in $releases) {
+            try {
+                $metadata = Get-ReleaseMetadata -Release $release
+            }
+            catch {
+                continue
+            }
+            if ($metadata.RunId -ceq $RunId) {
+                $matchingReleases += [pscustomobject]@{
+                    RunId = $metadata.RunId
+                    TagName = $metadata.TagName
+                }
+            }
+        }
+    }
+    if ($matchingReleases.Count -gt 1) {
+        throw "Multiple GitHub Releases match BUILD run '$RunId'; select a Release tag directly."
+    }
+    if ($matchingReleases.Count -eq 0) {
+        throw "No GitHub Release was found for BUILD run '$RunId'. Baseline packages must be downloaded from the BUILD Release asset."
+    }
+    return $matchingReleases[0]
+}
+
 function Resolve-Baseline {
     param([Parameter(Mandatory)][string]$Selector)
 
     if ($Selector -match '^\d+$') {
-        return [pscustomobject]@{ RunId = $Selector; TagName = '' }
+        return Find-ReleaseForRunId -RunId $Selector
     }
 
     if ($Selector.StartsWith('@')) {
@@ -133,10 +166,13 @@ function Resolve-Baseline {
             $runMatch = [regex]::Match($tagMessage, '(?im)^BUILD run:\s*(?<id>\d+)\s*$')
             $releaseMatch = [regex]::Match($tagMessage, '(?im)^Release tag:\s*(?<tag>[^\r\n]+)\s*$')
             if ($runMatch.Success) {
-                return [pscustomobject]@{
-                    RunId = $runMatch.Groups['id'].Value
-                    TagName = $(if ($releaseMatch.Success) { $releaseMatch.Groups['tag'].Value.Trim() } else { '' })
+                if ($releaseMatch.Success) {
+                    return [pscustomobject]@{
+                        RunId = $runMatch.Groups['id'].Value
+                        TagName = $releaseMatch.Groups['tag'].Value.Trim()
+                    }
                 }
+                return Find-ReleaseForRunId -RunId $runMatch.Groups['id'].Value
             }
         }
 
@@ -156,22 +192,6 @@ function Resolve-Baseline {
     return [pscustomobject]@{
         RunId = $metadata.RunId
         TagName = $metadata.TagName
-    }
-}
-
-function Assert-SuccessfulBuildRun {
-    param([Parameter(Mandatory)][string]$RunId)
-
-    $run = Invoke-GitHubApi -RelativePath "actions/runs/$RunId" -AllowNotFound
-    if ($null -eq $run) {
-        throw "GitHub BUILD run '$RunId' was not found."
-    }
-    $workflowPath = [string]$run.path
-    if ($workflowPath -notmatch '(?i)(^|/)\.github/workflows/build\.ya?ml(?:@.+)?$' -and [string]$run.name -ine 'BUILD') {
-        throw "GitHub run '$RunId' is not a BUILD workflow run."
-    }
-    if ([string]$run.status -ne 'completed' -or [string]$run.conclusion -ne 'success') {
-        throw "GitHub BUILD run '$RunId' did not complete successfully."
     }
 }
 
@@ -200,11 +220,11 @@ function Download-BaselineReleaseAsset {
 
     $release = Get-ReleaseByTag -TagName $ReleaseTag
     if ($null -eq $release) {
-        return $false
+        throw "GitHub Release '$ReleaseTag' was not found."
     }
     $asset = @($release.assets | Where-Object { [string]$_.name -eq 'artifacts.zip' } | Select-Object -First 1)
     if ($asset.Count -eq 0) {
-        return $false
+        throw "GitHub Release '$ReleaseTag' does not contain the required 'artifacts.zip' baseline asset."
     }
 
     $downloadDirectory = Join-Path $env:RUNNER_TEMP "alm4dataverse-release-baseline-$([guid]::NewGuid().ToString('N'))"
@@ -214,43 +234,17 @@ function Download-BaselineReleaseAsset {
         $env:GH_TOKEN = $env:GITHUB_TOKEN
         & gh release download $ReleaseTag --repo $env:GITHUB_REPOSITORY --pattern 'artifacts.zip' --dir $downloadDirectory --clobber
         if ($LASTEXITCODE -ne 0) {
-            return $false
+            throw "Could not download 'artifacts.zip' from GitHub Release '$ReleaseTag'."
         }
 
         if (-not (Test-Path -LiteralPath $archivePath)) {
-            return $false
+            throw "GitHub Release '$ReleaseTag' did not download the expected 'artifacts.zip' asset."
         }
         Expand-BaselineArchive -ArchivePath $archivePath -DestinationPath $DestinationPath
-        return $true
     }
     finally {
         if (Test-Path -LiteralPath $downloadDirectory) {
             Remove-Item -LiteralPath $downloadDirectory -Recurse -Force
-        }
-    }
-}
-
-function Download-BaselineRunArtifact {
-    param(
-        [Parameter(Mandatory)][string]$RunId,
-        [Parameter(Mandatory)][string]$DestinationPath
-    )
-
-    $response = Invoke-GitHubApi -RelativePath "actions/runs/$RunId/artifacts?name=artifacts&per_page=100"
-    $artifact = @($response.artifacts | Where-Object { [string]$_.name -eq 'artifacts' -and -not [bool]$_.expired } | Select-Object -First 1)
-    if ($artifact.Count -eq 0) {
-        throw "BUILD run '$RunId' has no retained 'artifacts' Actions artifact and no downloadable Release asset."
-    }
-
-    $archivePath = Join-Path $env:RUNNER_TEMP "alm4dataverse-baseline-$([guid]::NewGuid().ToString('N')).zip"
-    try {
-        $uri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/actions/artifacts/$($artifact[0].id)/zip"
-        Invoke-WebRequest -Method Get -Uri $uri -Headers (Get-GitHubApiHeaders) -OutFile $archivePath
-        Expand-BaselineArchive -ArchivePath $archivePath -DestinationPath $DestinationPath
-    }
-    finally {
-        if (Test-Path -LiteralPath $archivePath) {
-            Remove-Item -LiteralPath $archivePath -Force
         }
     }
 }
@@ -284,18 +278,11 @@ if ($null -eq $baseline) {
     return
 }
 
-Assert-SuccessfulBuildRun -RunId ([string]$baseline.RunId)
 $baselineArtifactsPath = Join-Path $env:RUNNER_TEMP "alm4dataverse-baseline-$([guid]::NewGuid().ToString('N'))"
 try {
-    $downloadedFromRelease = $false
-    if (-not [string]::IsNullOrWhiteSpace([string]$baseline.TagName)) {
-        $downloadedFromRelease = Download-BaselineReleaseAsset -ReleaseTag ([string]$baseline.TagName) -DestinationPath $baselineArtifactsPath
-    }
-    if (-not $downloadedFromRelease) {
-        Download-BaselineRunArtifact -RunId ([string]$baseline.RunId) -DestinationPath $baselineArtifactsPath
-    }
+    Download-BaselineReleaseAsset -ReleaseTag ([string]$baseline.TagName) -DestinationPath $baselineArtifactsPath
 
-    Write-Host "Deploying BUILD baseline run $($baseline.RunId) to validation environment '$EnvironmentName'."
+    Write-Host "Deploying GitHub Release '$($baseline.TagName)' (BUILD run $($baseline.RunId)) to validation environment '$EnvironmentName'."
     & (Join-Path $baselineArtifactsPath 'alm/pipelines/scripts/deploy.ps1') -ArtifactsPath $baselineArtifactsPath
 
     Write-Host "Deploying candidate BUILD artifacts to validation environment '$EnvironmentName'."
