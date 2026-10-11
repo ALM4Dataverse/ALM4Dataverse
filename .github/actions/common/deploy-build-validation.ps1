@@ -218,7 +218,12 @@ function Resolve-BaselineReleaseTag {
         if ($null -eq $release) {
             continue
         }
-        $metadata = Get-ReleaseMetadata -Release $release
+        try {
+            $metadata = Get-ReleaseMetadata -Release $release
+        }
+        catch {
+            continue
+        }
         if ($metadata.RunId -ceq [string]$Baseline.RunId) {
             $matchingTags += [string]$release.tag_name
         }
