@@ -24,7 +24,7 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - name: Import Dataverse solutions
+      - name: Import
         uses: ALM4Dataverse/ALM4Dataverse/.github/actions/import@main
         with:
           environment-name: ${{ format('Dev-{0}', github.ref_name) }}

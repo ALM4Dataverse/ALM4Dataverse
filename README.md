@@ -12,6 +12,9 @@ Features:
 - Handles zero to many Dataverse solutions per repo.
 - Correctly determines the install/upgrade/update method for each solution based on the state of the target environment
 - Supports branches, PRs etc with minimal re-configuration
+- GitHub builds publish the existing deployment artifacts as separate GitHub Release assets
+- GitHub deployments prefer Release assets and fall back to the BUILD artifact
+- GitHub deployment and cleanup flows preserve branch/build identity for safe promotion and rollback
 - Supports including config/system/lookup data
 - Easy to extend using the extensive PowerShell ecosystem.
 
@@ -64,9 +67,10 @@ Features:
 - [Exporting changes](docs/usage/exporting-changes.md) - `EXPORT` pipeline/workflow
   Capturing changes from your dev environments into source control.
 - [Building releases](docs/usage/building-releases.md) - `BUILD` pipeline/workflow
-  Generating release assets for later deployment.
+  Generating Actions artifacts and GitHub Releases for later deployment.
 - [Deploying](docs/usage/deploying.md) - `DEPLOY-<branchname>` pipeline/workflow
-  Deploying release assets to environments in a controlled sequence
+  Deploying Release assets, with BUILD-artifact fallback, to environments in a controlled sequence
+- [Cleaning up GitHub Releases](docs/usage/building-releases.md#github-release-cleanup) - branch-aware cleanup of build Releases
 - [Importing changes](docs/usage/importing-changes.md) - `IMPORT` pipeline/workflow
   Seeding or updating dev environment from source control.
 

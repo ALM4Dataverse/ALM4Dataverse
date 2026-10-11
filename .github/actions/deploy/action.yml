@@ -66,7 +66,52 @@ runs:
 
         Write-Host "Gate tag '$gateTag' found."
 
+    - name: Download Release artifacts
+      id: download-release-artifacts
+      if: steps.resolve.outputs.artifact_source == 'release'
+      continue-on-error: true
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASE_TAG: ${{ steps.resolve.outputs.release_tag }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $releaseDirectory = Join-Path $env:RUNNER_TEMP 'alm4dataverse-release-download'
+        $releaseArchive = Join-Path $releaseDirectory 'artifacts.zip'
+        if (Test-Path -LiteralPath $releaseDirectory) {
+          Remove-Item -LiteralPath $releaseDirectory -Recurse -Force
+        }
+        New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
+        & gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern 'artifacts.zip' --dir $releaseDirectory --clobber
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $releaseArchive)) {
+          throw "GitHub Release asset download failed for tag '$($env:RELEASE_TAG)'."
+        }
+        if (Test-Path -LiteralPath 'artifacts') {
+          Remove-Item -LiteralPath 'artifacts' -Recurse -Force
+        }
+        Expand-Archive -LiteralPath $releaseArchive -DestinationPath 'artifacts' -Force
+        if (-not (Test-Path -LiteralPath 'artifacts/alm/pipelines/scripts/deploy.ps1')) {
+          throw "Release asset 'artifacts.zip' is not a valid deployment artifact."
+        }
+
+    - name: Remove failed Release extraction before BUILD fallback
+      if: >-
+        steps.resolve.outputs.artifact_source == 'release' &&
+        steps.download-release-artifacts.outcome != 'success' &&
+        steps.resolve.outputs.build_run_id != ''
+      shell: pwsh
+      run: |
+        if (Test-Path -LiteralPath 'artifacts') {
+          Remove-Item -LiteralPath 'artifacts' -Recurse -Force
+        }
+
     - name: Download build artifacts
+      if: >-
+        steps.resolve.outputs.artifact_source != 'release' ||
+        (
+          steps.download-release-artifacts.outcome != 'success' &&
+          steps.resolve.outputs.build_run_id != ''
+        )
       uses: actions/download-artifact@v4.1.3
       with:
         name: artifacts
@@ -74,6 +119,15 @@ runs:
         github-token: ${{ github.token }}
         repository: ${{ github.repository }}
         path: artifacts
+
+    - name: Fail when Release and BUILD assets are unavailable
+      if: >-
+        steps.resolve.outputs.artifact_source == 'release' &&
+        steps.download-release-artifacts.outcome != 'success' &&
+        steps.resolve.outputs.build_run_id == ''
+      shell: pwsh
+      run: |
+        throw 'The GitHub Release asset could not be downloaded and its BUILD fallback is no longer available.'
 
     - name: Resolve dependency cache keys
       id: dependency-cache
@@ -154,12 +208,11 @@ runs:
         $ErrorActionPreference = 'Stop'
         $successTag = '${{ steps.resolve.outputs.success_gate_tag }}'
         $environmentPointerTag = '${{ steps.resolve.outputs.environment_pointer_tag }}'
-        $buildRunId = '${{ steps.resolve.outputs.build_run_id }}'
         $repo = $env:GITHUB_REPOSITORY
 
-        $sha = (gh api "/repos/$repo/actions/runs/$buildRunId" --jq '.head_sha').Trim()
+        $sha = '${{ steps.resolve.outputs.build_source_sha }}'.Trim()
         if ([string]::IsNullOrWhiteSpace($sha)) {
-          throw "Could not resolve HEAD SHA for run $buildRunId."
+          throw 'Could not resolve the selected build source commit.'
         }
 
         $out = gh api --method POST "/repos/$repo/git/refs" `

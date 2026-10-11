@@ -35,7 +35,7 @@ jobs:
       id-token: write
       actions: write
     steps:
-      - name: Export Dataverse solutions
+      - name: Export
         uses: ALM4Dataverse/ALM4Dataverse/.github/actions/export@main
         with:
           commit-message: ${{ inputs.commit-message }}

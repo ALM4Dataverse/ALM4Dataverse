@@ -3,6 +3,7 @@ name: BUILD
 # Triggers on every push to any branch.
 # Also supports manual runs and repository_dispatch from EXPORT.
 # Packs Dataverse solutions into deployable artifacts and tags the source commit.
+# and publishes the same artifacts as GitHub Release assets.
 #
 # See docs/usage/building-releases.md and docs/setup/github-setup.md
 
@@ -26,7 +27,7 @@ jobs:
       actions: write
       id-token: write
     steps:
-      - name: Build Dataverse solutions
+      - name: Build
         uses: ALM4Dataverse/ALM4Dataverse/.github/actions/build@main
         with:
           build-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
