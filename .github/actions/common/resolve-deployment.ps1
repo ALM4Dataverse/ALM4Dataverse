@@ -256,33 +256,15 @@ function Find-LatestManagedReleaseForBranch {
             try { $metadata = Get-ReleaseMetadata -Release $release } catch { continue }
             if ($metadata.Branch -cne $BranchName) { continue }
 
-            $releaseDate = $release.published_at
-            if ($null -eq $releaseDate -or [string]::IsNullOrWhiteSpace([string]$releaseDate)) {
-                $releaseDate = $release.created_at
-            }
-            if ($releaseDate -is [DateTimeOffset]) {
-                $sortDate = $releaseDate
-            }
-            elseif ($releaseDate -is [DateTime]) {
-                $sortDate = [DateTimeOffset]$releaseDate
-            }
-            else {
-                $sortDate = [DateTimeOffset]::Parse(
-                    [string]$releaseDate,
-                    [System.Globalization.CultureInfo]::InvariantCulture,
-                    [System.Globalization.DateTimeStyles]::AssumeUniversal
-                )
-            }
-
             $match = [pscustomobject]@{
                 Release = $release
                 Metadata = $metadata
-                SortDate = $sortDate
+                BuildRunId = [long]$metadata.RunId
                 ReleaseId = [long]$release.id
             }
             if ($null -eq $latestMatch -or
-                $match.SortDate -gt $latestMatch.SortDate -or
-                ($match.SortDate -eq $latestMatch.SortDate -and $match.ReleaseId -gt $latestMatch.ReleaseId)) {
+                $match.BuildRunId -gt $latestMatch.BuildRunId -or
+                ($match.BuildRunId -eq $latestMatch.BuildRunId -and $match.ReleaseId -gt $latestMatch.ReleaseId)) {
                 $latestMatch = $match
             }
         }
