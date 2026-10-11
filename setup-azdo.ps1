@@ -2936,7 +2936,8 @@ function Ensure-AzDoVariableGroupExists {
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$ProjectId,
         [Parameter(Mandatory)][string]$GroupName,
-        [Parameter(Mandatory)][hashtable]$Variables
+        [Parameter(Mandatory)][hashtable]$Variables,
+        [Parameter()][bool]$RequireDeploymentApproval = $true
     )
 
     $group = $null
@@ -2978,7 +2979,7 @@ function Ensure-AzDoVariableGroupExists {
     if ($group -and $group.id) {
         Ensure-AzDoVariableGroupExclusiveLock -Organization $Organization -Project $Project -VariableGroupId $group.id -VariableGroupName $GroupName
 
-        if ($GroupName -notmatch 'Dev') {
+        if ($RequireDeploymentApproval) {
             $envName = $GroupName -replace '^Environment-', ''
             $team = Ensure-AzDoDeploymentApproversTeam -ProjectName $Project -EnvironmentName $envName
             Ensure-AzDoVariableGroupApproval -Organization $Organization -Project $Project -VariableGroupId $group.id -VariableGroupName $GroupName -ApproverTeam $team
@@ -3942,7 +3943,8 @@ function Get-AzDoEnvironmentConfiguration {
         [Parameter()][bool]$UseAlm4DataverseExtension = $true,
         [Parameter()][object]$ExistingCredential,
         [Parameter()][string]$ExistingServiceAccountUPN,
-        [Parameter()][bool]$IsDevelopmentEnvironment = $false
+        [Parameter()][bool]$IsDevelopmentEnvironment = $false,
+        [Parameter()][bool]$IsBuildValidationEnvironment = $false
     )
 
     $creds = Get-PowerPlatformSCCredentials `
@@ -3967,6 +3969,7 @@ function Get-AzDoEnvironmentConfiguration {
         Credentials          = $creds
         ServiceAccountUPN    = $serviceAccountUPN
         IsDevelopmentEnvironment = $IsDevelopmentEnvironment
+        IsBuildValidationEnvironment = $IsBuildValidationEnvironment
     }
 }
 
@@ -4562,6 +4565,10 @@ function Apply-AzDoEnvironmentConfiguration {
     if ($EnvironmentConfiguration.PSObject.Properties.Name -contains 'IsDevelopmentEnvironment') {
         $isDevelopmentEnvironment = [bool]$EnvironmentConfiguration.IsDevelopmentEnvironment
     }
+    $isBuildValidationEnvironment = $false
+    if ($EnvironmentConfiguration.PSObject.Properties.Name -contains 'IsBuildValidationEnvironment') {
+        $isBuildValidationEnvironment = [bool]$EnvironmentConfiguration.IsBuildValidationEnvironment
+    }
 
     $pipelineForPermissions = if ($isDevelopmentEnvironment) { $ExportPipeline } else { $DeployPipeline }
 
@@ -4643,13 +4650,13 @@ function Apply-AzDoEnvironmentConfiguration {
         'DataverseServiceAccountUPN' = $serviceAccountUPN
     }
 
-    $varGroup = $null
-    if ($isDevelopmentEnvironment) {
-        $varGroup = Ensure-AzDoVariableGroupExists -Organization $OrganizationName -Project $ProjectName -ProjectId $ProjectId -GroupName $groupName -Variables $variables
-    }
-    else {
-        $varGroup = Ensure-AzDoVariableGroupExists -Organization $OrganizationName -Project $ProjectName -ProjectId $ProjectId -GroupName $groupName -Variables $variables
-    }
+    $varGroup = Ensure-AzDoVariableGroupExists `
+        -Organization $OrganizationName `
+        -Project $ProjectName `
+        -ProjectId $ProjectId `
+        -GroupName $groupName `
+        -Variables $variables `
+        -RequireDeploymentApproval (-not $isDevelopmentEnvironment -and -not $isBuildValidationEnvironment)
 
     if ($varGroup -and $varGroup.id -and $pipelineForPermissions) {
         Ensure-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'variablegroup' -ResourceId $varGroup.id -PipelineId $pipelineForPermissions.id
@@ -5077,7 +5084,8 @@ function Invoke-AzDoBranchAwareSetup {
                         -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                         -ExistingCredential $existingBuildValidationCredential `
                         -ExistingServiceAccountUPN $existingBuildValidationServiceAccountUPN `
-                        -IsDevelopmentEnvironment $false
+                        -IsDevelopmentEnvironment $false `
+                        -IsBuildValidationEnvironment $true
                 }
 
                 if ($wizardState.BuildValidationEnvironmentConfiguration -and -not ($credentialsCache | Where-Object { $_.ApplicationId -eq $wizardState.BuildValidationEnvironmentConfiguration.Credentials.ApplicationId -and $_.TenantId -eq $wizardState.BuildValidationEnvironmentConfiguration.Credentials.TenantId })) {
