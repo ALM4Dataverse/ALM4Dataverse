@@ -102,7 +102,10 @@ function Find-UniqueReleaseForCommit {
     if ($matchingReleases.Count -gt 1) {
         throw "Multiple successful BUILD releases match legacy deployment pointer commit '$CommitSha'. Configure a fixed BUILD run ID instead of @environment-name."
     }
-    return if ($matchingReleases.Count -eq 1) { $matchingReleases[0] } else { $null }
+    if ($matchingReleases.Count -eq 1) {
+        return $matchingReleases[0]
+    }
+    return $null
 }
 
 function Resolve-Baseline {
@@ -121,7 +124,7 @@ function Resolve-Baseline {
         $encodedPointerTag = ($pointerTag -split '/' | ForEach-Object { [System.Uri]::EscapeDataString($_) }) -join '/'
         $reference = Invoke-GitHubApi -RelativePath "git/ref/tags/$encodedPointerTag" -AllowNotFound
         if ($null -eq $reference) {
-            throw "No successful deployment pointer exists for '$environment'. Deploy a BUILD release to that environment before using it as a validation baseline."
+            return $null
         }
 
         if ([string]$reference.object.type -eq 'tag') {
@@ -275,6 +278,12 @@ if ([string]::IsNullOrWhiteSpace($env:GITHUB_TOKEN) -or [string]::IsNullOrWhiteS
 }
 
 $baseline = Resolve-Baseline -Selector $baselineSelector
+if ($null -eq $baseline) {
+    Write-Warning "No successful deployment pointer exists for '$($baselineSelector.Substring(1))'; skipping the baseline and validating the candidate only."
+    & (Join-Path $ArtifactsPath 'alm/pipelines/scripts/deploy.ps1') -ArtifactsPath $ArtifactsPath
+    return
+}
+
 Assert-SuccessfulBuildRun -RunId ([string]$baseline.RunId)
 $baselineArtifactsPath = Join-Path $env:RUNNER_TEMP "alm4dataverse-baseline-$([guid]::NewGuid().ToString('N'))"
 try {

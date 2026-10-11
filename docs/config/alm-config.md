@@ -210,9 +210,9 @@ Accepted values:
 
 - `''` — no baseline; deploy only the candidate build.
 - `@<environment-name>` — use the most recently successfully deployed BUILD
-  run recorded by the `deployed/<environment-name>` pointer. The source
-  environment must have a prior successful deployment. This environment is
-  separate from the BUILD validation target.
+  run recorded by the `deployed/<environment-name>` pointer. If the pointer
+  does not yet exist, BUILD warns and deploys only the candidate. This
+  environment is separate from the BUILD validation target.
 - A fixed successful build identifier. Azure DevOps accepts the numeric BUILD
   run ID or exact build number. GitHub Actions accepts a numeric BUILD run ID
   or the corresponding GitHub Release tag.

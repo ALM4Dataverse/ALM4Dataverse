@@ -72,8 +72,10 @@ BUILD validation can deploy a previously successful BUILD package before the
 candidate package. This is useful when the validation environment needs the
 same installed-solution baseline that a target environment currently has.
 Both packages are deployed with the normal deployment process and their own
-packaged configuration; if baseline resolution, download, or deployment fails,
-BUILD fails without attempting the candidate deployment.
+packaged configuration. If a configured `@environment-name` has no successful
+deployment pointer yet, BUILD warns and validates only the candidate. Other
+baseline resolution, download, or deployment failures fail BUILD before the
+candidate is deployed.
 
 Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
 
@@ -85,9 +87,12 @@ Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
 
 Automated setup asks for a baseline source deployment environment separately
 from the Dataverse validation target. It also offers a no-baseline choice.
-The source environment must already have a successful deployment. Do not
-select the BUILD validation target as the baseline source: BUILD does not
-update deployment pointers when it writes to its validation environment.
+On initial use, the selected source may not yet have a successful deployment;
+the first BUILD then warns and deploys only the candidate. After a successful
+`DEPLOY` to the source, subsequent builds use that deployed version as the
+baseline. Do not select the BUILD validation target as the baseline source:
+BUILD does not update deployment pointers when it writes to its validation
+environment.
 For environments deployed before build-ID pointers were introduced, the
 resolver uses the existing source-commit pointer to find a unique successful
 build. If more than one successful build matches that commit, configure a

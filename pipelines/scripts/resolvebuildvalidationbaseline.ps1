@@ -130,6 +130,17 @@ elseif ($selector -match '^@(?<environment>[A-Za-z0-9._/-]+)$' -and $Matches.env
     $fetchRefspec = "+$tagRef`:$tagRef"
     Push-Location $SourceDirectory
     try {
+        $pointerLookupOutput = @(& git ls-remote --exit-code origin $tagRef 2>&1)
+        $pointerLookupExitCode = $LASTEXITCODE
+        if ($pointerLookupExitCode -eq 2) {
+            Write-Warning "No successful deployment pointer exists for '$environmentName'; skipping the baseline and validating the candidate only."
+            Write-Host '##vso[task.setvariable variable=BuildValidationBaselineBuildId]'
+            return
+        }
+        if ($pointerLookupExitCode -ne 0) {
+            throw "Could not check deployment pointer '$pointerTag': $($pointerLookupOutput -join ' ')"
+        }
+
         & git fetch --force origin $fetchRefspec 2>&1 | Write-Host
         if ($LASTEXITCODE -ne 0) {
             throw "Could not fetch deployment pointer '$pointerTag'. Ensure '$environmentName' has a successful deployment."
