@@ -135,6 +135,7 @@ elseif ($selector -match '^@(?<environment>[A-Za-z0-9._/-]+)$' -and $Matches.env
         if ($pointerLookupExitCode -eq 2) {
             Write-Warning "No successful deployment pointer exists for '$environmentName'; skipping the baseline and validating the candidate only."
             Write-Host '##vso[task.setvariable variable=BuildValidationBaselineBuildId]'
+            $global:LASTEXITCODE = 0
             return
         }
         if ($pointerLookupExitCode -ne 0) {
