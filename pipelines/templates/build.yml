@@ -15,6 +15,9 @@ stages:
           vmImage: windows-2022
         displayName: 'Build'
         timeoutInMinutes: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
+        variables:
+          - ${{ if ne(parameters.buildEnvironmentName, '') }}:
+            - group: 'Environment-${{ parameters.buildEnvironmentName }}'
         steps:
         - checkout: self
           persistCredentials: true
@@ -111,6 +114,7 @@ stages:
             displayName: 'Install Dependencies, Connect and Build artifacts'
             workingDirectory: '$(Pipeline.Workspace)/self'
             env:
+              BUILD_VALIDATION_ENVIRONMENT_NAME: ${{ parameters.buildEnvironmentName }}
               ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
                 AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
               ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
@@ -126,6 +130,108 @@ stages:
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)"
             displayName: 'Install Dependencies and Build artifacts'
             workingDirectory: '$(Pipeline.Workspace)/self'
+
+        - ${{ if ne(parameters.buildEnvironmentName, '') }}:
+          - pwsh: |
+              $ErrorActionPreference = 'Stop'
+              & "$(Pipeline.Workspace)/alm/pipelines/scripts/resolvebuildvalidationbaseline.ps1" `
+                -ConfigPath "$(Build.ArtifactStagingDirectory)/alm-config.psd1" `
+                -SourceDirectory "$(Pipeline.Workspace)/self" `
+                -CollectionUri "$(System.CollectionUri)" `
+                -Project "$(System.TeamProject)" `
+                -DefinitionId "$(System.DefinitionId)" `
+                -AccessToken $env:SYSTEM_ACCESSTOKEN
+            displayName: 'Resolve BUILD validation baseline'
+            workingDirectory: '$(Pipeline.Workspace)/self'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download BUILD validation baseline artifacts'
+            condition: and(succeeded(), ne(variables['BuildValidationBaselineBuildId'], ''))
+            inputs:
+              buildType: 'specific'
+              project: '$(System.TeamProject)'
+              definition: '$(System.DefinitionId)'
+              buildVersionToDownload: 'specific'
+              pipelineId: '$(BuildValidationBaselineBuildId)'
+              artifactName: 'artifacts'
+              targetPath: '$(Pipeline.Workspace)/build-validation-baseline'
+
+          - pwsh: |
+              $ErrorActionPreference = 'Stop'
+              & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
+
+              $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
+              if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
+                $environmentUrl = '$(BuildTools.EnvironmentUrl)'
+              }
+              if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
+                throw 'Environment URL could not be resolved from the selected connection variables task.'
+              }
+
+              $useAlm4DataverseExtension = '${{ parameters.useAlm4DataverseExtension }}' -eq 'true'
+              if (-not $useAlm4DataverseExtension) {
+                function Resolve-ConnectionVariable {
+                  param([string[]]$Candidates)
+                  foreach ($candidate in $Candidates) {
+                    if (-not [string]::IsNullOrWhiteSpace($candidate) -and $candidate -notmatch '^\$\(.+\)$') {
+                      return $candidate
+                    }
+                  }
+                  return $null
+                }
+
+                $resolvedClientId = Resolve-ConnectionVariable @(
+                  $env:AZURE_CLIENT_ID
+                  '$(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)'
+                  '$(BuildTools.ApplicationId)'
+                )
+                $resolvedTenantId = Resolve-ConnectionVariable @(
+                  $env:AZURE_TENANT_ID
+                  '$(PowerPlatformSetConnectionVariables.BuildTools.TenantId)'
+                  '$(BuildTools.TenantId)'
+                )
+                $resolvedClientSecret = Resolve-ConnectionVariable @(
+                  $env:AZURE_CLIENT_SECRET
+                  '$(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)'
+                  '$(BuildTools.ClientSecret)'
+                )
+                if ([string]::IsNullOrWhiteSpace($resolvedClientId) -or
+                    [string]::IsNullOrWhiteSpace($resolvedTenantId) -or
+                    [string]::IsNullOrWhiteSpace($resolvedClientSecret)) {
+                  throw 'Service principal credentials could not be resolved for BUILD validation deployment.'
+                }
+                $env:AZURE_CLIENT_ID = $resolvedClientId
+                $env:AZURE_TENANT_ID = $resolvedTenantId
+                $env:AZURE_CLIENT_SECRET = $resolvedClientSecret
+              }
+
+              & "$(Pipeline.Workspace)/alm/pipelines/scripts/connect.ps1" -Url $environmentUrl
+
+              $baselineBuildId = '$(BuildValidationBaselineBuildId)'
+              if (-not [string]::IsNullOrWhiteSpace($baselineBuildId) -and $baselineBuildId -notmatch '^\$\(.+\)$') {
+                $baselineArtifactsPath = '$(Pipeline.Workspace)/build-validation-baseline'
+                $baselineDeployScript = Join-Path $baselineArtifactsPath 'alm/pipelines/scripts/deploy.ps1'
+                if (-not (Test-Path -LiteralPath $baselineDeployScript)) {
+                  throw "Downloaded baseline run '$baselineBuildId' does not contain the expected deployment script."
+                }
+                Write-Host "##[section]Deploying baseline BUILD run $baselineBuildId to the BUILD validation environment"
+                & $baselineDeployScript -ArtifactsPath $baselineArtifactsPath
+              }
+
+              Write-Host '##[section]Deploying candidate build artifacts to the BUILD validation environment'
+              & "$(Build.ArtifactStagingDirectory)/alm/pipelines/scripts/deploy.ps1" `
+                -ArtifactsPath "$(Build.ArtifactStagingDirectory)"
+            displayName: 'Deploy baseline and candidate to BUILD validation environment'
+            workingDirectory: '$(Build.ArtifactStagingDirectory)'
+            env:
+              ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
+                AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+              ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
+                AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
+                AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
+                AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
 
         - task: PublishPipelineArtifact@1
           displayName: 'Publish Artifacts'

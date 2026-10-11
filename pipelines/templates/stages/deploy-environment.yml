@@ -144,6 +144,10 @@ stages:
                     $sanitizedBuildRunName = ConvertTo-TagSegment -Value $rawBuildRunName
                     $versionTag = $sanitizedBuildRunName
                     $environmentTag = 'deployed/${{ parameters.environmentName }}'
+                    $buildRunId = '$(resources.pipeline.build.runID)'
+                    if ($buildRunId -notmatch '^\d+$') {
+                      throw "Could not resolve the Azure DevOps BUILD run ID '$buildRunId'."
+                    }
 
                     Write-Host "Fetching build version tag '$versionTag' from origin"
                     git fetch --force origin "refs/tags/${versionTag}:refs/tags/${versionTag}"
@@ -156,8 +160,14 @@ stages:
                       throw "Could not resolve a commit SHA from build version tag '$versionTag'"
                     }
 
-                    Write-Host "Updating environment pointer tag '$environmentTag' to commit $targetCommit"
-                    git tag -f "$environmentTag" "$targetCommit"
+                    Write-Host "Updating environment pointer tag '$environmentTag' to BUILD run $buildRunId ($targetCommit)"
+                    $pointerMessage = @(
+                      'ALM4Dataverse environment deployment pointer'
+                      "Build: $rawBuildRunName"
+                      "BUILD run: $buildRunId"
+                      "Source commit: $targetCommit"
+                    ) -join "`n"
+                    git tag -f -a "$environmentTag" -m "$pointerMessage" "$targetCommit"
                     if ($LASTEXITCODE -ne 0) {
                       throw "Failed to create or move environment tag '$environmentTag'"
                     }

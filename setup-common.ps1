@@ -2352,6 +2352,144 @@ function Set-AlmConfigSolutionCheckEnabledInFile {
     return $hasChanges
 }
 
+function Set-AlmConfigBuildValidationBaselineReleaseInFile {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$BaselineRelease,
+        [Parameter()][switch]$CreateIfMissing,
+        [Parameter()][string]$TemplatePath
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+        if (-not $CreateIfMissing) {
+            throw "alm-config.psd1 not found: $ConfigPath"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($TemplatePath) -and (Test-Path -LiteralPath $TemplatePath)) {
+            Copy-Item -LiteralPath $TemplatePath -Destination $ConfigPath -Force
+        }
+        else {
+            Set-Content -LiteralPath $ConfigPath -Value "@{`n}`n" -NoNewline
+        }
+    }
+
+    $configContent = Get-Content -LiteralPath $ConfigPath -Raw
+    $escapedBaselineRelease = $BaselineRelease.Replace("'", "''")
+    $baselineBlock = "@{`n        baselineRelease = '$escapedBaselineRelease'`n    }"
+
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($configContent, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        throw "Could not parse existing alm-config.psd1 '$ConfigPath': $($parseErrors[0].Message)"
+    }
+
+    $rootHashtable = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.HashtableAst]
+    }, $false)
+
+    if (-not $rootHashtable) {
+        throw "Could not find the root hashtable in '$ConfigPath'."
+    }
+
+    $buildValidationEntry = $rootHashtable.KeyValuePairs | Where-Object {
+        $keyText = $_.Item1.Extent.Text.Trim()
+        $keyText -in @('buildValidation', "'buildValidation'", '"buildValidation"')
+    } | Select-Object -First 1
+
+    if ($buildValidationEntry) {
+        $buildValidationHashtable = $buildValidationEntry.Item2.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.HashtableAst]
+        }, $false)
+        if (-not $buildValidationHashtable) {
+            throw "The buildValidation setting in '$ConfigPath' must be a hashtable."
+        }
+
+        $baselineEntry = $buildValidationHashtable.KeyValuePairs | Where-Object {
+            $keyText = $_.Item1.Extent.Text.Trim()
+            $keyText -in @('baselineRelease', "'baselineRelease'", '"baselineRelease"')
+        } | Select-Object -First 1
+
+        if ($baselineEntry) {
+            $valueExtent = $baselineEntry.Item2.Extent
+            $updatedContent = $configContent.Substring(0, $valueExtent.StartOffset) + "'$escapedBaselineRelease'" + $configContent.Substring($valueExtent.EndOffset)
+        }
+        else {
+            $insertOffset = $buildValidationHashtable.Extent.EndOffset - 1
+            $lineEnding = if ($configContent -match "`r`n") { "`r`n" } else { "`n" }
+            $insertText = "$lineEnding        baselineRelease = '$escapedBaselineRelease'$lineEnding    "
+            $updatedContent = $configContent.Substring(0, $insertOffset) + $insertText + $configContent.Substring($insertOffset)
+        }
+    }
+    else {
+        $insertOffset = $rootHashtable.Extent.EndOffset - 1
+        $lineEnding = if ($configContent -match "`r`n") { "`r`n" } else { "`n" }
+        $insertText = "$lineEnding    buildValidation = $baselineBlock$lineEnding"
+        $updatedContent = $configContent.Substring(0, $insertOffset) + $insertText + $configContent.Substring($insertOffset)
+    }
+
+    $hasChanges = ($updatedContent -ne $configContent)
+    if ($hasChanges) {
+        Set-Content -LiteralPath $ConfigPath -Value $updatedContent -NoNewline
+    }
+
+    return $hasChanges
+}
+
+function Select-BuildValidationBaselineEnvironment {
+    [CmdletBinding()]
+    param(
+        [Parameter()][array]$DeploymentEnvironments,
+        [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentName = '',
+        [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentUrl = ''
+    )
+
+    $uniqueEnvironments = @()
+    foreach ($environment in @($DeploymentEnvironments)) {
+        $shortName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ShortName')
+        $environmentUrl = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'Url')
+        if (-not [string]::IsNullOrWhiteSpace($ExcludedEnvironmentName) -and $shortName -ieq $ExcludedEnvironmentName) {
+            continue
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExcludedEnvironmentUrl) -and
+            -not [string]::IsNullOrWhiteSpace($environmentUrl) -and
+            $environmentUrl.TrimEnd('/') -ieq $ExcludedEnvironmentUrl.TrimEnd('/')) {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($shortName) -or
+            @($uniqueEnvironments | Where-Object { [string]$_.ShortName -ieq $shortName }).Count -gt 0) {
+            continue
+        }
+
+        $uniqueEnvironments += [pscustomobject]@{
+            ShortName = $shortName
+            FriendlyName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'FriendlyName')
+        }
+    }
+
+    if ($uniqueEnvironments.Count -eq 0) {
+        Write-Host 'No deployment environments are configured, so no baseline environment can be selected. BUILD validation will deploy only the candidate release.' -ForegroundColor Yellow
+        return ''
+    }
+
+    $items = @('No baseline release') + @($uniqueEnvironments | ForEach-Object {
+        $friendlyName = if ([string]::IsNullOrWhiteSpace($_.FriendlyName)) { $_.ShortName } else { $_.FriendlyName }
+        "$friendlyName ($($_.ShortName))"
+    })
+    $selectedIndex = Select-FromMenu -Title 'Select the separate deployment environment whose latest successful deployment should be used as the BUILD validation baseline' -Items $items
+    if ($null -eq $selectedIndex) {
+        throw 'No BUILD validation baseline choice was selected.'
+    }
+    if ($selectedIndex -eq 0) {
+        return ''
+    }
+
+    return "@$($uniqueEnvironments[$selectedIndex - 1].ShortName)"
+}
+
 function Select-ConfiguredDeploymentEnvironments {
     [CmdletBinding()]
     param(

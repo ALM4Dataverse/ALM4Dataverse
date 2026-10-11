@@ -194,6 +194,35 @@ If a deployment job times out, the solution import may still be running inside D
 
 > **Future improvement:** Automating the detection of an in-progress import and waiting for it to complete is a planned enhancement.
 
+### BUILD validation baseline
+
+`buildValidation.baselineRelease` optionally configures a release that BUILD
+deploys to the Dataverse validation environment before deploying the candidate
+artifacts. Leave it empty to deploy only the candidate.
+
+```powershell
+buildValidation = @{
+    baselineRelease = '@TEST'
+}
+```
+
+Accepted values:
+
+- `''` — no baseline; deploy only the candidate build.
+- `@<environment-name>` — use the most recently successfully deployed BUILD
+  run recorded by the `deployed/<environment-name>` pointer. If the pointer
+  does not yet exist, BUILD warns and deploys only the candidate. This
+  environment is separate from the BUILD validation target.
+- A fixed successful build identifier. Azure DevOps accepts the numeric BUILD
+  run ID or exact build number. GitHub Actions accepts a numeric BUILD run ID
+  or the corresponding GitHub Release tag. A GitHub run ID is resolved to its
+  Release tag, and the baseline is downloaded from that Release's
+  `artifacts.zip` asset rather than the expiring Actions artifact.
+
+The baseline and candidate each use the deployment script and configuration
+packaged with their own build. If resolving, downloading, or deploying the
+baseline fails, BUILD fails and does not deploy the candidate.
+
 ### Solution Check (PAC `solution check`)
 
 `BUILD` can run `pac solution check` against packed solution zip files and fail the build based on a configurable severity threshold.

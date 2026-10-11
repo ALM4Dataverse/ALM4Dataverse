@@ -271,6 +271,33 @@ function Find-LatestManagedReleaseForBranch {
     return $latestMatch
 }
 
+function Find-ReleaseForBuildRun {
+    param([Parameter(Mandatory)][string]$RunId)
+
+    $matchingReleases = @()
+    for ($page = 1; $page -le 100; $page++) {
+        $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
+        if ($releases.Count -eq 0) { break }
+        foreach ($release in $releases) {
+            try { $releaseMetadata = Get-ReleaseMetadata -Release $release } catch { continue }
+            if ($releaseMetadata.RunId -ceq $RunId) {
+                $matchingReleases += [pscustomobject]@{
+                    Release = $release
+                    Metadata = $releaseMetadata
+                }
+            }
+        }
+    }
+
+    if ($matchingReleases.Count -gt 1) {
+        throw "Multiple GitHub Releases match BUILD run '$RunId'; refusing to write an ambiguous deployment pointer."
+    }
+    if ($matchingReleases.Count -eq 1) {
+        return $matchingReleases[0]
+    }
+    return $null
+}
+
 function Find-BuildRunByName {
     param([Parameter(Mandatory)][string]$RunName)
     for ($page = 1; $page -le 100; $page++) {
@@ -386,6 +413,20 @@ if ($null -eq $buildRun -and $null -ne $metadata) {
 if ($null -eq $buildRun) { throw 'Could not resolve a BUILD run for deployment.' }
 if (-not (Test-IsBuildWorkflowRun $buildRun)) { throw "Resolved run '$($buildRun.id)' is not a BUILD run." }
 if ([string]$buildRun.conclusion -ne 'success') { throw "BUILD run '$($buildRun.id)' is not successful." }
+
+if ($requestedReleaseTag -match '[\r\n]') {
+    Write-Warning "The selected BUILD provided a malformed multi-line Release tag; resolving it from BUILD run '$($buildRun.id)' instead."
+    $requestedReleaseTag = ''
+    $release = $null
+}
+if ([string]::IsNullOrWhiteSpace($requestedReleaseTag)) {
+    $runRelease = Find-ReleaseForBuildRun -RunId ([string]$buildRun.id)
+    if ($null -ne $runRelease) {
+        $release = $runRelease.Release
+        $metadata = $runRelease.Metadata
+        $requestedReleaseTag = $metadata.TagName
+    }
+}
 
 $buildName = if ($null -ne $metadata) { $metadata.BuildName } else { Resolve-BuildRunCanonicalName $buildRun }
 $buildTagKey = ConvertTo-GateTagSegment $buildName
