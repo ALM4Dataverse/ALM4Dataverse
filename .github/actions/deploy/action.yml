@@ -208,11 +208,17 @@ runs:
         $ErrorActionPreference = 'Stop'
         $successTag = '${{ steps.resolve.outputs.success_gate_tag }}'
         $environmentPointerTag = '${{ steps.resolve.outputs.environment_pointer_tag }}'
+        $buildRunId = '${{ steps.resolve.outputs.build_run_id }}'.Trim()
+        $buildRunName = '${{ steps.resolve.outputs.build_run_name }}'.Trim()
+        $releaseTag = '${{ steps.resolve.outputs.release_tag }}'.Trim()
         $repo = $env:GITHUB_REPOSITORY
 
         $sha = '${{ steps.resolve.outputs.build_source_sha }}'.Trim()
         if ([string]::IsNullOrWhiteSpace($sha)) {
           throw 'Could not resolve the selected build source commit.'
+        }
+        if ($buildRunId -notmatch '^\d+$') {
+          throw "Could not resolve the selected BUILD run ID '$buildRunId'."
         }
 
         $out = gh api --method POST "/repos/$repo/git/refs" `
@@ -223,6 +229,31 @@ runs:
         }
 
         if (-not [string]::IsNullOrWhiteSpace($environmentPointerTag)) {
+          $pointerMessage = @(
+            'ALM4Dataverse environment deployment pointer'
+            "Build: $buildRunName"
+            "BUILD run: $buildRunId"
+            "Release tag: $releaseTag"
+            "Source commit: $sha"
+          ) -join "`n"
+          $tagObjectOutput = gh api --method POST "/repos/$repo/git/tags" `
+                                    --field "tag=$environmentPointerTag" `
+                                    --field "message=$pointerMessage" `
+                                    --field "object=$sha" `
+                                    --field "type=commit" 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to create annotated environment pointer tag '$environmentPointerTag': $tagObjectOutput"
+          }
+          try {
+            $pointerTagObjectSha = ([string]($tagObjectOutput | ConvertFrom-Json).sha).Trim()
+          }
+          catch {
+            throw "Could not read the annotated tag object SHA for '$environmentPointerTag': $tagObjectOutput"
+          }
+          if ($pointerTagObjectSha -notmatch '^[0-9a-fA-F]{40}$') {
+            throw "GitHub returned an invalid tag object SHA for '$environmentPointerTag'."
+          }
+
           $delOut = gh api --method DELETE "/repos/$repo/git/refs/tags/$environmentPointerTag" 2>&1
           if ($LASTEXITCODE -ne 0 -and "$delOut" -notmatch '"Not Found"|404|Reference does not exist|422') {
             throw "Unexpected error deleting pointer tag '$environmentPointerTag': $delOut"
@@ -230,7 +261,7 @@ runs:
 
           $createOut = gh api --method POST "/repos/$repo/git/refs" `
                               --field "ref=refs/tags/$environmentPointerTag" `
-                              --field "sha=$sha" 2>&1
+                              --field "sha=$pointerTagObjectSha" 2>&1
           if ($LASTEXITCODE -ne 0) {
             throw "Failed to create environment pointer tag '$environmentPointerTag': $createOut"
           }

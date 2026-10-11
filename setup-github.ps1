@@ -3196,6 +3196,7 @@ function Update-AlmConfigInRepoClone {
     param(
         [Parameter()][AllowNull()][array]$Solutions,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled,
+        [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter(Mandatory)][string]$RepoRoot
     )
 
@@ -3212,7 +3213,8 @@ function Update-AlmConfigInRepoClone {
     }
 
     [void](Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $BuildValidationEnabled -CreateIfMissing -TemplatePath $templatePath)
-    Write-Host "Updated alm-config.psd1 with $($effectiveSolutions.Count) solution(s); solutionCheck.enabled=$BuildValidationEnabled."
+    [void](Set-AlmConfigBuildValidationBaselineReleaseInFile -ConfigPath $configPath -BaselineRelease $BuildValidationBaselineRelease -CreateIfMissing -TemplatePath $templatePath)
+    Write-Host "Updated alm-config.psd1 with $($effectiveSolutions.Count) solution(s); solutionCheck.enabled=$BuildValidationEnabled; buildValidation.baselineRelease='$BuildValidationBaselineRelease'."
 }
 
 function Update-BuildWorkflowInRepoClone {
@@ -3606,6 +3608,7 @@ function Publish-GitHubBranchSetupChanges {
         [Parameter()][array]$DeployWorkflowBranchDefinitions,
         [Parameter()][bool]$BuildValidationEnabled = $false,
         [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = '',
+        [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter()][switch]$SkipDeployWorkflow
     )
 
@@ -3696,7 +3699,11 @@ function Publish-GitHubBranchSetupChanges {
             -SharedWorkflowRef $SharedWorkflowReference `
             -SkipDeployWorkflow:$SkipDeployWorkflow
 
-        Update-AlmConfigInRepoClone -Solutions $Solutions -BuildValidationEnabled $BuildValidationEnabled -RepoRoot $RepoRoot
+        Update-AlmConfigInRepoClone `
+            -Solutions $Solutions `
+            -BuildValidationEnabled $BuildValidationEnabled `
+            -BuildValidationBaselineRelease $BuildValidationBaselineRelease `
+            -RepoRoot $RepoRoot
 
         $buildEnvironmentName = if ($BuildValidationEnabled) { [string]$BuildValidationEnvironmentName } else { '' }
         Update-BuildWorkflowInRepoClone `
@@ -3844,6 +3851,7 @@ function Invoke-GitHubBranchAwareSetup {
             BranchEnvironmentMappingCompleted = $false
             BuildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnabled')
             BuildValidationEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnvironmentName')
+            BuildValidationBaselineRelease = ''
             BuildValidationEnvironmentConfiguration = (Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'ExistingBuildValidationEnvironment')
         }
 
@@ -4547,20 +4555,21 @@ function Invoke-GitHubBranchAwareSetup {
                     Write-Section `
                         -Message 'Configure solution validation during BUILD'
                     Write-SetupGuidance -Lines @(
-                        'When enabled, BUILD uses one global Dataverse environment for pre-build connect/auth and solution validation.',
-                        'This is configured once and then applied across all configured branches.'
+                        'When enabled, BUILD deploys its generated artifacts to one shared Dataverse validation environment across all configured branches.',
+                        'You can also select a separate deployment environment as the optional baseline source; its last successful BUILD is deployed before the candidate.'
                     ) -DocRelativePath 'docs/usage/building-releases.md' -Ref $ALM4DataverseRef -Header 'Build validation guidance'
 
                     $enableBuildValidation = if ([bool]$wizardState.BuildValidationEnabled) {
-                        Read-YesNo -Prompt 'Enable solution validation during BUILD?'
+                        Read-YesNo -Prompt 'Enable Dataverse deployment validation during BUILD?'
                     }
                     else {
-                        Read-YesNo -Prompt 'Enable solution validation during BUILD?' -DefaultNo
+                        Read-YesNo -Prompt 'Enable Dataverse deployment validation during BUILD?' -DefaultNo
                     }
 
                     if (-not $enableBuildValidation) {
                         $wizardState.BuildValidationEnabled = $false
                         $wizardState.BuildValidationEnvironmentName = ''
+                        $wizardState.BuildValidationBaselineRelease = ''
                         $wizardState.BuildValidationEnvironmentConfiguration = $null
                         return
                     }
@@ -4616,6 +4625,14 @@ function Invoke-GitHubBranchAwareSetup {
                         $wizardState.BuildValidationEnvironmentName = [string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName
                     }
 
+                    $baselineEnvironments = @()
+                    foreach ($branchState in @($wizardState.BranchStates)) {
+                        $baselineEnvironments += @($branchState.DeploymentEnvironments)
+                    }
+                    $wizardState.BuildValidationBaselineRelease = Select-BuildValidationBaselineEnvironment `
+                        -DeploymentEnvironments $baselineEnvironments `
+                        -ExcludedEnvironmentName ([string]$wizardState.BuildValidationEnvironmentName) `
+                        -ExcludedEnvironmentUrl ([string](Get-OptionalObjectPropertyValue -InputObject $wizardState.BuildValidationEnvironmentConfiguration -PropertyName 'Url'))
                     $wizardState.BuildValidationEnabled = $true
                 }
             },
@@ -4697,6 +4714,7 @@ function Invoke-GitHubBranchAwareSetup {
                         'Configured branches'      = [string]$wizardState.BranchStates.Count
                         'BUILD validation'         = $(if ($wizardState.BuildValidationEnabled) { 'Enabled' } else { 'Disabled' })
                         'BUILD validation environment' = $(if (-not [string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationEnvironmentName)) { [string]$wizardState.BuildValidationEnvironmentName } elseif ($wizardState.BuildValidationEnvironmentConfiguration) { $wizardState.BuildValidationEnvironmentConfiguration.ShortName } else { '<none>' })
+                        'BUILD validation baseline' = $(if ([string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationBaselineRelease)) { '<none>' } else { [string]$wizardState.BuildValidationBaselineRelease })
                         'Solution source branch'   = $(if ([string]::IsNullOrWhiteSpace($wizardState.SolutionSourceBranch)) { '<none>' } else { $wizardState.SolutionSourceBranch })
                         'Solutions selected'       = [string]$(if ($wizardState.SolutionResult) { @($wizardState.SolutionResult.Solutions).Count } else { 0 })
                     })
@@ -4842,6 +4860,7 @@ function Invoke-GitHubBranchAwareSetup {
                         -DeployWorkflowBranchDefinitions $deployDefinitionsForBranchPublish `
                         -BuildValidationEnabled ([bool]$wizardState.BuildValidationEnabled) `
                         -BuildValidationEnvironmentName $buildValidationEnvironmentNameForPublish `
+                        -BuildValidationBaselineRelease ([string]$wizardState.BuildValidationBaselineRelease) `
                         -SkipDeployWorkflow:$isRemovedBranch
             }
 
@@ -4861,6 +4880,7 @@ function Invoke-GitHubBranchAwareSetup {
             SolutionSourceBranch = $wizardState.SolutionSourceBranch
             BuildValidationEnabled = [bool]$wizardState.BuildValidationEnabled
             BuildValidationEnvironmentName = [string]$wizardState.BuildValidationEnvironmentName
+            BuildValidationBaselineRelease = [string]$wizardState.BuildValidationBaselineRelease
             BuildValidationEnvironmentConfiguration = $wizardState.BuildValidationEnvironmentConfiguration
             PublishResults       = @($publishResults)
         }

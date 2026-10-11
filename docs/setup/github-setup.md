@@ -27,9 +27,9 @@ actions directly, keeping job-level configuration in the consuming repository.
 | `DEPLOY-main.yml` | `.github/actions/deploy` | Deploy Release assets or BUILD artifacts to each environment |
 | `CLEANUP-RELEASES.yml` | `cleanup-releases.yml` | Remove deleted-branch Releases and cap Releases per branch |
 
-During automated setup (`setup-github.ps1`), you are also prompted whether to enable BUILD validation globally. If enabled, setup configures one shared GitHub environment for BUILD. Each BUILD authenticates to it, creates deployment artifacts, and deploys those artifacts to that environment; configured PAC Solution Checker rules also run against the packed solutions. Builds from all branches update this same environment, so select a non-production environment that is safe to update repeatedly. See [Building Releases](../usage/building-releases.md) for the validation sequence and PR check configuration.
+During automated setup (`setup-github.ps1`), you are also prompted whether to enable BUILD validation globally. If enabled, setup configures one shared GitHub environment for BUILD and asks which separate deployment environment should supply the optional baseline release (or lets you choose no baseline). Each BUILD authenticates to the validation environment, creates deployment artifacts, and deploys its baseline first when selected, then the candidate; configured PAC Solution Checker rules also run against the packed solutions. Builds from all branches update this same validation environment, so select a non-production environment that is safe to update repeatedly. A baseline environment must have a prior successful deployment. See [Building Releases](../usage/building-releases.md) for the validation sequence and PR check configuration.
 
-When configuring manually, set the BUILD workflow's `environment-name` input to a GitHub environment containing the Dataverse URL, credentials, service-account UPN, and any connection-reference/environment-variable settings required by deployment. BUILD deploys its generated artifacts to that environment. See [BUILD validation](../usage/building-releases.md#build-validation).
+When configuring manually, set the BUILD workflow's `environment-name` input to a GitHub environment containing the Dataverse URL, credentials, service-account UPN, and any connection-reference/environment-variable settings required by deployment. BUILD deploys its generated artifacts to that environment. Set `buildValidation.baselineRelease` in `alm-config.psd1` to `@<environment-name>`, a fixed successful BUILD run ID, or a GitHub Release tag; leave it empty for candidate-only validation. See [BUILD validation](../usage/building-releases.md#build-validation).
 
 ---
 
@@ -552,8 +552,9 @@ The gate tags serve as a **permanent, auditable trail** of which build was deplo
 to which environment and in what order.
 
 The `deployed/{environment}` tag is a **movable pointer** that is updated on every
-successful deployment, making it easy to see the build currently live in each
-environment.
+successful deployment. It is an annotated tag that resolves to the deployed
+source commit and records the exact BUILD run and Release tag for baseline
+validation; older lightweight pointers are still resolved by source commit.
 
 ### Key properties
 
@@ -696,7 +697,7 @@ Deployment tags are stored in the repository and are visible in the **Tags** sec
 of the repository (under **Code** > **Tags**).
 
 - `{build-run-name}/deployed/{environment}` is the permanent audit/gate tag.
-- `deployed/{environment}` is the movable pointer showing what is currently deployed.
+- `deployed/{environment}` is the movable pointer showing what is currently deployed and recording its BUILD run metadata.
 
 Example:
 

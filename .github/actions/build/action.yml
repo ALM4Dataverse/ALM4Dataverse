@@ -1,5 +1,5 @@
 name: Build
-description: Build, validate, deploy to the optional validation environment, publish, and tag Dataverse solution artifacts.
+description: Build, validate, optionally deploy a baseline and candidate to the validation environment, publish, and tag Dataverse solution artifacts.
 
 inputs:
   build-name:
@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ''
   environment-name:
-    description: Optional GitHub environment used to authenticate and deploy the build artifacts for deployment validation.
+    description: Optional GitHub environment used to authenticate and deploy the baseline and candidate artifacts for deployment validation.
     required: false
     default: ''
   all-repo-vars-json:
@@ -116,6 +116,7 @@ runs:
       working-directory: ${{ github.workspace }}/self
       env:
         BUILD_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
+        GITHUB_TOKEN: ${{ github.token }}
       run: |
         $ErrorActionPreference = 'Stop'
         & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
@@ -143,8 +144,9 @@ runs:
 
           Write-Host '##[group]Deploying build artifacts to the BUILD validation environment'
           $artifactsPath = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
-          $deployScriptPath = Join-Path $artifactsPath 'alm/pipelines/scripts/deploy.ps1'
-          & $deployScriptPath -ArtifactsPath $artifactsPath
+          & "${{ github.action_path }}/../common/deploy-build-validation.ps1" `
+            -ArtifactsPath $artifactsPath `
+            -EnvironmentName $env:BUILD_ENVIRONMENT_NAME
           Write-Host '##[endgroup]'
         }
 

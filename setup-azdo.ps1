@@ -3256,6 +3256,7 @@ function Update-AlmConfigInWorkingTree {
     param(
         [Parameter()][AllowNull()][array]$Solutions,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled,
+        [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter(Mandatory)][string]$RepoRoot
     )
 
@@ -3269,7 +3270,8 @@ function Update-AlmConfigInWorkingTree {
         Write-Host 'Skipping solution list updates in alm-config.psd1 because solution selection was not run.' -ForegroundColor Yellow
     }
     $solutionCheckChanged = Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $BuildValidationEnabled -CreateIfMissing -TemplatePath $templatePath
-    $changed = ($solutionsChanged -or $solutionCheckChanged)
+    $baselineChanged = Set-AlmConfigBuildValidationBaselineReleaseInFile -ConfigPath $configPath -BaselineRelease $BuildValidationBaselineRelease -CreateIfMissing -TemplatePath $templatePath
+    $changed = ($solutionsChanged -or $solutionCheckChanged -or $baselineChanged)
 
     if ($changed) {
         Write-Host 'Updated alm-config.psd1 in the working tree.' -ForegroundColor Green
@@ -4387,7 +4389,8 @@ function Publish-AzDoBranchSetupChanges {
         [Parameter()][AllowNull()][array]$Solutions,
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][bool]$BuildValidationEnabled = $false,
-        [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = ''
+        [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = '',
+        [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = ''
     )
 
     Push-Location $RepoRoot
@@ -4488,7 +4491,11 @@ function Publish-AzDoBranchSetupChanges {
             -Branch $ConfiguredBranch `
             -UseAlm4DataverseExtension $UseAlm4DataverseExtension
 
-        [void](Update-AlmConfigInWorkingTree -Solutions $Solutions -BuildValidationEnabled $BuildValidationEnabled -RepoRoot $RepoRoot)
+        [void](Update-AlmConfigInWorkingTree `
+            -Solutions $Solutions `
+            -BuildValidationEnabled $BuildValidationEnabled `
+            -BuildValidationBaselineRelease $BuildValidationBaselineRelease `
+            -RepoRoot $RepoRoot)
 
         $buildEnvironmentName = if ($BuildValidationEnabled) { [string]$BuildValidationEnvironmentName } else { '' }
         Update-AzDoBuildPipelineInWorkingTree `
@@ -4690,6 +4697,7 @@ function Invoke-AzDoBranchAwareSetup {
         SolutionSourceBranch = $null
         BranchEnvironmentMappingCompleted = $false
         BuildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $existingSetupState -PropertyName 'BuildValidationEnabled')
+        BuildValidationBaselineRelease = ''
         BuildValidationEnvironmentConfiguration = (Get-OptionalObjectPropertyValue -InputObject $existingSetupState -PropertyName 'ExistingBuildValidationEnvironment')
     }
 
@@ -5020,19 +5028,20 @@ function Invoke-AzDoBranchAwareSetup {
                 Write-Section `
                     -Message 'Configure solution validation during BUILD'
                 Write-SetupGuidance -Lines @(
-                    'When enabled, BUILD will run Dataverse connect first (same connection/auth flow as EXPORT) and then run solution validation.',
-                    'This is a global setup choice: one environment configuration is used for BUILD across all configured branches.'
+                'When enabled, BUILD deploys its generated artifacts to one shared Dataverse validation environment across all configured branches.',
+                'You can also select a separate deployment environment as the optional baseline source; its last successful BUILD is deployed before the candidate.'
                 ) -DocRelativePath 'docs/usage/building-releases.md' -Ref $ALM4DataverseRef -Header 'Build validation guidance'
 
                 $enableBuildValidation = if ([bool]$wizardState.BuildValidationEnabled) {
-                    Read-YesNo -Prompt 'Enable solution validation during BUILD?'
+                    Read-YesNo -Prompt 'Enable Dataverse deployment validation during BUILD?'
                 }
                 else {
-                    Read-YesNo -Prompt 'Enable solution validation during BUILD?' -DefaultNo
+                    Read-YesNo -Prompt 'Enable Dataverse deployment validation during BUILD?' -DefaultNo
                 }
 
                 if (-not $enableBuildValidation) {
                     $wizardState.BuildValidationEnabled = $false
+                    $wizardState.BuildValidationBaselineRelease = ''
                     $wizardState.BuildValidationEnvironmentConfiguration = $null
                     return
                 }
@@ -5078,6 +5087,14 @@ function Invoke-AzDoBranchAwareSetup {
                     $serviceAccountsCache += $wizardState.BuildValidationEnvironmentConfiguration.ServiceAccountUPN
                 }
 
+                $baselineEnvironments = @()
+                foreach ($branchState in @($wizardState.BranchStates)) {
+                    $baselineEnvironments += @($branchState.DeploymentEnvironments)
+                }
+                $wizardState.BuildValidationBaselineRelease = Select-BuildValidationBaselineEnvironment `
+                    -DeploymentEnvironments $baselineEnvironments `
+                    -ExcludedEnvironmentName ([string]$wizardState.BuildValidationEnvironmentConfiguration.ShortName) `
+                    -ExcludedEnvironmentUrl ([string](Get-OptionalObjectPropertyValue -InputObject $wizardState.BuildValidationEnvironmentConfiguration -PropertyName 'Url'))
                 $wizardState.BuildValidationEnabled = $true
             }
         },
@@ -5158,6 +5175,7 @@ function Invoke-AzDoBranchAwareSetup {
                     'Configured branches'  = [string]$wizardState.BranchStates.Count
                     'BUILD validation'     = $(if ($wizardState.BuildValidationEnabled) { 'Enabled' } else { 'Disabled' })
                     'BUILD validation environment' = $(if ($wizardState.BuildValidationEnvironmentConfiguration) { $wizardState.BuildValidationEnvironmentConfiguration.ShortName } else { '<none>' })
+                    'BUILD validation baseline' = $(if ([string]::IsNullOrWhiteSpace([string]$wizardState.BuildValidationBaselineRelease)) { '<none>' } else { [string]$wizardState.BuildValidationBaselineRelease })
                     'Solution source branch' = $(if ([string]::IsNullOrWhiteSpace($wizardState.SolutionSourceBranch)) { '<none>' } else { $wizardState.SolutionSourceBranch })
                     'Solutions selected'   = [string]$(if ($wizardState.SolutionData) { @($wizardState.SolutionData.Solutions).Count } else { 0 })
                     'Extension mode'       = $(if ($UseAlm4DataverseExtension) { 'ALM4Dataverse extension enabled' } else { 'ALM4Dataverse extension disabled' })
@@ -5180,6 +5198,7 @@ function Invoke-AzDoBranchAwareSetup {
         SolutionData         = $wizardState.SolutionData
         SolutionSourceBranch = $wizardState.SolutionSourceBranch
         BuildValidationEnabled = [bool]$wizardState.BuildValidationEnabled
+        BuildValidationBaselineRelease = [string]$wizardState.BuildValidationBaselineRelease
         BuildValidationEnvironmentConfiguration = $wizardState.BuildValidationEnvironmentConfiguration
     }
 }
@@ -5245,7 +5264,8 @@ try {
                 -Solutions $(if ($solutionData) { @($solutions) } else { $null }) `
                 -DeploymentEnvironments @($branchState.DeploymentEnvironments) `
                 -BuildValidationEnabled $buildValidationEnabled `
-                -BuildValidationEnvironmentName $(if ($buildValidationEnvironmentConfiguration) { [string]$buildValidationEnvironmentConfiguration.ShortName } else { '' })
+                -BuildValidationEnvironmentName $(if ($buildValidationEnvironmentConfiguration) { [string]$buildValidationEnvironmentConfiguration.ShortName } else { '' }) `
+                -BuildValidationBaselineRelease ([string](Get-OptionalObjectPropertyValue -InputObject $azDoSetupResult -PropertyName 'BuildValidationBaselineRelease'))
         }
 
         $repoPublishResults += $publishResult

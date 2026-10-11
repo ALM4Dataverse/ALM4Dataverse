@@ -22,6 +22,9 @@ configured deployment hooks complete; it changes that environment and is not
 a runtime/functional test or a `DEPLOY` target.
 See [Building Releases](building-releases.md) for how these validations work
 and how to configure a successful build as a PR/branch-policy requirement.
+If a baseline release is configured, BUILD deploys that successful package to
+the validation environment before the candidate from the current branch; the
+baseline source environment is separate from the validation target.
 
 For the `main`/`develop` and feature-branch models below, configure your
 repository's PR policy to require successful validation before merging into

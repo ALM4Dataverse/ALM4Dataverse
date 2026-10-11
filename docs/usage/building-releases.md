@@ -66,6 +66,40 @@ The credentials and deployment settings must be available to that job. See
 [Azure DevOps setup](../setup/azdo-manual-setup.md) and
 [GitHub setup](../setup/github-setup.md).
 
+### Optional baseline release
+
+BUILD validation can deploy a previously successful BUILD package before the
+candidate package. This is useful when the validation environment needs the
+same installed-solution baseline that a target environment currently has.
+Both packages are deployed with the normal deployment process and their own
+packaged configuration; if baseline resolution, download, or deployment fails,
+BUILD fails without attempting the candidate deployment.
+
+Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
+
+- Leave it empty to deploy only the current candidate.
+- Use `@<environment-name>` to resolve the most recently successfully
+  deployed BUILD run recorded for that deployment environment.
+- Use a fixed build identifier: an Azure DevOps BUILD run ID or build number;
+  or a GitHub BUILD run ID or GitHub Release tag.
+
+Automated setup asks for a baseline source deployment environment separately
+from the Dataverse validation target. It also offers a no-baseline choice.
+The source environment must already have a successful deployment. Do not
+select the BUILD validation target as the baseline source: BUILD does not
+update deployment pointers when it writes to its validation environment.
+For environments deployed before build-ID pointers were introduced, the
+resolver uses the existing source-commit pointer to find a unique successful
+build. If more than one successful build matches that commit, configure a
+fixed build identifier to avoid guessing which package was deployed.
+
+GitHub release cleanup keeps Releases referenced by active deployment pointers,
+so their packaged baseline assets remain available. Azure DevOps baseline
+artifacts must still be retained by the project’s pipeline retention policy.
+If a fixed identifier or a selected environment’s baseline artifact has expired
+or been removed, BUILD fails with a resolution/download error; choose a
+retained baseline or adjust retention.
+
 ### PAC Solution Checker
 
 When `solutionCheck.enabled` is `$true` globally or for an individual
