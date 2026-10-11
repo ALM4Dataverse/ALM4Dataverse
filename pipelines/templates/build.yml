@@ -15,6 +15,9 @@ stages:
           vmImage: windows-2022
         displayName: 'Build'
         timeoutInMinutes: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
+        variables:
+          - ${{ if ne(parameters.buildEnvironmentName, '') }}:
+            - group: 'Environment-${{ parameters.buildEnvironmentName }}'
         steps:
         - checkout: self
           persistCredentials: true
@@ -108,9 +111,16 @@ stages:
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/build.ps1" `
                 -SourceDirectory "$(Pipeline.Workspace)/self" `
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)"
+
+              if (-not [string]::IsNullOrWhiteSpace($env:BUILD_VALIDATION_ENVIRONMENT_NAME)) {
+                Write-Host "##[section]Deploying build artifacts to the BUILD validation environment"
+                & "$(Build.ArtifactStagingDirectory)/alm/pipelines/scripts/deploy.ps1" `
+                  -ArtifactsPath "$(Build.ArtifactStagingDirectory)"
+              }
             displayName: 'Install Dependencies, Connect and Build artifacts'
             workingDirectory: '$(Pipeline.Workspace)/self'
             env:
+              BUILD_VALIDATION_ENVIRONMENT_NAME: ${{ parameters.buildEnvironmentName }}
               ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
                 AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
               ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:

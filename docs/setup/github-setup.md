@@ -27,7 +27,9 @@ actions directly, keeping job-level configuration in the consuming repository.
 | `DEPLOY-main.yml` | `.github/actions/deploy` | Deploy Release assets or BUILD artifacts to each environment |
 | `CLEANUP-RELEASES.yml` | `cleanup-releases.yml` | Remove deleted-branch Releases and cap Releases per branch |
 
-During automated setup (`setup-github.ps1`), you are also prompted whether to enable solution validation in `BUILD` globally. If enabled, setup configures one shared GitHub environment for BUILD validation and wires the build action to run Dataverse connect/authentication against that environment before build validation.
+During automated setup (`setup-github.ps1`), you are also prompted whether to enable BUILD validation globally. If enabled, setup configures one shared GitHub environment for BUILD. Each BUILD authenticates to it, creates deployment artifacts, and deploys those artifacts to that environment; configured PAC Solution Checker rules also run against the packed solutions. Builds from all branches update this same environment, so select a non-production environment that is safe to update repeatedly. See [Building Releases](../usage/building-releases.md) for the validation sequence and PR check configuration.
+
+When configuring manually, set the BUILD workflow's `environment-name` input to a GitHub environment containing the Dataverse URL, credentials, service-account UPN, and any connection-reference/environment-variable settings required by deployment. BUILD deploys its generated artifacts to that environment. See [BUILD validation](../usage/building-releases.md#build-validation).
 
 ---
 

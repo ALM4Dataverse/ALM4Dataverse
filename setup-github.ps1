@@ -3246,6 +3246,7 @@ function Update-BuildWorkflowInRepoClone {
             name: '$escapedBuildEnvironmentName'
             deployment: false
 "@
+        $environmentBlock += "`r`n"
     }
 
     $newContent = @"

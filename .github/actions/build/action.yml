@@ -1,5 +1,5 @@
 name: Build
-description: Build, validate, publish, and tag Dataverse solution artifacts.
+description: Build, validate, deploy to the optional validation environment, publish, and tag Dataverse solution artifacts.
 
 inputs:
   build-name:
@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ''
   environment-name:
-    description: Optional GitHub environment used for build validation.
+    description: Optional GitHub environment used to authenticate and deploy the build artifacts for deployment validation.
     required: false
     default: ''
   all-repo-vars-json:
@@ -98,7 +98,7 @@ runs:
       if: inputs.environment-name != ''
       shell: pwsh
       run: |
-        & "${{ github.action_path }}/../common/validate-auth.ps1"
+        & "${{ github.action_path }}/../common/validate-auth.ps1" -RequireServiceAccount
 
     - name: Log in to Azure with GitHub OIDC
       if: inputs.environment-name != ''
@@ -111,12 +111,13 @@ runs:
         creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
         allow-no-subscriptions: true
 
-    - name: Install dependencies and build
+    - name: Build artifacts and validate deployment
       shell: pwsh
       working-directory: ${{ github.workspace }}/self
       env:
         BUILD_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
       run: |
+        $ErrorActionPreference = 'Stop'
         & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
         if (-not [string]::IsNullOrWhiteSpace($env:BUILD_ENVIRONMENT_NAME)) {
           & "${{ github.action_path }}/../../../pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
@@ -124,6 +125,28 @@ runs:
         & "${{ github.action_path }}/../../../pipelines/scripts/build.ps1" `
           -SourceDirectory "${{ github.workspace }}/self" `
           -ArtifactStagingDirectory "${{ github.workspace }}/artifacts"
+
+        if (-not [string]::IsNullOrWhiteSpace($env:BUILD_ENVIRONMENT_NAME)) {
+          if (-not [string]::IsNullOrWhiteSpace($env:DATAVERSE_CONNECTION_REFS)) {
+            $connRefs = $env:DATAVERSE_CONNECTION_REFS | ConvertFrom-Json
+            foreach ($prop in $connRefs.PSObject.Properties) {
+              [System.Environment]::SetEnvironmentVariable("DataverseConnRef_$($prop.Name)", $prop.Value)
+            }
+          }
+
+          if (-not [string]::IsNullOrWhiteSpace($env:DATAVERSE_ENV_VARS)) {
+            $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
+            foreach ($prop in $envVars.PSObject.Properties) {
+              [System.Environment]::SetEnvironmentVariable("DataverseEnvVar_$($prop.Name)", $prop.Value)
+            }
+          }
+
+          Write-Host '##[group]Deploying build artifacts to the BUILD validation environment'
+          $artifactsPath = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
+          $deployScriptPath = Join-Path $artifactsPath 'alm/pipelines/scripts/deploy.ps1'
+          & $deployScriptPath -ArtifactsPath $artifactsPath
+          Write-Host '##[endgroup]'
+        }
 
     - name: Upload build artifacts
       if: always()

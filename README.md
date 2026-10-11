@@ -64,6 +64,8 @@ Features:
 
 #### Usage Instructions
 
+- [Branching strategies](docs/usage/branching-strategies.md) - choosing between
+  a simple `main`-only workflow and a `main`/`develop` workflow with PRs into `main`
 - [Exporting changes](docs/usage/exporting-changes.md) - `EXPORT` pipeline/workflow
   Capturing changes from your dev environments into source control.
 - [Building releases](docs/usage/building-releases.md) - `BUILD` pipeline/workflow

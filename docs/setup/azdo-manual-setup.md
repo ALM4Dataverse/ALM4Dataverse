@@ -424,7 +424,9 @@ Edit the `alm-config.psd1` file in your main repository to list the solutions yo
 - `deployUnmanaged`: Set to `$true` if you want to deploy as unmanaged (typically only for Dev), `$false` for managed
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings
 
-If solution check is enabled, BUILD authenticates PAC using managed identity / existing Azure identity context and fails clearly if no non-interactive Azure sign-in context is available.
+If solution check is enabled, BUILD authenticates PAC using managed identity / existing Azure identity context and fails clearly if no non-interactive Azure sign-in context is available. See [Building Releases](../usage/building-releases.md) for how BUILD validation works and how to require its result for PRs.
+
+To have BUILD validate the actual deployment as well, set the `buildEnvironmentName` parameter in `pipelines/BUILD.yml` to a non-production environment name. Create the matching Power Platform service connection named exactly that value and its `Environment-<name>` variable group, including the Dataverse connection references, environment variable values, and service-account UPN required by deployment. The BUILD pipeline then deploys its generated artifacts to that environment; see [BUILD validation](../usage/building-releases.md#build-validation).
 
 ### 9.2 Configure Deployment Environments
 
