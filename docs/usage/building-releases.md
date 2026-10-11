@@ -5,7 +5,7 @@
 flowchart LR
     A[Repository Branch<br/>&lt;branchname&gt;] --> B[BUILD Pipeline]
     B --> C[BUILD Actions artifacts]
-    B --> D[GitHub Release<br/>v&lt;build-name&gt;]
+    B --> D[GitHub Release<br/>&lt;build-name&gt;]
 
     style A fill:#e1f5fe
     style C fill:#f3e5f5

@@ -1,4 +1,4 @@
-name: Build Dataverse solutions
+name: Build
 description: Build, validate, publish, and tag Dataverse solution artifacts.
 
 inputs:
@@ -165,7 +165,7 @@ runs:
         if ([string]::IsNullOrWhiteSpace($sanitizedBuildNumber)) {
           throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
         }
-        $tagName = "v$sanitizedBuildNumber"
+        $tagName = $sanitizedBuildNumber
         $sourceCommit = (git rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
           throw "Could not resolve the source commit for build tag '$tagName'."
@@ -270,11 +270,7 @@ runs:
             `Build: ${process.env.RELEASE_NAME}`,
             `Branch: ${branchName}`,
             `Source commit: ${process.env.BUILD_SOURCE_SHA}`,
-            `BUILD run: [${process.env.BUILD_RUN_ID}](${process.env.BUILD_RUN_URL})`,
-            '',
-            'Release assets are the same archives uploaded by the BUILD workflow:',
-            '- `artifacts.zip`',
-            '- `solution-check-report.zip` (when a solution-check report was produced)',
+            `BUILD run: [${process.env.BUILD_RUN_ID}](${process.env.BUILD_RUN_URL})`
           ].join('\n');
           const assets = [
             { path: process.env.ARTIFACTS_ASSET_PATH, name: 'artifacts.zip' },

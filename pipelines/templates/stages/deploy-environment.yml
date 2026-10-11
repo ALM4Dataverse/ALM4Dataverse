@@ -142,7 +142,7 @@ stages:
 
                     $rawBuildRunName = '$(resources.pipeline.build.runName)'
                     $sanitizedBuildRunName = ConvertTo-TagSegment -Value $rawBuildRunName
-                    $versionTag = "v$sanitizedBuildRunName"
+                    $versionTag = $sanitizedBuildRunName
                     $environmentTag = 'deployed/${{ parameters.environmentName }}'
 
                     Write-Host "Fetching build version tag '$versionTag' from origin"

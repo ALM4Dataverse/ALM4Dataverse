@@ -684,7 +684,7 @@ Once configured:
 2. Copy the exact BUILD name shown in the run title (for example `repo-main-2025-05-27T14:23:11Z-4`). The **Set build number** step shows the same exact value.
 3. Enter that BUILD name into **DEPLOY-main** when you want to deploy a specific build; otherwise, leave `build-run-name` blank to use the latest successful BUILD from the selected branch.
 
-When ALM4Dataverse creates git tags from that BUILD name, it automatically sanitizes characters that git refs do not like. For example, `repo-main-2025-05-27T14:23:11Z-4` becomes the source tag `vrepo-main-2025-05-27T14-23-11Z-4`.
+When ALM4Dataverse creates git tags from that BUILD name, it automatically sanitizes characters that git refs do not like. For example, `repo-main-2025-05-27T14:23:11Z-4` becomes the source tag `repo-main-2025-05-27T14-23-11Z-4`.
 
 For backward compatibility, numeric run IDs from the run URL are still accepted too.
 

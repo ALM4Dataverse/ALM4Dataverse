@@ -106,7 +106,7 @@ function ConvertTo-BuildReleaseTag {
     if ([string]::IsNullOrWhiteSpace($sanitized)) {
         throw "BUILD name '$BuildName' cannot be converted to a Release tag."
     }
-    return "v$sanitized"
+    return $sanitized
 }
 
 function ConvertTo-GateTagSegment {
@@ -189,7 +189,8 @@ function Resolve-GitTagCommitSha {
 
     $tagObject = $reference.object
     while ([string]$tagObject.type -eq 'tag') {
-        $tagObject = Invoke-GitHubApi -RelativePath "git/tags/$([System.Uri]::EscapeDataString([string]$tagObject.sha))"
+        $annotatedTag = Invoke-GitHubApi -RelativePath "git/tags/$([System.Uri]::EscapeDataString([string]$tagObject.sha))"
+        $tagObject = $annotatedTag.object
     }
     if ([string]$tagObject.type -ne 'commit' -or [string]::IsNullOrWhiteSpace([string]$tagObject.sha)) {
         throw "Git tag '$TagName' does not resolve to a commit."
@@ -306,10 +307,26 @@ $release = $null
 $metadata = $null
 $requestedReleaseTag = $dispatchReleaseTag.Trim()
 if ($eventName -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($manualSelector) -and $manualSelector -notmatch '^\d+$') {
-    $release = Get-GitHubReleaseByTag $manualSelector
-    if ($null -eq $release) { $release = Get-GitHubReleaseByTag (ConvertTo-BuildReleaseTag $manualSelector) }
-    if ($null -ne $release) { $requestedReleaseTag = [string]$release.tag_name }
-    else { $requestedReleaseTag = ConvertTo-BuildReleaseTag $manualSelector }
+    $normalizedTag = ConvertTo-BuildReleaseTag $manualSelector
+    $tagCandidates = @($manualSelector)
+    if ($tagCandidates -cnotcontains $normalizedTag) { $tagCandidates += $normalizedTag }
+    $legacyPrefixedTag = "v$normalizedTag"
+    if ($tagCandidates -cnotcontains $legacyPrefixedTag) { $tagCandidates += $legacyPrefixedTag }
+
+    foreach ($tagCandidate in $tagCandidates) {
+        $release = Get-GitHubReleaseByTag $tagCandidate
+        if ($null -ne $release) {
+            $requestedReleaseTag = [string]$release.tag_name
+            break
+        }
+
+        $metadata = Get-BuildMetadataForTag $tagCandidate
+        if ($null -ne $metadata) {
+            $requestedReleaseTag = $metadata.TagName
+            break
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($requestedReleaseTag)) { $requestedReleaseTag = $normalizedTag }
 }
 if ([string]::IsNullOrWhiteSpace($requestedReleaseTag) -and [string]::IsNullOrWhiteSpace($manualSelector)) {
     $latest = Find-LatestManagedReleaseForBranch $callerBranch

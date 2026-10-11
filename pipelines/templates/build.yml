@@ -166,7 +166,7 @@ stages:
             if ([string]::IsNullOrWhiteSpace($sanitizedBuildNumber)) {
               throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
             }
-            $tagName = "v$sanitizedBuildNumber"
+            $tagName = $sanitizedBuildNumber
             Write-Host "Tagging source repository with build version $tagName"
             git config user.email "$(Build.RequestedForEmail)"
             if ($LASTEXITCODE -ne 0) { throw "git config user.email failed with exit code $LASTEXITCODE" }
