@@ -189,6 +189,47 @@ function Resolve-Baseline {
     }
 }
 
+function Resolve-BaselineReleaseTag {
+    param([Parameter(Mandatory)][object]$Baseline)
+
+    $tagCandidates = @(
+        foreach ($value in @($Baseline.TagName)) {
+            foreach ($tag in ([string]$value -split '\s+')) {
+                if (-not [string]::IsNullOrWhiteSpace($tag)) {
+                    $tag
+                }
+            }
+        }
+    ) | Select-Object -Unique
+
+    if ($tagCandidates.Count -eq 0) {
+        throw "The BUILD baseline for run '$($Baseline.RunId)' has no Release tag."
+    }
+    if ($tagCandidates.Count -eq 1) {
+        return [string]$tagCandidates[0]
+    }
+    if ([string]$Baseline.RunId -notmatch '^\d+$') {
+        throw 'Multiple BUILD baseline Release tags were returned without a valid BUILD run ID; refusing to choose one.'
+    }
+
+    $matchingTags = @()
+    foreach ($tagCandidate in $tagCandidates) {
+        $release = Get-ReleaseByTag -TagName $tagCandidate
+        if ($null -eq $release) {
+            continue
+        }
+        $metadata = Get-ReleaseMetadata -Release $release
+        if ($metadata.RunId -ceq [string]$Baseline.RunId) {
+            $matchingTags += [string]$release.tag_name
+        }
+    }
+
+    if ($matchingTags.Count -ne 1) {
+        throw "Could not uniquely resolve a Release tag for BUILD run '$($Baseline.RunId)' from the returned baseline tags."
+    }
+    return $matchingTags[0]
+}
+
 function Expand-BaselineArchive {
     param(
         [Parameter(Mandatory)][string]$ArchivePath,
@@ -212,7 +253,7 @@ function Download-BaselineReleaseAsset {
         [Parameter(Mandatory)][string]$DestinationPath
     )
 
-    if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or $ReleaseTag -match '[\r\n]') {
+    if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or $ReleaseTag -match '\s') {
         throw 'The resolved BUILD baseline Release tag must be a single non-empty line.'
     }
 
@@ -278,9 +319,10 @@ if ($null -eq $baseline) {
 
 $baselineArtifactsPath = Join-Path $env:RUNNER_TEMP "alm4dataverse-baseline-$([guid]::NewGuid().ToString('N'))"
 try {
-    Download-BaselineReleaseAsset -ReleaseTag ([string]$baseline.TagName) -DestinationPath $baselineArtifactsPath
+    $baselineReleaseTag = Resolve-BaselineReleaseTag -Baseline $baseline
+    Download-BaselineReleaseAsset -ReleaseTag $baselineReleaseTag -DestinationPath $baselineArtifactsPath
 
-    Write-Host "Deploying GitHub Release '$($baseline.TagName)' (BUILD run $($baseline.RunId)) to validation environment '$EnvironmentName'."
+    Write-Host "Deploying GitHub Release '$baselineReleaseTag' (BUILD run $($baseline.RunId)) to validation environment '$EnvironmentName'."
     & (Join-Path $baselineArtifactsPath 'alm/pipelines/scripts/deploy.ps1') -ArtifactsPath $baselineArtifactsPath
 
     Write-Host "Deploying candidate BUILD artifacts to validation environment '$EnvironmentName'."
