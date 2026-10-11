@@ -248,18 +248,47 @@ function Get-ReleaseMetadata {
 function Find-LatestManagedReleaseForBranch {
     param([Parameter(Mandatory)][string]$BranchName)
 
-    $matches = @()
+    $latestMatch = $null
     for ($page = 1; $page -le 100; $page++) {
         $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
             try { $metadata = Get-ReleaseMetadata -Release $release } catch { continue }
-            if ($metadata.Branch -ceq $BranchName) { $matches += [pscustomobject]@{ Release = $release; Metadata = $metadata } }
+            if ($metadata.Branch -cne $BranchName) { continue }
+
+            $releaseDate = $release.published_at
+            if ($null -eq $releaseDate -or [string]::IsNullOrWhiteSpace([string]$releaseDate)) {
+                $releaseDate = $release.created_at
+            }
+            if ($releaseDate -is [DateTimeOffset]) {
+                $sortDate = $releaseDate
+            }
+            elseif ($releaseDate -is [DateTime]) {
+                $sortDate = [DateTimeOffset]$releaseDate
+            }
+            else {
+                $sortDate = [DateTimeOffset]::Parse(
+                    [string]$releaseDate,
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    [System.Globalization.DateTimeStyles]::AssumeUniversal
+                )
+            }
+
+            $match = [pscustomobject]@{
+                Release = $release
+                Metadata = $metadata
+                SortDate = $sortDate
+                ReleaseId = [long]$release.id
+            }
+            if ($null -eq $latestMatch -or
+                $match.SortDate -gt $latestMatch.SortDate -or
+                ($match.SortDate -eq $latestMatch.SortDate -and $match.ReleaseId -gt $latestMatch.ReleaseId)) {
+                $latestMatch = $match
+            }
         }
     }
 
-    if ($matches.Count -eq 0) { return $null }
-    return $matches | Sort-Object -Property @{ Expression = { [DateTimeOffset]::Parse([string]$(if ($_.Release.published_at) { $_.Release.published_at } else { $_.Release.created_at })) }; Descending = $true }, @{ Expression = { [long]$_.Release.id }; Descending = $true } | Select-Object -First 1
+    return $latestMatch
 }
 
 function Find-BuildRunByName {
