@@ -166,12 +166,6 @@ function Resolve-Baseline {
             $runMatch = [regex]::Match($tagMessage, '(?im)^BUILD run:\s*(?<id>\d+)\s*$')
             $releaseMatch = [regex]::Match($tagMessage, '(?im)^Release tag:\s*(?<tag>[^\r\n]+)\s*$')
             if ($runMatch.Success) {
-                if ($releaseMatch.Success) {
-                    return [pscustomobject]@{
-                        RunId = $runMatch.Groups['id'].Value
-                        TagName = $releaseMatch.Groups['tag'].Value.Trim()
-                    }
-                }
                 return Find-ReleaseForRunId -RunId $runMatch.Groups['id'].Value
             }
         }
@@ -217,6 +211,10 @@ function Download-BaselineReleaseAsset {
         [Parameter(Mandatory)][string]$ReleaseTag,
         [Parameter(Mandatory)][string]$DestinationPath
     )
+
+    if ([string]::IsNullOrWhiteSpace($ReleaseTag) -or $ReleaseTag -match '[\r\n]') {
+        throw 'The resolved BUILD baseline Release tag must be a single non-empty line.'
+    }
 
     $release = Get-ReleaseByTag -TagName $ReleaseTag
     if ($null -eq $release) {
