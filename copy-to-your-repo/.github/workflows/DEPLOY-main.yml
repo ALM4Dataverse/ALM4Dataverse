@@ -75,8 +75,12 @@ jobs:
           trigger-branch: main
           github-context-json: ${{ toJSON(github) }}
           caller-inputs-json: ${{ toJSON(inputs) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }
 
   deploy-prod:
     # Higher stage example.
@@ -115,5 +119,9 @@ jobs:
           trigger-branch: main
           github-context-json: ${{ toJSON(github) }}
           caller-inputs-json: ${{ toJSON(inputs) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }

@@ -29,7 +29,7 @@ actions directly, keeping job-level configuration in the consuming repository.
 
 During automated setup (`setup-github.ps1`), you are also prompted whether to enable BUILD validation globally. If enabled, setup configures one shared GitHub environment for BUILD and asks which separate deployment environment should supply the optional baseline release (or lets you choose no baseline). Each BUILD authenticates to the validation environment, creates deployment artifacts, and deploys its baseline first when available, then the candidate; configured PAC Solution Checker rules also run against the packed solutions. If the selected source has no successful deployment yet, BUILD warns and deploys only the candidate until a successful `DEPLOY` creates its pointer. Builds from all branches update the same validation environment, so select a non-production environment that is safe to update repeatedly. See [Building Releases](../usage/building-releases.md) for the validation sequence and PR check configuration.
 
-When configuring manually, set the BUILD workflow's `environment-name` input to a GitHub environment containing the Dataverse URL, credentials, service-account UPN, and any connection-reference/environment-variable settings required by deployment. BUILD deploys its generated artifacts to that environment. Set `buildValidation.baselineRelease` in `alm-config.psd1` to `@<environment-name>`, a fixed successful BUILD run ID, or a GitHub Release tag; a run ID is resolved to the Release and its `artifacts.zip` asset, not the expiring Actions artifact. Leave the setting empty for candidate-only validation. See [BUILD validation](../usage/building-releases.md#build-validation).
+When configuring manually, set the BUILD job's GitHub `environment` to the environment containing the Dataverse URL, credentials, service-account UPN, and any connection-reference/environment-variable settings required by deployment. Uncomment the example `environment` block in `BUILD.yml` and replace `Build` with that environment's name. Also set the action's `environment-name` input to the same name; selecting the job environment makes its secrets available to the `secrets-json` mapping. BUILD deploys its generated artifacts to that environment. Set `buildValidation.baselineRelease` in `alm-config.psd1` to `@<environment-name>`, a fixed successful BUILD run ID, or a GitHub Release tag; a run ID is resolved to the Release and its `artifacts.zip` asset, not the expiring Actions artifact. Leave the setting empty for candidate-only validation. See [BUILD validation](../usage/building-releases.md#build-validation).
 
 ---
 
@@ -266,8 +266,12 @@ jobs:
           trigger-branch: main
           github-context-json: ${{ toJSON(github) }}
           caller-inputs-json: ${{ toJSON(inputs) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }
 ```
 
 ---
@@ -278,9 +282,15 @@ ALM4Dataverse supports three approaches for per-environment credentials.
 They can be mixed: use whichever fits each environment.
 
 Composite actions receive credential/value data from the caller job through the
-`all-repo-vars-json` and `all-repo-secrets-json` inputs. The shared resolver maps both
-standard runtime names and prefixed repository names. You do not need to add
-per-credential action inputs.
+`vars-json` input and one `secrets-json` input containing JSON. The shared resolver maps
+standard and prefixed repository variables; the caller explicitly lists only secret
+values it wants to expose to the action. Use `toJSON(secrets.NAME)` for each value so
+quotes and newlines are escaped safely. The Deploy template anchors this object in its
+first stage and reuses it in later stages.
+
+When setup refreshes an existing repository, it preserves the workflow's current
+`secrets-json` input blocks, including separate mappings for each deployment stage.
+Stored GitHub secret values are not changed by this workflow update.
 
 See [GitHub Secrets & Variables Reference](../config/github-secrets.md) for the full
 list of secrets and variables required for each approach.
@@ -312,7 +322,7 @@ Inside each environment, add:
 |------|------|-------|
 | `AZURE_CLIENT_ID` | Variable | App registration client ID |
 | `AZURE_TENANT_ID` | Variable | Entra ID tenant ID |
-| `DATAVERSESERVICEACCOUNTUPN` | Secret or Variable | UPN of the service account for activating processes |
+| `DATAVERSESERVICEACCOUNTUPN` | Variable | UPN of the service account for activating processes |
 | `DATAVERSE_URL` | Variable | Dataverse environment URL (e.g. `https://yourorg-test.crm.dynamics.com`) |
 
 > **Do NOT set `AZURE_CLIENT_SECRET`** — when it is absent the workflows automatically
@@ -324,6 +334,10 @@ For connection references and environment variables, add individual entries:
 |------|------|-------|
 | `DataverseConnRef_<schema_name>` | Variable | Connection ID GUID |
 | `DataverseEnvVar_<schema_name>` | Variable | Environment variable value |
+
+For each sensitive Dataverse environment-variable value, add an individual GitHub secret
+and map it to the `DataverseEnvVar_<schema_name>` runtime name in `secrets-json`. For
+example, map `DATAVERSE_API_KEY` to `DataverseEnvVar_contoso_APIKey`.
 
 #### 1.3 Add protection rules (optional)
 
@@ -356,8 +370,12 @@ jobs:
           trigger-branch: main
           github-context-json: ${{ toJSON(github) }}
           caller-inputs-json: ${{ toJSON(inputs) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }
 
   deploy-prod:
     needs: deploy-test
@@ -373,9 +391,28 @@ jobs:
           trigger-branch: main
           github-context-json: ${{ toJSON(github) }}
           caller-inputs-json: ${{ toJSON(inputs) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }
 ```
+
+To pass another individual secret, add its desired runtime environment-variable name
+and named GitHub secret reference to the `secrets-json` object, for example:
+
+```yaml
+# Add custom secrets explicitly to this JSON object.
+secrets-json: >-
+  {
+    "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }},
+    "API_ACCESS_TOKEN": ${{ toJSON(secrets.API_ACCESS_TOKEN) }}
+  }
+```
+
+The same named secret is not automatically discovered or forwarded. Add it explicitly
+to the one `secrets-json` mapping used by that workflow.
 
 To switch to `manual-gate-tag`, update the copied template as follows:
 
@@ -414,7 +451,7 @@ Inside each environment, add:
 | `AZURE_CLIENT_ID` | Variable | App registration client ID |
 | `AZURE_CLIENT_SECRET` | Secret | App registration client secret |
 | `AZURE_TENANT_ID` | Variable | Entra ID tenant ID |
-| `DATAVERSESERVICEACCOUNTUPN` | Secret or Variable | UPN of the service account for activating processes |
+| `DATAVERSESERVICEACCOUNTUPN` | Variable | UPN of the service account for activating processes |
 | `DATAVERSE_URL` | Variable | Dataverse environment URL (e.g. `https://yourorg-test.crm.dynamics.com`) |
 
 For connection references and environment variables, add individual entries:
@@ -435,18 +472,23 @@ Example:
 
 The copied jobs map `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` from the selected
 GitHub environment into the action step (see [1.4](#14-configure-your-deploy-workflow-wif)).
+Sensitive Dataverse environment-variable values must be stored as individual secrets
+and explicitly mapped to `DataverseEnvVar_<schema_name>` in `secrets-json`.
 
 ---
 
-### Approach 3: Prefixed global secrets
+### Approach 3: Prefixed repository variables and secrets
 
-Store all credentials as repository-level secrets/variables using a naming convention
-that includes the environment name as a prefix.  This approach works on **all GitHub
+Store non-sensitive values as repository-level variables using a naming convention
+that includes the environment name as a prefix. Automated setup stores genuine secrets
+in the matching GitHub environment. If you cannot manage environment secrets, store them
+as prefixed repository secrets instead. This approach works on **all GitHub
 licence levels** including GitHub Free on private repositories.
 
-The composite actions auto-map prefixed names to the unprefixed runtime variables used
-by ALM4Dataverse scripts. The copied jobs pass the repository variables and secrets JSON
-to the action; you do not manually map each prefixed name in the workflow YAML.
+The composite actions auto-map prefixed repository variables to the unprefixed runtime
+variables used by ALM4Dataverse scripts. Secrets are never auto-discovered: environment
+secrets are selected by the generated workflow, while prefixed repository secrets must
+be mapped explicitly in each stage's `secrets-json` input.
 
 This is also the automatic fallback used by `setup-github.ps1` when GitHub environment
 approval rules are not available for the selected repository.
@@ -462,13 +504,11 @@ In **Settings** > **Secrets and variables** > **Actions**, add:
 
 | Name | Type | Value |
 |------|------|-------|
-| `TEST_MAIN_AZURE_CLIENT_ID` | Secret | App registration client ID |
-| `TEST_MAIN_AZURE_CLIENT_SECRET` | Secret | Client secret (omit if using WIF) |
-| `TEST_MAIN_AZURE_TENANT_ID` | Secret | Tenant ID |
-| `TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN` | Secret | Service account UPN |
+| `TEST_MAIN_AZURE_CLIENT_ID` | Variable | App registration client ID |
+| `TEST_MAIN_AZURE_TENANT_ID` | Variable | Tenant ID |
+| `TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN` | Variable | Service account UPN |
 | `TEST_MAIN_DATAVERSE_URL` | Variable | Dataverse URL |
 | `TEST_MAIN_DATAVERSE_CONN_REFS` | Variable | JSON — see below |
-| `TEST_MAIN_DATAVERSE_ENV_VARS` | Variable | JSON — see below |
 
 Optional (instead of JSON):
 
@@ -478,6 +518,12 @@ Optional (instead of JSON):
 | `TEST_MAIN_DataverseEnvVar_<schema_name>` | Variable | Environment variable value |
 
 Repeat with a `PROD_` prefix for production (and similar for other environments).
+Automated setup stores `AZURE_CLIENT_SECRET` inside each matching GitHub environment.
+For manual configuration without environment-secret access, create prefixed repository
+secrets such as `TEST_MAIN_AZURE_CLIENT_SECRET` and `TEST_MAIN_DATAVERSE_API_KEY`, then
+map each value individually in `secrets-json`. Existing repository secret values cannot
+be read or migrated by GitHub's API; keep and map them explicitly, or transfer them
+manually before deleting.
 
 For dev environments used in EXPORT/IMPORT, use a prefix like `DEV_MAIN_`.
 
@@ -493,25 +539,31 @@ The prefix is matched from the effective environment name (for example `Dev-main
 }
 ```
 
-**Environment variables JSON format** (variable `TEST_MAIN_DATAVERSE_ENV_VARS`):
+Store non-sensitive Dataverse environment-variable values individually in prefixed
+variables such as `TEST_MAIN_DataverseEnvVar_contoso_APIEndpoint`.
 
-```json
-{
-  "contoso_APIEndpoint": "https://api.test.contoso.com",
-  "contoso_BatchSize": "50"
-}
+#### 3.2 Configure workflows for prefixed variables and secrets
+
+The `vars-json` input and resolver automatically handle prefixed repository
+variables. Repository secrets are not auto-discovered. For each stage, change its
+`secrets-json` mapping to reference the prefixed repository secrets and map them to the
+runtime names, for example:
+
+```yaml
+secrets-json: >-
+  {
+    "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.TEST_MAIN_AZURE_CLIENT_SECRET) }},
+    "DataverseEnvVar_contoso_APIKey": ${{ toJSON(secrets.TEST_MAIN_DATAVERSE_API_KEY) }}
+  }
 ```
 
-#### 3.2 Configure workflows for prefixed credentials
-
-No extra per-credential wiring is needed in the copied workflow stubs. Keep the
-environment variables and `all-repo-vars-json` / `all-repo-secrets-json` action inputs
-generated by the templates.
+Use each stage's prefix (for example, `PROD_` for `PROD` and `DEV_MAIN_` for `Dev-main`).
+Add custom secret names explicitly to the same JSON object.
 
 The same two deployment promotion strategies still apply exactly as shown in
 [1.4](#14-configure-your-deploy-workflow-wif); the only difference is where values
-come from (auto-mapped prefixed repo secrets/variables instead of GitHub environment
-values).
+come from prefixed repository variables instead of GitHub environment variables; secrets
+remain explicitly selected in `secrets-json`.
 
 ---
 
@@ -565,7 +617,7 @@ validation; older lightweight pointers are still resolved by source commit.
 | Targeted redeploy supported | Enter `target-environment` explicitly to deploy a specific stage |
 | Single workflow file | Everything lives in `DEPLOY-main.yml` — no extra files to manage |
 | GitHub Free compatible | Uses only `contents: write` permission and the GitHub REST API |
-| Works with all credential approaches | WIF, client secret, or prefixed global secrets |
+| Works with all credential approaches | WIF, client secret, or prefixed repository variables |
 
 ### Adding more stages (UAT)
 
@@ -656,9 +708,10 @@ tags after successful deployments.
 `EXPORT` triggers `BUILD` by sending a `repository_dispatch` event via the GitHub
 CLI/API. By default it uses the workflow `GITHUB_TOKEN`.
 
-If your repository policy requires a separate token, add a repository-level or
-environment-level secret named `WORKFLOW_DISPATCH_TOKEN` (or legacy alias
-`GH_WORKFLOW_TOKEN`).
+If your repository policy requires a separate token, add an environment secret named
+`WORKFLOW_DISPATCH_TOKEN` (or legacy alias `GH_WORKFLOW_TOKEN`) and add its named
+reference to the Export workflow's `secrets-json` object. Otherwise the workflow uses
+`GITHUB_TOKEN` without adding a secret entry.
 
 The copied caller jobs declare the required `contents: write` permission explicitly.
 

@@ -22,6 +22,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 360
+    # If using build validation environment, uncomment the following lines to specify it.
+    # environment:
+    #   name: Build
+    #   deployment: false
     permissions:
       contents: write
       actions: write
@@ -33,6 +37,12 @@ jobs:
           build-name: ${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
           source-branch: ${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
           source-ref: ${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
+          # If using build validation environment, specify its name here.
           environment-name: ''
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
+          vars-json: ${{ toJSON(vars) }}
+          # Standard BUILD secrets are listed below; add any custom secrets explicitly to this JSON object.
+          # Enable the matching job environment above to read environment-scoped values.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }

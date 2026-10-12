@@ -6,14 +6,16 @@ inputs:
     description: GitHub environment used for credentials and prefixed values.
     required: false
     default: ''
-  all-repo-vars-json:
+  vars-json:
     description: JSON representation of the caller repository variables.
     required: false
     default: '{}'
-  all-repo-secrets-json:
-    description: JSON representation of the caller repository secrets.
+  secrets-json:
+    description: JSON object containing only explicitly selected secret values.
     required: false
-    default: '{}'
+    default: |-
+      {
+      }
 
 runs:
   using: composite
@@ -48,11 +50,11 @@ runs:
         key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
         path: ~/.alm4dataverse/tools
 
-    - name: Resolve prefixed repo variables and secrets
+    - name: Resolve prefixed repo variables and explicit secrets
       shell: pwsh
       env:
-        ALL_REPO_VARS_JSON: ${{ inputs.all-repo-vars-json }}
-        ALL_REPO_SECRETS_JSON: ${{ inputs.all-repo-secrets-json }}
+        VARS_JSON: ${{ inputs.vars-json }}
+        SELECTED_SECRETS_JSON: ${{ inputs.secrets-json }}
         RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name != '' && inputs.environment-name || format('Dev-{0}', github.ref_name) }}
       run: |
         & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
@@ -80,13 +82,6 @@ runs:
           $connRefs = $env:DATAVERSE_CONNECTION_REFS | ConvertFrom-Json
           foreach ($prop in $connRefs.PSObject.Properties) {
             [System.Environment]::SetEnvironmentVariable("DataverseConnRef_$($prop.Name)", $prop.Value)
-          }
-        }
-
-        if (-not [string]::IsNullOrEmpty($env:DATAVERSE_ENV_VARS)) {
-          $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
-          foreach ($prop in $envVars.PSObject.Properties) {
-            [System.Environment]::SetEnvironmentVariable("DataverseEnvVar_$($prop.Name)", $prop.Value)
           }
         }
 

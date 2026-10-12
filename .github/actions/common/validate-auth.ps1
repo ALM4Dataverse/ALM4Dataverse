@@ -5,11 +5,11 @@ param(
 $ErrorActionPreference = 'Stop'
 
 if ([string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_ID)) {
-    throw 'AZURE_CLIENT_ID is required. Set a GitHub environment variable or provide a prefixed repository secret/variable.'
+    throw 'AZURE_CLIENT_ID is required. Set a GitHub environment variable or provide a prefixed repository variable.'
 }
 
 if ([string]::IsNullOrWhiteSpace($env:AZURE_TENANT_ID)) {
-    throw 'AZURE_TENANT_ID is required. Set a GitHub environment variable or provide a prefixed repository secret/variable.'
+    throw 'AZURE_TENANT_ID is required. Set a GitHub environment variable or provide a prefixed repository variable.'
 }
 
 $tenant = $env:AZURE_TENANT_ID.Trim()
@@ -24,5 +24,5 @@ if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
 }
 
 if ($RequireServiceAccount -and [string]::IsNullOrWhiteSpace($env:DATAVERSESERVICEACCOUNTUPN)) {
-    throw 'DATAVERSESERVICEACCOUNTUPN is required. Set a GitHub environment variable or provide a prefixed repository secret/variable.'
+    throw 'DATAVERSESERVICEACCOUNTUPN is required. Set a GitHub environment variable or provide a prefixed repository variable.'
 }

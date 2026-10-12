@@ -6,7 +6,7 @@ This document describes how to configure the variables and secrets consumed by t
 
 Each environment requires credentials and settings stored in one of two places:
 
-| | GitHub Environments | Prefixed repo-level secrets/variables |
+| | GitHub environments for secrets + values | Prefixed repo variables + secrets |
 |---|---|---|
 | Location | Settings > Environments > *{EnvironmentName}* | Settings > Secrets and variables > Actions |
 | Approval gates | ✅ Pro/Team/Enterprise for private repos | ❌ |
@@ -30,6 +30,7 @@ ALM4Dataverse workflows use the following GitHub environment names:
 ## Approach 1 — GitHub Environments
 
 Store each environment's credentials in **Settings > Environments > *{EnvironmentName}***.
+This approach is preferred, but not all GitHub repos have access to the environment feature. See below for an alternative.
 
 ### Variables
 
@@ -46,16 +47,18 @@ Store each environment's credentials in **Settings > Environments > *{Environmen
 
 **WIF/OIDC** — no client secret needed. Omit `AZURE_CLIENT_SECRET`; the workflow requests an OIDC token automatically.
 
-| Secret | Description |
-|---|---|
-| `DATAVERSESERVICEACCOUNTUPN` | Optional — store as a secret if the value is sensitive |
-
-**Client secret:**
+For client-secret authentication, add `AZURE_CLIENT_SECRET` to the environment secrets
+and explicitly list it in the workflow's `secrets-json` JSON object. Sensitive Dataverse
+environment-variable values should also be stored as individual secrets and mapped to
+their `DataverseEnvVar_<schema_name>` runtime names in `secrets-json`.
 
 | Secret | Description |
 |---|---|
 | `AZURE_CLIENT_SECRET` | App Registration client secret value |
-| `DATAVERSESERVICEACCOUNTUPN` | Optional — store as a secret if the value is sensitive |
+
+| Secret | Description |
+|---|---|
+| `AZURE_CLIENT_SECRET` | App Registration client secret value |
 
 ### WIF federated credential configuration
 
@@ -88,9 +91,14 @@ first because other repository consumers that trust legacy subjects may need upd
 
 ---
 
-## Approach 2 — Prefixed repo-level secrets/variables
+## Approach 2 — Prefixed repo-level variables and secrets
 
-Store all credentials as repository-level secrets and variables in **Settings > Secrets and variables > Actions**.
+This approach is recommended only if your repo doesn't have access to the environments feature in GitHub.
+
+Store non-sensitive settings as repository-level variables in **Settings > Secrets and variables > Actions**.
+Store sensitive values as prefixed repository secrets in the same settings page. This approach does
+not require access to GitHub environment secrets. Prefixed variables are resolved automatically;
+prefixed secrets must be explicitly mapped in each workflow's `secrets-json` input.
 
 Derive a prefix from the effective GitHub environment name:
 
@@ -100,22 +108,15 @@ Derive a prefix from the effective GitHub environment name:
 | `TEST-main` | `TEST_MAIN_` |
 | `PROD` | `PROD_` |
 
-### Secrets
-
-| Secret | Description |
-|---|---|
-| `{PREFIX}AZURE_CLIENT_ID` | App Registration (client) ID |
-| `{PREFIX}AZURE_CLIENT_SECRET` | Client secret value — omit if using WIF |
-| `{PREFIX}AZURE_TENANT_ID` | Entra ID tenant (directory) ID |
-| `{PREFIX}DATAVERSE_SERVICE_ACCOUNT_UPN` | Dataverse service account UPN |
-
 ### Variables
 
 | Variable | Description | Example |
 |---|---|---|
+| `{PREFIX}AZURE_CLIENT_ID` | App Registration (client) ID | `00000000-0000-0000-0000-000000000001` |
+| `{PREFIX}AZURE_TENANT_ID` | Entra ID tenant (directory) ID | `00000000-0000-0000-0000-000000000002` |
+| `{PREFIX}DATAVERSE_SERVICE_ACCOUNT_UPN` | Dataverse service account UPN | `svc-dataverse@contoso.com` |
 | `{PREFIX}DATAVERSE_URL` | Dataverse environment URL | `https://yourorg.crm.dynamics.com` |
 | `{PREFIX}DATAVERSE_CONN_REFS` | JSON — connection reference values | See below |
-| `{PREFIX}DATAVERSE_ENV_VARS` | JSON — environment variable values | See below |
 | `{PREFIX}DataverseConnRef_{schema_name}` | Individual connection reference value | `12345678-...` |
 | `{PREFIX}DataverseEnvVar_{schema_name}` | Individual Dataverse environment variable | `https://api.contoso.com` |
 
@@ -127,18 +128,44 @@ Derive a prefix from the effective GitHub environment name:
 }
 ```
 
-### Environment variables JSON format
+### Individual Dataverse environment variables
 
-```json
-{
-  "contoso_APIEndpoint": "https://api.test.contoso.com",
-  "contoso_FeatureXEnabled": "true"
-}
+Store non-sensitive values as individual prefixed repository variables, for example
+`TEST_MAIN_DataverseEnvVar_contoso_APIEndpoint`. Store sensitive values as individual
+prefixed repository secrets, such as `TEST_MAIN_DATAVERSE_API_KEY`, and map each secret
+to its `DataverseEnvVar_<schema_name>` runtime name in `secrets-json`.
+
+### Secrets and workflow mapping
+
+Create prefixed repository secrets as needed. Omit the client secret when using WIF/OIDC.
+
+| Name | Type | Value |
+|------|------|-------|
+| `TEST_MAIN_AZURE_CLIENT_SECRET` | Secret | App registration client secret |
+| `TEST_MAIN_DATAVERSE_API_KEY` | Secret | Sensitive Dataverse environment-variable value |
+
+Map each secret explicitly to the runtime name expected by the scripts. For example, a
+`TEST-main` deployment stage uses:
+
+```yaml
+# Add any custom secrets explicitly to this JSON object.
+secrets-json: >-
+  {
+    "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.TEST_MAIN_AZURE_CLIENT_SECRET) }},
+    "DataverseEnvVar_contoso_APIKey": ${{ toJSON(secrets.TEST_MAIN_DATAVERSE_API_KEY) }}
+  }
 ```
+
+Use the matching prefix for each deployment stage (for example, `PROD_` for `PROD`).
+EXPORT and IMPORT use the prefix for their `Dev-{branch}` environment. Add other secrets
+by name in the same JSON object; prefixed repository secrets are not auto-discovered.
 
 ### WIF federated credential configuration
 
-Even when using prefixed repo-level secrets, workflows still run within a named GitHub environment. Use the same federated credential subject format as Approach 1 — one federated credential per GitHub environment.
+Workflows still declare the named GitHub environment for the OIDC subject and pass that
+name to the action, but this approach stores no variables or secrets in the environment.
+Use the same federated credential subject format as Approach 1 — one federated credential
+per GitHub environment.
 
 ---
 

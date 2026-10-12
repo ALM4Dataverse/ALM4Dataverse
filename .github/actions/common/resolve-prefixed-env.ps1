@@ -50,12 +50,20 @@ if (-not [string]::IsNullOrWhiteSpace($derivedPrefix) -and $derivedPrefix -ne 'P
     $prefixCandidates = @($derivedPrefix) + $prefixCandidates
 }
 
-$sources = @(
-    @{ Name = 'secrets';   Data = ConvertTo-HashtableSafe $env:ALL_REPO_SECRETS_JSON; IsSensitive = $true  },
-    @{ Name = 'variables'; Data = ConvertTo-HashtableSafe $env:ALL_REPO_VARS_JSON;    IsSensitive = $false }
-)
-$secretData = $sources[0].Data
-$variableData = $sources[1].Data
+$variableData = ConvertTo-HashtableSafe $env:VARS_JSON
+
+$selectedSecrets = @{}
+if (-not [string]::IsNullOrWhiteSpace($env:SELECTED_SECRETS_JSON)) {
+    try {
+        $selectedSecrets = $env:SELECTED_SECRETS_JSON | ConvertFrom-Json -AsHashtable
+        if ($selectedSecrets -isnot [System.Collections.IDictionary]) {
+            throw 'Expected a JSON object.'
+        }
+    }
+    catch {
+        throw 'SELECTED_SECRETS_JSON must contain a JSON object.'
+    }
+}
 
 function ConvertTo-ValueText([object]$rawValue) {
     if ($rawValue -is [string]) {
@@ -65,20 +73,39 @@ function ConvertTo-ValueText([object]$rawValue) {
     return $rawValue | ConvertTo-Json -Compress -Depth 50
 }
 
-# These are the unprefixed runtime values used by the ALM scripts. Prefixed names
-# continue to be handled below for repository-level credential setups.
+$sources = @(
+    @{ Name = 'variables'; Data = $variableData; IsSensitive = $false }
+)
+
+# These are the unprefixed runtime values used by the ALM scripts. Prefixed variable
+# names continue to be handled below for repository-level configuration.
 $directMappings = @(
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('AZURE_CLIENT_ID'); TargetName = 'AZURE_CLIENT_ID'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('AZURE_TENANT_ID'); TargetName = 'AZURE_TENANT_ID'; IsSensitive = $false },
-    @{ SourceLabel = 'secrets';   Source = $secretData;   Names = @('AZURE_CLIENT_SECRET'); TargetName = 'AZURE_CLIENT_SECRET'; IsSensitive = $true },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_URL'); TargetName = 'DATAVERSE_URL'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSESERVICEACCOUNTUPN'); TargetName = 'DATAVERSESERVICEACCOUNTUPN'; IsSensitive = $false },
-    @{ SourceLabel = 'secrets';   Source = $secretData;   Names = @('DATAVERSESERVICEACCOUNTUPN'); TargetName = 'DATAVERSESERVICEACCOUNTUPN'; IsSensitive = $true },
-    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS'); TargetName = 'DATAVERSE_CONNECTION_REFS'; IsSensitive = $false },
-    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_ENV_VARS'); TargetName = 'DATAVERSE_ENV_VARS'; IsSensitive = $false }
+    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS'); TargetName = 'DATAVERSE_CONNECTION_REFS'; IsSensitive = $false }
 )
 
 $setCount = 0
+foreach ($entry in $selectedSecrets.GetEnumerator()) {
+    $targetName = [string]$entry.Key
+    if ($null -eq $entry.Value) {
+        continue
+    }
+
+    $valueText = ConvertTo-ValueText $entry.Value
+    if ([string]::IsNullOrWhiteSpace($valueText)) {
+        continue
+    }
+
+    [System.Environment]::SetEnvironmentVariable($targetName, $valueText)
+    Write-GitHubEnv -name $targetName -value $valueText
+    Write-Output "::add-mask::$valueText"
+    $setCount++
+    Write-Host "Mapped explicitly supplied secret to '$targetName'."
+}
+
 foreach ($mapping in $directMappings) {
     $sourceName = $null
     $valueText = $null
