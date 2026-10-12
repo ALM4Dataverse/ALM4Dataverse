@@ -87,6 +87,18 @@ $directMappings = @(
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS'); TargetName = 'DATAVERSE_CONNECTION_REFS'; IsSensitive = $false }
 )
 
+foreach ($variableName in $variableData.Keys) {
+    if ($variableName -like 'DataverseConnRef_*' -or $variableName -like 'DataverseEnvVar_*') {
+        $directMappings += @{
+            SourceLabel = 'variables'
+            Source = $variableData
+            Names = @($variableName)
+            TargetName = $variableName
+            IsSensitive = $false
+        }
+    }
+}
+
 $setCount = 0
 foreach ($entry in $selectedSecrets.GetEnumerator()) {
     $targetName = [string]$entry.Key

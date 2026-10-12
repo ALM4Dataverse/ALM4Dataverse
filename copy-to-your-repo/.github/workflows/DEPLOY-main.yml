@@ -88,6 +88,7 @@ jobs:
     # but do not bypass failed prerequisite stages on automatic runs.
     needs: deploy-test
     if: >-
+      !cancelled() && (
       (
         github.event_name == 'repository_dispatch' &&
         github.event.client_payload.branch == 'main' &&
@@ -98,6 +99,7 @@ jobs:
           inputs.target-environment == 'PROD' ||
           (inputs.target-environment == '' && needs['deploy-test'].result == 'success')
         )
+      )
       )
     runs-on: ubuntu-latest
     timeout-minutes: 360

@@ -4,10 +4,10 @@
     # Paths in this file are relative to the directory this file is in (the repo root).
     #
     # FORK CONFIGURATION:
-    # To customize this configuration in a fork, create a fork-almconfig.psd1 file
+    # To customize defaults in a fork, edit alm-config-defaults.psd1
     # in the ALM4Dataverse repository root.
     # Fork configuration is merged with this file (this file's values take precedence).
-    # Arrays are concatenated, hashtables are merged.
+    # Arrays append this file's items after defaults; hashtables are merged recursively.
     # This allows forks to add custom defaults without modifying this template.
     #
     # HOOK SCRIPT PATHS AND [ALM] REPLACEMENT:

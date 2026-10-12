@@ -1,772 +1,278 @@
 # GitHub Actions Setup Guide
 
-This guide describes how to set up ALM4Dataverse for use with GitHub Actions.
+GitHub Actions support is **PREVIEW**. This guide covers automated and manual setup.
+For Azure DevOps, use the [Azure DevOps setup guide](azdo-automated-setup.md).
 
-> **Automated setup**: For most users, the easiest option is to run `setup-github.ps1` which automates
-> all of the steps below. See [GitHub Variables & Secrets](github-variables.md) for the credential configuration reference.
-
-> `setup-github.ps1` automatically selects deployment mode per repository:
-> - Uses GitHub environments + approvals + `promotion-mode: environment-approval` when supported.
-> - Falls back to prefixed repo-level credentials + `promotion-mode: manual-gate-tag` when not.
-
-> **Azure DevOps users**: if you are using Azure DevOps, follow the [Azure DevOps setup guide](azdo-manual-setup.md) instead.
-
----
-
-## Overview
-
-ALM4Dataverse provides four composite actions hosted in the ALM4Dataverse repository.
-The ordinary caller workflows in `copy-to-your-repo/.github/workflows/` invoke these
-actions directly, keeping job-level configuration in the consuming repository.
-
-| Your workflow | Composite action used | Purpose |
-|---|---|---|
-| `BUILD.yml` | `.github/actions/build` | Pack solutions, upload artifacts, tag commit, create a Release |
-| `EXPORT.yml` | `.github/actions/export` | Export from dev Dataverse, commit to repo |
-| `IMPORT.yml` | `.github/actions/import` | Build from source, import into dev Dataverse |
-| `DEPLOY-main.yml` | `.github/actions/deploy` | Deploy Release assets or BUILD artifacts to each environment |
-| `CLEANUP-RELEASES.yml` | `cleanup-releases.yml` | Remove deleted-branch Releases and cap Releases per branch |
-
-During automated setup (`setup-github.ps1`), you are also prompted whether to enable BUILD validation globally. If enabled, setup configures one shared GitHub environment for BUILD and asks which separate deployment environment should supply the optional baseline release (or lets you choose no baseline). Each BUILD authenticates to the validation environment, creates deployment artifacts, and deploys its baseline first when available, then the candidate; configured PAC Solution Checker rules also run against the packed solutions. If the selected source has no successful deployment yet, BUILD warns and deploys only the candidate until a successful `DEPLOY` creates its pointer. Builds from all branches update the same validation environment, so select a non-production environment that is safe to update repeatedly. See [Building Releases](../usage/building-releases.md) for the validation sequence and PR check configuration.
-
-When configuring manually, set the BUILD job's GitHub `environment` to the environment containing the Dataverse URL, credentials, service-account UPN, and any connection-reference/environment-variable settings required by deployment. Uncomment the example `environment` block in `BUILD.yml` and replace `Build` with that environment's name. Also set the action's `environment-name` input to the same name; selecting the job environment makes its secrets available to the `secrets-json` mapping. BUILD deploys its generated artifacts to that environment. Set `buildValidation.baselineRelease` in `alm-config.psd1` to `@<environment-name>`, a fixed successful BUILD run ID, or a GitHub Release tag; a run ID is resolved to the Release and its `artifacts.zip` asset, not the expiring Actions artifact. Leave the setting empty for candidate-only validation. See [BUILD validation](../usage/building-releases.md#build-validation).
-
----
+The application repository contains unpacked solutions, its ALM configuration, data/hooks,
+and small caller workflows. Shared composite actions run the build/export/import/deploy
+steps; a separate reusable workflow handles Release cleanup. You do not need a second
+GitHub repository unless you want to maintain a fork of the shared implementation.
 
 ## Prerequisites
 
-When running `setup-github.ps1`, GitHub CLI (`gh`) is downloaded automatically to a temporary setup
-directory if it is not already installed. The downloaded CLI is available for that setup session only.
+- A GitHub repository with Actions enabled and permission to configure its workflows, variables, secrets, and environments.
+- Access to development and deployment Dataverse environments and permission to create/manage application users.
+- An Entra app registration for each target, or permission to create one and configure its authentication.
+- An existing user account for process ownership, with the necessary licensing, roles, and connection access.
+- A GitHub plan supporting the environment features you intend to use; see [licence limitations](#github-licence-limitations).
+- For automated setup: Windows PowerShell 5.1 or PowerShell 7 on Windows, Git, and network access to GitHub and the required Microsoft/package services. Setup downloads a temporary GitHub CLI when `gh` is missing.
 
-### 1. GitHub repository
+> [!CAUTION]
+> Use separate application identities for production and non-production. The application
+> user authenticates automation; the service-account user owns and activates processes.
+> They are not interchangeable. The standard setup assigns the application user the
+> Dataverse System Administrator role. Restrict access to CI credentials and treat
+> workflow and hook changes as privileged code changes.
 
-Create or use an existing GitHub repository for your Dataverse application source code.
+## Automated Setup
 
-### 2. App Registration in Entra ID
-
-For each Dataverse environment (Dev, Test, UAT, Production…), create an App Registration
-in Entra ID to act as a service principal.
-
-1. Navigate to the [Azure Portal](https://portal.azure.com) > **Entra ID** > **App registrations**
-2. Click **New registration**
-3. Name: `{ProjectName} - {EnvironmentName} - deployment` (e.g. `MyProject - PROD - deployment`)
-4. Select "Accounts in this organizational directory only"
-5. Click **Register**
-6. Note the **Application (client) ID** and **Directory (tenant) ID**
-
-You do not need to create a client secret if you use Workload Identity Federation (see below).
-If you prefer client secret authentication, go to **Certificates & secrets** > **New client secret**
-and copy the **Value** immediately after creation.
-
-📖 **Reference**: [Register an app with Entra ID](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)
-
-### 3. Configure authentication for the App Registration
-
-Choose one of the following authentication methods.
-
-#### Option A: Workload Identity Federation / OIDC (recommended)
-
-Workload Identity Federation lets GitHub Actions authenticate to Azure using short-lived
-OIDC tokens with no secrets to manage or rotate.
-
-1. In the App Registration, go to **Certificates & secrets** > **Federated credentials**
-2. Click **Add credential**
-3. Select **Other issuer**
-4. Fill in:
-   - **Issuer**: `https://token.actions.githubusercontent.com`
-   - **Subject identifier**: depends on how the workflow runs (see below)
-   - **Name**: e.g. `github-{environment-name}` (alphanumeric and hyphens only)
-   - **Audience**: `api://AzureADTokenExchange`
-5. Click **Add**
-
-**Subject identifier format for GitHub Actions:**
-
-| Workflow scenario | Subject identifier |
-|---|---|
-| Default ALM4Dataverse workflows (Approach 1, 2, and 3) | `repo:{owner}@{owner-id}/{repo}@{repo-id}:environment:{environment-name}` |
-
-> **Examples** for repo `MyOrg/MyApp` with owner ID `123456` and repository ID `456789`:
-> - Environment-based: `repo:MyOrg@123456/MyApp@456789:environment:TEST-main`
-
-The numeric IDs are the GitHub `repository_owner_id` and `repository_id` values.
-The automated setup script retrieves them from GitHub and checks the repository's
-`use_immutable_subject` setting so the configured credential matches the subject
-format that GitHub will issue. Existing repositories retain the legacy format unless
-immutable subjects have been explicitly enabled.
-
-When WIF is selected for an existing legacy repository, automated setup offers to
-enable immutable subjects. Review the [GitHub changelog](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories)
-first: other workflows or applications in the same repository that trust legacy
-subjects may need their cloud credentials updated.
-
-ALM4Dataverse caller jobs run within a named GitHub environment across all
-credential approaches:
-
-- `EXPORT` / `IMPORT` default to `Dev-{branch}` when `environment-name` is not passed.
-- `DEPLOY` uses the target environment name (for example `TEST-main`, `PROD`).
-
-Create one federated credential per GitHub environment (Dev-main, TEST-main, PROD, etc.).
-
-> ℹ️ **GitHub Environments and GitHub Free**: GitHub Environments themselves (for storing
-> secrets and variables) work on all plans including GitHub Free.  Only *environment
-> protection rules* (required reviewers, wait timers) require GitHub Pro, Team, or Enterprise
-> for private repositories.  GitHub Free users can use Approach 1, 2, or 3 with environment-based
-> WIF subjects — they just cannot configure approval gates via protection rules (use the
-> [gate tag mechanism](#deployment-gates-for-github-free) instead).
-
-📖 **References**:
-- [Workload identity federation](https://learn.microsoft.com/en-us/entra/workload-id/workload-identity-federation)
-- [GitHub OIDC with Azure](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure)
-
-#### Option B: Client secret (traditional)
-
-1. In the App Registration, go to **Certificates & secrets** > **New client secret**
-2. Add a description and expiry period
-3. Copy the **Value** immediately — you cannot view it again
-
-### 4. Application user in each Dataverse environment
-
-1. Go to the [Power Platform Admin Center](https://admin.powerplatform.microsoft.com)
-2. Select the environment > **Settings** > **Users + permissions** > **Application users**
-3. Click **New app user** > add your App Registration
-4. Assign the **System Administrator** security role
-5. Click **Create**
-
-📖 **Reference**: [Create an application user](https://learn.microsoft.com/en-us/power-platform/admin/manage-application-users)
-
----
-
-## Repository Setup
-
-### Copy workflow templates to your repository
-
-Copy all files from `copy-to-your-repo/` in the ALM4Dataverse repository into the root
-of your application repository, preserving the folder structure:
-
-```
-your-repo/
-├── .github/
-│   └── workflows/
-│       ├── BUILD.yml
-│       ├── EXPORT.yml
-│       ├── IMPORT.yml
-│       ├── DEPLOY-main.yml   ← all environments; auto-chain with environment approvals by default
-│       └── CLEANUP-RELEASES.yml
-├── alm-config.psd1
-└── data/
-```
-
-### Configure `alm-config.psd1`
-
-Edit `alm-config.psd1` to list the solutions you want to manage:
+Download the released script, review it, then run it from PowerShell:
 
 ```powershell
-@{
-    solutions = @(
-    @{ name = 'YourSolutionUniqueName' }
-    @{
-      name = 'AnotherSolution'
-      solutionCheck = @{ enabled = $true; failThreshold = 'High' }
-    }
-    )
-
-  # Optional global PAC solution check settings used by BUILD.
-  solutionCheck = @{
-    enabled = $true
-    geo = 'Europe'
-    failThreshold = 'Critical'
-    maxParallel = 4
-  }
-}
+Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1' -OutFile './setup-github.ps1'
 ```
 
-If solution check is enabled, BUILD authenticates PAC using managed identity / existing Azure identity context and fails clearly if no non-interactive Azure sign-in context is available.
+After reviewing the downloaded file:
 
-### Configure deployment environments in `DEPLOY-main.yml`
-
-`DEPLOY-main.yml` uses one **stage/job per environment**.
-
-The copied template defaults to `environment-approval`: BUILD starts the first stage
-through `repository_dispatch`, later stages auto-chain, and GitHub environment
-protection rules can pause a stage for approval.
-
-To configure it, edit only:
-
-- each stage's `promotion-mode` value:
-  - `environment-approval` (default; auto-chain after previous stage success; relies on environment protection rules)
-  - `manual-gate-tag` (GitHub Free compatible; manual deployment + gate tag)
-- the `repository_dispatch` trigger (keep it for `environment-approval`; remove it for `manual-gate-tag`)
-- `workflow_dispatch.inputs.target-environment`
-- the `deploy-*` jobs (one per environment, with `needs` chaining)
-- keep the context payload lines unchanged in each stage:
-  - `trigger-branch: <workflow-branch-name>`
-  - `github-context-json: ${{ toJSON(github) }}`
-  - `caller-inputs-json: ${{ toJSON(inputs) }}`
-
-If you used `setup-github.ps1`, this value is generated automatically based on
-repository capability detection:
-
-- `environment-approval` when GitHub environment approvals are available.
-- `manual-gate-tag` when approvals are unavailable (prefixed credential fallback).
-
-Behavior remains simple:
-
-- **`manual-gate-tag`**: every stage is triggered manually from **Actions** > **DEPLOY-main** > **Run workflow**; `target-environment` remains mandatory, while `build-run-name` can be supplied explicitly or left blank to use the latest successful BUILD from the selected branch.
-- **`environment-approval`**: when BUILD succeeds, it sends a `repository_dispatch` event and stage 1 starts automatically for matching branch workflows; later stages auto-chain only after the previous stage succeeds and any environment approval rules pass. For a manual replay, `target-environment` can be left blank to start from the first configured stage, or set to a specific environment name to jump directly to that stage.
-
-Each successful BUILD creates a GitHub Release with `artifacts.zip` and an
-optional `solution-check-report.zip`. Manual deployment continues to use the
-legacy `build-run-name` input; it accepts a Release tag, BUILD name, or numeric
-BUILD run ID. The reusable deploy action verifies that the caller, BUILD, and
-Release branches agree before deployment.
-
-`CLEANUP-RELEASES.yml` removes managed Releases from deleted branches and keeps
-at most 10 Releases per branch by default. Before deletion it preserves build
-metadata in an annotated `alm4dataverse/metadata/<release-tag>` tag.
-
-  The dispatch event type is branch-scoped using:
-  `alm4dataverse-build-deploy-{branch-token}`
-  where `{branch-token}` is the lowercase branch name with non-alphanumeric
-  characters replaced by `-` (for example `main` → `main`,
-  `feature/my-work` → `feature-my-work`).
-
-  Each DEPLOY stage must pass the matching branch via:
-  `trigger-branch: <workflow-branch-name>`.
-
-See [Deployment Gates for GitHub Free](#deployment-gates-for-github-free).
-
-If your default branch is not `main`:
-- Rename `DEPLOY-main.yml` to `DEPLOY-{branchname}.yml`
-- Ensure your BUILD dispatch payload branch value matches the DEPLOY workflow branch name.
-
-### Workflow job timeouts
-
-ALM4Dataverse aligns GitHub Actions timeout defaults with the Azure DevOps templates:
-
-- Copied workflow jobs (`BUILD.yml`, `EXPORT.yml`, `IMPORT.yml`, `DEPLOY-*.yml`) set `timeout-minutes: 360` explicitly.
-
-GitHub-hosted runners enforce a maximum of 360 minutes per job, so this value uses the full hosted-runner limit.
-
-You can override the timeout per workflow/stage by editing the caller job's `timeout-minutes` value.
-
-Example (single-stage override):
-
-```yaml
-jobs:
-  deploy-prod:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    environment: PROD
-    steps:
-      - uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
-        with:
-          environment-name: PROD
-          previous-environment-name: TEST-main
-          promotion-mode: manual-gate-tag
-          trigger-branch: main
-          github-context-json: ${{ toJSON(github) }}
-          caller-inputs-json: ${{ toJSON(inputs) }}
-          vars-json: ${{ toJSON(vars) }}
-          # Add any custom secrets explicitly to this JSON object.
-          secrets-json: >-
-            {
-              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
-            }
+```powershell
+.\setup-github.ps1
 ```
 
----
+The existing one-line bootstrap remains available for users who have already reviewed
+and trust the release:
+
+```powershell
+iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1 | iex
+```
+
+Setup signs in, selects or creates the application repository, selects solutions in
+dependency order, and configures development and deployment environments. It prompts
+for application identities/authentication and process-owner accounts, generates caller
+workflows, and offers shared BUILD deployment validation with an optional baseline source.
+
+> [!IMPORTANT]
+> Verify plan compatibility and the generated protection rules. Setup selects
+> `environment-approval` when it detects support, or prefixed repository variables plus
+> `manual-gate-tag` otherwise. The fallback still stores client secrets in the matching
+> GitHub environment; it does not make private GitHub Free repositories a fully supported
+> out-of-the-box configuration.
+
+Re-running setup can update generated files. Existing `secrets-json` mappings, including
+separate deployment-stage mappings, are preserved by the updater. Review the resulting
+diff and stored settings; do not assume every local workflow customization is preserved.
+GitHub cannot reveal existing secret values for automatic relocation.
+
+For `TenantId`, `UseDeviceAuthentication`, and `ALM4DataverseRef`, see
+[setup parameters](../config/pipelines.md#setup-script-parameters). Released scripts
+embed their helpers; raw repository scripts need the adjacent files in this repository.
+
+## Manual Setup
+
+### 1. Prepare Application Identities
+
+For each target, register an app in Entra ID and record its application/client ID and
+tenant ID. In the Power Platform admin center, select the Dataverse environment, add
+an **Application user** for that app, and assign the required role.
+
+Choose authentication:
+
+- **WIF/OIDC:** add a federated credential with issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and the exact job subject. No client secret is needed.
+- **Client secret:** create a secret and retain its value in GitHub Secrets, not source control. Track its expiry and rotation process.
+
+The [credential reference](../config/github-secrets.md#entra-id-federated-credential-setup)
+shows both legacy and immutable subject formats. For environment-based jobs, create a
+credential for each relevant GitHub environment, including BUILD validation when enabled.
+
+> [!NOTE]
+> **Advanced: immutable OIDC subjects.** Setup can offer to enable these on existing
+> repositories. Review other applications trusting the old subjects before changing
+> this repository-wide setting.
+
+Official guidance: [app registrations](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app),
+[Dataverse application users](https://learn.microsoft.com/en-us/power-platform/admin/manage-application-users),
+and [GitHub OIDC with Azure](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure).
+
+### 2. Copy The Application Files
+
+Copy the following from a consistent ALM4Dataverse release into your application repository:
+
+| Source | Destination |
+| --- | --- |
+| [alm-config.psd1](../../copy-to-your-repo/alm-config.psd1) | Repository root |
+| [data](../../copy-to-your-repo/data) | `data/` |
+| [GitHub workflows](../../copy-to-your-repo/.github/workflows) | `.github/workflows/` |
+
+Include the hidden `.github` directory. Do not copy the Azure DevOps `pipelines` callers
+unless you also intend to configure that platform. Select a tested action/workflow ref
+instead of unintentionally following the template's `@main` references.
+
+The caller workflows are BUILD, EXPORT, IMPORT, DEPLOY-main, and CLEANUP-RELEASES.
+Configure `solutions` using unique names in dependency order, then customize optional
+assets, hooks, checker rules, and validation in the [ALM configuration](../config/alm-config.md).
+Do not add plaintext secrets to that file.
+
+### 3. Configure Credentials
+
+Follow the [environment checklist](github-variables.md) for `Dev-main`, your deployment
+targets, and optional BUILD validation environment. The job's `environment` selects
+GitHub environment settings; `environment-name` tells the action which configuration
+prefix to resolve. Keep them consistent.
+
+Pass `${{ toJSON(vars) }}` as `vars-json`. Explicitly select each secret in `secrets-json`,
+using `toJSON(secrets.NAME)` to escape its value. For prefixed repository secrets, map the
+stored prefixed name to the runtime unprefixed name in each stage. Do not duplicate a
+setting in multiple forms and rely on ambiguous precedence.
 
 ## Credential Configuration
 
-ALM4Dataverse supports three approaches for per-environment credentials.
-They can be mixed: use whichever fits each environment.
+The complete settings are maintained in one [credential reference](../config/github-secrets.md):
 
-Composite actions receive credential/value data from the caller job through the
-`vars-json` input and one `secrets-json` input containing JSON. The shared resolver maps
-standard and prefixed repository variables; the caller explicitly lists only secret
-values it wants to expose to the action. Use `toJSON(secrets.NAME)` for each value so
-quotes and newlines are escaped safely. The Deploy template anchors this object in its
-first stage and reuses it in later stages.
+| Requirement | Reference |
+| --- | --- |
+| Environment values with WIF | [WIF settings and subjects](../config/github-secrets.md#approach-1-workload-identity-federation-oidc) |
+| Environment values with a client secret | [Client-secret settings](../config/github-secrets.md#approach-2-github-environments-with-client-secret) |
+| Prefixed repository values | [Prefixes, aliases, and secrets](../config/github-secrets.md#approach-3-prefixed-repository-variables-and-secrets) |
+| Connection references and Dataverse variables | [Per-solution settings](../config/github-secrets.md#per-solution-connection-references) |
+| Custom secrets and process-owner keys | [Explicit mapping](../config/github-secrets.md#per-solution-environment-variable-values) |
 
-When setup refreshes an existing repository, it preserves the workflow's current
-`secrets-json` input blocks, including separate mappings for each deployment stage.
-Stored GitHub secret values are not changed by this workflow update.
+## Deployment Configuration
 
-See [GitHub Secrets & Variables Reference](../config/github-secrets.md) for the full
-list of secrets and variables required for each approach.
+Edit DEPLOY-main to contain one job per target environment. Configure the job environment,
+action `environment-name`, `previous-environment-name`, `promotion-mode`, and
+`trigger-branch`. Keep `github-context-json: ${{ toJSON(github) }}` and
+`caller-inputs-json: ${{ toJSON(inputs) }}` unchanged.
 
----
+### Environment Approval Mode
 
-### Approach 1: Workload Identity Federation / OIDC (recommended)
+The copied caller explicitly uses `environment-approval`. A successful BUILD sends
+`alm4dataverse-build-deploy-<branch-token>` through `repository_dispatch`; the first
+stage starts, and later stages follow successful predecessors.
 
-WIF lets the workflow authenticate to Azure using a short-lived OIDC token issued by
-GitHub — no secrets to store or rotate.
+> [!IMPORTANT]
+> Configure actual GitHub environment required reviewers where supported. Without
+> protection rules, `environment-approval` can deploy through every stage automatically.
 
-> **Prerequisite**: configure a federated credential on each App Registration as
-> described in [Prerequisites → Workload Identity Federation](#option-a-workload-identity-federation--oidc-recommended).
+For a manual run, leave `target-environment` empty to start at the first stage, or set
+it to a named stage. The `build-run-name` selector can be an exact Release tag, BUILD
+name, or numeric BUILD run ID; blank means the latest successful BUILD from the selected
+branch. For promotion, use an explicit identity so a newer build is not selected by accident.
 
-#### 1.1 Create GitHub Environments
+### Deployment Gates For GitHub Free
 
-For each Dataverse environment:
+`manual-gate-tag` is the alternative when required reviewers are unavailable, including
+private Pro/Team repositories. The name of this section is retained for existing links;
+the [private-Free environment restriction](#github-licence-limitations) still applies.
 
-1. Go to **Settings** > **Environments** in your GitHub repository
-2. Click **New environment**
-3. Name it to match your deployment target (e.g. `Dev-main`, `TEST-main`, `PROD`)
-4. Click **Configure environment**
+To adapt the supplied caller:
 
-#### 1.2 Add variables (no client secret needed)
+1. Set every stage's `promotion-mode` to `manual-gate-tag`.
+2. Remove the `repository_dispatch` trigger.
+3. Make `target-environment` a required choice containing your target names.
+4. Give each job a manual selection condition. Jobs with `needs` must use a status-aware condition, such as `!cancelled()`, so a skipped earlier job does not suppress the selected stage.
+5. Set each later stage's `previous-environment-name` to its predecessor.
 
-Inside each environment, add:
-
-| Name | Type | Value |
-|------|------|-------|
-| `AZURE_CLIENT_ID` | Variable | App registration client ID |
-| `AZURE_TENANT_ID` | Variable | Entra ID tenant ID |
-| `DATAVERSESERVICEACCOUNTUPN` | Variable | UPN of the service account for activating processes |
-| `DATAVERSE_URL` | Variable | Dataverse environment URL (e.g. `https://yourorg-test.crm.dynamics.com`) |
-
-> **Do NOT set `AZURE_CLIENT_SECRET`** — when it is absent the workflows automatically
-> obtain an OIDC token via GitHub's built-in token endpoint.
-
-For connection references and environment variables, add individual entries:
-
-| Name | Type | Value |
-|------|------|-------|
-| `DataverseConnRef_<schema_name>` | Variable | Connection ID GUID |
-| `DataverseEnvVar_<schema_name>` | Variable | Environment variable value |
-
-For each sensitive Dataverse environment-variable value, add an individual GitHub secret
-and map it to the `DataverseEnvVar_<schema_name>` runtime name in `secrets-json`. For
-example, map `DATAVERSE_API_KEY` to `DataverseEnvVar_contoso_APIKey`.
-
-#### 1.3 Add protection rules (optional)
-
-In the environment settings, you can add:
-- **Required reviewers** — users or teams who must approve before deployment starts
-- **Wait timer** — a delay (in minutes) before deployment runs
-- **Deployment branches** — restrict which branches can deploy to this environment
-
-> ⚠️ **Licence requirement**: Environment protection rules (required reviewers, wait timer,
-> deployment branches) require **GitHub Pro, Team, or Enterprise** for private repositories.
-> Public repositories can use protection rules on any plan.
-> See [GitHub licence limitations](#github-licence-limitations) below.
-
-#### 1.4 Configure your DEPLOY workflow (WIF)
-
-  `DEPLOY-main.yml` uses explicit stage jobs and invokes the deploy composite action
-for each environment:
+For example, the selection condition on a manual PROD job can be:
 
 ```yaml
-jobs:
-  deploy-test:
-    runs-on: ubuntu-latest
-    environment: TEST-main
-    steps:
-      - uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
-        with:
-          environment-name: TEST-main
-          previous-environment-name: ''
-          promotion-mode: environment-approval
-          trigger-branch: main
-          github-context-json: ${{ toJSON(github) }}
-          caller-inputs-json: ${{ toJSON(inputs) }}
-          vars-json: ${{ toJSON(vars) }}
-          # Add any custom secrets explicitly to this JSON object.
-          secrets-json: >-
-            {
-              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
-            }
-
-  deploy-prod:
-    needs: deploy-test
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.target-environment == 'PROD' }}
-    runs-on: ubuntu-latest
-    environment: PROD
-    steps:
-      - uses: ALM4Dataverse/ALM4Dataverse/.github/actions/deploy@main
-        with:
-          environment-name: PROD
-          previous-environment-name: TEST-main
-          promotion-mode: manual-gate-tag
-          trigger-branch: main
-          github-context-json: ${{ toJSON(github) }}
-          caller-inputs-json: ${{ toJSON(inputs) }}
-          vars-json: ${{ toJSON(vars) }}
-          # Add any custom secrets explicitly to this JSON object.
-          secrets-json: >-
-            {
-              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
-            }
+if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.target-environment == 'PROD' }}
 ```
 
-To pass another individual secret, add its desired runtime environment-variable name
-and named GitHub secret reference to the `secrets-json` object, for example:
-
-```yaml
-# Add custom secrets explicitly to this JSON object.
-secrets-json: >-
-  {
-    "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }},
-    "API_ACCESS_TOKEN": ${{ toJSON(secrets.API_ACCESS_TOKEN) }}
-  }
-```
-
-The same named secret is not automatically discovered or forwarded. Add it explicitly
-to the one `secrets-json` mapping used by that workflow.
-
-To switch to `manual-gate-tag`, update the copied template as follows:
-
-```yaml
-promotion-mode: manual-gate-tag
-```
-
-- change `promotion-mode` on every stage;
-- remove the `repository_dispatch` trigger;
-- make `target-environment` a required choice input with one option per stage; and
-- use manual `workflow_dispatch` conditions for the stage jobs.
-
-`environment-approval` (default) auto-chains to each next stage; approval is handled
-by GitHub environment protection rules. `manual-gate-tag` requires a manual trigger
-for each stage and uses the previous-stage gate tag.
-
-See [Deployment Gates for GitHub Free](#deployment-gates-for-github-free) for full details.
-
----
-
-### Approach 2: GitHub Environments with client secret
-
-Use this approach if you prefer or require client secret authentication while still
-using GitHub Environments for approval gates.
-
-#### 2.1 Create GitHub Environments
-
-Follow the same steps as Approach 1.
-
-#### 2.2 Add secrets and variables (including client secret)
-
-Inside each environment, add:
-
-| Name | Type | Value |
-|------|------|-------|
-| `AZURE_CLIENT_ID` | Variable | App registration client ID |
-| `AZURE_CLIENT_SECRET` | Secret | App registration client secret |
-| `AZURE_TENANT_ID` | Variable | Entra ID tenant ID |
-| `DATAVERSESERVICEACCOUNTUPN` | Variable | UPN of the service account for activating processes |
-| `DATAVERSE_URL` | Variable | Dataverse environment URL (e.g. `https://yourorg-test.crm.dynamics.com`) |
-
-For connection references and environment variables, add individual entries:
-
-| Name | Type | Value |
-|------|------|-------|
-| `DataverseConnRef_<schema_name>` | Variable | Connection ID GUID |
-| `DataverseEnvVar_<schema_name>` | Variable | Environment variable value |
-
-Example:
-
-| Name | Value |
-|------|-------|
-| `DataverseConnRef_contoso_sharedsharepointonline` | `12345678-1234-1234-1234-123456789abc` |
-| `DataverseEnvVar_contoso_APIEndpoint` | `https://api.test.contoso.com` |
-
-#### 2.3 Configure your DEPLOY workflow (client secret)
-
-The copied jobs map `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` from the selected
-GitHub environment into the action step (see [1.4](#14-configure-your-deploy-workflow-wif)).
-Sensitive Dataverse environment-variable values must be stored as individual secrets
-and explicitly mapped to `DataverseEnvVar_<schema_name>` in `secrets-json`.
-
----
-
-### Approach 3: Prefixed repository variables and secrets
-
-Store non-sensitive values as repository-level variables using a naming convention
-that includes the environment name as a prefix. Automated setup stores genuine secrets
-in the matching GitHub environment. If you cannot manage environment secrets, store them
-as prefixed repository secrets instead. This approach works on **all GitHub
-licence levels** including GitHub Free on private repositories.
-
-The composite actions auto-map prefixed repository variables to the unprefixed runtime
-variables used by ALM4Dataverse scripts. Secrets are never auto-discovered: environment
-secrets are selected by the generated workflow, while prefixed repository secrets must
-be mapped explicitly in each stage's `secrets-json` input.
-
-This is also the automatic fallback used by `setup-github.ps1` when GitHub environment
-approval rules are not available for the selected repository.
-
-> ⚠️ **No approval gates**: Without environment protection rules there is no built-in
-> approval mechanism.  Anyone who can trigger the DEPLOY workflow can deploy to any
-> environment.  For production environments, consider restricting who can trigger the
-> workflow by using branch protection rules on `main` and limiting merge permissions.
-
-#### 3.1 Add secrets and variables
-
-In **Settings** > **Secrets and variables** > **Actions**, add:
-
-| Name | Type | Value |
-|------|------|-------|
-| `TEST_MAIN_AZURE_CLIENT_ID` | Variable | App registration client ID |
-| `TEST_MAIN_AZURE_TENANT_ID` | Variable | Tenant ID |
-| `TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN` | Variable | Service account UPN |
-| `TEST_MAIN_DATAVERSE_URL` | Variable | Dataverse URL |
-| `TEST_MAIN_DATAVERSE_CONN_REFS` | Variable | JSON — see below |
-
-Optional (instead of JSON):
-
-| Name | Type | Value |
-|------|------|-------|
-| `TEST_MAIN_DataverseConnRef_<schema_name>` | Variable | Connection ID GUID |
-| `TEST_MAIN_DataverseEnvVar_<schema_name>` | Variable | Environment variable value |
-
-Repeat with a `PROD_` prefix for production (and similar for other environments).
-Automated setup stores `AZURE_CLIENT_SECRET` inside each matching GitHub environment.
-For manual configuration without environment-secret access, create prefixed repository
-secrets such as `TEST_MAIN_AZURE_CLIENT_SECRET` and `TEST_MAIN_DATAVERSE_API_KEY`, then
-map each value individually in `secrets-json`. Existing repository secret values cannot
-be read or migrated by GitHub's API; keep and map them explicitly, or transfer them
-manually before deleting.
-
-For dev environments used in EXPORT/IMPORT, use a prefix like `DEV_MAIN_`.
-
-The prefix is matched from the effective environment name (for example `Dev-main` →
-`DEV_MAIN_`) with fallback support for a literal `PREFIX_` prefix.
-
-**Connection references JSON format** (variable `TEST_MAIN_DATAVERSE_CONN_REFS`):
-
-```json
-{
-  "contoso_sharedsharepointonline": "12345678-1234-1234-1234-123456789abc",
-  "contoso_sharedcommondataserviceforapps": "98765432-9876-9876-9876-987654321xyz"
-}
-```
-
-Store non-sensitive Dataverse environment-variable values individually in prefixed
-variables such as `TEST_MAIN_DataverseEnvVar_contoso_APIEndpoint`.
-
-#### 3.2 Configure workflows for prefixed variables and secrets
-
-The `vars-json` input and resolver automatically handle prefixed repository
-variables. Repository secrets are not auto-discovered. For each stage, change its
-`secrets-json` mapping to reference the prefixed repository secrets and map them to the
-runtime names, for example:
-
-```yaml
-secrets-json: >-
-  {
-    "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.TEST_MAIN_AZURE_CLIENT_SECRET) }},
-    "DataverseEnvVar_contoso_APIKey": ${{ toJSON(secrets.TEST_MAIN_DATAVERSE_API_KEY) }}
-  }
-```
-
-Use each stage's prefix (for example, `PROD_` for `PROD` and `DEV_MAIN_` for `Dev-main`).
-Add custom secret names explicitly to the same JSON object.
-
-The same two deployment promotion strategies still apply exactly as shown in
-[1.4](#14-configure-your-deploy-workflow-wif); the only difference is where values
-come from prefixed repository variables instead of GitHub environment variables; secrets
-remain explicitly selected in `secrets-json`.
-
----
-
-## Deployment Gates for GitHub Free
-
-On GitHub Free (private repos), environment protection rules — and therefore
-mandatory approval gates — are not available.  ALM4Dataverse provides a **git tag
-gate mechanism** that enforces ordered promotion and prevents automatic runaway
-deployments without using any time-limited construct.
-
-### How it works
-
-```
-BUILD (auto) → [human decision] → DEPLOY-main manual-run (TEST stage) → [human decision] → DEPLOY-main manual-run (PROD stage)
-```
-
-1. **BUILD** runs automatically on every push to `main`.
-2. A team member manually triggers **DEPLOY-main** by going to **Actions** > **DEPLOY-main** > **Run workflow**, setting `target-environment` to the desired stage (for example `TEST-main`), and either entering the exact BUILD name shown in the run title (for example `repo-main-2025-05-27T14:23:11Z-4`) or leaving `build-run-name` blank to use the latest successful BUILD from the selected branch.
-3. When the selected stage succeeds it pushes two lightweight git tags:
-   ```
-  {build-run-name}/deployed/TEST-main
-  deployed/TEST-main
-   ```
-4. After inspecting that deployment, a team member manually triggers **DEPLOY-main** again for the desired next stage.
-5. In `manual-gate-tag` mode, the selected stage checks via the GitHub API whether
-  the previous stage gate tag exists (`{build-run-name}/deployed/{previous-environment}`).
-   If it doesn't — because TEST never succeeded for that build — the workflow
-   **fails immediately** with a clear error:
-  > *Deployment gate check FAILED: the tag `repo-main-2025-05-27T14-23-11Z-4/deployed/TEST-main` does not exist.
-   > Deploy to the previous environment first, then re-trigger this workflow.*
-6. If the tag is present, deployment proceeds and on success pushes:
-   ```
-  {build-run-name}/deployed/PROD
-  deployed/PROD
-   ```
-
-The gate tags serve as a **permanent, auditable trail** of which build was deployed
-to which environment and in what order.
-
-The `deployed/{environment}` tag is a **movable pointer** that is updated on every
-successful deployment. It is an annotated tag that resolves to the deployed
-source commit and records the exact BUILD run and Release tag for baseline
-validation; older lightweight pointers are still resolved by source commit.
-
-### Key properties
-
-| Property | Detail |
-|---|---|
-| No time limits | Gate tags are permanent — they don't expire |
-| Ordered promotion enforced | Cannot deploy to a later stage without successful deployment of the previous stage for the same build |
-| Targeted redeploy supported | Enter `target-environment` explicitly to deploy a specific stage |
-| Single workflow file | Everything lives in `DEPLOY-main.yml` — no extra files to manage |
-| GitHub Free compatible | Uses only `contents: write` permission and the GitHub REST API |
-| Works with all credential approaches | WIF, client secret, or prefixed repository variables |
-
-### Adding more stages (UAT)
-
-Add another stage job and chain it between TEST and PROD.
-
-Example additions:
-
-1. Add `UAT-main` to `target-environment` options.
-2. Add `deploy-uat` with `needs: deploy-test`.
-3. Update `deploy-prod` to `needs: deploy-uat` and set its manual gate predecessor to `UAT-main`.
-
-In `manual-gate-tag` mode, each manual promotion checks its previous stage tag.
-In `environment-approval` mode, each stage auto-chains from the previous stage.
-
-### GitHub Pro/Team/Enterprise alternative
-
-If you have environment protection rules available, set:
-
-```yaml
-promotion-mode: environment-approval
-```
-
-Then add **Required reviewers** to your higher environment in
-**Settings > Environments**.
-
-Flow with `environment-approval` mode:
-```
-BUILD (auto) → stage 1 (auto) → stage 2 (queued/approval) → stage 3 (queued/approval) → ...
-```
-
-In this mode, each stage runs only after the previous stage succeeds on automatic runs.
-For manual runs, you can leave `target-environment` blank to start from the first
-configured stage in `environment-approval` mode, or set it to deploy directly to a
-specific stage.
-
----
+Run DEPLOY manually for the first target, inspect the result, then run it again for the
+next target with the **same build identity**. Later stages require a success tag for
+that build in the previous environment. These tags enforce recorded order, not a separate
+person's approval. Anyone able to modify trusted workflows, credentials, or gate tags
+can affect that control, so secure those permissions.
+
+### Branches And Additional Stages
+
+For another deployment branch, create a matching DEPLOY caller and update its name,
+branch filters, dispatch event, `trigger-branch`, and target settings consistently.
+The dispatch token is the lowercase branch name with non-alphanumeric runs replaced
+by `-`, trimmed at the ends: `feature/customer-import` becomes `feature-customer-import`.
+Avoid normalized-name collisions.
+
+> [!NOTE]
+> **Advanced: dispatch branch context.** Repository-dispatch workflows must exist on the
+> repository's **default branch**. They use the payload to select the source branch/build,
+> but the workflow's GitHub ref still comes from the default branch. Account for that in
+> environment deployment-branch policies. See [branching strategies](../usage/branching-strategies.md).
+
+To add UAT, add a job, target choice if applicable, credentials, and concurrency group;
+chain it with `needs` and update PROD's predecessor. Test automatic and targeted manual
+runs. The [action reference](../config/pipelines.md#deploy) defines all supported inputs.
+
+## BUILD Validation And Pull Requests
+
+For deployment validation, uncomment the BUILD job's environment block, set its name,
+and set the action's `environment-name` to that same value. Provide the target's URL,
+credentials, process-owner UPN, connections, and Dataverse values.
+
+> [!CAUTION]
+> Use a dedicated non-production Dataverse environment for BUILD validation. It is
+> updated in place, not reset, and builds from multiple branches can share it.
+> Configure appropriate serialization to prevent conflicting deployments.
+
+Optionally set `buildValidation.baselineRelease` to a retained build or `@<deployment-environment>`.
+That source environment is separate from the validation target.
+
+Enable Solution Checker separately if required. It checks package quality, not end-user
+behavior. The copied BUILD workflow runs on branch pushes, manual dispatch, and export
+dispatch, not `pull_request`. Configure required status checks in repository policies;
+add PR-merge/merge-queue validation separately when required. Do not expose privileged
+credentials to untrusted PR code. See [building releases](../usage/building-releases.md).
+
+## Workflow Job Timeouts
+
+Caller jobs run on `ubuntu-latest` and request `timeout-minutes: 360` at job level.
+Do not pass a timeout as a composite-action input. DEPLOY's example concurrency groups
+use `cancel-in-progress: true`; EXPORT/IMPORT use a shared development-environment group
+with cancellation disabled. Review the consequences of cancellation for server-side imports.
+See [timeouts](../config/alm-config.md#import-timeout).
 
 ## GitHub Licence Limitations
 
-| Feature | Free (public) | Free (private) | Pro | Team | Enterprise |
-|---------|:---:|:---:|:---:|:---:|:---:|
-| GitHub Actions | ✅ | ✅ | ✅ | ✅ | ✅ |
-| GitHub Environments (secrets/vars) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Environment protection rules (approvals, wait timers) | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Deployment branches restriction | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Git tag deployment gates (ALM4Dataverse) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Actions minutes included | Unlimited | 2 000/month | 3 000/month | 3 000/month | 50 000/month |
+| Capability | Public repositories on Free/Pro/Team | Private Free | Private Pro/Team |
+| --- | --- | --- | --- |
+| GitHub Actions | Available, subject to policy/limits | Available, subject to limits | Available, subject to limits |
+| Environments and environment secrets/variables | Available | Not available | Available |
+| Required reviewers and wait timers | Available | Not available | Not available |
+| Environment deployment branch/tag restrictions | Available | Not available | Available |
 
-### Impact on private repository deployments (Free plan)
+For private-repository required reviewers, check the applicable GitHub Enterprise offering.
+These are platform capabilities, not features ALM4Dataverse can enable on an unsupported
+plan. Prefixed repository credentials and manual gate tags are not equivalent to protected
+environment secrets and independent approval.
 
-On a **private repository with GitHub Free**:
+Consult [environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
+[protection rules](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),
+and [current Actions limits](https://docs.github.com/en/actions/reference/limits).
+The supplied Linux jobs should not be budgeted using Windows-runner multipliers.
 
-- You **can** store environment-specific secrets and variables in GitHub Environments.
-- You **cannot** add protection rules to environments — but the git tag gate mechanism
-  (see [Deployment Gates for GitHub Free](#deployment-gates-for-github-free)) provides
-  an equivalent ordered-promotion guarantee without approval rules.
-- Workflow minutes are limited to 2,000/month for the repository. Windows runners
-  (used by ALM4Dataverse) consume minutes at 2× the Linux rate, so the effective
-  budget is 1,000 minutes of pipeline time per month on the Free plan.
+## Grant Permissions For Workflow Operations
 
-**Additional access controls on Free plan:**
+Keep the caller's explicit job-level permissions, described in the
+[permissions reference](../config/pipelines.md#caller-settings-and-permissions), and
+verify organization/repository policy permits them. EXPORT needs to push source changes;
+BUILD publishes tags and Releases; DEPLOY writes success/pointer tags; cleanup deletes
+managed Releases. Branch and tag rules must permit these intended operations.
 
-- Use branch protection rules on `main` to restrict who can merge/push, which
-  controls which builds are available for promotion.
-- Restrict `workflow_dispatch` permission using repository collaborator roles —
-  only users with at least **Write** access can trigger manual deployments in
-  `DEPLOY-main.yml`.
-- Consider upgrading to GitHub Pro/Team for production workloads requiring formal
-  approval workflows.
+> [!NOTE]
+> **Advanced: custom dispatch tokens.** EXPORT normally uses `GITHUB_TOKEN` to dispatch
+> BUILD after committing. Its default mapping also accepts an optional
+> `WORKFLOW_DISPATCH_TOKEN` or legacy `GH_WORKFLOW_TOKEN` secret when policy requires one.
+> Dataverse credentials do not grant GitHub repository access. Do not grant broad default
+> token access when explicit job permissions suffice.
 
----
+## First Run
 
-## Grant permissions for workflow operations
+1. Commit the configured callers and configuration to the default branch.
+2. Run EXPORT from the intended development branch with a meaningful commit message.
+3. Review the exported `solutions/<unique-name>` files and any data changes.
+4. Check the resulting BUILD and its Release. A build before the first export may fail because solution source is not present yet.
+5. Deploy that exact build to the first non-production target and verify process activation and application behavior.
+6. Promote the same build through the remaining configured targets.
 
-### Write access for EXPORT and DEPLOY tags
-
-The EXPORT workflow commits and pushes solution changes back to the repository.
-After a successful export commit, it uses the GitHub CLI/API to dispatch `BUILD.yml`
-on the same branch. The DEPLOY workflows push git tag gates and environment pointer
-tags after successful deployments.
-
-1. Go to **Settings** > **Actions** > **General**
-2. Under **Workflow permissions**, select **Read and write permissions**
-3. Click **Save**
-
-### Repository dispatch token for EXPORT → BUILD
-
-`EXPORT` triggers `BUILD` by sending a `repository_dispatch` event via the GitHub
-CLI/API. By default it uses the workflow `GITHUB_TOKEN`.
-
-If your repository policy requires a separate token, add an environment secret named
-`WORKFLOW_DISPATCH_TOKEN` (or legacy alias `GH_WORKFLOW_TOKEN`) and add its named
-reference to the Export workflow's `secrets-json` object. Otherwise the workflow uses
-`GITHUB_TOKEN` without adding a secret entry.
-
-The copied caller jobs declare the required `contents: write` permission explicitly.
-
-### Actions read for DEPLOY (artifact download)
-
-The DEPLOY workflow downloads artifacts from the BUILD workflow run. The copied deploy
-jobs declare `permissions: actions: read`, which is granted automatically by the
-caller's `GITHUB_TOKEN` on all plans.
-
----
-
-## Usage
-
-Once configured:
-
-- **BUILD** — runs automatically on every push. View run status in the **Actions** tab.
-- **EXPORT** — go to **Actions** > **EXPORT** > **Run workflow**, enter a commit message, and click **Run workflow**.
-- **IMPORT** — go to **Actions** > **IMPORT** > **Run workflow** and click **Run workflow**.
-- **DEPLOY-main** — for `manual-gate-tag` mode, enter `target-environment` and optionally `build-run-name`; if left blank, the workflow uses the latest successful BUILD from the selected branch. In `environment-approval` mode, stage 1 starts automatically after BUILD succeeds and later stages auto-chain after prior-stage success plus any required approvals; for a manual replay, `target-environment` can be left blank to start from the first configured stage, while entering a value targets a specific stage.
-
-`EXPORT.yml` commits changes back to the same branch it was run from, then sends a `repository_dispatch` event with branch and commit metadata. `BUILD.yml` listens for that dispatch and checks out the exact exported commit.
-
-### Finding a BUILD run name for manual deploy (optional)
-
-1. Go to **Actions** and select the **BUILD** workflow
-2. Copy the exact BUILD name shown in the run title (for example `repo-main-2025-05-27T14:23:11Z-4`). The **Set build number** step shows the same exact value.
-3. Enter that BUILD name into **DEPLOY-main** when you want to deploy a specific build; otherwise, leave `build-run-name` blank to use the latest successful BUILD from the selected branch.
-
-When ALM4Dataverse creates git tags from that BUILD name, it automatically sanitizes characters that git refs do not like. For example, `repo-main-2025-05-27T14:23:11Z-4` becomes the source tag `repo-main-2025-05-27T14-23-11Z-4`.
-
-For backward compatibility, numeric run IDs from the run URL are still accepted too.
-
-### Viewing deployment tags
-
-Deployment tags are stored in the repository and are visible in the **Tags** section
-of the repository (under **Code** > **Tags**).
-
-- `{build-run-name}/deployed/{environment}` is the permanent audit/gate tag.
-- `deployed/{environment}` is the movable pointer showing what is currently deployed and recording its BUILD run metadata.
-
-Example:
-
-```
-repo-main-2025-05-27T14-23-11Z-4/deployed/TEST-main   ← TEST was successfully deployed for that build
-repo-main-2025-05-27T14-23-11Z-4/deployed/PROD        ← PROD was successfully deployed for that build
-deployed/TEST-main                                 ← TEST currently points at that build
-deployed/PROD                                      ← PROD currently points at that build
-```
-
----
-
-## References
-
-- [GitHub Actions composite actions](https://docs.github.com/en/actions/creating-actions/creating-a-composite-action)
-- [GitHub Environments and deployment protection rules](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-- [GitHub Actions billing and usage limits](https://docs.github.com/en/billing/managing-billing-for-github-actions/about-billing-for-github-actions)
-- [GitHub REST API — Git refs](https://docs.github.com/en/rest/git/refs)
-- [GitHub Secrets & Variables Reference](../config/github-secrets.md)
+Use IMPORT to seed or synchronize a development environment from source, not to promote
+a release. Keep CLEANUP-RELEASES on the default branch and review its retention policy.
+Continue with [exporting](../usage/exporting-changes.md), [building](../usage/building-releases.md),
+[deploying](../usage/deploying.md), or [importing](../usage/importing-changes.md).
