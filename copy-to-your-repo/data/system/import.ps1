@@ -10,5 +10,5 @@ Get-DataverseRecordsFolder -InputPath $PSScriptRoot/new_exampleconfigtable |
 
 <# Example - uncomment and enter your table name
 Get-DataverseRecordsFolder -InputPath $PSScriptRoot/new_exampleconfigtable -deletions |
-     Remove-DataverseRecord -Connection $c -Verbose -IfExists
+  Remove-DataverseRecord -TableName new_exampleconfigtable -Verbose -IfExists
 #>

@@ -10,6 +10,31 @@ The examples below show three common patterns. The environment names and
 deployment targets are examples; configure each branch's pipelines/workflows
 and environment credentials for your own organization.
 
+## Branch And Environment Names
+
+| Branch | GitHub development environment | Azure DevOps development service connection/group suffix |
+| --- | --- | --- |
+| `main` | `Dev-main` | `Dev-main` |
+| `develop` | `Dev-develop` | `Dev-develop` |
+| `feature/customer-import` | `Dev-feature/customer-import` | `Dev-customer-import` |
+
+GitHub uses `github.ref_name`, while the Azure DevOps callers use the final component
+`Build.SourceBranchName`. Avoid duplicate leaf names across Azure DevOps branches.
+Names in the examples below use the GitHub full-branch convention; apply the table
+when configuring Azure DevOps.
+
+For every development branch, configure credentials, target settings, and any WIF
+subject before using EXPORT/IMPORT. Feature environments are not created automatically
+when you create a branch. A deployment caller is only needed if that branch must also
+promote numbered builds to downstream targets.
+
+> [!NOTE]
+> **Advanced: branch-specific triggers.** GitHub dispatch-driven BUILD/DEPLOY definitions
+> must be present on the default branch. For a new deployment branch, update its dispatch
+> token, `trigger-branch`, job conditions, credentials, and target list together. Azure
+> DevOps deployment callers instead filter their BUILD pipeline resource by branch.
+> See [pipeline contracts](../config/pipelines.md).
+
 ## Build validation and pull requests
 
 `BUILD` runs when changes are pushed to a branch, including commits created by
@@ -26,13 +51,14 @@ If a baseline release is configured, BUILD deploys that successful package to
 the validation environment before the candidate from the current branch; the
 baseline source environment is separate from the validation target.
 
-For the `main`/`develop` and feature-branch models below, configure your
-repository's PR policy to require successful validation before merging into
-`main`. ALM4Dataverse builds branch pushes, but does not automatically create
-the host platform's branch protection or PR policy. The default GitHub BUILD
-workflow checks pushed branch commits and does not have a `pull_request`
-trigger; add PR-triggered or merge-queue validation separately if your policy
-requires a fresh build of the proposed merge result.
+> [!IMPORTANT]
+> For the `main`/`develop` and feature-branch models below, configure your repository's
+> PR policy to require successful validation before merging into `main`. ALM4Dataverse
+> builds branch pushes but does not create branch protection or PR policies.
+>
+> The default GitHub BUILD workflow checks pushed branch commits and has no `pull_request`
+> trigger. Add PR-triggered or merge-queue validation if your policy requires a fresh
+> build of the proposed merge result.
 
 ## Main only
 
@@ -57,9 +83,10 @@ environment and exports its changes to `main`.
 | --- | --- | --- | --- |
 | `main` | `Dev-main` | `main` | Production |
 
-Because exports write directly to `main`, this pattern is not suitable when
-corporate policy requires a pull request before changes can enter `main`.
-Use the `main` and `develop` pattern below for that policy.
+> [!TIP]
+> Need pull-request review before changes enter `main`? Use the `main` and `develop`
+> pattern below. The main-only pattern exports directly to `main` and does not meet
+> that requirement.
 
 ## Main and develop
 
@@ -135,12 +162,11 @@ changes have since been merged into or rebased onto the feature branch from
 upstream `main`, run `IMPORT` again to bring the feature environment up to
 date.
 
-Before merging or rebasing upstream changes into your feature branch, run
-`EXPORT` from that feature's development environment to commit its current
-work to the feature branch. Then merge or rebase the upstream changes and run
-`IMPORT` for the feature branch. This order preserves environment changes in
-source control before `IMPORT` updates the environment from the integrated
-branch.
+> [!IMPORTANT]
+> Preserve maker work before synchronizing: run `EXPORT` from the feature's development
+> environment, merge or rebase upstream changes into the feature branch, then run
+> `IMPORT`. This order captures environment changes in source control before IMPORT
+> updates the environment from the integrated branch.
 
 Each export to a feature branch triggers a BUILD for that branch. Review its
 result and any enabled Solution Checker report, and resolve failures before

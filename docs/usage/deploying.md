@@ -2,7 +2,7 @@
 
 ```mermaid
 flowchart LR
-  A[GitHub Release assets<br/>or BUILD Actions artifacts] --> B[DEPLOY Pipeline]
+  A[Successful BUILD artifacts<br/>or GitHub Release assets] --> B[DEPLOY Pipeline]
     B -- 1. When approved ---> C[Environment<br/>Env1]
     B -- 2. When approved ---> E[Environment<br/>Env2]
     D[<small>Environment settings: env1</small>] --> C
@@ -25,23 +25,57 @@ workflow with the exact Release/build identity. In `manual-gate-tag` mode, an
 operator starts deployment from Actions. Azure DevOps continues to use its
 selected pipeline resource artifact.
 
-It is also possible to manually trigger deployment. In Azure DevOps, select the
-relevant BUILD job from the `resources` section. In GitHub Actions, use
-`build-run-name` and select the target environment.
+## Before You Deploy
 
-> **Which environments?**
+1. Select a successful build from the intended source branch and record its exact identity.
+2. Verify target credentials, connections, Dataverse values, and the process-owner UPN. Connections and users must already exist.
+3. Review solution removals, data migrations, organization settings, and other hooks in that build. Managed deployments can overwrite unmanaged customizations and upgrades can remove components/data.
+4. Check that no other import is still running against the target and that approval/concurrency controls are configured.
+5. Take or confirm the appropriate environment backup and test a recovery plan for production changes.
+
+> [!NOTE]
+> Changing source configuration after BUILD does not change an existing package. Build
+> a new release to change its solutions, hooks, defaults, or dependencies. Runtime target
+> settings remain external and can change the effect of redeploying the same package.
+
+## Choose A Build And Target
+
+**Azure DevOps:** open the branch's DEPLOY pipeline and choose **Run pipeline**. In
+**Resources**, select the `build` resource's exact successful BUILD run. Select applicable
+stages if needed, run, and complete any configured approvals. The default pipeline
+resource trigger also starts DEPLOY after a matching branch BUILD.
+
+**GitHub Actions:** open the branch's DEPLOY workflow and choose **Run workflow**.
+Select the branch and enter `build-run-name` as a Release tag, exact BUILD name, or numeric
+BUILD run ID. Blank selects the latest successful build, which may change between manual
+promotions. Use an explicit identity when promoting or redeploying.
+
+| GitHub mode | First stage | Later stages | Manual selection |
+| --- | --- | --- | --- |
+| `environment-approval` | Automatic build dispatch | Chain after success and configured environment protection checks | Empty `target-environment` starts from stage one; a named target selects that stage. |
+| `manual-gate-tag` | Manual | Separate manual run per stage; checks predecessor tag for the same build | `target-environment` is required. |
+
+Approval mode does not itself create an approval rule. Without configured protection,
+stages run automatically. Gate-tag mode records prior success; it does not require an
+independent reviewer. Configure [GitHub deployment modes](../setup/github-setup.md#deployment-configuration)
+and [platform plan restrictions](../setup/github-setup.md#github-licence-limitations) deliberately.
+
+> [!IMPORTANT]
+> **Configure deployment targets.**
 >
 > Each `DEPLOY-<branchname>.yml` pipeline/workflow is associated with a single branch and must be edited to add a list of environments to deploy to, in sequence.
 >
 > **Azure DevOps**: Each environment requires a [service connection](../config/azdo-environment-service-connection.md) for auth and a [variable group](../config/azdo-environment-variable-group.md) for environment-specific values. Add the following variable group policies:
+>
 > - **Exclusive lock** — ensures only one deployment at a time can touch the environment.
 > - **Approval** — requires approvers to sign off before deployment starts.
 >
-> **GitHub Actions**: Each environment requires [variables and secrets](../setup/github-variables.md). Non-sensitive settings may use prefixed repository variables; secrets can be GitHub environment secrets or prefixed repository secrets, and must be listed explicitly in each stage's `secrets-json` input. Add required reviewers on the GitHub environment for approval gates (requires Pro/Team/Enterprise for private repos; see [deployment gates](../setup/github-setup.md#deployment-gates-for-github-free) for alternatives).
+> **GitHub Actions**: Each target requires [variables and secrets](../setup/github-variables.md). Secrets must be listed explicitly in each stage's `secrets-json` input. Required-reviewer availability depends on plan and visibility; private Pro/Team repositories do not have this rule. See [deployment gates](../setup/github-setup.md#deployment-gates-for-github-free) for the manual alternative.
 
-To monitor:
+## Monitor A Deployment
 
 **Azure DevOps:**
+
 1) Navigate to the **Pipelines** area of your AzDO project.
 2) Select the **All** tab and navigate to the folder with the same name as your repo.
 3) Select the `DEPLOY-<branchname>` pipeline and then select an instance of the job.
@@ -50,17 +84,23 @@ To monitor:
 6) Once approved, the deployment stage starts. Select the stage to follow progress and check it completes successfully.
 
 **GitHub Actions:**
+
 1) Navigate to the **Actions** tab of your repository.
 2) Select the **DEPLOY-main** (or your branch) workflow from the left panel.
 3) Select the running workflow run. Each deployment stage is shown as a job.
 4) If an environment has required reviewers configured, a review request is shown. Approvers must approve before the stage runs.
 5) Select a job to follow its progress and check it completes successfully.
 
-Once a stage completes successfully, the next stage will be started.
+In Azure DevOps and GitHub approval mode, a successful stage allows the next configured
+stage to start, subject to checks. In GitHub manual gate-tag mode, start the next stage
+separately with the same build identity.
 
-If a stage fails, you can see the detailed error. You can select 'Retry stage' to give it another go.
+> [!WARNING]
+> Before retrying a failed stage, inspect its logs and Dataverse solution history. A
+> timeout or cancellation may leave an import running server-side. Hooks may already
+> have partially changed data; repeated execution must be safe.
 
-What happens for each deployment stage:
+## Deployment Sequence
 
 - **The pipeline waits for all configured policies to be met.**
   For instance the exclusive lock and approval steps.
@@ -75,9 +115,57 @@ What happens for each deployment stage:
   - If the solution is not currently present in the environment, the 'Import' method is used
   - If there's a pending unmerged upgrade with a different version, an error is thrown with details asking you to resolve it. This is not automated because it can result in data loss. You either need to remove (warning - data loss) or apply the prior upgrade before retrying.
   - If there's a pending upgrade for the same version, the 'Stage for upgrade' is skipped
-  - If the solution is already present with a different version the 'Update' (if Major.Minor matches) or 'Stage for Upgrade' method is used 
+  - If the solution is already present with a different version the 'Update' (if Major.Minor matches) or 'Stage for Upgrade' method is used
 - **If you've configured any `dataMigrations` hook extensions in `alm-config.psd1`, these will be executed**.
   This stage is designed to let you run steps that need both the old and new components to be present. For instance, moving data from an old/obsolete column (which is no longer present in the solution version being upgraded to) and into a new column.
 - **Solutions that have a pending upgrade then have them applied in reverse dependency order**.
-- **If you've configured any hook extensions in `alm-config.psd1`, these will be executed and can add to the deployment steps consuming files from the build assets.**
-   For example, you might deploy data you captured during export.
+- **Processes are assigned to the configured service-account user and activated.** Custom per-solution owner keys can select different users.
+- **Customizations are published, then `postDeploy` hooks run.** This commonly imports data captured by EXPORT.
+- **The caller records deployment success only after these steps complete.** Azure DevOps updates the environment pointer; GitHub writes the success gate and environment pointer.
+
+`preDeploy` runs before staging. The default is managed deployment; `deployUnmanaged`
+selects a solution's unmanaged package. IMPORT uses the same deployment script with a
+global unmanaged override and different import flags.
+
+> [!IMPORTANT]
+> **Advanced: single-solution migrations.** A single solution uses `Auto` import mode,
+> which can apply its upgrade before `dataMigrations`. The multi-solution staging window
+> does not exist in that case. Plan a separate migration release if your migration requires
+> components that the upgrade removes. See [hook ordering](../config/alm-config.md#hooks).
+
+## Deployment Tags
+
+| Tag | Meaning |
+| --- | --- |
+| Source build tag | Identifies the source commit used by a numbered build. Characters invalid in Git refs are sanitized. |
+| `<build-name>/deployed/<environment>` | GitHub success/gate tag for that build and target. |
+| `deployed/<environment>` | Movable annotated pointer to the last successfully deployed source commit and BUILD run; GitHub also records the Release tag. |
+| `alm4dataverse/metadata/<release-tag>` | GitHub cleanup's durable identity record for a removed Release, not an asset backup. |
+
+> [!NOTE]
+> **Advanced: deployment pointers.** These tags support
+> [BUILD baseline selection](building-releases.md#optional-baseline-release).
+> BUILD validation and IMPORT do not move them. Do not manually create gate tags to
+> bypass a failed deployment, or move environment pointers without reconciling actual state.
+
+## Retry, Redeploy, And Recovery
+
+To retry, confirm the previous Dataverse operation has finished, resolve any pending
+upgrade/conflict, and rerun the failed Azure DevOps stage or GitHub job/workflow with
+the same build. If replaying a GitHub workflow manually, specify the target and exact
+build rather than relying on the latest-successful default.
+
+To redeploy a known build, select its retained artifact/Release through the same DEPLOY
+process. Same-version solution imports may be skipped, but surrounding hooks, activation,
+and publishing still run. Test custom hooks for repeatability and verify target settings
+afterward; redeployment is not guaranteed to force reapplication of every setting.
+
+> [!CAUTION]
+> **An older build is not a guaranteed rollback.** Dataverse solution downgrades, component
+> removal, unmanaged layers, and data migrations may prevent or invalidate reverse deployment.
+> Use a tested forward-fix or environment restore strategy as appropriate. Retain the
+> necessary build assets and backups; deployment tags alone cannot restore data.
+
+After success, verify solution versions, connection references, environment values,
+flow ownership/activation, hook results, and application behavior. A success tag records
+completion of automation, not functional acceptance testing.

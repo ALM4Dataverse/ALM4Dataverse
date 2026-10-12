@@ -1,10 +1,53 @@
 # ALM Configuration (alm-config.psd1)
 
-The `alm-config.psd1` file in your repo is the central configuration file for the ALM4Dataverse pipeline system. It defines which solutions to deploy, assets to include, hook scripts to run, dependencies required for the build/export/deployment processes, and optional PAC solution validation settings.
+The `alm-config.psd1` file in your application repository configures both Azure DevOps and GitHub Actions. It defines solutions, deployment assets, hooks, dependencies, import timeouts, build validation, and Solution Checker settings. Credentials and target-specific values belong in your CI platform's environment configuration, not in this file.
 
 ## Location
 
-The configuration file should be placed in the repository root. The pipelines expect to find it at the root of your repository alongside your solution folders.
+Place the file at the application repository root; unpacked solutions live in `solutions/<unique-name>/`. Start with the [supplied configuration](../../copy-to-your-repo/alm-config.psd1).
+
+ALM4Dataverse loads [shared defaults](../../alm-config-defaults.psd1), then merges your application configuration into them:
+
+| Value type | Merge behavior |
+| --- | --- |
+| Hashtable | Merge recursively; application values override matching defaults. |
+| Array | Append application items after default items; no deduplication. An empty array does not clear defaults. |
+| Scalar | The application value wins, including `$false` and an empty string. |
+| `$null` | Keep the default value. |
+
+The same rules merge global and per-solution checker settings. Defaults are versioned
+with ALM4Dataverse, so review them when upgrading.
+
+> [!NOTE]
+> **Advanced: loaded configuration.** `_main` and `_defaults` in a hook's configuration
+> are internal snapshots, not settings to put in your file.
+
+## Minimal Configuration
+
+```powershell
+@{
+    solutions = @(
+        @{ name = 'ContosoCore' }
+    )
+    assets = @()
+    hooks = @{}
+}
+```
+
+The supplied template additionally includes the `data` asset and example data hooks. Configure those scripts for your tables or leave their example operations commented out. An empty `solutions = @()` is supported for data-only or hook-only projects.
+
+## Settings At A Glance
+
+| Setting | Type | Default or template value |
+| --- | --- | --- |
+| `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. |
+| `assets` | Array of paths | `@('data')` in the template. |
+| `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
+| `scriptDependencies` | Hashtable of module names and versions | `Rnwood.Dataverse.Data.PowerShell = '3.0.3'`. |
+| `pacCliVersion` | String | `'2.7.4'`. |
+| `importTimeoutSeconds` | Number of seconds | `10800` per import. |
+| `buildValidation.baselineRelease` | String | `''`; no baseline. |
+| `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
 
@@ -23,10 +66,24 @@ solutions = @(
 ```
 
 **Properties:**
-- `name` (required): Unique solution name that matches your solution folder in the source directory
+
+- `name` (required): Dataverse unique solution name, not display name; must match `solutions/<name>` in source control.
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
+
+`BUILD` packs both managed and unmanaged packages. `DEPLOY` selects the package using `deployUnmanaged`; `IMPORT` always selects unmanaged packages for every solution. Use managed deployment for controlled downstream environments unless you have a specific reason to retain unmanaged customizations.
+
+The service account is a real Dataverse user used to own and activate processes, not the
+application user used to authenticate.
+
+> [!NOTE]
+> **Advanced: per-solution process owners.** Supply the selected key in the runner
+> environment; deployment uppercases it before reading it. For example,
+> `serviceAccountUpnConfigKey = 'ContosoFlowOwner'` requires `CONTOSOFLOWOWNER`. This matters
+> on Linux, where environment variables are case-sensitive. See the
+> [Azure DevOps variable reference](azdo-environment-variable-group.md) or
+> [GitHub variable reference](github-secrets.md).
 
 ### Assets
 
@@ -40,7 +97,13 @@ assets = @(
 )
 ```
 
-Paths are relative to the repository root. This is useful for including data migration scripts, configuration files, or other resources needed during deployment.
+Paths are relative to the repository root and retain that layout inside the artifact.
+Every listed path must exist or the build fails.
+
+> [!IMPORTANT]
+> Include every application-owned deployment hook and its supporting files in `assets`.
+> Listing a hook does not automatically package its script. Do not include credentials
+> or environment-specific secrets in assets.
 
 ### Hooks
 
@@ -77,6 +140,15 @@ hooks = @{
 - **dataMigrations**: Called during deployment after solutions are staged but before upgrades. Use this for data migration scripts that need to relocate data before columns are removed
 - **postDeploy**: Called after publish customizations
 
+Hooks run in their listed order, and a missing or failing hook fails the operation. `IMPORT` runs the build hooks and then the deployment hooks; it does not run export hooks. BUILD validation also runs the selected package's deployment hooks, including data migrations.
+
+> [!CAUTION]
+> **Advanced: migration timing.** Multi-solution managed deployments stage imports in
+> dependency order and apply upgrades in reverse order after `dataMigrations`. A single
+> solution uses `Auto` mode, which may complete its upgrade before this hook. Do not
+> assume removed components remain available; design and test a staged migration release
+> when the migration requires them.
+
 #### Hook Context
 
 Each hook script receives a `$Context` parameter containing:
@@ -88,6 +160,25 @@ Each hook script receives a `$Context` parameter containing:
   - **preBuild, postBuild**: `SourceDirectory`, `ArtifactStagingDirectory`
   - **preExport, postExport**: `SourceDirectory`, `ArtifactStagingDirectory`, `TempDirectory`, `EnvironmentName`
   - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`
+
+Start a hook with a parameter block. Resolve application-owned files from `$PSScriptRoot` or `$Context.BaseDirectory`, not from assumptions about the runner's working directory. Guard optional configuration keys when using strict mode:
+
+```powershell
+param([hashtable]$Context)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+if ($Context.Config.ContainsKey('customSettings')) {
+        $settings = $Context.Config.customSettings
+        Write-Host "Loaded $($settings.Count) custom settings."
+}
+```
+
+> [!IMPORTANT]
+> Throw on failures and check `$LASTEXITCODE` after native commands. Do not log secrets.
+> Make hooks safe to retry: skipping an unchanged solution import does not skip the
+> surrounding hooks.
 
 #### Hook Script Path Placeholder
 
@@ -114,12 +205,18 @@ scriptDependencies = @{
 ```
 
 **Version Specifications:**
+
 - Empty string (`''`): Installs the latest stable version
 - `'prerelease'`: Installs the latest prerelease version
 - Specific version (e.g., `'2.12.1'` or `'1.0.0-beta.1'`): Installs that exact version
 
-When build assets are generated, the version that has been selected is frozen and baked into the configuration file that will be used when deploying.
-This ensures that the same exact version of all dependencies is always used for each release, even across extended time period and environments.
+The build writes the exact loaded module versions and installed PAC version to `scriptDependencies.lock.json` in the artifact. Deployment's dependency installer reads this lock instead of resolving floating versions again. The application configuration itself is copied unchanged, alongside a snapshot of the shared ALM4Dataverse repository.
+
+> [!NOTE]
+> **Advanced: reproducibility and caching.** Packages must still be obtainable from their
+> feeds. The lock does not freeze the hosted runner image or all external services/tools.
+> GitHub actions cache modules and PAC by operating system and version specifications;
+> cache hits are an optimization, not a substitute for the lock or installation step.
 
 ### PAC CLI Version
 
@@ -130,21 +227,22 @@ pacCliVersion = '2.7.4'
 ```
 
 **Version Specifications:**
+
 - Empty string (`''`): Installs the latest stable version
 - `'prerelease'`: Installs the latest prerelease version
 - Specific version (for example `'2.7.4'`): Installs that exact version
 
 For reproducible builds/deployments, pin an explicit version.
 
-> **Azure DevOps note**
->
+> [!NOTE]
+> **Advanced: PAC on Azure DevOps.**
 > Azure DevOps templates intentionally set `PowerPlatformToolInstaller@2` with `AddToolsToPath: false`.
 > This prevents the Power Platform Build Tools `pac` from being added to `PATH` and ensures
 > the pinned `pacCliVersion` installed by `installdependencies.ps1` is the one used.
 
 ### Import Timeout
 
-The `importTimeoutSeconds` setting controls how long each individual solution import operation is allowed to run before the deployment script cancels it. The default is 10800 seconds (3 hours).
+The `importTimeoutSeconds` setting is passed to `Import-DataverseSolution` for each individual solution import. The default is 10800 seconds (3 hours). A client-side timeout does not establish that the server-side Dataverse operation has stopped.
 
 ```powershell
 importTimeoutSeconds = 10800
@@ -152,47 +250,34 @@ importTimeoutSeconds = 10800
 
 Increase this value if solution imports time out in large or complex environments.
 
-> **Important — pipeline job timeout (Azure DevOps and GitHub Actions)**
->
-> `importTimeoutSeconds` only controls the timeout inside the deployment script. The pipeline runner also enforces a **job-level timeout** which can terminate the job even when `importTimeoutSeconds` is higher.
->
-> - **Azure DevOps** uses `timeoutInMinutes`.
-> - **GitHub Actions** uses `timeout-minutes`.
->
-> All pipeline templates (`DEPLOY`, `IMPORT`, `BUILD`, `EXPORT`) set `timeoutInMinutes: 360`. Azure DevOps enforces your account's capacity limits on top of this value — on free capacity the effective limit is lower, but setting a higher value causes no harm; the job simply falls back to the account's enforced limit:
->
-> | Capacity type | Effective job timeout |
-> |---|---|
-> | **Free Microsoft-hosted (public project)** | Up to 60 minutes (falls back to account default if `timeoutInMinutes` exceeds it) |
-> | **Free Microsoft-hosted (private project)** | Up to 60 minutes (falls back to account default if `timeoutInMinutes` exceeds it) |
-> | **Paid parallel jobs (Microsoft-hosted)** | Up to 360 minutes (6 hours) |
-> | **Self-hosted agents** | No enforced maximum |
->
-> GitHub composite-action caller jobs set `timeout-minutes: 360` explicitly in the copied workflows.
->
-> The `DEPLOY` template exposes `timeoutInMinutes` as a parameter so you can override the default per-environment:
->
-> ```yaml
-> - template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
->   parameters:
->     environmentName: Test-main
->     timeoutInMinutes: 120  # override the 360-minute default for this environment
-> ```
->
-> For GitHub, override per job by setting `with.timeout-minutes` in your caller workflow (for example in `DEPLOY-main.yml`).
->
-> For imports that genuinely need more than 6 hours, switch to a **self-hosted agent** — there is no enforced maximum on self-hosted agents.
+The CI job also has a timeout covering installation, all imports, and hooks. Shipped jobs request 360 minutes, but your platform's lower limit still applies.
+
+| Platform | Job timeout configuration | Capacity considerations |
+| --- | --- | --- |
+| Azure DevOps | `timeoutInMinutes`; exposed as a parameter by the deployment-stage template | Free private Microsoft-hosted jobs allow 60 minutes; paid hosted jobs allow 360. Check your organization's entitlement for other grants. |
+| GitHub Actions | `jobs.<job-id>.timeout-minutes` in the caller workflow | GitHub-hosted jobs allow 6 hours. Self-hosted jobs also have platform limits; they are not unlimited. |
+
+For Azure DevOps, set these fields within the existing deployment-stage entry:
+
+```yaml
+template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
+parameters:
+    environmentName: TEST-main
+    timeoutInMinutes: 120
+```
+
+For GitHub, set `timeout-minutes` beside `runs-on` on the job, **not** under the composite action's `with`. See [GitHub limits](https://docs.github.com/en/actions/reference/limits) and [Microsoft-hosted agent limits](https://learn.microsoft.com/en-us/azure/devops/pipelines/agents/hosted#capabilities-and-limitations) before changing runner or timeout settings.
 
 #### What to do after a timeout
 
-If a deployment job times out, the solution import may still be running inside Dataverse. **Do not immediately retry** — a concurrent import of the same solution can cause conflicts.
+> [!WARNING]
+> After a job timeout, the solution import may still be running inside Dataverse.
+> **Do not immediately retry**: a concurrent import of the same solution can cause conflicts.
 
 1. Open the target Dataverse environment.
 2. Navigate to **Settings → Solutions → Solution history** (or go to **make.powerapps.com → Solutions → See history** for the relevant solution).
 3. Wait until the import operation shown there reaches a terminal state (**Succeeded** or **Failed**).
-4. Once the import has completed (successfully or not), it is safe to retry the pipeline stage.
-
-> **Future improvement:** Automating the detection of an in-progress import and waiting for it to complete is a planned enhancement.
+4. Inspect the final result and any pending upgrade, correct the cause, then retry the same selected build. Consider whether hooks partially ran and whether repeating them is safe.
 
 ### BUILD validation baseline
 
@@ -277,7 +362,7 @@ solutions = @(
 #### Settings reference
 
 | Setting | Scope | Description |
-|---|---|---|
+| --- | --- | --- |
 | `enabled` | Global + Solution | Enables/disables checker. Build runs checks only for solutions where merged `enabled` is `$true`. |
 | `geo` | Global + Solution | PAC checker geography, e.g. `Europe`, `UnitedStates`, `Japan`. |
 | `failThreshold` | Global + Solution | Build fails when findings include this severity or higher. Values: `Critical`, `High`, `Medium`, `Low`, `Informational`. Default: `Critical`. |
@@ -285,6 +370,15 @@ solutions = @(
 | `excludedFiles` | Global + Solution | One or more glob patterns. Patterns are expanded to concrete file paths before calling PAC `--excludedFiles`. |
 | `ruleLevelOverride` | Global + Solution | Rule override definitions. Supported formats: JSON file path, hashtable, or array of rule override objects. |
 | `maxParallel` | Global | Maximum number of solutions checked in parallel. Default: `4`. |
+
+The other shipped defaults are `enabled = $false`, `geo = 'Europe'`, `ruleSet = 'Solution Checker'`, `excludedFiles = @()`, and `ruleLevelOverride = @()`. Severities are ordered `Critical`, `High`, `Medium`, `Low`, `Informational`. `maxParallel` is a global setting, even when a per-solution hashtable includes that key.
+
+Relative exclusion patterns are resolved from `solutions/<name>` using PowerShell file
+matching; unmatched patterns produce warnings.
+
+> [!TIP]
+> Prefer inline rule-override objects when portability matters. A JSON override path is
+> passed to PAC as supplied, so it must be valid from the build's working directory.
 
 #### Authentication behavior for solution check
 
@@ -296,6 +390,7 @@ pac auth create --managedIdentity
 
 This uses Default Azure Credential and is designed to pick up an existing Azure identity context (for example Azure CLI sign-in, managed identity, or workload identity federation). If no non-interactive Azure identity context is available, solution check fails with a clear error.
 
+> [!NOTE]
 > `connect.ps1` also initializes PAC auth unconditionally so future PAC-based operations can reuse the same behavior.
 
 #### Reports and failure visibility
@@ -313,8 +408,9 @@ Azure DevOps and GitHub build templates upload a dedicated `solution-check-repor
 To customize this configuration in a custom fork, you can edit the `alm-config-defaults.psd1` file in the ALM4Dataverse repository root.
 
 Fork configuration is merged with `alm-config.psd1` as follows:
-- **Hashtables**: Merged (fork values override template values)
-- **Arrays**: Concatenated (fork values appended to template values)
-- **This file's values take precedence** when merging
+
+- **Hashtables**: Merged recursively; the application repository's values override your fork defaults.
+- **Arrays**: Default items first, followed by application items.
+- There is no separately loaded `fork-almconfig.psd1` file.
 
 This allows forks to add custom defaults that contribute custom config to each repo using the pipelines and without needing to make edits in each of those repos. For example, standard hook scripts can be added to extend ALM4Dataverse across every consuming repo. See the note above about `[alm]` placeholder allowing you to put the scripts in your fork of this repo.

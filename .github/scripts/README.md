@@ -1,79 +1,43 @@
-# Automated Dependency Update Workflow
+# Maintainer Scripts
 
-This workflow automatically checks for outdated PowerShell module dependencies and creates pull requests to update them.
-
-## Overview
-
-The workflow consists of:
-- A GitHub Actions workflow that runs daily at 2 AM UTC (or can be manually triggered)
-- Two PowerShell scripts that handle dependency checking and PR management
-- A test script to validate the workflow logic
+See the [maintainer guide](../../docs/maintainers.md) for prerequisites, release
+preparation/publication, test boundaries, and dependency-update operation.
 
 ## Files
 
-### `.github/workflows/update-dependencies.yml`
-The main workflow file that:
-- Runs on a schedule (daily at 2 AM UTC)
-- Can be manually triggered via workflow_dispatch
-- Sets up PowerShell environment with NuGet provider and PSGallery
-- Executes the dependency check and PR creation scripts
+| Script | Purpose |
+| --- | --- |
+| [check-outdated-dependencies.ps1](check-outdated-dependencies.ps1) | Query PowerShell Gallery for newer configured module versions; output `outdated-deps.json` and `has_updates`. |
+| [update-dependency-prs.ps1](update-dependency-prs.ps1) | Consume that file, update Git branches, and create/update remote PRs. Not an offline check. |
+| [test-dependency-workflow.ps1](test-dependency-workflow.ps1) | Offline dependency-data/update-pattern smoke checks. |
+| [test-deployment-options.ps1](test-deployment-options.ps1) | Strict-mode deployment-option checks and generated/copied workflow guard checks. |
+| [test-environment-mapping.ps1](test-environment-mapping.ps1) | Offline direct/prefixed variable and selected-secret precedence checks. |
+| [test-documentation.ps1](test-documentation.ps1) | Local links/anchors, fenced example syntax, and reference-name coverage. |
 
-### `.github/scripts/check-outdated-dependencies.ps1`
-Checks for outdated dependencies by:
-- Reading `scriptDependencies` from `alm-config-defaults.psd1`
-- Querying PowerShell Gallery for the latest version of each module
-- Comparing current vs latest versions
-- Creating a JSON file with outdated dependencies
+## Automated Dependency Update Workflow
 
-### `.github/scripts/update-dependency-prs.ps1`
-Manages pull requests by:
-- Creating a new PR for each outdated dependency
-- Updating existing PRs if one already exists for the same module
-- Using the branch naming convention: `deps/update-{module}-to-{version}`
-- Rebasing on the base branch to maintain linear history
-- Using `--force-with-lease` for safe force pushes
+The [workflow](../workflows/update-dependencies.yml) runs daily at **02:00 UTC** or from
+**Actions > Update Script Dependencies > Run workflow**. It checks `scriptDependencies`,
+not the PAC CLI version. New branches use `deps/update-<module>-to-<version>`; existing
+matching open PR branches are reused. Commits use `chore(deps): update <module> to <version>`.
 
-### `.github/scripts/test-dependency-workflow.ps1`
-Tests the workflow logic without requiring network access:
-- Validates config file parsing
-- Tests version comparison and serialization
-- Tests the regex pattern for updating versions
-- Validates branch naming convention
-
-## How It Works
-
-1. **Scheduled Run**: The workflow runs daily at 2 AM UTC
-2. **Check Dependencies**: The script reads `alm-config-defaults.psd1` and queries PowerShell Gallery for each module
-3. **Identify Updates**: Compares versions and creates a list of outdated dependencies
-4. **Create/Update PRs**: For each outdated dependency:
-   - If no PR exists, creates a new PR with branch `deps/update-{module}-to-{version}`
-   - If a PR already exists for the same module (any version), updates that PR to the latest version
-   - Each PR updates only one dependency in `alm-config-defaults.psd1`
-
-## PR Behavior
-
-- **New Dependencies**: When a module is outdated, a new PR is created
-- **Existing PRs**: If a PR already exists for the same module (even for a different version), it will be updated to the latest version
-- **Branch Names**: Follow the pattern `deps/update-{module-name}-to-{version}`
-- **Commit Messages**: Use conventional commit format: `chore(deps): update {module} to {version}`
-
-## Manual Trigger
-
-To manually trigger the workflow:
-1. Go to the Actions tab in GitHub
-2. Select "Update Script Dependencies" workflow
-3. Click "Run workflow"
-4. Select the branch and click "Run workflow"
+> [!CAUTION]
+> The PR script rebases and pushes with `--force-with-lease`. Run it only in its intended
+> automation/disposable checkout with authorized GitHub credentials, not as a local test.
+> See [dependency maintenance](../../docs/maintainers.md#dependency-updates).
 
 ## Testing
 
-Run the test script to validate the workflow logic:
+Run from the repository root in PowerShell 7. Install `powershell-yaml` if required,
+as described in the [local check prerequisites](../../docs/maintainers.md#local-checks).
+
 ```powershell
-pwsh -File .github/scripts/test-dependency-workflow.ps1
+& ./.github/scripts/test-dependency-workflow.ps1
+& ./.github/scripts/test-deployment-options.ps1
+& ./.github/scripts/test-environment-mapping.ps1
+& ./.github/scripts/test-documentation.ps1
 ```
 
-This test verifies:
-- Config file parsing works correctly
-- Version comparison logic is sound
-- Regex patterns correctly update versions
-- Branch naming follows conventions
+> [!NOTE]
+> These checks do not contact Dataverse, authenticate to Azure, or create remote resources.
+> They do not replace hosted integration tests or prove custom hooks are safe to replay.

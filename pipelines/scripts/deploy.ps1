@@ -45,7 +45,7 @@ Invoke-Hooks -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $soluti
 # Define solutions to deploy
 $solutions = @()
 foreach ($solutionConfig in $solutionsConfig.solutions) {
-    if ($UseUnmanagedSolutions -or ($solutionConfig.PSObject.Properties.Name -contains 'deployUnmanaged' -and $solutionConfig.deployUnmanaged -eq $true)) {
+    if ($UseUnmanagedSolutions -or ($solutionConfig.ContainsKey('deployUnmanaged') -and $solutionConfig.deployUnmanaged -eq $true)) {
         $fileName = "$($solutionConfig.name).zip"
     }
     else {
@@ -55,6 +55,7 @@ foreach ($solutionConfig in $solutionsConfig.solutions) {
     $solutions += @{
         Name = $solutionConfig.name
         File = Join-Path $ArtifactsPath solutions $fileName
+        serviceAccountUpnConfigKey = if ($solutionConfig.ContainsKey('serviceAccountUpnConfigKey')) { $solutionConfig.serviceAccountUpnConfigKey } else { $null }
     }
 }
 $connectionReferences = @{}
@@ -131,7 +132,7 @@ Write-Host "##[section]Activating Processes"
 foreach ($solution in $solutions) {
     Write-Host "##[group]Activating processes for solution: $($solution.Name)"
 
-    if ($solution.PSObject.Properties.Name -contains 'serviceAccountUpnConfigKey' -and $solution.serviceAccountUpnConfigKey) {
+    if ($solution.ContainsKey('serviceAccountUpnConfigKey') -and $solution.serviceAccountUpnConfigKey) {
         $serviceAccountUpnKey = $solution.serviceAccountUpnConfigKey
     }
     else {

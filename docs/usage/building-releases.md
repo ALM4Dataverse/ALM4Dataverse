@@ -1,11 +1,10 @@
 # Building Releases
 
-
 ```mermaid
 flowchart LR
     A[Repository Branch<br/>&lt;branchname&gt;] --> B[BUILD Pipeline]
-    B --> C[BUILD Actions artifacts]
-    B --> D[GitHub Release<br/>&lt;build-name&gt;]
+    B --> C[Deployment artifacts]
+    B --> D[GitHub only: Release assets]
     B -. Optional deployment validation .-> E[Dataverse validation environment]
 
     style A fill:#e1f5fe
@@ -16,6 +15,20 @@ flowchart LR
 ```
 
 The `BUILD` pipeline collates a numbered release by extracting and building the assets required to deploy from source control. This can then be used later to deploy to any number of environments using the exact same, unchanged assets. When configured, BUILD also deploys its generated artifacts to a Dataverse validation environment, exercising the deployment process before promotion. BUILD can additionally run PAC Solution Checker against packed solutions.
+
+## Prerequisites And Outputs
+
+Run [EXPORT](exporting-changes.md) first if configured solution folders are not yet in source control. The `solutions` order must satisfy dependencies; configured asset paths must exist. Package-only BUILD does not require a Dataverse target, but Solution Checker and connected hooks need a suitable authenticated identity.
+
+| Platform | Build output | How DEPLOY selects it |
+| --- | --- | --- |
+| Azure DevOps | Pipeline artifact `artifacts`, optional `solution-check-report`, and a source version tag | The `build` pipeline resource, selected automatically or through **Run pipeline > Resources** |
+| GitHub Actions | Actions artifacts plus a successful build's GitHub Release assets and source tag | Exact Release tag, BUILD name, or numeric BUILD run ID; latest-successful selection is also available |
+
+> [!NOTE]
+> The build/run identity is not the same as a solution version. Multiple solutions in one
+> build can have different versions, and several builds may reference one source commit.
+> Use the exact build identity when promoting or selecting a baseline.
 
 On GitHub Actions, each successful branch BUILD publishes the same separate
 deployment archives as both Actions artifacts and GitHub Release assets:
@@ -28,6 +41,37 @@ The Release is not a different deployment package. Existing Actions artifacts
 remain available for compatibility and fallback deployments.
 
 The `BUILD` job triggers automatically when any changes are made in the associated repo, including when `EXPORT` completes (unless no changes were found). The copied GitHub workflow and Azure Pipeline trigger on pushes to branches; setting a repository's PR or branch policy to require successful validation is a separate configuration step.
+
+GitHub EXPORT explicitly dispatches BUILD with the exported branch and SHA. Repository-dispatch definitions must exist on the default branch. To build manually, select BUILD in **Actions > Run workflow** on GitHub or **Pipelines > BUILD > Run pipeline** in Azure DevOps, then select the intended branch.
+
+### Artifact Layout
+
+```text
+artifacts/
+  alm-config.psd1
+  scriptDependencies.lock.json
+  solutions/
+    ContosoCore.zip
+    ContosoCore_managed.zip
+  alm/
+    alm-config-defaults.psd1
+    pipelines/scripts/
+  data/
+  solution-check/
+```
+
+The `data` directory represents configured assets; it is not mandatory. `solution-check`
+exists only when checks generate reports.
+
+> [!NOTE]
+> **Advanced: packaged tooling.** The `alm` directory snapshots the shared repository,
+> including its deployment scripts/defaults. The lock records the exact loaded PowerShell
+> module versions and installed PAC version. Deployment uses these packaged scripts,
+> settings, and versions instead of rebuilding source or using newer deployment scripts.
+> Target-specific credentials/settings are still supplied at runtime.
+
+Treat artifacts as executable deployment content: they include hooks and scripts.
+Limit write access and never package secret values or sensitive data inadvertently.
 
 ## BUILD validation
 
@@ -49,13 +93,16 @@ fails the BUILD run.
 Automated setup can configure one shared validation environment for generated
 BUILD pipelines/workflows, so builds from different branches deploy to that
 same environment. It is separate from each branch's `Dev-<branchname>`
-environment and from the environments in `DEPLOY-<branchname>`. Choose a
-non-production environment that is safe to update repeatedly: BUILD does not
-reset it, and deployments may update installed solutions or run configured
-deployment hooks. Concurrent builds from different branches also use the same
-environment, so serialize builds or configure separate validation environments
-if they could interfere. This validates that the deployment process succeeds;
-it does not prove the solution's end-user behavior.
+environment and from the environments in `DEPLOY-<branchname>`.
+
+> [!CAUTION]
+> Choose a non-production target that is safe to update repeatedly. BUILD does not reset
+> it: solutions and hooks can change target state, and concurrent builds can interfere.
+> Serialize builds or use separate validation targets. A baseline deployment does not
+> restore a snapshot or guarantee a downgrade; keep the target compatible with the
+> intended upgrade path and refresh it deliberately when needed.
+>
+> Successful validation proves deployment completed, not that end-user behavior is correct.
 
 Automated setup wires the validation environment into BUILD. For manual
 configuration, Azure DevOps uses the `buildEnvironmentName` parameter in
@@ -95,10 +142,12 @@ the first BUILD then warns and deploys only the candidate. After a successful
 baseline. Do not select the BUILD validation target as the baseline source:
 BUILD does not update deployment pointers when it writes to its validation
 environment.
-For environments deployed before build-ID pointers were introduced, the
-resolver uses the existing source-commit pointer to find a unique successful
-build. If more than one successful build matches that commit, configure a
-fixed build identifier to avoid guessing which package was deployed.
+
+> [!NOTE]
+> **Advanced: older deployment pointers.** For environments deployed before build-ID
+> pointers were introduced, the resolver uses the existing source-commit pointer to find
+> a unique successful build. If more than one successful build matches that commit,
+> configure a fixed build identifier to avoid guessing which package was deployed.
 
 GitHub release cleanup keeps Releases referenced by active deployment pointers,
 so their packaged baseline assets remain available. A fixed GitHub baseline
@@ -128,12 +177,14 @@ for configuration examples, settings, authentication behavior, and reports.
 To monitor:
 
 **Azure DevOps:**
+
 1) Navigate to the **Pipelines** area of your AzDO project.
 2) Select the **All** tab and navigate to the folder with the same name as your repo. (If you only have one repo, this will be the same as your project name by default.)
 3) Select the `BUILD` pipeline and then select an instance of the job.
 4) The view will switch automatically to show progress. Wait until it is shown as successful.
 
 **GitHub Actions:**
+
 1) Navigate to the **Actions** tab of your repository.
 2) Select the **BUILD** workflow from the left panel.
 3) Select the running workflow run. Wait until it is shown as successful (green checkmark).
@@ -141,11 +192,11 @@ To monitor:
 
 What happens:
 
-- Solution(s) are packed from the folders in source control at `solutions/uniquename` using PAC solution pack. A managed solution is generated and added to the build assets.
+- Solutions are packed from `solutions/<unique-name>` into both managed and unmanaged packages through the Dataverse PowerShell module/PAC tooling.
 - The optional PAC Solution Checker and Dataverse deployment validation run as described in [BUILD validation](#build-validation).
 - If you've configured any hook extensions in `alm-config.psd1`, these will be executed and can add to the build steps and the assets.
 - Any additional paths configured in `assets` will be copied to the build assets.
-- The configuration and scripts for the deployment process are also copied to the build assets to ensure that everything is frozen in time.
+- The configuration, shared scripts/defaults, and dependency lock are copied to the build assets. Runner images, external services, and runtime environment settings are not frozen by this snapshot.
 
 The BUILD result is useful as a merge gate: a failed build or enabled solution check marks that branch's build as failed. ALM4Dataverse does not automatically add branch protection or PR policies. Configure those in your source-control platform if a PR must not merge until validation succeeds:
 
@@ -164,13 +215,38 @@ If checks fail, the logs clearly state which solution breached the configured th
 
 What to do next:
 
-- The `DEPLOY-<branchname>` workflow uses the Release assets first and falls back
-  to the BUILD artifact when needed. See [Deploying](deploying.md) for information.
+- Check the run result, enabled validation results, and reports before promoting.
+- GitHub DEPLOY prefers Release assets with Actions-artifact fallback; Azure DevOps DEPLOY uses the selected pipeline artifact. See [Deploying](deploying.md).
+- Failed GitHub builds may upload partial artifacts for diagnosis. Do not use them as successful release packages.
 
 ## GitHub Release cleanup
 
-The copied `CLEANUP-RELEASES.yml` workflow runs on branch deletion, daily, and
-manually. It removes managed build Releases from deleted branches and keeps at
-most 10 Releases per branch by default, including the default branch. Before an
-old Release is deleted, its branch, build name, source commit, and BUILD run ID
-are preserved in an annotated `alm4dataverse/metadata/<release-tag>` tag.
+The copied CLEANUP-RELEASES workflow runs on delete events, daily at **03:17 UTC**, and
+manually. Keep it on the default branch for scheduled runs. It operates only on Releases
+recognized by ALM4Dataverse build metadata, not arbitrary Releases.
+
+For existing branches it retains the newest `max-releases-per-branch` builds (default
+`10`), **plus Releases referenced by active annotated `deployed/<environment>` pointers**.
+For deleted branches it removes managed Releases except those protected by those pointers.
+The count can therefore exceed the configured cap.
+
+Before deleting a Release, cleanup creates an annotated
+`alm4dataverse/metadata/<release-tag>` tag containing branch, build name, source commit,
+and BUILD run ID. This metadata preserves identity, **not the deleted asset files**.
+Cleanup does not delete the source version tag, the gate tags, or Actions artifacts.
+Legacy lightweight environment pointers do not contain the Release-tag metadata used
+by the retention protection; review older deployments before cleanup.
+
+To change retention, adjust the caller's default or run CLEANUP-RELEASES manually with
+a positive `max-releases-per-branch`.
+
+> [!CAUTION]
+> Cleanup has no dry-run input. Check which baselines and recovery builds you must retain
+> first. A fixed baseline not referenced by an active pointer can still be deleted.
+> GitHub baseline validation requires its Release asset; ordinary DEPLOY's Actions
+> fallback only helps while that artifact remains retained. Metadata tags do not preserve
+> deleted asset files.
+
+Azure DevOps retention is controlled by project/pipeline policy, not this GitHub workflow.
+Retain deployed and baseline builds explicitly where needed. On GitHub, Actions artifacts
+request 90-day retention subject to platform policy; Release cleanup is a separate policy.

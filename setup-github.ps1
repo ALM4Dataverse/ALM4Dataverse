@@ -3655,6 +3655,7 @@ function Update-DeployWorkflowInRepoClone {
             $lines.Add('    # but do not bypass failed prerequisite stages on automatic runs.')
             if ($PromotionMode -eq 'environment-approval') {
                 $lines.Add('    if: >-')
+                $lines.Add('      !cancelled() && (')
                 $lines.Add('      (')
                 $lines.Add("        github.event_name == 'repository_dispatch' &&")
                 $lines.Add("        '$PromotionMode' == 'environment-approval' &&")
@@ -3667,9 +3668,10 @@ function Update-DeployWorkflowInRepoClone {
                 $lines.Add(("          ('$PromotionMode' == 'environment-approval' && inputs.target-environment == '' && needs['{0}'].result == 'success')" -f $previousJobId))
                 $lines.Add('        )')
                 $lines.Add('      )')
+                $lines.Add('      )')
             }
             else {
-                $lines.Add("    if: `${{ github.event_name == 'workflow_dispatch' && inputs.target-environment == '$envNameEscaped' }}")
+                $lines.Add("    if: `${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.target-environment == '$envNameEscaped' }}")
             }
         }
 
