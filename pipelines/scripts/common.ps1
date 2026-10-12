@@ -38,7 +38,8 @@ function Merge-AlmConfigValue {
 
 function Get-AlmConfig {
     param(
-        [string]$BaseDirectory = "."
+        [string]$BaseDirectory = ".",
+        [bool]$LogConfig = $true
     )
 
     $defaultConfigPath = Join-Path $PSScriptRoot ".." ".." "alm-config-defaults.psd1" | Resolve-Path | Select-Object -ExpandProperty Path
@@ -78,7 +79,7 @@ function Get-AlmConfig {
     $config["_main"] = $mainConfig
     $config["_defaults"] = $defaultConfig
 
-    Write-Host "##[debug]Loaded configuration: $($config | ConvertTo-Json -Depth 20)"
+    if ($LogConfig) { Write-Host "##[debug]Loaded configuration: $($config | ConvertTo-Json -Depth 20)" }
     
     return $config
 }
@@ -141,11 +142,12 @@ function Invoke-Hooks {
         [string]$BaseDirectory,
         [Parameter(Mandatory = $true)]
         [hashtable]$Config,
-        [hashtable]$AdditionalContext = @{}
+        [hashtable]$AdditionalContext = @{},
+        [bool]$LogContext = $true
     )
 
-    if ($Config.hooks -and $Config.hooks.$HookType) {
-        $hooks = $Config.hooks.$HookType
+    if ($Config.ContainsKey('hooks') -and $Config['hooks'] -is [hashtable] -and $Config['hooks'].ContainsKey($HookType) -and $Config['hooks'][$HookType]) {
+        $hooks = $Config['hooks'][$HookType]
         if ($hooks -is [string]) {
             $hooks = @($hooks)
         }
@@ -169,19 +171,21 @@ function Invoke-Hooks {
             
             if (Test-Path $hookPath) {
 
-                write-host "##[debug] Executing hook script at path: $hookPath with context: $($context | ConvertTo-Json -Depth 10)"
+                if ($LogContext) { write-host "##[debug] Executing hook script at path: $hookPath with context: $($context | ConvertTo-Json -Depth 10)" }
 
-                & $hookPath -Context $context
-                if (-not $? ) {
-                    throw "Hook $hook failed"
+                try {
+                    & $hookPath -Context $context
+                    if (-not $? ) { throw "Hook $hook failed" }
+                } finally {
+                    Write-Host "##[endgroup]"
                 }
 
             }
             else {
                 Write-Host "##[error]Hook script not found: $hookPath"
+                Write-Host "##[endgroup]"
                 throw "Hook script not found: $hookPath"
             }
-            Write-Host "##[endgroup]"
         }
     }
 }

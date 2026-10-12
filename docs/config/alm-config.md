@@ -41,6 +41,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | Setting | Type | Default or template value |
 | --- | --- | --- |
 | `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. |
+| `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
 | `scriptDependencies` | Hashtable of module names and versions | `Rnwood.Dataverse.Data.PowerShell = '3.0.3'`. |
@@ -84,6 +85,30 @@ application user used to authenticate.
 > on Linux, where environment variables are case-sensitive. See the
 > [Azure DevOps variable reference](azdo-environment-variable-group.md) or
 > [GitHub variable reference](github-secrets.md).
+
+### Export Processing
+
+```powershell
+export = @{
+    parallel = $true
+    maxParallel = 2
+    maxConcurrentOperations = 4
+}
+```
+
+| Setting | Type | Default | Behavior |
+| --- | --- | --- | --- |
+| `export.parallel` | Boolean | `$true` | Export managed and unmanaged packages concurrently; `$false` retains sequential export. |
+| `export.maxParallel` | Integer, `1` to `8` | `2` | Maximum simultaneous package exports, including both packages of the same solution. |
+| `export.maxConcurrentOperations` | Integer, `1` to `8` | `4` | Shared limit for package exports and environment version updates. Custom hooks are not limited by this setting. |
+
+Missing, null, or empty optional settings use the defaults; an explicit `$false`
+is preserved. Invalid types or out-of-range limits fail with a configuration error.
+Unpacking, change detection, and version updates run in configured solution order.
+Pre-export and post-export hooks keep their existing order and context.
+
+See [Export Logs](../usage/exporting-changes.md#export-logs) for progress messages,
+per-solution summaries and retained diagnostics.
 
 ### Assets
 

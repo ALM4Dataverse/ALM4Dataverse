@@ -98,6 +98,40 @@ Review the resulting commit for unintended solution/data changes, then check [BU
 > appropriate, and rerun. EXPORT may already have updated Dataverse versions before a
 > later Git failure. See [importing changes](importing-changes.md) for safe synchronization.
 
+## Export Processing
+
+Managed and unmanaged packages are exported in parallel by default, with up to
+two package exports at once. Unpacking, change detection, and version updates
+still run in the configured solution order. Pre-export and post-export hooks
+keep their existing order and context.
+
+Set `export.parallel = $false` in `alm-config.psd1` for sequential exports.
+`export.maxParallel` controls simultaneous package exports;
+`export.maxConcurrentOperations` limits package exports and environment version
+updates together. Both limits accept integers from `1` to `8`. Custom hooks are
+outside these limits. See [Export Processing settings](../config/alm-config.md#export-processing).
+
+## Export Logs
+
+Live messages identify the solution and phase, for example
+`[MySolution][Export:Managed]`. Detailed package output is grouped by solution
+and phase. Failures include the actual error in the standard log.
+
+The final summary reports each solution's completed packages and elapsed export
+time, including on failure. Export duration is elapsed time, not the sum of
+concurrent package durations. Package counts and export durations are unavailable
+in sequential mode.
+
+Detailed logs, `summary.json`, and parallel package `timings.json` are retained
+under `export-logs` in the artifact staging directory. Azure DevOps publishes
+the `export-logs` artifact, and GitHub Actions uploads it even if export fails.
+Local runs retain the same files.
+
+For local measurements, `pipelines/scripts/export.ps1 -PassThru` returns
+`Parallel`, `TotalSeconds`, and `WorkerTimings`. Authentication and dependency
+installation are outside this measurement. This switch does not disable source
+changes, environment version updates, or hooks.
+
 ## Viewing Exported Changes
 
 **Azure DevOps:**

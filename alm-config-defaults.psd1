@@ -11,6 +11,12 @@
     # Increase this value if solution imports time out in large or complex environments.
     importTimeoutSeconds = 10800
 
+    export = @{
+        parallel = $true
+        maxParallel = 2
+        maxConcurrentOperations = 4
+    }
+
     # PAC solution check configuration used during BUILD.
     # Set enabled = $true globally or per-solution to activate checks.
     solutionCheck = @{
