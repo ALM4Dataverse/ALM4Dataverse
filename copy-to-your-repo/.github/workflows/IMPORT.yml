@@ -28,8 +28,9 @@ jobs:
         uses: ALM4Dataverse/ALM4Dataverse/.github/actions/import@main
         with:
           environment-name: ${{ format('Dev-{0}', github.ref_name) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
-    # Credentials are resolved automatically from either:
-    # 1) GitHub environment Dev-{branch} (default), or
-    # 2) repo-level prefixed secrets/variables (e.g. DEV_MAIN_* or PREFIX_*).
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+            }

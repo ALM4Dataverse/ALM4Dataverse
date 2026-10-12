@@ -42,4 +42,4 @@ What happens:
   - it imports an unmanaged solution instead of a managed solution.
 - Where connection references, environment variables, and other settings are required, they are read from the environment configuration:
   - **Azure DevOps**: the `Environment-Dev-<branchname>` variable group. See [variable group configuration](../config/azdo-environment-variable-group.md).
-  - **GitHub Actions**: the `Dev-<branchname>` GitHub environment secrets/variables (or prefixed repo-level secrets). See [GitHub variables & secrets](../setup/github-variables.md).
+  - **GitHub Actions**: `Dev-<branchname>` GitHub environment values or prefixed repository variables; secrets must be explicitly selected in `secrets-json` and may be prefixed repository secrets. See [GitHub variables & secrets](../setup/github-variables.md).

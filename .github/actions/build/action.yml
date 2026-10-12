@@ -17,14 +17,16 @@ inputs:
     description: Optional GitHub environment used to authenticate and deploy the baseline and candidate artifacts for deployment validation.
     required: false
     default: ''
-  all-repo-vars-json:
+  vars-json:
     description: JSON representation of the caller repository variables.
     required: false
     default: '{}'
-  all-repo-secrets-json:
-    description: JSON representation of the caller repository secrets.
+  secrets-json:
+    description: JSON object containing only explicitly selected secret values.
     required: false
-    default: '{}'
+    default: |-
+      {
+      }
 
 outputs:
   run-id:
@@ -84,12 +86,12 @@ runs:
         "run_name=$env:BUILD_NAME" >> $env:GITHUB_OUTPUT
         Write-Host "Exact build name: $env:BUILD_NAME"
 
-    - name: Resolve prefixed repo variables and secrets
+    - name: Resolve prefixed repo variables and explicit secrets
       if: inputs.environment-name != ''
       shell: pwsh
       env:
-        ALL_REPO_VARS_JSON: ${{ inputs.all-repo-vars-json }}
-        ALL_REPO_SECRETS_JSON: ${{ inputs.all-repo-secrets-json }}
+        VARS_JSON: ${{ inputs.vars-json }}
+        SELECTED_SECRETS_JSON: ${{ inputs.secrets-json }}
         RESOLVED_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
       run: |
         & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
@@ -132,13 +134,6 @@ runs:
             $connRefs = $env:DATAVERSE_CONNECTION_REFS | ConvertFrom-Json
             foreach ($prop in $connRefs.PSObject.Properties) {
               [System.Environment]::SetEnvironmentVariable("DataverseConnRef_$($prop.Name)", $prop.Value)
-            }
-          }
-
-          if (-not [string]::IsNullOrWhiteSpace($env:DATAVERSE_ENV_VARS)) {
-            $envVars = $env:DATAVERSE_ENV_VARS | ConvertFrom-Json
-            foreach ($prop in $envVars.PSObject.Properties) {
-              [System.Environment]::SetEnvironmentVariable("DataverseEnvVar_$($prop.Name)", $prop.Value)
             }
           }
 

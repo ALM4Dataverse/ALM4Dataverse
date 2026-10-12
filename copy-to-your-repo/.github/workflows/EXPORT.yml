@@ -40,6 +40,10 @@ jobs:
         with:
           commit-message: ${{ inputs.commit-message }}
           environment-name: ${{ format('Dev-{0}', github.ref_name) }}
-          all-repo-vars-json: ${{ toJSON(vars) }}
-          all-repo-secrets-json: ${{ toJSON(secrets) }}
-          workflow-dispatch-token: ${{ secrets.WORKFLOW_DISPATCH_TOKEN || secrets.GH_WORKFLOW_TOKEN || github.token }}
+          vars-json: ${{ toJSON(vars) }}
+          # Add any custom secrets explicitly to this JSON object.
+          secrets-json: >-
+            {
+              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }},
+              "WORKFLOW_DISPATCH_TOKEN": ${{ toJSON(secrets.WORKFLOW_DISPATCH_TOKEN || secrets.GH_WORKFLOW_TOKEN) }}
+            }

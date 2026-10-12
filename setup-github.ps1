@@ -542,7 +542,7 @@ function Get-GitHubEnvironmentPrefix {
 function Set-GitHubPrefixedEnvironmentCredentials {
     <#
     .SYNOPSIS
-        Stores per-environment credentials as prefixed repository-level variables/secrets.
+        Stores non-sensitive values as prefixed repository variables and secrets in the matching environment.
     #>
     [CmdletBinding()]
     param(
@@ -561,7 +561,9 @@ function Set-GitHubPrefixedEnvironmentCredentials {
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID" -VariableValue $Credentials.TenantId
 
     if ($Credentials.AuthType -eq 'Secret' -and $Credentials.ClientSecret) {
-        Set-GitHubRepoSecret -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET" -SecretValue $Credentials.ClientSecret
+        [void](Ensure-GitHubEnvironment -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName)
+        Set-GitHubEnvironmentSecret -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName `
+            -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $Credentials.ClientSecret
     }
 
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_URL" -VariableValue $DataverseUrl
@@ -1069,27 +1071,37 @@ function Get-GitHubExistingEnvironmentState {
     $environmentServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'DATAVERSESERVICEACCOUNTUPN'
     $environmentSecretExists = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -SecretName 'AZURE_CLIENT_SECRET'
 
-    $storageScope = $null
-    $applicationId = $environmentClientId
-    $resolvedTenantId = $environmentTenantId
-    $environmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $environmentUrl
-    $serviceAccountUPN = $environmentServiceAccount
-    $hasExistingSecret = $environmentSecretExists
+    $prefix = Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName
+    $prefixedClientId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_CLIENT_ID"
+    $prefixedTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID"
+    $prefixedUrl = ConvertTo-NormalizedEnvironmentUrl -Url (Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_URL")
+    $prefixedServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_SERVICE_ACCOUNT_UPN"
+    $prefixedSecretExists = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
 
-    if (-not [string]::IsNullOrWhiteSpace($environmentClientId) -or -not [string]::IsNullOrWhiteSpace($environmentUrl) -or -not [string]::IsNullOrWhiteSpace($environmentServiceAccount) -or $environmentSecretExists) {
-        $storageScope = 'Environment'
+    $applicationId = if (-not [string]::IsNullOrWhiteSpace($environmentClientId)) { $environmentClientId } else { $prefixedClientId }
+    $resolvedTenantId = if (-not [string]::IsNullOrWhiteSpace($environmentTenantId)) { $environmentTenantId } else { $prefixedTenantId }
+    $environmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $(if (-not [string]::IsNullOrWhiteSpace($environmentUrl)) { $environmentUrl } else { $prefixedUrl })
+    $serviceAccountUPN = if (-not [string]::IsNullOrWhiteSpace($environmentServiceAccount)) { $environmentServiceAccount } else { $prefixedServiceAccount }
+    $hasExistingSecret = $environmentSecretExists -or $prefixedSecretExists
+
+    $hasEnvironmentValues = -not [string]::IsNullOrWhiteSpace($environmentClientId) -or
+        -not [string]::IsNullOrWhiteSpace($environmentUrl) -or
+        -not [string]::IsNullOrWhiteSpace($environmentServiceAccount)
+    $hasRepositoryValues = -not [string]::IsNullOrWhiteSpace($prefixedClientId) -or
+        -not [string]::IsNullOrWhiteSpace($prefixedUrl) -or
+        -not [string]::IsNullOrWhiteSpace($prefixedServiceAccount)
+
+    $storageScope = if ($hasEnvironmentValues) {
+        'Environment'
+    }
+    elseif ($hasRepositoryValues -or $prefixedSecretExists) {
+        'RepositoryPrefix'
+    }
+    elseif ($environmentSecretExists) {
+        'Environment'
     }
     else {
-        $prefix = Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName
-        $applicationId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_CLIENT_ID"
-        $resolvedTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID"
-        $environmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url (Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_URL")
-        $serviceAccountUPN = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_SERVICE_ACCOUNT_UPN"
-        $hasExistingSecret = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
-
-        if (-not [string]::IsNullOrWhiteSpace($applicationId) -or -not [string]::IsNullOrWhiteSpace($environmentUrl) -or -not [string]::IsNullOrWhiteSpace($serviceAccountUPN) -or $hasExistingSecret) {
-            $storageScope = 'RepositoryPrefix'
-        }
+        $null
     }
 
     if (-not $storageScope) {
@@ -3058,6 +3070,144 @@ function Apply-GitHubEnvironmentConfiguration {
 
 #region Repository Setup
 
+# Preserve the input block verbatim because GitHub expressions are not valid JSON until runtime.
+function Get-SecretsJsonInputBlocks {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
+
+    $blocks = New-Object System.Collections.Generic.List[object]
+    for ($lineIndex = 0; $lineIndex -lt $Lines.Count; $lineIndex++) {
+        $keyMatch = [regex]::Match($Lines[$lineIndex], '^(?<indent>[\t ]*)secrets-json:(?<tail>.*)$')
+        if (-not $keyMatch.Success) {
+            continue
+        }
+
+        $keyIndent = $keyMatch.Groups['indent'].Value.Length
+        $endLine = $lineIndex
+        $tail = $keyMatch.Groups['tail'].Value
+        $isBlockScalar = [string]::IsNullOrWhiteSpace($tail) -or $tail -match '^\s*[>|](?:[1-9])?[-+]?\s*(?:#.*)?$'
+        if ($isBlockScalar) {
+            for ($candidateIndex = $lineIndex + 1; $candidateIndex -lt $Lines.Count; $candidateIndex++) {
+                if ([string]::IsNullOrWhiteSpace($Lines[$candidateIndex])) {
+                    $endLine = $candidateIndex
+                    continue
+                }
+
+                $contentIndent = [regex]::Match($Lines[$candidateIndex], '^[\t ]*').Length
+                if ($contentIndent -le $keyIndent) {
+                    break
+                }
+
+                $endLine = $candidateIndex
+            }
+        }
+
+        $environmentName = ''
+        for ($previousIndex = $lineIndex - 1; $previousIndex -ge 0; $previousIndex--) {
+            $environmentMatch = [regex]::Match($Lines[$previousIndex], '^[\t ]*environment-name:[\t ]*(?<value>.*?)[\t ]*(?:#.*)?$')
+            if ($environmentMatch.Success) {
+                $environmentName = $environmentMatch.Groups['value'].Value.Trim().Trim("'").Trim('"')
+                break
+            }
+        }
+
+        $blocks.Add([pscustomobject]@{
+            StartLine       = $lineIndex
+            EndLine         = $endLine
+            KeyIndent       = $keyIndent
+            EnvironmentName = $environmentName
+        })
+        $lineIndex = $endLine
+    }
+
+    return $blocks.ToArray()
+}
+
+function Merge-SecretsJsonInputs {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$ExistingContent,
+        [Parameter(Mandatory)][string]$GeneratedContent
+    )
+
+    if ([string]::IsNullOrEmpty($ExistingContent)) {
+        return $GeneratedContent
+    }
+
+    $existingLines = [regex]::Split($ExistingContent, "`r`n|`n|`r")
+    $generatedLines = [regex]::Split($GeneratedContent, "`r`n|`n|`r")
+    $existingBlocks = @(Get-SecretsJsonInputBlocks -Lines $existingLines)
+    $generatedBlocks = @(Get-SecretsJsonInputBlocks -Lines $generatedLines)
+    if ($existingBlocks.Count -eq 0 -or $generatedBlocks.Count -eq 0) {
+        return $GeneratedContent
+    }
+
+    $replacements = New-Object System.Collections.Generic.List[object]
+    for ($blockIndex = 0; $blockIndex -lt $generatedBlocks.Count; $blockIndex++) {
+        $generatedBlock = $generatedBlocks[$blockIndex]
+        $existingBlock = $null
+
+        if (-not [string]::IsNullOrWhiteSpace($generatedBlock.EnvironmentName)) {
+            foreach ($candidate in $existingBlocks) {
+                if ($candidate.EnvironmentName -ieq $generatedBlock.EnvironmentName) {
+                    $existingBlock = $candidate
+                    break
+                }
+            }
+        }
+
+        if ($null -eq $existingBlock -and $existingBlocks.Count -eq $generatedBlocks.Count) {
+            $existingBlock = $existingBlocks[$blockIndex]
+        }
+        elseif ($null -eq $existingBlock -and [string]::IsNullOrWhiteSpace($generatedBlock.EnvironmentName) -and $blockIndex -lt $existingBlocks.Count) {
+            $existingBlock = $existingBlocks[$blockIndex]
+        }
+
+        if ($null -eq $existingBlock) {
+            continue
+        }
+
+        $generatedKeyMatch = [regex]::Match($generatedLines[$generatedBlock.StartLine], '^(?<indent>[\t ]*)(?<key>secrets-json:)(?<tail>.*)$')
+        $existingKeyMatch = [regex]::Match($existingLines[$existingBlock.StartLine], '^(?<indent>[\t ]*)(?<key>secrets-json:)(?<tail>.*)$')
+        $replacementLines = New-Object System.Collections.Generic.List[string]
+        $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + $generatedKeyMatch.Groups['key'].Value + $existingKeyMatch.Groups['tail'].Value)
+
+        for ($oldLineIndex = $existingBlock.StartLine + 1; $oldLineIndex -le $existingBlock.EndLine; $oldLineIndex++) {
+            $oldLine = $existingLines[$oldLineIndex]
+            if ([string]::IsNullOrWhiteSpace($oldLine)) {
+                $replacementLines.Add('')
+                continue
+            }
+
+            $oldIndent = [regex]::Match($oldLine, '^[\t ]*').Length
+            $relativeIndent = [Math]::Max(0, $oldIndent - $existingBlock.KeyIndent)
+            $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + (' ' * $relativeIndent) + $oldLine.Substring($oldIndent))
+        }
+
+        $replacements.Add([pscustomobject]@{
+            StartLine = $generatedBlock.StartLine
+            EndLine   = $generatedBlock.EndLine
+            Lines     = $replacementLines.ToArray()
+        })
+    }
+
+    foreach ($replacement in ($replacements | Sort-Object -Property StartLine -Descending)) {
+        $beforeLines = @()
+        $afterLines = @()
+        if ($replacement.StartLine -gt 0) {
+            $beforeLines = @($generatedLines[0..($replacement.StartLine - 1)])
+        }
+        if ($replacement.EndLine + 1 -lt $generatedLines.Count) {
+            $afterLines = @($generatedLines[($replacement.EndLine + 1)..($generatedLines.Count - 1)])
+        }
+
+        $generatedLines = @($beforeLines) + @($replacement.Lines) + @($afterLines)
+    }
+
+    $newline = if ($GeneratedContent.Contains("`r`n")) { "`r`n" } else { "`n" }
+    return ($generatedLines -join $newline)
+}
+
 function Copy-WorkflowTemplatesToRepo {
     <#
     .SYNOPSIS
@@ -3088,6 +3238,21 @@ function Copy-WorkflowTemplatesToRepo {
         $relativePath = $file.FullName.Substring($SourceRoot.Length).TrimStart('\', '/')
         $normalizedRelativePath = $relativePath -replace '\\','/'
         $destPath     = Join-Path $TargetRoot $relativePath
+
+        if ($normalizedRelativePath -eq '.github/workflows/BUILD.yml') {
+            continue
+        }
+
+        if ($normalizedRelativePath -eq '.github/workflows/DEPLOY-main.yml') {
+            if ($SkipDeployWorkflow) {
+                continue
+            }
+
+            $destPath = Join-Path $TargetRoot ".github/workflows/DEPLOY-$Branch.yml"
+            if (Test-Path -LiteralPath $destPath) {
+                continue
+            }
+        }
 
         if ($normalizedRelativePath -eq 'alm-config.psd1' -and (Test-Path -LiteralPath $destPath)) {
             if (Test-Path -LiteralPath "$destPath.template") {
@@ -3134,12 +3299,6 @@ function Copy-WorkflowTemplatesToRepo {
 
         # Rename DEPLOY-main.yml to match the branch, and patch branch references
         if ($normalizedRelativePath -eq '.github/workflows/DEPLOY-main.yml') {
-            if ($SkipDeployWorkflow) {
-                continue
-            }
-
-            $destPath = Join-Path $TargetRoot ".github/workflows/DEPLOY-$Branch.yml"
-            
             $content = Get-Content -LiteralPath $sourceFileToUse -Raw
             $content = $content -replace "branches:\s*\[\s*main\s*\]", "branches: [ $Branch ]"
             $content = $content -replace 'workflow_name: ''BUILD''', "workflow_name: 'BUILD'"
@@ -3158,6 +3317,23 @@ function Copy-WorkflowTemplatesToRepo {
 
         try {
             if (Test-Path -LiteralPath $destPath) {
+                if ($normalizedRelativePath -like '.github/workflows/*.yml') {
+                    $existingContent = [System.IO.File]::ReadAllText($destPath)
+                    $sourceContent = [System.IO.File]::ReadAllText($sourceFileToUse)
+                    $mergedContent = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $sourceContent
+                    if ($mergedContent -cne $sourceContent) {
+                        if ($isTempFile) {
+                            Set-Content -LiteralPath $sourceFileToUse -Value $mergedContent -NoNewline
+                        }
+                        else {
+                            $tempFile = [System.IO.Path]::GetTempFileName()
+                            Set-Content -LiteralPath $tempFile -Value $mergedContent -NoNewline
+                            $sourceFileToUse = $tempFile
+                            $isTempFile = $true
+                        }
+                    }
+                }
+
                 $srcHash = Get-FileHash -LiteralPath $sourceFileToUse -Algorithm MD5
                 $dstHash = Get-FileHash -LiteralPath $destPath        -Algorithm MD5
 
@@ -3228,8 +3404,11 @@ function Update-BuildWorkflowInRepoClone {
     )
 
     $buildWorkflowPath = Join-Path $RepoRoot '.github/workflows/BUILD.yml'
-    if (-not (Test-Path -LiteralPath $buildWorkflowPath)) {
-        throw "Build workflow file not found: $buildWorkflowPath"
+    $existingContent = if (Test-Path -LiteralPath $buildWorkflowPath) {
+        [System.IO.File]::ReadAllText($buildWorkflowPath)
+    }
+    else {
+        ''
     }
 
     $escapedBuildEnvironmentName = ([string]$BuildEnvironmentName).Replace("'", "''")
@@ -3239,6 +3418,24 @@ function Update-BuildWorkflowInRepoClone {
     }
     else {
         ''
+    }
+
+    $secretsInput = if ([string]::IsNullOrWhiteSpace($environmentInput)) {
+        @'
+                # Add any custom secrets explicitly to this JSON object.
+                secrets-json: >-
+                    {
+                    }
+'@
+    }
+    else {
+        @"
+                # Add any custom secrets explicitly to this JSON object.
+                secrets-json: >-
+                                        {
+                                            "AZURE_CLIENT_SECRET": `${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+                                        }
+"@
     }
 
     $environmentBlock = ''
@@ -3287,10 +3484,15 @@ $environmentBlock        permissions:
                 source-branch: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
                 source-ref: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
                 environment-name: '$environmentInput'
-                all-repo-vars-json: `${{ toJSON(vars) }}
-                all-repo-secrets-json: `${{ toJSON(secrets) }}
+                vars-json: `${{ toJSON(vars) }}
+$secretsInput
 "@
 
+                    $newContent = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $newContent
+                    $buildWorkflowDirectory = Split-Path -Parent $buildWorkflowPath
+                    if (-not (Test-Path -LiteralPath $buildWorkflowDirectory)) {
+                        New-Item -ItemType Directory -Path $buildWorkflowDirectory -Force | Out-Null
+                    }
     Set-Content -LiteralPath $buildWorkflowPath -Value $newContent.TrimStart("`r", "`n") -NoNewline
 }
 
@@ -3303,13 +3505,19 @@ function Update-DeployWorkflowInRepoClone {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch,
-        [Parameter(Mandatory)][array]$DeploymentEnvironments,
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$DeploymentEnvironments,
         [Parameter(Mandatory)][string]$SharedWorkflowRepository,
         [Parameter(Mandatory)][string]$SharedWorkflowRef,
         [Parameter()][ValidateSet('manual-gate-tag','environment-approval')][string]$PromotionMode = 'manual-gate-tag'
     )
 
     $deployFilePath = Join-Path $RepoRoot ".github/workflows/DEPLOY-$Branch.yml"
+    $existingContent = if (Test-Path -LiteralPath $deployFilePath) {
+        [System.IO.File]::ReadAllText($deployFilePath)
+    }
+    else {
+        ''
+    }
 
     $deployDirectory = Split-Path -Parent $deployFilePath
     if (-not (Test-Path -LiteralPath $deployDirectory)) {
@@ -3491,8 +3699,12 @@ function Update-DeployWorkflowInRepoClone {
         $lines.Add("          trigger-branch: '$branchEscaped'")
         $lines.Add('          github-context-json: ${{ toJSON(github) }}')
         $lines.Add('          caller-inputs-json: ${{ toJSON(inputs) }}')
-        $lines.Add('          all-repo-vars-json: ${{ toJSON(vars) }}')
-        $lines.Add('          all-repo-secrets-json: ${{ toJSON(secrets) }}')
+        $lines.Add('          vars-json: ${{ toJSON(vars) }}')
+        $lines.Add('          # Add any custom secrets explicitly to this JSON object.')
+        $lines.Add('          secrets-json: >-')
+        $lines.Add('            {')
+        $lines.Add('              "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}')
+        $lines.Add('            }')
         $lines.Add('')
 
         $previousJobId = $jobId
@@ -3500,6 +3712,7 @@ function Update-DeployWorkflowInRepoClone {
     }
 
     $output = ($lines -join [Environment]::NewLine).TrimEnd() + [Environment]::NewLine
+    $output = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $output
     Set-Content -LiteralPath $deployFilePath -Value $output -NoNewline
 
     $envList = ($DeploymentEnvironments | ForEach-Object { $_.ShortName }) -join ', '
@@ -4709,7 +4922,7 @@ function Invoke-GitHubBranchAwareSetup {
                         'Repository'               = $RepoFullName
                         'Shared workflow source'   = $SharedWorkflowRepository
                         'Shared workflow ref'      = $SharedWorkflowReference
-                        'Credential storage'       = $(if ($UseGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables/secrets' })
+                        'Credential storage'       = $(if ($UseGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables + environment secrets' })
                         'Promotion mode'           = $DeploymentPromotionMode
                         'Configured branches'      = [string]$wizardState.BranchStates.Count
                         'BUILD validation'         = $(if ($wizardState.BuildValidationEnabled) { 'Enabled' } else { 'Disabled' })
@@ -5522,7 +5735,7 @@ Show-SetupCompletionScreen `
         'Solution source branch'  = $(if ([string]::IsNullOrWhiteSpace($solutionSourceBranch)) { '<none>' } else { $solutionSourceBranch })
         'Repository publish'      = (Get-GitHubPublishSummaryText -PublishResults $repoPublishResults)
         'Promotion mode'          = $deploymentPromotionMode
-        'Credential storage'      = $(if ($useGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables/secrets' })
+        'Credential storage'      = $(if ($useGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables + environment secrets' })
         'BUILD validation'        = $(if ($buildValidationEnabled) { 'Enabled' } else { 'Disabled' })
         'BUILD validation environment' = $(if ($buildValidationEnvironmentConfiguration) { $buildValidationEnvironmentConfiguration.ShortName } else { '<none>' })
         'Configured environments' = [string]$allConfiguredEnvironments.Count

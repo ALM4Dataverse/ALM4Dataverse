@@ -37,7 +37,7 @@ relevant BUILD job from the `resources` section. In GitHub Actions, use
 > - **Exclusive lock** — ensures only one deployment at a time can touch the environment.
 > - **Approval** — requires approvers to sign off before deployment starts.
 >
-> **GitHub Actions**: Each environment requires [variables and secrets](../setup/github-variables.md) configured in a GitHub environment or as prefixed repo-level secrets. Add required reviewers on the GitHub environment for approval gates (requires Pro/Team/Enterprise for private repos; see [deployment gates](../setup/github-setup.md#deployment-gates-for-github-free) for alternatives).
+> **GitHub Actions**: Each environment requires [variables and secrets](../setup/github-variables.md). Non-sensitive settings may use prefixed repository variables; secrets can be GitHub environment secrets or prefixed repository secrets, and must be listed explicitly in each stage's `secrets-json` input. Add required reviewers on the GitHub environment for approval gates (requires Pro/Team/Enterprise for private repos; see [deployment gates](../setup/github-setup.md#deployment-gates-for-github-free) for alternatives).
 
 To monitor:
 
@@ -69,7 +69,7 @@ What happens for each deployment stage:
   artifact if the Release asset is unavailable. Azure DevOps downloads the
   selected pipeline artifact.
 - **The name of the deployment job matches the release number.**
-- **Environment settings are read from the configuration associated with the environment** (Azure DevOps: variable group; GitHub Actions: GitHub environment secrets/variables or prefixed repo-level secrets), matching with those required by each solution.
+- **Environment settings are read from the configuration associated with the environment** (Azure DevOps: variable group; GitHub Actions: GitHub environment values or prefixed repository variables; secrets are selected explicitly in `secrets-json`), matching with those required by each solution.
 - **Solutions are deployed if needed in the configured dependency order**:
   - If the solution is already present with the same version, the import is skipped.
   - If the solution is not currently present in the environment, the 'Import' method is used
