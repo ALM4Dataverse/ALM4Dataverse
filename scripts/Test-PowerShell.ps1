@@ -110,6 +110,7 @@ $configuration.TestResult.Enabled = $true
 $configuration.TestResult.OutputPath = Join-Path $repoRoot 'TestResults/powershell.xml'
 $configuration.TestResult.OutputFormat = 'NUnitXml'
 $configuration.CodeCoverage.Enabled = $true
+$configuration.CodeCoverage.UseBreakpoints = $false
 $configuration.CodeCoverage.Path = @($coveragePaths | ForEach-Object { Join-Path $repoRoot $_ })
 $configuration.CodeCoverage.OutputPath = Join-Path $repoRoot 'TestResults/coverage.xml'
 $configuration.CodeCoverage.OutputFormat = 'JaCoCo'

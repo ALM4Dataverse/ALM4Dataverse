@@ -4000,7 +4000,7 @@ function Get-DataverseEnvironmentsSelection {
     )
 
     $selectedEnvironments = @($InitialEnvironments | Where-Object { $null -ne $_ })
-    $credentialsForReuse = @($ExistingCredentials)
+    $credentialsForReuse = @($ExistingCredentials | Where-Object { $null -ne $_ })
     $serviceAccountsForReuse = @($ExistingServiceAccounts)
     $normalizedExcludedUrl = ConvertTo-NormalizedEnvironmentUrl -Url $ExcludedUrl
 
@@ -4021,7 +4021,7 @@ function Get-DataverseEnvironmentsSelection {
                     $existingEnvironmentState = Get-AzDoExistingEnvironmentState -ProjectName $ProjectName -EnvironmentName $name -TenantId $TenantId
 
                     $existingEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $existingEnvironmentState.Url
-                    if ($existingEnvironmentUrl -eq $normalizedExcludedUrl) {
+                    if (-not [string]::IsNullOrWhiteSpace($normalizedExcludedUrl) -and $existingEnvironmentUrl -eq $normalizedExcludedUrl) {
                         Write-Warning "Skipping existing deployment stage '$name' because it points at the selected DEV environment URL."
                         continue
                     }
@@ -4162,7 +4162,7 @@ function Get-DataverseEnvironmentsSelection {
             $resolvedFriendlyName = $resolvedEnvironment.FriendlyName
         }
 
-        if ($resolvedEnvironmentUrl -eq $normalizedExcludedUrl) {
+        if (-not [string]::IsNullOrWhiteSpace($normalizedExcludedUrl) -and $resolvedEnvironmentUrl -eq $normalizedExcludedUrl) {
             Write-Warning "Skipping deployment environment '$($selectedEnvironment.ShortName)' because it points at the selected DEV environment URL."
             continue
         }
@@ -4878,10 +4878,10 @@ function Invoke-AzDoBranchAwareSetup {
 
                 $wizardState.BranchStates = @($updatedBranchStates | Sort-Object BranchName)
 
-                $branchMappingsForValidation = @($wizardState.BranchStates | ForEach-Object {
+                $branchMappingsForValidation = @($selectedBranchMappings | ForEach-Object {
                     [pscustomobject]@{
                         BranchName   = [string]$_.BranchName
-                        Environments = @($_.DeploymentEnvironments)
+                        Environments = @($_.Environments)
                     }
                 })
                 if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation) {

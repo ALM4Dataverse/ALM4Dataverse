@@ -458,7 +458,9 @@ function Write-SetupDebug {
 }
 
 function New-SpectreTable {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Table')]
     param(
         [Parameter(Mandatory)][string[]]$Columns
     )
@@ -493,7 +495,9 @@ function Add-SpectreTableRow {
 }
 
 function New-SpectrePanel {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Panel')]
     param(
         [Parameter(Mandatory)]$Content,
         [Parameter()][string]$Header,
@@ -523,7 +527,9 @@ function New-SpectrePanel {
 }
 
 function New-SpectreInfoGrid {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Grid')]
     param(
         [Parameter(Mandatory)][hashtable]$Values,
         [Parameter()][int]$LabelWidth = 18
@@ -553,7 +559,9 @@ function New-SpectreInfoGrid {
 }
 
 function New-SpectreMetricColumn {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Columns')]
     param(
         [Parameter(Mandatory)][array]$Cards
     )
@@ -1373,7 +1381,7 @@ function Select-FromMenu {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string[]]$Items,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Items,
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
@@ -1524,6 +1532,7 @@ function Select-FromMenu {
 
 function Read-YesNo {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter()][string[]]$PromptGuidanceLines,

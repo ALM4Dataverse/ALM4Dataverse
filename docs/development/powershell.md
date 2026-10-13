@@ -49,8 +49,12 @@ Suites live under `tests/`, grouped by the behaviour they own:
     `GitHubDeployment` and `GitHubEnvironment`.
 - Coverage calculations, validation enforcement, and release packaging:
     `Coverage`, `Validation`, and `Release`.
-- Shared setup decisions and provider authentication, lookup failures, cleanup,
-    credential writes, and mutation guards: `SetupCommon` and `SetupProviders`.
+- Shared setup prompts, rendering, configuration and selectors: `SetupCommon`.
+- Provider identity, Dataverse users, solutions and environments: `SetupEnvironment`.
+- Provider authentication, lookup failures, mutation guards and generated files:
+    `SetupProviders`.
+- Repository selection, synchronization, publication and cleanup: `SetupRepository`.
+- Branch-aware setup wizard decisions and editor callbacks: `SetupWizard`.
 
 Each suite is named `<Suite>.Tests.ps1`. Tests invoke the production scripts and
 helpers, assert resulting artifacts and decisions, and mock external service and
@@ -65,6 +69,19 @@ Invoke-Pester -Path ./tests/PipelineBuild.Tests.ps1 -Output Detailed
 
 A focused Pester run verifies behaviour; it does not replace the full validation
 command or its per-file coverage gate.
+
+Run setup suites in a fresh PowerShell process to report command coverage for all
+three setup scripts:
+
+```powershell
+pwsh -NoProfile -File ./tests/helpers/Invoke-SetupTests.ps1
+pwsh -NoProfile -File ./tests/helpers/Invoke-SetupTests.ps1 -TestPath tests/SetupEnvironment.Tests.ps1
+```
+
+The setup runner uses the pinned Pester version, fails on test failures, and prints
+per-file coverage and the largest uncovered functions. A single-suite percentage
+reports only that suite's coverage. Use the full validation command for analyzer
+checks, saved artifacts and enforcement of the 65% changed-file gate.
 
 ### Setup Mutation Guards
 
@@ -119,23 +136,22 @@ excluding under-covered source files or reducing the threshold.
 
 ### Setup Coverage Limits
 
-> [!WARNING]
-> `setup-azdo.ps1`, `setup-github.ps1`, and `setup-common.ps1` remain below the
-> whole-file threshold. Changes to these files still fail the coverage gate.
-> There are no setup exemptions or reduced thresholds.
+All three setup scripts meet the same 65% whole-file command coverage threshold as
+other executable source files. Startup commands remain part of the denominator;
+there are no setup exemptions or reduced thresholds.
 
-Shared setup tests cover configuration editing, publication decisions, branch and
-environment mapping, optional values, validation, and completed-operation handling.
-Provider tests also cover mocked authentication failures, missing-resource
-classification, credential writes, cleanup failures, and `-WhatIf` guards.
-They do not cover the complete interactive wizards, console rendering, real
-authentication, or live resource provisioning. Both generated standalone installers
-are syntax-checked.
+Setup tests cover prompt and rendering contracts, configuration editing, wizard
+steps, branch/environment mapping, identity reuse and creation, service-account
+ownership, Dataverse solution discovery, provider permissions, generated files,
+repository publication, cleanup and mutation guards. Service and native-command
+boundaries are mocked; configuration and workflow files are generated in temporary
+directories. Both generated standalone installers are syntax-checked.
 
-Reaching 65% across these large setup files needs broader wizard/provider scenario
-tests or a separately scoped refactor that separates interactive orchestration
-from independently testable decisions. Until then, use the all-file coverage report
-to distinguish tested helpers from untested setup workflows.
+> [!IMPORTANT]
+> Coverage does not certify an entire interactive installation, real console
+> rendering, authentication or live resource provisioning. Review the all-file
+> coverage report when extending setup behavior and add meaningful regression
+> scenarios for the affected paths.
 
 The automated suite also does not certify real PAC/Dataverse integrations or
 parallel-runspace execution. Checker parsing, result handling, and thresholds are

@@ -23,6 +23,40 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Organization, $Project, $VariableGroupId, $VariableGroupName)
     }
+    function Get-VSTeamBuildDefinition {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        [CmdletBinding()]
+        param($ProjectName, $Id)
+    }
+    function Invoke-VSTeamRequest {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Method', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Resource', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Body', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ContentType', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Version', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Area', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Id', Justification = 'Pester mock command parameter.')]
+        [CmdletBinding()]
+        param($Method, $Resource, $Body, $ContentType, $Version, $Area, $ProjectName, $Id)
+        throw 'Unexpected live provider request.'
+    }
+    function Add-VSTeamServiceEndpoint {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'EndpointName', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'EndpointType', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Object', Justification = 'Pester mock command parameter.')]
+        [CmdletBinding()]
+        param($ProjectName, $EndpointName, $EndpointType, $Object)
+        throw 'Unexpected live endpoint creation.'
+    }
+    function Remove-VSTeamServiceEndpoint {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Force', Justification = 'Pester mock command parameter.')]
+        [CmdletBinding(SupportsShouldProcess = $true)]
+        param($ProjectName, $Id, [switch]$Force)
+        if ($PSCmdlet.ShouldProcess($Id, 'Remove service endpoint')) { throw 'Unexpected live endpoint deletion.' }
+    }
 }
 
 Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
@@ -383,5 +417,217 @@ Describe 'HTTP missing-resource classification' {
     It 'does not infer absence from exception text' {
         $record = [System.Management.Automation.ErrorRecord]::new([System.Exception]::new('Resource not found or request failed'), 'Probe', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
         Test-SetupResourceNotFound -ErrorRecord $record | Should -BeFalse
+    }
+}
+
+Describe 'Generated GitHub workflow files' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        foreach ($name in @('Update-BuildWorkflowInRepoClone', 'Update-DeployWorkflowInRepoClone', 'Get-SecretJsonInputBlock', 'Merge-SecretJsonInput')) {
+            $definition = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $false)
+            Set-Item -Path "Function:$name" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    BeforeEach {
+        $workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $workingRoot | Out-Null
+    }
+
+    It 'generates build validation inputs and safely quotes the environment' -ForEach @(
+        @{ Enabled = $true }
+        @{ Enabled = $false }
+    ) {
+        Update-BuildWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowReference stable -BuildEnvironmentName "Build's" -BuildValidationEnabled $Enabled
+        $content = Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw
+        $content | Should -Match 'uses: owner/shared/.github/actions/build@stable'
+        $content | Should -Match 'alm4dataverse-export-build'
+        if ($Enabled) {
+            $content | Should -Match "name: 'Build''s'"
+            $content | Should -Match 'AZURE_CLIENT_SECRET'
+        }
+        else {
+            $content | Should -Match "environment-name: ''"
+            $content | Should -Not -Match 'AZURE_CLIENT_SECRET'
+        }
+        Update-BuildWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowReference stable -BuildEnvironmentName "Build's" -BuildValidationEnabled $Enabled
+        Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw | Should -Be $content
+    }
+
+    It 'chains deployment stages with stable unique job IDs in <Mode> mode' -ForEach @(
+        @{ Mode = 'manual-gate-tag' }
+        @{ Mode = 'environment-approval' }
+    ) {
+        $environments = @('QA', 'qa!', '!!!', "Prod's") | ForEach-Object { [pscustomobject]@{ ShortName = $_ } }
+        Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments @($environments) -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable -PromotionMode $Mode
+        $content = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw
+        $content | Should -Match 'deploy-qa:'
+        $content | Should -Match 'deploy-qa-2:'
+        $content | Should -Match 'deploy-stage-3:'
+        $content | Should -Match 'needs: deploy-qa-2'
+        $content | Should -Match "environment: 'Prod''s'"
+        $content | Should -Match "previous-environment-name: 'QA'"
+        if ($Mode -eq 'environment-approval') {
+            $content | Should -Match 'alm4dataverse-build-deploy-main'
+            $content | Should -Match "needs\['deploy-qa'\].result == 'success'"
+        }
+        else {
+            $content | Should -Not -Match 'repository_dispatch:'
+            $content | Should -Match 'type: choice'
+        }
+        Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments @() -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+        Test-Path (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') | Should -BeFalse
+        Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments @() -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+        Test-Path (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') | Should -BeFalse
+    }
+}
+
+Describe 'Generated Azure DevOps pipeline files' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        foreach ($name in @('Update-AzDoBuildPipelineInWorkingTree', 'Update-DeployPipelineInWorkingTree')) {
+            $definition = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $false)
+            Set-Item -Path "Function:$name" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    BeforeEach {
+        $workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $workingRoot 'pipelines') -Force | Out-Null
+        Copy-Item (Join-Path $repoRoot 'copy-to-your-repo/pipelines/*.yml') (Join-Path $workingRoot 'pipelines')
+    }
+
+    It 'writes build settings and replaces deployment stages for extension=<Enabled>' -ForEach @(
+        @{ Enabled = $true }
+        @{ Enabled = $false }
+    ) {
+        Update-AzDoBuildPipelineInWorkingTree -RepoRoot $workingRoot -SharedRepositoryName shared -BuildEnvironmentName "Build's" -UseAlm4DataverseExtension $Enabled
+        $content = Get-Content (Join-Path $workingRoot 'pipelines/BUILD.yml') -Raw
+        $content | Should -Match "buildEnvironmentName: 'Build''s'"
+        $content | Should -Match ('useAlm4DataverseExtension: ' + $Enabled.ToString().ToLowerInvariant())
+        $environments = @([pscustomobject]@{ ShortName = 'QA' }, [pscustomobject]@{ ShortName = 'PROD' })
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeTrue
+        $deployContent = Get-Content (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml') -Raw
+        $deployContent | Should -Match 'environmentName: QA'
+        $deployContent | Should -Match 'environmentName: PROD'
+        @([regex]::Matches($deployContent, '(?m)^\s+environmentName:')).Count | Should -Be 2
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeFalse
+    }
+
+    It 'fails rather than silently fabricating missing templates' {
+        { Update-AzDoBuildPipelineInWorkingTree -RepoRoot $TestDrive -SharedRepositoryName shared -BuildEnvironmentName '' -UseAlm4DataverseExtension $true } | Should -Throw '*Build pipeline file not found*'
+        { Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch absent -Environments @([pscustomobject]@{ ShortName = 'QA' }) } | Should -Throw '*not found*'
+    }
+}
+
+Describe 'Azure DevOps pipeline and endpoint reconciliation' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+            Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    BeforeEach {
+        $script:adoAccessToken = [pscustomobject]@{ Token = 'fake-token' }
+        $script:apiExists = $false
+        $script:pipelineDefinition = [pscustomobject]@{ id = 7; name = 'BUILD'; path = '\'; repository = [pscustomobject]@{ id = 'repo-id'; name = 'repo'; defaultBranch = 'refs/heads/main' }; process = [pscustomobject]@{ type = 2; yamlFilename = 'pipelines/BUILD.yml' } }
+        $script:apiEndpoint = $null
+        Mock Write-Section {}
+        Mock Start-Sleep {}
+        Mock Get-VSTeamBuildDefinition { if ($script:apiExists) { $script:pipelineDefinition } }
+        Mock Invoke-VSTeamRequest { [pscustomobject]@{ id = 7 } }
+        Mock Get-VSTeamServiceEndpoint { if ($script:apiEndpoint) { $script:apiEndpoint } }
+        Mock Remove-VSTeamServiceEndpoint { $script:apiEndpoint = $null }
+        Mock Add-VSTeamServiceEndpoint {
+            $script:apiEndpoint = [pscustomobject]@{ id = 8; name = $EndpointName; url = $Object.url; authorization = [pscustomobject]@{ scheme = $Object.authorization.scheme; parameters = [pscustomobject]$Object.authorization.parameters } }
+            $script:apiEndpoint
+        }
+        Mock Invoke-RestMethod {
+            if ($Method -eq 'Get') {
+                [pscustomobject]@{ value = @([pscustomobject]@{ name = 'TEST'; id = 8 } | Where-Object { $script:apiExists }); pipelines = @([pscustomobject]@{ id = 7; authorized = $true } | Where-Object { $script:apiExists }) }
+            }
+            else { [pscustomobject]@{ id = 8 } }
+        }
+    }
+
+    It 'creates or preserves a current YAML pipeline' -ForEach @(
+        @{ Exists = $false }
+        @{ Exists = $true }
+    ) {
+        $script:apiExists = $Exists
+        Initialize-AzDoYamlPipelineDefinition -Project project -Repository ([pscustomobject]@{ Id = 'repo-id'; Name = 'repo' }) -DefinitionName BUILD -YamlPath /pipelines/BUILD.yml -DefinitionBranch refs/heads/main -QueueId 1
+        $writes = if ($Exists) { 0 } else { 1 }
+        Should -Invoke Invoke-VSTeamRequest -Times $writes -Exactly -ParameterFilter {
+            $payload = $Body | ConvertFrom-Json
+            $Method -eq 'POST' -and $payload.process.type -eq 2 -and $payload.process.yamlFilename -eq 'pipelines/BUILD.yml' -and $payload.repository.defaultBranch -eq 'refs/heads/main'
+        }
+    }
+
+    It 'updates a pipeline when the YAML path or branch has changed' {
+        $script:apiExists = $true
+        Initialize-AzDoYamlPipelineDefinition -Project project -Repository ([pscustomobject]@{ Id = 'repo-id'; Name = 'repo' }) -DefinitionName BUILD -YamlPath pipelines/BUILD-new.yml -DefinitionBranch release -QueueId 1
+        Should -Invoke Invoke-VSTeamRequest -Times 1 -Exactly -ParameterFilter {
+            $payload = $Body | ConvertFrom-Json
+            $Method -eq 'PUT' -and $Resource -eq 'build/definitions/7' -and $payload.process.yamlFilename -eq 'pipelines/BUILD-new.yml' -and $payload.repository.defaultBranch -eq 'refs/heads/release'
+        }
+    }
+
+    It 'creates, reuses or refreshes an endpoint using <AuthType>' -ForEach @(
+        @{ AuthType = 'WIF'; Existing = $false; Drift = $false }
+        @{ AuthType = 'WIF'; Existing = $true; Drift = $false }
+        @{ AuthType = 'WIF'; Existing = $true; Drift = $true }
+        @{ AuthType = 'Secret'; Existing = $false; Drift = $false }
+        @{ AuthType = 'Secret'; Existing = $true; Drift = $true }
+    ) {
+        if ($Existing) { $script:apiEndpoint = [pscustomobject]@{ id = 8; name = 'TEST'; url = 'https://test.example.com'; authorization = [pscustomobject]@{ scheme = 'WorkloadIdentityFederation'; parameters = [pscustomobject]@{ serviceprincipalid = $(if ($Drift) { 'old-app' } else { 'app-id' }); tenantid = 'example.com' } } } }
+        $parameters = @{ ProjectName = 'project'; ServiceEndpointName = 'TEST'; EnvironmentUrl = 'https://test.example.com'; ApplicationId = 'app-id'; TenantId = 'example.com'; AuthType = $AuthType }
+        if ($AuthType -eq 'Secret') { $parameters.ClientSecret = 'fake-secret' }
+        $result = Initialize-AzDoServiceEndpoint @parameters
+        $result.id | Should -Be 8
+        $writes = if ($Existing -and -not $Drift) { 0 } else { 1 }
+        Should -Invoke Add-VSTeamServiceEndpoint -Times $writes -Exactly -ParameterFilter { $EndpointType -eq 'powerplatform-spn' -and $Object.url -eq 'https://test.example.com' }
+        $deletes = if ($Existing -and $Drift) { 1 } else { 0 }
+        Should -Invoke Remove-VSTeamServiceEndpoint -Times $deletes -Exactly -ParameterFilter { $Id -eq 8 -and $Force }
+        if ($AuthType -eq 'Secret') { $result.authorization.parameters.clientSecret | Should -Be fake-secret }
+        else { $result.authorization.scheme | Should -Be WorkloadIdentityFederation }
+    }
+
+    It 'rejects secret authentication without a secret before creating an endpoint' {
+        { Initialize-AzDoServiceEndpoint -ProjectName project -ServiceEndpointName TEST -EnvironmentUrl https://test.example.com -ApplicationId app-id -TenantId example.com -AuthType Secret } | Should -Throw '*ClientSecret is required*'
+        Should -Invoke Add-VSTeamServiceEndpoint -Times 0 -Exactly
+    }
+
+    It 'creates or reuses deployment environments and grants only missing pipeline permissions' -ForEach @(
+        @{ Exists = $false }
+        @{ Exists = $true }
+    ) {
+        $script:apiExists = $Exists
+        $result = Initialize-AzDoEnvironment -Organization org -Project project -EnvironmentName TEST -Description Deployment
+        $result.id | Should -Be 8
+        Initialize-AzDoPipelinePermission -Organization org -Project project -ResourceType endpoint -ResourceId 8 -PipelineId 7
+        $writes = if ($Exists) { 0 } else { 1 }
+        Should -Invoke Invoke-RestMethod -Times $writes -Exactly -ParameterFilter { $Method -eq 'Post' }
+        Should -Invoke Invoke-RestMethod -Times $writes -Exactly -ParameterFilter { $Method -eq 'Patch' -and ($Body | ConvertFrom-Json).pipelines[0].authorized }
+    }
+
+    It 'assigns DEPLOY definitions to their configured branch rather than the repository default' {
+        Mock Get-AzDoDefaultAgentQueueId { 1 }
+        Mock Initialize-AzDoYamlPipelineDefinition {}
+        Initialize-AzDoMainRepositoryPipeline -Project project -Repository ([pscustomobject]@{ Id = 'repo-id'; Name = 'repo'; defaultBranch = 'refs/heads/main' }) -YamlFiles @('pipelines/BUILD.yml', 'pipelines/DEPLOY-release.yml')
+        Should -Invoke Initialize-AzDoYamlPipelineDefinition -Times 1 -Exactly -ParameterFilter { $DefinitionName -eq 'BUILD' -and $DefinitionBranch -eq 'main' }
+        Should -Invoke Initialize-AzDoYamlPipelineDefinition -Times 1 -Exactly -ParameterFilter { $DefinitionName -eq 'DEPLOY-release' -and $DefinitionBranch -eq 'release' }
     }
 }

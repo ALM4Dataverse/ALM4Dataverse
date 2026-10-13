@@ -41,6 +41,7 @@ Describe 'Validation orchestration and coverage enforcement' {
         $output | Should -Contain 'Passed 4 PowerShell tests.'
         Should -Invoke Invoke-Pester -Times 1 -Exactly -ParameterFilter {
             $Configuration.CodeCoverage.Enabled.Value -and $Configuration.CodeCoverage.CoveragePercentTarget.Value -eq 0 -and
+            -not $Configuration.CodeCoverage.UseBreakpoints.Value -and
             $Configuration.TestResult.OutputFormat.Value -eq 'NUnitXml'
         }
         (Get-Content (Join-Path $TestDrive 'coverage-files.json') -Raw | ConvertFrom-Json).Percent | Should -Be 100

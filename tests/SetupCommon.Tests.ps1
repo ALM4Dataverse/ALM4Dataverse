@@ -9,6 +9,57 @@ Describe 'Setup status callback state' {
         if (-not ('Spectre.Console.AnsiConsole' -as [type])) {
             Add-Type -TypeDefinition @'
 namespace Spectre.Console {
+    public class Markup : Rendering.IRenderable {
+        public string Text;
+        public Markup(string text) { Text = text; }
+        public override string ToString() { return Text; }
+    }
+    public class Padding { public Padding(int left, int top, int right, int bottom) {} }
+    public class BoxBorder { public static object Rounded = new object(); }
+    public class PanelHeader { public string Text; public PanelHeader(string text) { Text = text; } }
+    public class Panel : Rendering.IRenderable {
+        public object Content, Border, BorderStyle, Padding;
+        public PanelHeader Header;
+        public bool Expand;
+        public Panel(object content) { Content = content; }
+        public override string ToString() { return (Header == null ? "" : Header.Text) + " " + Content; }
+    }
+    public class TableColumn { public string Text; public TableColumn(string text) { Text = text; } }
+    public class Table : Rendering.IRenderable {
+        public System.Collections.Generic.List<Rendering.IRenderable[]> Rows = new System.Collections.Generic.List<Rendering.IRenderable[]>();
+        public System.Collections.Generic.List<TableColumn> Columns = new System.Collections.Generic.List<TableColumn>();
+        public void AddColumn(TableColumn column) { Columns.Add(column); }
+    }
+    public class GridColumn { public bool NoWrap; public int Width; public Padding Padding; }
+    public class Grid : Rendering.IRenderable {
+        public bool Expand;
+        public System.Collections.Generic.List<Rendering.IRenderable[]> Rows = new System.Collections.Generic.List<Rendering.IRenderable[]>();
+        public void AddColumn() {}
+        public void AddColumn(GridColumn column) {}
+        public void AddRow(Rendering.IRenderable[] row) { Rows.Add(row); }
+    }
+    public class Columns : Rendering.IRenderable {
+        public bool Expand;
+        public Padding Padding;
+        public Rendering.IRenderable[] Items;
+        public Columns(Rendering.IRenderable[] items) { Items = items; }
+    }
+    public class SelectionPrompt<T> {
+        public string MoreChoicesText, SearchPlaceholderText;
+        public bool WrapAround, SearchEnabled;
+        public int PageSize;
+        public System.Collections.Generic.List<T> Choices = new System.Collections.Generic.List<T>();
+        public void AddChoice(T value) { Choices.Add(value); }
+        public System.Threading.Tasks.Task<T> ShowAsync(object console, System.Threading.CancellationToken token) {
+            token.ThrowIfCancellationRequested();
+            return System.Threading.Tasks.Task.FromResult((T)AnsiConsole.Answers.Dequeue());
+        }
+    }
+    public class TextPrompt<T> {
+        public bool IsSecret, AllowEmpty;
+        public TextPrompt(string text) {}
+        public T Show(object console) { return (T)AnsiConsole.Answers.Dequeue(); }
+    }
     public class StatusContext {}
     public class Style {
         public static object Parse(string value) { return null; }
@@ -21,9 +72,20 @@ namespace Spectre.Console {
         }
     }
     public static class AnsiConsole {
+        public static object Console = new object();
+        public static System.Collections.Generic.Queue<object> Answers = new System.Collections.Generic.Queue<object>();
+        public static System.Collections.Generic.List<object> Output = new System.Collections.Generic.List<object>();
         public static StatusDisplay Status() { return new StatusDisplay(); }
+        public static void MarkupLine(string value) { Output.Add(value); }
+        public static void WriteLine() {}
+        public static void Write(object value) { Output.Add(value); }
+        public static void Markup(string value) { Output.Add(value); }
+        public static void Clear() { Output.Clear(); }
+        public static bool Confirm(string value, bool defaultValue) { return Answers.Count == 0 ? defaultValue : (bool)Answers.Dequeue(); }
+        public static T Ask<T>(string value, T defaultValue) { return Answers.Count == 0 ? defaultValue : (T)Answers.Dequeue(); }
     }
 }
+namespace Spectre.Console.Rendering { public interface IRenderable {} }
 '@
         }
     }
@@ -38,6 +100,192 @@ namespace Spectre.Console {
         }
         $executionState.Count | Should -Be 1
         $result.Value | Should -Be 42
+    }
+}
+
+Describe 'Setup selector state transitions' {
+    BeforeEach {
+        Mock Initialize-SpectreConsole {}
+        Mock Write-SetupConsoleBar { $false }
+        $script:menuAnswers = [System.Collections.Generic.Queue[string]]::new()
+        $script:textAnswers = [System.Collections.Generic.Queue[string]]::new()
+        Mock Select-FromMenu {
+            if ($script:menuAnswers.Count -eq 0) { throw "Unexpected menu: $Title" }
+            $answer = $script:menuAnswers.Dequeue()
+            $index = [array]::IndexOf($Items, $answer)
+            if ($index -lt 0) { throw "Unavailable answer '$answer' in '$Title': $($Items -join ', ')" }
+            $index
+        }
+        Mock Read-TextWithDefault {
+            if ($script:textAnswers.Count -eq 0) { throw "Unexpected text prompt: $Prompt" }
+            $script:textAnswers.Dequeue()
+        }
+    }
+
+    It 'adds, reorders and removes solutions without changing their identity' {
+        foreach ($answer in @('Add a solution', 'One (one)', 'Add a solution', 'Two (two)', 'Move a solution earlier', 'Two (two)', 'Move a solution later', 'Two (two)', 'Remove a solution', 'Two (two)', 'Done')) { $script:menuAnswers.Enqueue($answer) }
+        $solutions = @([pscustomobject]@{ friendlyname = 'One'; uniquename = 'one' }, [pscustomobject]@{ friendlyname = 'Two'; uniquename = 'two' })
+        $selected = @(Select-OrderedSolution -AvailableSolutions $solutions)
+        $selected.Count | Should -Be 1
+        $selected[0] | Should -Be $solutions[0]
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'clears an existing solution selection' {
+        foreach ($answer in @('Clear list', 'Done')) { $script:menuAnswers.Enqueue($answer) }
+        $solution = [pscustomobject]@{ friendlyname = 'One'; uniquename = 'one' }
+        @(Select-OrderedSolution -AvailableSolutions @($solution) -InitiallySelectedSolutions @($solution)).Count | Should -Be 0
+    }
+
+    It 'initializes both supported bootstrap branch strategies and calls environment editors' -ForEach @(
+        @{ Strategy = 'main only (recommended simple option)'; ExpectedBranches = @('main') }
+        @{ Strategy = 'main + develop (required for environments that enforce PRs)'; ExpectedBranches = @('main', 'develop') }
+    ) {
+        $script:menuAnswers.Enqueue($Strategy)
+        $script:menuAnswers.Enqueue('Done')
+        $initial = [pscustomobject]@{ BranchName = 'main'; Environments = @() }
+        $result = @(Select-BranchEnvironmentMapping -InitialBranchMappings @($initial) -BranchOnly -EditDevEnvironmentScriptBlock {
+            param($allMappings, $mapping)
+            $allMappings.Count | Should -Be $ExpectedBranches.Count
+            [pscustomobject]@{ ShortName = "Dev-$($mapping.BranchName)" }
+        } -EditDeploymentEnvironmentsScriptBlock {
+            param($allMappings, $mapping)
+            $allMappings.Count | Should -Be $ExpectedBranches.Count
+            [pscustomobject]@{ ShortName = "Target-$($mapping.BranchName)"; Url = "https://$($mapping.BranchName).example.com" }
+        })
+        @($result.BranchName) | Should -Be $ExpectedBranches
+        foreach ($mapping in $result) {
+            $mapping.DevEnvironmentConfiguration.ShortName | Should -Be "Dev-$($mapping.BranchName)"
+            $mapping.Environments[0].ShortName | Should -Be "Target-$($mapping.BranchName)"
+        }
+    }
+
+    It 'renames a branch, assigns a target exclusively, then removes another branch' {
+        foreach ($answer in @('Edit a branch mapping', 'main', 'Rename branch', 'Assign environments', 'QA - QA [not selected]', 'Done', 'Done', 'Remove a branch mapping', 'develop', 'Done')) { $script:menuAnswers.Enqueue($answer) }
+        $script:textAnswers.Enqueue('release')
+        $qa = [pscustomobject]@{ ShortName = 'QA'; FriendlyName = 'QA'; Url = 'https://qa.example.com' }
+        $prod = [pscustomobject]@{ ShortName = 'PROD'; FriendlyName = 'Production'; Url = 'https://prod.example.com' }
+        $initial = @([pscustomobject]@{ BranchName = 'main'; Environments = @() }, [pscustomobject]@{ BranchName = 'develop'; Environments = @($prod) })
+        $result = @(Select-BranchEnvironmentMapping -EnvironmentConfigurations @($qa, $prod) -InitialBranchMappings $initial)
+        $result.Count | Should -Be 1
+        $result[0].BranchName | Should -Be release
+        $result[0].Environments[0].ShortName | Should -Be QA
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'adds and edits a deployment target and invokes both callback contracts' {
+        foreach ($answer in @('Add an environment', 'Edit an environment', 'TEST - Test (https://test.example.com)', 'Done')) { $script:menuAnswers.Enqueue($answer) }
+        $result = @(Select-ConfiguredDeploymentEnvironment -AddEnvironmentScriptBlock {
+            param($currentSelections)
+            @($currentSelections).Count | Should -Be 0
+            [pscustomobject]@{ ShortName = 'TEST'; FriendlyName = 'Test'; Url = 'https://test.example.com'; Credentials = $null; ServiceAccountUPN = '' }
+        } -EditEnvironmentScriptBlock {
+            param($currentSelections, $environment, $index)
+            @($currentSelections).Count | Should -Be 1
+            $index | Should -Be 0
+            $environment.FriendlyName = 'Edited'
+            $environment
+        })
+        $result.Count | Should -Be 1
+        $result[0].FriendlyName | Should -Be Edited
+    }
+}
+
+Describe 'Shared setup prompt and rendering contracts' {
+    BeforeEach {
+        Mock Initialize-SpectreConsole {}
+        Mock Write-SetupConsoleBar { $false }
+        Clear-SetupWizardContext
+        Clear-SetupPromptDocContext
+        [Spectre.Console.AnsiConsole]::Answers.Clear()
+        [Spectre.Console.AnsiConsole]::Output.Clear()
+    }
+
+    AfterEach {
+        Clear-SetupWizardContext
+        Clear-SetupPromptDocContext
+        [Spectre.Console.AnsiConsole]::Answers.Clear()
+        [Spectre.Console.AnsiConsole]::Output.Clear()
+    }
+
+    It 'maps markup-safe menu values and supports single-choice cancellation' {
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('[[One]]')
+        Select-FromMenu -Title Test -Items @('[One]', 'Two') | Should -Be 0
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('< Cancel setup')
+        Select-FromMenu -Title Test -Items @('One') | Should -BeNullOrEmpty
+        Select-FromMenu -Title Test -Items @() | Should -BeNullOrEmpty
+    }
+
+    It 'supports searchable menus and requests back navigation from later wizard steps' {
+        $items = @(1..10 | ForEach-Object { "Item $_" })
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('Item 10')
+        Select-FromMenu -Title Test -Items $items | Should -Be 9
+        Set-SetupWizardContext -Title Test -StepNames @('First', 'Second') -CurrentStepIndex 1
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('< Back to previous step')
+        { Select-FromMenu -Title Test -Items @('One', 'Two') } | Should -Throw '*__ALM4DATAVERSE_WIZARD_BACK__*'
+    }
+
+    It 'preserves secret whitespace, trims text, honors defaults and allows explicitly empty input' {
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue(' fake-secret ')
+        Read-SecretText -Prompt Secret | Should -Be ' fake-secret '
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('  text  ')
+        Read-TextWithDefault -Prompt Text | Should -Be text
+        Read-TextWithDefault -Prompt Text -DefaultValue Default | Should -Be Default
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('')
+        Read-SecretText -Prompt Secret -AllowEmpty | Should -Be ''
+        [Spectre.Console.AnsiConsole]::Answers.Enqueue('')
+        Read-TextWithDefault -Prompt Text -AllowEmpty | Should -Be ''
+        Read-YesNo -Prompt Confirm | Should -BeTrue
+        Read-YesNo -Prompt Confirm -DefaultNo | Should -BeFalse
+    }
+
+    It 'renders escaped metrics, documentation links and completion summary values' {
+        $columns = New-SpectreMetricColumn -Cards @(@{ Label = '[Count]'; Value = '3'; Detail = 'detail'; AccentColor = 'green' }, [pscustomobject]@{ Label = 'Other'; Value = '4'; Detail = ''; AccentColor = 'yellow' })
+        $columns.Items.Count | Should -Be 2
+        $columns.Items[0].Content.ToString() | Should -Match '\[\[Count\]\]'
+        Write-SetupGuidance -Header Guidance -Lines @('Read [this]', '') -DocRelativePath docs/config/alm-config.md -Ref main
+        (Get-SetupPromptDocContext).Ref | Should -Be main
+        Show-SetupCompletionScreen -Heading Done -AccessLabel Repository -AccessUrl https://example.com -SummaryValues @{ Repository = 'repo' } -NextStepLinks @('https://one.example.com', @{ Url = 'https://two.example.com'; Description = 'Two' }, [pscustomobject]@{ Url = 'https://three.example.com'; Text = 'Three' })
+        ([Spectre.Console.AnsiConsole]::Output | Out-String) | Should -Match 'https://three.example.com'
+    }
+
+    It 'retries a failed operation once and preserves its successful result' {
+        Mock Select-FromMenu { 0 }
+        $state = @{ Attempts = 0 }
+        $result = Invoke-WithErrorHandling -OperationName Test -ScriptBlock {
+            $state.Attempts++
+            if ($state.Attempts -eq 1) { throw 'Temporary failure' }
+            42
+        }
+        $result | Should -Be 42
+        $state.Attempts | Should -Be 2
+    }
+
+    It 'summarizes pending configuration, authentication mix and distinct service accounts' -ForEach @(
+        @{ AuthTypes = @('WIF', 'Secret'); ExpectedMix = 'Mixed' }
+        @{ AuthTypes = @('WIF'); ExpectedMix = 'WIF' }
+        @{ AuthTypes = @('Secret'); ExpectedMix = 'Secret' }
+        @{ AuthTypes = @(); ExpectedMix = 'Unassigned' }
+    ) {
+        $environments = @($AuthTypes | ForEach-Object {
+            [pscustomobject]@{ Credentials = [pscustomobject]@{ AuthType = $_ }; ServiceAccountUPN = 'service@example.com'; ConfigurationPending = $false }
+        })
+        $environments += [pscustomobject]@{ Credentials = $null; ServiceAccountUPN = ''; ConfigurationPending = $true }
+        Mock Show-SpectreMetricCard {}
+        Show-EnvironmentConfigurationOverview -EnvironmentConfigurations $environments
+        Should -Invoke Show-SpectreMetricCard -Times 1 -Exactly -ParameterFilter {
+            ($Cards | Where-Object Label -eq 'Auth mode').Value -eq $ExpectedMix -and
+            ($Cards | Where-Object Label -eq 'Pending setup').Value -eq '1'
+        }
+    }
+
+    It 'selects only a distinct deployment environment as BUILD baseline' {
+        $build = [pscustomobject]@{ ShortName = 'Build'; FriendlyName = 'Validation'; Url = 'https://build.example.com' }
+        $target = [pscustomobject]@{ ShortName = 'TEST'; FriendlyName = 'Test'; Url = 'https://test.example.com' }
+        Mock Select-FromMenu { 1 }
+        Select-BuildValidationBaselineEnvironment -DeploymentEnvironments @($build, $target, $target) -ExcludedEnvironmentName Build -ExcludedEnvironmentUrl $build.Url | Should -Be '@TEST'
+        Select-BuildValidationBaselineEnvironment -DeploymentEnvironments @() | Should -Be ''
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter { $Items.Count -eq 2 }
     }
 }
 
