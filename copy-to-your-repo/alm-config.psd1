@@ -47,6 +47,12 @@
     )
 
 
+    export = @{
+        parallel = $true
+        maxParallel = 2
+        maxConcurrentOperations = 4
+    }
+
     # Extra folders/files to include in build artifacts (copied verbatim).
     assets = @(
         'data'

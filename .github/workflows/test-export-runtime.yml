@@ -1,0 +1,34 @@
+name: Test Export Runtime
+
+on:
+  pull_request:
+    paths:
+      - 'pipelines/scripts/export.ps1'
+      - 'pipelines/scripts/parallel-export.ps1'
+      - 'pipelines/scripts/common.ps1'
+      - 'alm-config-defaults.psd1'
+      - 'copy-to-your-repo/alm-config.psd1'
+      - '.github/actions/export/action.yml'
+      - '.github/scripts/test-export-runtime.ps1'
+      - '.github/workflows/test-export-runtime.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'pipelines/scripts/**'
+      - 'alm-config-defaults.psd1'
+      - 'copy-to-your-repo/alm-config.psd1'
+      - '.github/scripts/test-export-runtime.ps1'
+      - '.github/workflows/test-export-runtime.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  export-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test export runtime
+        shell: pwsh
+        run: '& ./.github/scripts/test-export-runtime.ps1'
