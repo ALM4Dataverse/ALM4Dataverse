@@ -200,7 +200,8 @@ function Resolve-BaselineReleaseTag {
                 }
             }
         }
-    ) | Select-Object -Unique
+    )
+    $tagCandidates = @($tagCandidates | Select-Object -Unique)
 
     if ($tagCandidates.Count -eq 0) {
         throw "The BUILD baseline for run '$($Baseline.RunId)' has no Release tag."

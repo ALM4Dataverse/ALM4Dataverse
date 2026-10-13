@@ -130,10 +130,10 @@ function ConvertTo-GateTagSegment {
 function Resolve-WorkflowDispatchBranch {
     param([Parameter(Mandatory)][object]$GitHubContext)
 
-    $refType = if ($GitHubContext.PSObject.Properties.Name -contains 'ref_type') { [string]$GitHubContext.ref_type } else { '' }
-    $refName = if ($GitHubContext.PSObject.Properties.Name -contains 'ref_name') { [string]$GitHubContext.ref_name } else { '' }
+    $refType = if ($null -ne $GitHubContext.PSObject.Properties['ref_type']) { [string]$GitHubContext.ref_type } else { '' }
+    $refName = if ($null -ne $GitHubContext.PSObject.Properties['ref_name']) { [string]$GitHubContext.ref_name } else { '' }
 
-    if ([string]::IsNullOrWhiteSpace($refName) -and $GitHubContext.PSObject.Properties.Name -contains 'ref') {
+    if ([string]::IsNullOrWhiteSpace($refName) -and $null -ne $GitHubContext.PSObject.Properties['ref']) {
         $fullRef = [string]$GitHubContext.ref
         if ($fullRef -match '^refs/heads/(?<branch>.+)$') {
             $refName = $Matches['branch']

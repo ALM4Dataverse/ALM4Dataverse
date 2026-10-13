@@ -14,7 +14,7 @@ function Get-AzureBuild {
     param([Parameter(Mandatory)][string]$BuildId)
 
     $projectSegment = [System.Uri]::EscapeDataString($Project)
-    $uri = "$($CollectionUri.TrimEnd('/'))/$projectSegment/_apis/build/builds/$BuildId?api-version=7.1"
+    $uri = "$($CollectionUri.TrimEnd('/'))/$projectSegment/_apis/build/builds/${BuildId}?api-version=7.1"
     return Invoke-RestMethod -Method Get -Uri $uri -Headers @{ Authorization = "Bearer $AccessToken" }
 }
 
@@ -47,19 +47,19 @@ function Resolve-FixedBuildIdentifier {
     $buildNumber = [System.Uri]::EscapeDataString($Identifier)
     $uri = "$($CollectionUri.TrimEnd('/'))/$projectSegment/_apis/build/builds?definitions=$DefinitionId&buildNumber=$buildNumber&statusFilter=completed&resultFilter=succeeded&queryOrder=finishTimeDescending&%24top=100&api-version=7.1"
     $response = Invoke-RestMethod -Method Get -Uri $uri -Headers @{ Authorization = "Bearer $AccessToken" }
-    $matches = @($response.value | Where-Object {
+    $matchingBuilds = @($response.value | Where-Object {
         [string]$_.definition.id -eq $DefinitionId -and
         [string]$_.status -eq 'completed' -and
         [string]$_.result -eq 'succeeded' -and
         [string]$_.buildNumber -ceq $Identifier
     })
-    if ($matches.Count -eq 0) {
+    if ($matchingBuilds.Count -eq 0) {
         throw "No successful BUILD run with build number '$Identifier' was found in this Azure DevOps project."
     }
-    if ($matches.Count -gt 1) {
+    if ($matchingBuilds.Count -gt 1) {
         throw "More than one successful BUILD run has build number '$Identifier'; use its numeric run ID instead."
     }
-    return [string]$matches[0].id
+    return [string]$matchingBuilds[0].id
 }
 
 function Find-SuccessfulBuildForCommit {

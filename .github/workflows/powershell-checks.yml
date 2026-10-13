@@ -1,0 +1,74 @@
+name: PowerShell Checks
+
+on:
+  pull_request:
+  push:
+    branches: ['main']
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: PowerShell (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Install validation tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $policy = Import-PowerShellDataFile ./scripts/powershell-validation.psd1
+          foreach ($tool in $policy.Tools.GetEnumerator()) {
+            Install-Module -Name $tool.Key -RequiredVersion $tool.Value -Repository PSGallery -Scope CurrentUser -Force
+          }
+      - name: Validate PowerShell
+        shell: pwsh
+        env:
+          COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          COVERAGE_HEAD_REF: ${{ github.sha }}
+        run: ./scripts/Test-PowerShell.ps1 -BaseRef $env:COVERAGE_BASE_REF -HeadRef $env:COVERAGE_HEAD_REF
+      - name: Generate setup installers for Windows PowerShell syntax checks
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./prepare-release.ps1 -TagName v0.0.0-ci -OutputDir "$env:RUNNER_TEMP/setup-syntax"
+      - name: Parse setup installers with Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($file in Get-ChildItem "$env:RUNNER_TEMP/setup-syntax" -Filter *.ps1) {
+            $tokens = $null
+            $parseErrors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$parseErrors)
+            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+          }
+      - name: Publish test and coverage results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: powershell-results-${{ matrix.os }}
+          path: TestResults/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  required:
+    name: PowerShell Required
+    if: always()
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require successful validation
+        env:
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+        run: test "$VALIDATION_RESULT" = success

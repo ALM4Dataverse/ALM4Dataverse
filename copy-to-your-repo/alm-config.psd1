@@ -116,7 +116,7 @@
     # PowerShell modules required by the scripts in addition to the default modules.
     # or to override with specific versions.
 
-    # Key = module name, 
+    # Key = module name,
     # Value = version ('' = latest stable version, 'prerelease' = latest prerelease, or specific version).
     scriptDependencies = @{
         # Example:

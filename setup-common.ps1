@@ -1,6 +1,7 @@
 function New-DirectoryIfMissing {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) {
+    if (-not (Test-Path -LiteralPath $Path) -and $PSCmdlet.ShouldProcess($Path, 'Create directory')) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
@@ -43,7 +44,7 @@ function Get-SetupConsoleDependencyAssemblyPath {
                 }
             }
             catch {
-                # Non-fatal; continue.
+                Write-Verbose 'Could not set the legacy TLS preference; continuing with the current protocol settings.'
             }
 
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
@@ -236,7 +237,7 @@ function Initialize-SpectreConsole {
         return
     }
     catch {
-        # Continue and load the assembly from the NuGet package.
+        Write-Verbose 'The console assembly is not loaded; loading it from the configured package.'
     }
 
     # Spectre.Console 0.50+ uses a System.Memory build that references .NET 8
@@ -270,7 +271,7 @@ function Initialize-SpectreConsole {
                 }
             }
             catch {
-                # Non-fatal; continue.
+                Write-Verbose 'Could not set the legacy TLS preference; continuing with the current protocol settings.'
             }
 
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
@@ -360,11 +361,30 @@ function Get-OptionalObjectPropertyValue {
         return $null
     }
 
-    if ($InputObject.PSObject -and $InputObject.PSObject.Properties.Name -contains $PropertyName) {
+    if ($InputObject.PSObject -and $null -ne $InputObject.PSObject.Properties[$PropertyName]) {
         return $InputObject.$PropertyName
     }
 
     return $null
+}
+
+function Test-SetupResourceNotFound {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    $exception = $ErrorRecord.Exception
+    while ($null -ne $exception) {
+        $response = Get-OptionalObjectPropertyValue -InputObject $exception -PropertyName 'Response'
+        $statusCode = Get-OptionalObjectPropertyValue -InputObject $response -PropertyName 'StatusCode'
+        if ($null -ne $statusCode -and [int]$statusCode -eq 404) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+    return $false
 }
 
 function Invoke-GenericStaticMethod {
@@ -947,7 +967,7 @@ function Show-SetupPromptGuidance {
     )
 
     $effectiveGuidanceLines = @($GuidanceLines)
-    
+
     if (
         @($effectiveGuidanceLines).Count -eq 0 -and
         [string]::IsNullOrWhiteSpace($DocRelativePath)
@@ -1137,7 +1157,7 @@ function Add-SetupConsoleCancelHandler {
             }
         }
         catch {
-            # Some hosts do not expose a usable console cancel event. Continue without explicit Ctrl+C interception.
+            Write-Verbose 'The console host does not support cancellation interception; continuing without a cancel handler.'
         }
     }
 
@@ -1165,7 +1185,7 @@ function Remove-SetupConsoleCancelHandler {
             }
         }
         catch {
-            # Ignore cleanup failures when the host does not support console cancel events.
+            Write-Verbose 'Could not remove the console cancel handler; continuing cleanup.'
         }
     }
 }
@@ -1212,7 +1232,7 @@ function Show-SelectionPromptWithInterruptHandling {
                 [void]$stopMethod.Invoke($null, [object[]]@($cancellationTokenSource))
             }
             catch {
-                # Ignore cleanup failures.
+                Write-Verbose 'Could not stop the console cancellation handler; continuing cleanup.'
             }
         }
         elseif ($null -ne $cancellationTokenSource) {
@@ -1490,7 +1510,7 @@ function Select-FromMenu {
                 [Console]::TreatControlCAsInput = $originalTreatControlCAsInput
             }
             catch {
-                # Ignore cleanup failures.
+                Write-Verbose 'Could not restore console input settings; continuing cleanup.'
             }
         }
     }
@@ -1704,7 +1724,7 @@ function Write-SetupPanelBottomBorderOverlay {
         [Console]::SetCursorPosition($savedLeft, $savedTop)
     }
     catch {
-        # Ignore overlay failures in hosts that do not expose reliable cursor positioning.
+        Write-Verbose 'The console host could not display the guidance overlay; continuing without the overlay.'
     }
 }
 
@@ -2019,14 +2039,14 @@ function Get-CredentialSummaryText {
     }
 
     $name = ''
-    if ($Credentials.PSObject.Properties.Name -contains 'Name' -and -not [string]::IsNullOrWhiteSpace($Credentials.Name)) {
+    if ($null -ne $Credentials.PSObject.Properties['Name'] -and -not [string]::IsNullOrWhiteSpace($Credentials.Name)) {
         $name = [string]$Credentials.Name
     }
-    elseif ($Credentials.PSObject.Properties.Name -contains 'ApplicationId' -and -not [string]::IsNullOrWhiteSpace($Credentials.ApplicationId)) {
+    elseif ($null -ne $Credentials.PSObject.Properties['ApplicationId'] -and -not [string]::IsNullOrWhiteSpace($Credentials.ApplicationId)) {
         $name = [string]$Credentials.ApplicationId
     }
 
-    if ($Credentials.PSObject.Properties.Name -contains 'IsExistingServiceConnection' -and $Credentials.IsExistingServiceConnection) {
+    if ($null -ne $Credentials.PSObject.Properties['IsExistingServiceConnection'] -and $Credentials.IsExistingServiceConnection) {
         if (-not [string]::IsNullOrWhiteSpace($name)) {
             return "Existing service connection - $name"
         }
@@ -2034,7 +2054,7 @@ function Get-CredentialSummaryText {
     }
 
     $authType = 'Credential'
-    if ($Credentials.PSObject.Properties.Name -contains 'AuthType' -and -not [string]::IsNullOrWhiteSpace($Credentials.AuthType)) {
+    if ($null -ne $Credentials.PSObject.Properties['AuthType'] -and -not [string]::IsNullOrWhiteSpace($Credentials.AuthType)) {
         $authType = [string]$Credentials.AuthType
     }
 
@@ -2204,13 +2224,15 @@ function Select-OrderedSolutions {
 }
 
 function Set-AlmConfigSolutionsInFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][array]$Solutions,
         [Parameter()][switch]$CreateIfMissing,
         [Parameter()][string]$TemplatePath
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update configured solutions')) { return $false }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         if (-not $CreateIfMissing) {
@@ -2235,7 +2257,7 @@ function Set-AlmConfigSolutionsInFile {
             $escapedSolutionName = ([string]$solution.name).Replace("'", "''")
             $solutionsArray += "        @{`n"
             $solutionsArray += "            name = '$escapedSolutionName'`n"
-            if ($solution.deployUnmanaged) {
+            if (Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'deployUnmanaged') {
                 $solutionsArray += "            deployUnmanaged = `$true`n"
             }
             $solutionsArray += "        }`n"
@@ -2287,13 +2309,15 @@ function Set-AlmConfigSolutionsInFile {
 }
 
 function Set-AlmConfigSolutionCheckEnabledInFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][bool]$Enabled,
         [Parameter()][switch]$CreateIfMissing,
         [Parameter()][string]$TemplatePath
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update solution checker configuration')) { return $false }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         if (-not $CreateIfMissing) {
@@ -2353,13 +2377,15 @@ function Set-AlmConfigSolutionCheckEnabledInFile {
 }
 
 function Set-AlmConfigBuildValidationBaselineReleaseInFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][AllowEmptyString()][string]$BaselineRelease,
         [Parameter()][switch]$CreateIfMissing,
         [Parameter()][string]$TemplatePath
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update BUILD validation baseline')) { return $false }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         if (-not $CreateIfMissing) {
@@ -3302,9 +3328,11 @@ function Invoke-WithSpectreStatus {
 
     Initialize-SpectreConsole
 
-    $scriptExecutionStarted = $false
-    $scriptExecutionCompleted = $false
-    $scriptExecutionResult = $null
+    $statusExecutionState = @{
+        Started = $false
+        Completed = $false
+        Result = $null
+    }
 
     try {
         $statusDisplay = [Spectre.Console.AnsiConsole]::Status()
@@ -3328,7 +3356,7 @@ function Invoke-WithSpectreStatus {
             [System.Func[Spectre.Console.StatusContext, object]]{
                 param($context)
 
-                $scriptExecutionStarted = $true
+                $statusExecutionState.Started = $true
                 $capturedOutput = @(& { & $ScriptBlock $context } 6>&1 5>&1 4>&1 3>&1 2>&1)
                 $capturedResult = $null
                 foreach ($entry in $capturedOutput) {
@@ -3350,8 +3378,8 @@ function Invoke-WithSpectreStatus {
                     }
                 }
 
-                $scriptExecutionCompleted = $true
-                $scriptExecutionResult = $capturedResult
+                $statusExecutionState.Completed = $true
+                $statusExecutionState.Result = $capturedResult
                 return $capturedResult
             }
         )
@@ -3368,9 +3396,9 @@ function Invoke-WithSpectreStatus {
             throw
         }
 
-        if ($CaptureOutputInPanel -and ($scriptExecutionStarted -or $scriptExecutionCompleted)) {
-            if ($scriptExecutionCompleted) {
-                return $scriptExecutionResult
+        if ($CaptureOutputInPanel -and ($statusExecutionState.Started -or $statusExecutionState.Completed)) {
+            if ($statusExecutionState.Completed) {
+                return $statusExecutionState.Result
             }
 
             throw
@@ -3667,7 +3695,7 @@ function Get-AuthToken {
         }
     }
     catch {
-        # Silent acquisition failed, try interactive.
+        Write-Verbose 'Silent token acquisition failed; retrying interactively.'
     }
 
     if (-not $authResult) {
@@ -3704,12 +3732,14 @@ function Get-AuthToken {
 }
 
 function New-EntraIdApplicationSecret {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ApplicationObjectId,
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter()][string]$DisplayName = 'ALM4Dataverse Setup'
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ApplicationObjectId, 'Create Entra application secret')) { return }
 
     $graphToken = Get-AuthToken -ResourceUrl 'https://graph.microsoft.com' -TenantId $TenantId
     $headers = @{

@@ -6,6 +6,33 @@
     such as build.ps1, deploy.ps1, and export.ps1.
 #>
 
+function Invoke-CheckedNativeCommand {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string]$Command,
+        [string[]]$Arguments = @(),
+        [switch]$AllowFailure
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $Command @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        throw "Native command '$Command' failed with exit code $exitCode."
+    }
+    foreach ($entry in $output) {
+        [string]$entry
+    }
+}
+
 function Merge-AlmConfigValue {
     param(
         $DefaultValue,
@@ -42,10 +69,10 @@ function Get-AlmConfig {
         [bool]$LogConfig = $true
     )
 
-    $defaultConfigPath = Join-Path $PSScriptRoot ".." ".." "alm-config-defaults.psd1" | Resolve-Path | Select-Object -ExpandProperty Path
-    
+    $defaultConfigPath = Join-Path -Path $PSScriptRoot -ChildPath ".." -AdditionalChildPath "..", "alm-config-defaults.psd1" | Resolve-Path | Select-Object -ExpandProperty Path
+
     $config = @{}
-    
+
     Write-Host "##[group] Loading default configuration from $defaultConfigPath"
     $defaultConfig = Import-PowerShellDataFile -Path $defaultConfigPath
     Write-Host "##[endgroup]"
@@ -68,7 +95,7 @@ function Get-AlmConfig {
             $config[$key] = $mainConfig[$key]
         }
     }
-    
+
     # Preserve any keys from default config that are not in main config
     foreach ($key in $defaultConfig.Keys) {
         if (-not $mainConfig.ContainsKey($key)) {
@@ -80,7 +107,7 @@ function Get-AlmConfig {
     $config["_defaults"] = $defaultConfig
 
     if ($LogConfig) { Write-Host "##[debug]Loaded configuration: $($config | ConvertTo-Json -Depth 20)" }
-    
+
     return $config
 }
 
@@ -153,7 +180,7 @@ function Invoke-Hooks {
         }
         foreach ($hook in $hooks) {
             Write-Host "##[group] Executing $HookType hook: $hook"
-            
+
             # Build context hashtable with required and additional entries
             $context = @{
                 HookType      = $HookType
@@ -164,11 +191,11 @@ function Invoke-Hooks {
             foreach ($key in $AdditionalContext.Keys) {
                 $context[$key] = $AdditionalContext[$key]
             }
-            
+
             # Replace [alm] placeholder with the absolute path of the ALM repo root
-            $almRootPath = Join-Path $PSScriptRoot ".." ".." | Resolve-Path | Select-Object -ExpandProperty Path
+            $almRootPath = Join-Path -Path $PSScriptRoot -ChildPath ".." -AdditionalChildPath ".." | Resolve-Path | Select-Object -ExpandProperty Path
             $hookPath = $hook -replace '\[alm\]', $almRootPath
-            
+
             if (Test-Path $hookPath) {
 
                 if ($LogContext) { write-host "##[debug] Executing hook script at path: $hookPath with context: $($context | ConvertTo-Json -Depth 10)" }
