@@ -42,6 +42,21 @@ namespace Spectre.Console {
 }
 
 Describe 'Setup configuration and validation helpers' {
+    It 'declares the emitted branch-mapping element type for both strategies' -ForEach @(
+        @{ Strategy = 'Simple'; ExpectedCount = 1 }
+        @{ Strategy = 'GitflowLike'; ExpectedCount = 3 }
+    ) {
+        $environment = [pscustomobject]@{ ShortName = 'prod'; FriendlyName = 'Production' }
+        $mappings = @(Get-DefaultBranchEnvironmentMappingsFromStrategy -Strategy $Strategy -EnvironmentConfigurations @($environment))
+        $mappings.Count | Should -Be $ExpectedCount
+        $declaredTypes = @((Get-Command Get-DefaultBranchEnvironmentMappingsFromStrategy).OutputType.Type)
+        $declaredTypes | Should -Contain ([object[]])
+        foreach ($mapping in $mappings) {
+            $mapping | Should -BeOfType ([pscustomobject])
+            @($declaredTypes | Where-Object { $_.IsInstanceOfType($mapping) }).Count | Should -BeGreaterThan 0
+        }
+    }
+
     It 'reads optional hashtable and object values under strict mode without losing false or zero' {
         Set-StrictMode -Version Latest
         Get-OptionalObjectPropertyValue -InputObject $null -PropertyName key | Should -BeNullOrEmpty

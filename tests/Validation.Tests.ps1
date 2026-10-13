@@ -124,14 +124,14 @@ Describe 'Validation orchestration and coverage enforcement' {
 }
 
 Describe 'Repository analyzer policy' {
-    It 'has no unused-parameter, singular-noun, or approved-verb findings' {
+    It 'has no unused-parameter, naming, or output-type findings' {
         $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
         $paths = @(& git -C $repoRoot ls-files --cached --others --exclude-standard |
             Where-Object { $_ -match '\.(ps1|psm1|psd1)$' } | Sort-Object -Unique)
         $findings = @(
             foreach ($path in $paths) {
                 Invoke-ScriptAnalyzer -Path (Join-Path $repoRoot $path) -Settings $policy.AnalyzerSettings |
-                    Where-Object { $_.RuleName -in @('PSReviewUnusedParameter','PSUseSingularNouns','PSUseApprovedVerbs') }
+                    Where-Object { $_.RuleName -in @('PSReviewUnusedParameter','PSUseSingularNouns','PSUseApprovedVerbs','PSUseOutputTypeCorrectly') }
             }
         )
         $findings | Should -BeNullOrEmpty

@@ -362,6 +362,7 @@ function New-AzDoProject {
 
 function Test-AzDoGitRepositoryCommit {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$RepositoryId
@@ -1057,6 +1058,7 @@ function Initialize-AzDoProjectAndRepository {
 
 function Get-DataverseEnvironmentCatalog {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter()][switch]$ForceRefresh,
         [Parameter()][switch]$ShowStatus
@@ -1284,6 +1286,7 @@ function Get-AzDoSharedRepositoryNameFromWorkingTree {
 
 function Get-AzDoDeploymentEnvironmentNamesFromWorkingTree {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch
@@ -1639,6 +1642,7 @@ function New-AzDoRepoWorkingTree {
 
 function Get-AzDoDefaultAgentQueueId {
     [CmdletBinding()]
+    [OutputType([int])]
     param(
         [Parameter(Mandatory)][string]$Project
     )
@@ -1680,6 +1684,7 @@ function Get-AzDoSecurityNamespaceByName {
 
 function Get-AzDoSecurityNamespaceActionBit {
     [CmdletBinding()]
+    [OutputType([long])]
     param(
         [Parameter(Mandatory)][object]$Namespace,
         [Parameter(Mandatory)][string]$ActionName
@@ -3479,6 +3484,7 @@ function Initialize-DataverseServiceAccountUser {
 
 function Get-ExistingEnvironmentsFromWorkingTree {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch
@@ -3645,6 +3651,7 @@ function Resolve-GitExistingBranchRef {
 
 function Get-AzDoDeploymentEnvironmentNamesFromPipelineContent {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter()][string]$PipelineContent
     )
@@ -3725,6 +3732,7 @@ function Get-AzDoBuildValidationEnabledFromRepoClone {
 
 function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot
     )
@@ -3767,6 +3775,7 @@ function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
 
 function Get-AzDoRegisteredDeployPipelineBranch {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$ProjectName
     )
@@ -3884,6 +3893,7 @@ function Get-AzDoRepositoryExistingSetupState {
 
 function Get-AzDoInitialBranchMapping {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
         [Parameter(Mandatory)][string]$DefaultBranch
@@ -3976,6 +3986,7 @@ function Get-AzDoEnvironmentConfiguration {
 
 function Get-DataverseEnvironmentsSelection {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory = $false)][string]$ExcludedUrl,
         [Parameter()][string]$RepoRoot,
@@ -4516,6 +4527,7 @@ function Publish-AzDoBranchSetupChange {
 
 function Get-AzDoPublishSummaryText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][array]$PublishResults
     )

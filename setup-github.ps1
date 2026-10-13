@@ -536,6 +536,7 @@ function Get-GitHubEnvironmentPrefix {
         Derives a repository-level prefix from an environment name.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$EnvironmentName
     )
@@ -726,6 +727,7 @@ function Set-GitHubRepositoryImmutableSubject {
 
 function New-GitHubEnvironmentWifSubject {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RepoOwner,
         [Parameter(Mandatory)][string]$RepoName,
@@ -806,6 +808,7 @@ function Initialize-GitHubSharedWorkflowAccessPolicy {
 
 function Get-GitHubActionsVariableValue {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
@@ -890,6 +893,7 @@ function Get-GitHubWorkflowReferenceFromRepoClone {
 
 function Get-GitHubDeploymentEnvironmentNamesFromRepoClone {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$DefaultBranch
@@ -915,6 +919,7 @@ function Get-GitHubDeploymentEnvironmentNamesFromRepoClone {
 
 function Get-GitHubDeploymentEnvironmentNamesFromWorkflowContent {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter()][string]$WorkflowContent
     )
@@ -1015,6 +1020,7 @@ function Get-GitRepoFileContentFromRemoteBranch {
 
 function Get-GitHubDeployWorkflowBranchMappingsFromRepoClone {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot
     )
@@ -1283,6 +1289,7 @@ function Get-GitHubRepositoryExistingSetupState {
 
 function Get-GitHubInitialBranchMapping {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
         [Parameter(Mandatory)][string]$DefaultBranch
@@ -1348,6 +1355,7 @@ function Get-GitHubOwnedReposForOwner {
         Returns repositories owned by the specified GitHub account.
     #>
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$Owner
     )
@@ -1396,6 +1404,7 @@ function Resolve-GitHubRepoFullNameFromSource {
         Resolves a GitHub repository full name (owner/repo) from URL, owner/repo text, or a local git repository path.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$Source,
         [Parameter()][string]$Fallback = 'ALM4Dataverse/ALM4Dataverse'
@@ -1434,6 +1443,7 @@ function Resolve-UpstreamGitRemoteSource {
         Resolves an upstream git remote source usable by `git fetch`/`git clone`.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$ConfiguredSource,
         [Parameter(Mandatory)][string]$GitHubFullName
@@ -1468,6 +1478,7 @@ function Resolve-GitTargetRefFromRemote {
         Resolves a branch/tag/commit ref against a remote to a local git ref for checkout/merge operations.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RemoteName,
         [Parameter(Mandatory)][string]$Ref,
@@ -1688,6 +1699,7 @@ function Get-GitHubForksOfRepositoryForOwner {
         Lists repositories owned by a user that are forks of the specified upstream repository.
     #>
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$UpstreamFullName
@@ -2551,6 +2563,7 @@ function Get-GitHubExistingEnvironmentSelectionSummary {
 
 function Get-DataverseEnvironmentCatalog {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter()][switch]$ForceRefresh,
         [Parameter()][switch]$ShowStatus
@@ -4009,6 +4022,7 @@ function Publish-GitHubBranchSetupChange {
 
 function Get-GitHubPublishSummaryText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][array]$PublishResults
     )

@@ -331,6 +331,7 @@ function Initialize-SpectreConsole {
 
 function ConvertTo-SpectreMarkupLiteral {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][AllowNull()][string]$Text
     )
@@ -432,6 +433,7 @@ function Invoke-GenericStaticMethod {
 
 function Test-SetupDebugEnabled {
     [CmdletBinding()]
+    [OutputType([bool])]
     param()
 
     $debugValue = $env:ALM4DATAVERSE_DEBUG
@@ -808,6 +810,7 @@ function Request-SetupWizardBack {
 
 function Test-IsSetupWizardBackException {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][System.Exception]$Exception
     )
@@ -826,6 +829,7 @@ function Test-IsSetupWizardBackException {
 
 function New-SetupHeroPanel {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Message
     )
@@ -872,6 +876,7 @@ function Write-SetupDashboard {
 
 function Test-IsUserInterruptException {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][System.Exception]$Exception
     )
@@ -988,6 +993,7 @@ function Show-SetupPromptGuidance {
 
 function Get-SetupPromptInlineText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][ValidateSet('Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter()][string]$PromptText
@@ -1011,6 +1017,7 @@ function Get-SetupPromptInlineText {
 
 function Write-SetupConsoleBar {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter()][string]$Text,
         [Parameter()][ConsoleColor]$ForegroundColor = [ConsoleColor]::Black,
@@ -1136,6 +1143,7 @@ function Clear-SetupStatusBarAtBottom {
 
 function Add-SetupConsoleCancelHandler {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][System.ConsoleCancelEventHandler]$Handler
     )
@@ -1288,6 +1296,7 @@ function Wait-ForUserAcknowledgement {
 
 function Read-SecretText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter()][string[]]$PromptGuidanceLines,
@@ -1638,6 +1647,7 @@ function Assert-ValidTenantIdentifier {
 
 function Get-Alm4DataverseDocumentationRef {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$Ref
     )
@@ -1663,6 +1673,7 @@ function Get-Alm4DataverseDocumentationRef {
 
 function Get-Alm4DataverseDocUrl {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RelativePath,
         [Parameter()][string]$Ref
@@ -1789,6 +1800,7 @@ function Write-SetupGuidance {
 
 function Read-TextWithDefault {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter()][string]$DefaultValue,
@@ -1854,6 +1866,7 @@ function Read-TextWithDefault {
 
 function Get-DefaultSetupBranchName {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$BaseBranch,
         [Parameter()][string]$Context = 'setup'
@@ -2025,6 +2038,7 @@ function Get-BranchTargetedRepoChangePublishPlan {
 
 function Get-CredentialSummaryText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()]$Credentials
     )
@@ -2096,6 +2110,7 @@ function Show-EnvironmentConfigurationTable {
 
 function Select-OrderedSolution {
     [CmdletBinding()]
+    [OutputType([object[]])]
     param(
         [Parameter(Mandatory)][array]$AvailableSolutions,
         [Parameter()][array]$InitiallySelectedSolutions
@@ -2462,6 +2477,7 @@ function Set-AlmConfigBuildValidationBaselineReleaseInFile {
 
 function Select-BuildValidationBaselineEnvironment {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentName = '',
@@ -2513,6 +2529,7 @@ function Select-BuildValidationBaselineEnvironment {
 
 function Select-ConfiguredDeploymentEnvironment {
     [CmdletBinding()]
+    [OutputType([object[]])]
     param(
         [Parameter()][array]$InitialEnvironments,
         [Parameter(Mandatory)][scriptblock]$AddEnvironmentScriptBlock,
@@ -2628,6 +2645,7 @@ function Select-ConfiguredDeploymentEnvironment {
 
 function Get-DefaultBranchEnvironmentMappingsFromStrategy {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][ValidateSet('Simple', 'GitflowLike')][string]$Strategy,
         [Parameter(Mandatory)][array]$EnvironmentConfigurations,
@@ -2782,6 +2800,7 @@ function Show-BranchEnvironmentMappingTable {
 
 function Select-BranchEnvironmentMapping {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter()][AllowEmptyCollection()][array]$EnvironmentConfigurations = @(),
         [Parameter()][array]$InitialBranchMappings,
@@ -3246,6 +3265,7 @@ function Resolve-DevelopmentDefaultAlm4DataverseRef {
 
 function ConvertTo-SetupActivityOutputLine {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][AllowNull()]$Entry
     )
@@ -3753,6 +3773,7 @@ function New-EntraIdApplicationSecret {
 
 function Resolve-DataverseEnvironmentFriendlyName {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$EnvironmentUrl,
         [Parameter()][string]$FallbackName
