@@ -10,8 +10,6 @@ preparation/publication, test boundaries, and dependency-update operation.
 | [check-outdated-dependencies.ps1](check-outdated-dependencies.ps1) | Query PowerShell Gallery for newer configured module versions; output `outdated-deps.json` and `has_updates`. |
 | [update-dependency-prs.ps1](update-dependency-prs.ps1) | Consume that file, update Git branches, and create/update remote PRs. Not an offline check. |
 | [test-dependency-workflow.ps1](test-dependency-workflow.ps1) | Offline dependency-data/update-pattern smoke checks. |
-| [test-deployment-options.ps1](test-deployment-options.ps1) | Strict-mode deployment-option checks and generated/copied workflow guard checks. |
-| [test-environment-mapping.ps1](test-environment-mapping.ps1) | Offline direct/prefixed variable and selected-secret precedence checks. |
 | [test-documentation.ps1](test-documentation.ps1) | Local links/anchors, fenced example syntax, and reference-name coverage. |
 
 ## Automated Dependency Update Workflow
@@ -28,15 +26,16 @@ matching open PR branches are reused. Commits use `chore(deps): update <module> 
 
 ## Testing
 
-Run from the repository root in PowerShell 7. Install `powershell-yaml` if required,
-as described in the [local check prerequisites](../../docs/maintainers.md#local-checks).
+Run from the repository root in PowerShell 7.2 or newer. Install the pinned tools
+as described in [PowerShell development](../../docs/development/powershell.md#local-validation).
 
 ```powershell
-& ./.github/scripts/test-dependency-workflow.ps1
-& ./.github/scripts/test-deployment-options.ps1
-& ./.github/scripts/test-environment-mapping.ps1
-& ./.github/scripts/test-documentation.ps1
+& ./scripts/Test-PowerShell.ps1
 ```
+
+The Pester suites include dependency checks, deployment options, generated/copied
+workflow guards, environment mapping, parallel export and documentation validation.
+The documentation script remains available for focused checks.
 
 > [!NOTE]
 > These checks do not contact Dataverse, authenticate to Azure, or create remote resources.

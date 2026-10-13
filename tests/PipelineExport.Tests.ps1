@@ -34,7 +34,7 @@ Describe 'Export and version changes' {
         $script:exportArtifacts = Join-Path $fixtureRoot 'artifacts'
         $script:exportTemp = Join-Path $fixtureRoot 'temp'
         New-Item -ItemType Directory -Path $script:exportSource, $script:exportArtifacts, $script:exportTemp -Force | Out-Null
-        Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value "@{ solutions = @(@{ name = 'Example' }); hooks = @{} }"
+        Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value "@{ solutions = @(@{ name = 'Example' }); hooks = @{}; export = @{ parallel = `$false } }"
         Mock Export-DataverseSolution {
             New-Item -ItemType Directory -Path (Join-Path $OutFolder 'Other') -Force | Out-Null
             Set-Content (Join-Path $OutFolder 'Other/Solution.xml') -Value '<ImportExportXml><SolutionManifest><Version>1.2.3.4</Version></SolutionManifest></ImportExportXml>'

@@ -27,6 +27,7 @@ Describe 'Pipeline hooks' {
         @{ Config = @{} }
         @{ Config = @{ hooks = $null } }
         @{ Config = @{ hooks = @{} } }
+        @{ Config = @{ hooks = @{ preBuild = $null } } }
         @{ Config = @{ hooks = @{ preBuild = @() } } }
     ) {
         Set-StrictMode -Version Latest

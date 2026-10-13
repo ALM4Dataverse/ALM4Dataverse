@@ -101,11 +101,22 @@ Describe 'Deployment options' {
         Should -Invoke Invoke-DataverseSolutionUpgrade -Times 0 -Exactly
     }
 
-    It 'honors the per-solution service account key' {
-        Write-DeploymentConfig -Settings "serviceAccountUpnConfigKey = 'CustomUpn'"
-        & $script:deployScript -ArtifactsPath $TestDrive
+    It 'selects package and service-account defaults for <Label>' -ForEach @(
+        @{ Label = 'missing keys'; Settings = ''; Unmanaged = $false; Package = 'Example_managed.zip'; Upn = 'default@example.com' }
+        @{ Label = 'per-solution overrides'; Settings = "deployUnmanaged = `$true; serviceAccountUpnConfigKey = 'CustomUpn'"; Unmanaged = $false; Package = 'Example.zip'; Upn = 'custom@example.com' }
+        @{ Label = 'false and empty keys'; Settings = "deployUnmanaged = `$false; serviceAccountUpnConfigKey = ''"; Unmanaged = $false; Package = 'Example_managed.zip'; Upn = 'default@example.com' }
+        @{ Label = 'null keys'; Settings = 'deployUnmanaged = $null; serviceAccountUpnConfigKey = $null'; Unmanaged = $false; Package = 'Example_managed.zip'; Upn = 'default@example.com' }
+        @{ Label = 'IMPORT overriding managed preference'; Settings = "deployUnmanaged = `$false; serviceAccountUpnConfigKey = 'CustomUpn'"; Unmanaged = $true; Package = 'Example.zip'; Upn = 'custom@example.com' }
+        @{ Label = 'IMPORT with missing keys'; Settings = ''; Unmanaged = $true; Package = 'Example.zip'; Upn = 'default@example.com' }
+    ) {
+        Set-StrictMode -Version Latest
+        Write-DeploymentConfig -Settings $Settings
+        & $script:deployScript -ArtifactsPath $TestDrive -UseUnmanagedSolutions:$Unmanaged
+        Should -Invoke Import-DataverseSolution -Times 1 -Exactly -ParameterFilter {
+            [IO.Path]::GetFileName($InFile) -eq $Package
+        }
         Should -Invoke Get-DataverseRecord -Times 1 -Exactly -ParameterFilter {
-            $TableName -eq 'systemuser' -and $FilterValues.domainname -eq 'custom@example.com'
+            $TableName -eq 'systemuser' -and $FilterValues.domainname -eq $Upn
         }
     }
 

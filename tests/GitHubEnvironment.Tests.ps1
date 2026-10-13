@@ -7,7 +7,7 @@ BeforeAll {
 Describe 'GitHub environment mapping and authentication validation' {
     BeforeEach {
         $script:savedActionEnvironment = @{}
-        foreach ($name in @('GITHUB_ENV', 'VARS_JSON', 'SELECTED_SECRETS_JSON', 'RESOLVED_ENVIRONMENT_NAME', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'DATAVERSE_URL', 'DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN', 'DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS', 'ALM_TEST_BOOLEAN', 'ALM_TEST_NUMBER', 'ALM_TEST_ARRAY')) {
+        foreach ($name in @('GITHUB_ENV', 'VARS_JSON', 'SELECTED_SECRETS_JSON', 'RESOLVED_ENVIRONMENT_NAME', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'DATAVERSE_URL', 'DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN', 'DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS', 'ALM_TEST_BOOLEAN', 'ALM_TEST_NUMBER', 'ALM_TEST_ARRAY', 'DATAVERSECONNREF_ALM_MAPPING_TEST', 'DATAVERSEENVVAR_ALM_MAPPING_TEST')) {
             $script:savedActionEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, $null)
         }
@@ -93,5 +93,22 @@ Describe 'GitHub environment mapping and authentication validation' {
         $env:AZURE_TENANT_ID = '00000000-0000-0000-0000-000000000001'
         $env:DATAVERSE_URL = 'https://example.crm.dynamics.com'
         & $script:authenticationValidator
+    }
+
+    It 'honors Dataverse mapping precedence for <Label>' -ForEach @(
+        @{ Label = 'direct over environment-specific values'; Variables = '{"DATAVERSECONNREF_ALM_MAPPING_TEST":"connection-test","DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test","TEST_MAIN_DATAVERSEENVVAR_ALM_MAPPING_TEST":"prefixed-test"}'; Selected = '{}'; Existing = ''; Expected = 'direct-test'; Connection = 'connection-test' }
+        @{ Label = 'selected values over runtime and variables'; Variables = '{"DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test"}'; Selected = '{"DATAVERSEENVVAR_ALM_MAPPING_TEST":"selected-test"}'; Existing = 'existing-test'; Expected = 'selected-test'; Connection = '' }
+        @{ Label = 'existing runtime values'; Variables = '{"DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test"}'; Selected = '{}'; Existing = 'existing-test'; Expected = 'existing-test'; Connection = '' }
+        @{ Label = 'environment-specific fallback'; Variables = '{"TEST_MAIN_DATAVERSEENVVAR_ALM_MAPPING_TEST":"prefixed-test"}'; Selected = '{}'; Existing = ''; Expected = 'prefixed-test'; Connection = '' }
+        @{ Label = 'literal PREFIX fallback'; Variables = '{"PREFIX_DATAVERSEENVVAR_ALM_MAPPING_TEST":"fallback-test"}'; Selected = '{}'; Existing = ''; Expected = 'fallback-test'; Connection = '' }
+    ) {
+        Set-StrictMode -Version Latest
+        $env:RESOLVED_ENVIRONMENT_NAME = 'TEST-main'
+        $env:VARS_JSON = $Variables
+        $env:SELECTED_SECRETS_JSON = $Selected
+        $env:DATAVERSEENVVAR_ALM_MAPPING_TEST = $Existing
+        & $script:environmentResolver
+        $env:DATAVERSEENVVAR_ALM_MAPPING_TEST | Should -Be $Expected
+        $env:DATAVERSECONNREF_ALM_MAPPING_TEST | Should -Be $Connection
     }
 }

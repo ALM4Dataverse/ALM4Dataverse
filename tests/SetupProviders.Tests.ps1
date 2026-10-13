@@ -422,6 +422,8 @@ Describe 'HTTP missing-resource classification' {
 
 Describe 'Generated GitHub workflow files' {
     BeforeAll {
+        $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
+        Import-Module powershell-yaml -RequiredVersion $policy.Tools['powershell-yaml']
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
@@ -484,6 +486,28 @@ Describe 'Generated GitHub workflow files' {
         Test-Path (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') | Should -BeFalse
         Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments @() -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
         Test-Path (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') | Should -BeFalse
+    }
+
+    It 'preserves status-aware predecessor guards in <Mode> mode' -ForEach @(
+        @{ Mode = 'manual-gate-tag' }
+        @{ Mode = 'environment-approval' }
+    ) {
+        $environments = @([pscustomobject]@{ ShortName = 'TEST-main' }, [pscustomobject]@{ ShortName = 'PROD' })
+        Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments $environments -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable -PromotionMode $Mode
+        $workflow = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw | ConvertFrom-Yaml
+        $condition = [string]$workflow.jobs['deploy-prod']['if']
+        $condition | Should -Match '!cancelled\(\)'
+        $workflow.jobs['deploy-prod'].needs | Should -Be 'deploy-test-main'
+        if ($Mode -eq 'environment-approval') {
+            $condition | Should -Match "needs\['deploy-test-main'\].result == 'success'"
+        }
+    }
+
+    It 'preserves manual and automatic stage guards in the copied deployment workflow' {
+        $workflow = Get-Content (Join-Path $repoRoot 'copy-to-your-repo/.github/workflows/DEPLOY-main.yml') -Raw | ConvertFrom-Yaml
+        $condition = [string]$workflow.jobs['deploy-prod']['if']
+        $condition | Should -Match '!cancelled\(\)'
+        $condition | Should -Match "needs\['deploy-test'\].result == 'success'"
     }
 }
 

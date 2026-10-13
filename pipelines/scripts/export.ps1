@@ -39,7 +39,7 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
-$exportSettings = Get-AlmExportSettings -Config $solutionsConfig
+$exportSettings = Get-AlmExportSetting -Config $solutionsConfig
 
 Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
@@ -55,12 +55,12 @@ try {
 if ($exportSettings.parallel) {
     $exportPipeline = Start-AlmExportPipeline -Config $solutionsConfig -TempDirectory $TempDirectory -MaxParallel $exportSettings.maxParallel
     $exportPipeline.LogDirectory = $exportLogDirectory
-    Start-AlmQueuedExports -State $exportPipeline
+    Start-AlmQueuedExport -State $exportPipeline
 }
 foreach ($solution in $solutionsConfig.solutions) {
     $solutionName = $solution.name
     $exportZipPath = $null
-    if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExports -State $exportPipeline -SolutionName $solutionName }
+    if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExport -State $exportPipeline -SolutionName $solutionName }
 
     Write-Host "[$solutionName][Unpack] Started (managed and unmanaged)"
 

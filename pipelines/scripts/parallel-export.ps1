@@ -1,4 +1,5 @@
-function Get-AlmExportSettings {
+function Get-AlmExportSetting {
+    [OutputType([hashtable])]
     param([Parameter(Mandatory)][hashtable]$Config)
 
     $settings = @{ parallel = $true; maxParallel = 2; maxConcurrentOperations = 4 }
@@ -21,6 +22,7 @@ function Get-AlmExportSettings {
 }
 
 function Format-AlmLogLine {
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$SolutionName,
         [Parameter(Mandatory)][string]$Phase,
@@ -49,11 +51,15 @@ function Expand-AlmExportSolution {
 }
 
 function Start-AlmExportPipeline {
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([hashtable])]
     param(
         [Parameter(Mandatory)][hashtable]$Config,
         [Parameter(Mandatory)][string]$TempDirectory,
         [ValidateRange(1, 8)][int]$MaxParallel = 2
     )
+
+    if (-not $PSCmdlet.ShouldProcess($TempDirectory, 'Initialize parallel export workers')) { return }
 
     $names = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     foreach ($solution in $Config.solutions) {
@@ -64,7 +70,7 @@ function Start-AlmExportPipeline {
     if (-not $cloneMethod) { throw 'Connection cloning is unavailable. Set export.parallel = $false to use sequential processing.' }
     $null = $connection.OrganizationDetail
     Get-Command Start-ThreadJob -ErrorAction Stop | Out-Null
-    $settings = Get-AlmExportSettings -Config $Config
+    $settings = Get-AlmExportSetting -Config $Config
     $workDirectory = Join-Path $TempDirectory ('export-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
     $state = @{
@@ -98,8 +104,12 @@ function Start-AlmExportPipeline {
     return $state
 }
 
-function Start-AlmQueuedExports {
+function Start-AlmQueuedExport {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker explicitly binds its parameters through Start-ThreadJob ArgumentList, preserving shared client and semaphore references.')]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory)][hashtable]$State)
+
+    if (-not $PSCmdlet.ShouldProcess($State.WorkDirectory, 'Start queued solution exports')) { return }
 
     while ($State.PendingExports.Count -and $State.ActiveExports.Count -lt $State.MaxParallel) {
         $task = $State.PendingExports.Dequeue()
@@ -137,6 +147,7 @@ function Start-AlmQueuedExports {
 }
 
 function Receive-AlmExportJob {
+    [OutputType([pscustomobject])]
     param([Parameter(Mandatory)]$Job, [string]$LogDirectory = '')
 
     $solutionName = $Job.AlmSolutionName
@@ -168,7 +179,7 @@ function Receive-AlmExportJob {
     return $result[0]
 }
 
-function Write-AlmExportEvents {
+function Write-AlmExportEvent {
     param([Parameter(Mandatory)][hashtable]$State)
 
     $entry = $null
@@ -177,15 +188,17 @@ function Write-AlmExportEvents {
     }
 }
 
-function Wait-AlmSolutionExports {
+function Wait-AlmSolutionExport {
+    [OutputType([string])]
     param([Parameter(Mandatory)][hashtable]$State, [Parameter(Mandatory)][string]$SolutionName)
 
-    Start-AlmQueuedExports -State $State
+    Start-AlmQueuedExport -State $State
     while ($State.CompletedExports[$SolutionName].Count -lt 2) {
-        Write-AlmExportEvents -State $State
+        Write-AlmExportEvent -State $State
+        if ($State.ActiveExports.Count -eq 0) { throw "[$SolutionName][Export] No active export workers; queued exports were not started." }
         $handles = [System.Threading.WaitHandle[]]@($State.LogEvents.Signal) + [System.Threading.WaitHandle[]]@($State.ActiveExports | ForEach-Object { $_.Finished })
         [System.Threading.WaitHandle]::WaitAny($handles) | Out-Null
-        Write-AlmExportEvents -State $State
+        Write-AlmExportEvent -State $State
         foreach ($job in @($State.ActiveExports.ToArray())) {
             if ($job.State -in @('Completed', 'Failed', 'Stopped')) {
                 $result = Receive-AlmExportJob -Job $job -LogDirectory $State.LogDirectory
@@ -195,30 +208,31 @@ function Wait-AlmSolutionExports {
                 $State.ActiveExports.Remove($job) | Out-Null
             }
         }
-        Start-AlmQueuedExports -State $State
+        Start-AlmQueuedExport -State $State
     }
     return $State.CompletedExports[$SolutionName].Unmanaged
 }
 
 function Stop-AlmExportPipeline {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Mandatory teardown cancels owned jobs and releases clients, synchronization handles and temporary files; prompting must not strand resources after an export failure.')]
     param([Parameter(Mandatory)][hashtable]$State)
 
     $State.Cancellation.Cancel()
     try {
         foreach ($job in $State.Jobs) {
-            if ($job.State -notin @('Completed', 'Failed', 'Stopped')) { Stop-Job -Job $job }
+            if ($job.State -notin @('Completed', 'Failed', 'Stopped')) { Stop-Job -Job $job -WhatIf:$false -Confirm:$false }
             if ($job.HasMoreData) {
                 try { $State.Timings.Add((Receive-AlmExportJob -Job $job -LogDirectory $State.LogDirectory)) }
                 catch { Write-Host ([string]$_) }
             }
-            Remove-Job -Job $job -Force
+            Remove-Job -Job $job -Force -WhatIf:$false -Confirm:$false
         }
-        Write-AlmExportEvents -State $State
+        Write-AlmExportEvent -State $State
     } finally {
         foreach ($client in $State.Clients) { $client.Dispose() }
         $State.OperationBudget.Dispose()
         $State.Cancellation.Dispose()
         $State.LogEvents.Signal.Dispose()
-        Remove-Item -LiteralPath $State.WorkDirectory -Recurse -Force
+        Remove-Item -LiteralPath $State.WorkDirectory -Recurse -Force -WhatIf:$false -Confirm:$false
     }
 }

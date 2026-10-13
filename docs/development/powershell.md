@@ -41,6 +41,9 @@ Suites live under `tests/`, grouped by the behaviour they own:
 - Pipeline build, connection, deployment/import, export, and shared helpers:
     `PipelineBuild`, `PipelineConnection`, `PipelineDeployment`, `PipelineExport`,
     and `PipelineCommon`.
+- Export configuration, logging, concurrency limits, worker failures and cleanup:
+    `ParallelExport`. These tests run real thread jobs with an isolated fake
+    Dataverse module and temporary Git repositories; they do not contact Dataverse.
 - Dependency installation, cache outputs, and update automation:
     `PipelineDependencies`, `DependencyCache`, and `DependencyUpdates`.
 - Azure DevOps and GitHub baseline selection: `BuildBaseline` and
@@ -49,6 +52,7 @@ Suites live under `tests/`, grouped by the behaviour they own:
     `GitHubDeployment` and `GitHubEnvironment`.
 - Coverage calculations, validation enforcement, and release packaging:
     `Coverage`, `Validation`, and `Release`.
+- Documentation links, examples and configuration reference coverage: `Documentation`.
 - Shared setup prompts, rendering, configuration and selectors: `SetupCommon`.
 - Provider identity, Dataverse users, solutions and environments: `SetupEnvironment`.
 - Provider authentication, lookup failures, mutation guards and generated files:
@@ -153,9 +157,10 @@ directories. Both generated standalone installers are syntax-checked.
 > coverage report when extending setup behavior and add meaningful regression
 > scenarios for the affected paths.
 
-The automated suite also does not certify real PAC/Dataverse integrations or
-parallel-runspace execution. Checker parsing, result handling, and thresholds are
-tested with controlled command responses.
+The automated suite does not certify real PAC/Dataverse integrations or parallel
+solution-checker execution. Parallel export runtime scenarios use controlled
+service responses; checker parsing, result handling, and thresholds are tested
+with controlled command responses.
 
 ## Analyzer Policy
 
@@ -206,10 +211,11 @@ Each exception names the exact file, function, rule, source expression, and reas
 Unexpected findings fail validation. Exceptions that match zero or multiple
 findings also fail and must be reviewed, not automatically refreshed.
 
-The expanded rule set currently exposes additional violations. Validation fails
-at the analyzer gate until those findings are fixed or individually justified;
-tests and coverage are not run after analyzer failure. Use focused Pester runs
-while addressing analyzer findings.
+Validation fails at the analyzer gate when new findings are introduced; tests and
+coverage are not run after analyzer failure. Use focused Pester runs while
+addressing analyzer findings. Parallel export has local justifications for its
+explicitly parameter-bound worker and mandatory resource teardown; its start
+helpers use tested `ShouldProcess` guards.
 
 ## CI Checks
 
