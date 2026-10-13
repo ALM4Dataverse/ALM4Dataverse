@@ -509,6 +509,20 @@ Describe 'Generated GitHub workflow files' {
         $condition | Should -Match '!cancelled\(\)'
         $condition | Should -Match "needs\['deploy-test'\].result == 'success'"
     }
+
+    It 'keeps secret-input merges byte-stable for <Label> generated newlines' -ForEach @(
+        @{ Label = 'LF'; Newline = "`n" }
+        @{ Label = 'CRLF'; Newline = "`r`n" }
+        @{ Label = 'mixed'; Newline = "`n" }
+    ) {
+        $lines = @('jobs:', '  build:', '    with:', '      environment-name: DEV', '      secrets-json: >-', '        {"VALUE": "${{ secrets.VALUE }}"}')
+        $generated = $lines -join $Newline
+        if ($Label -eq 'mixed') { $generated = $generated.Replace('    with:' + "`n", '    with:' + "`r`n") }
+        $first = Merge-SecretJsonInput -ExistingContent '' -GeneratedContent $generated
+        $second = Merge-SecretJsonInput -ExistingContent $first -GeneratedContent $generated
+        $second | Should -BeExactly $first
+        $first | Should -BeExactly ($lines -join [Environment]::NewLine)
+    }
 }
 
 Describe 'Generated Azure DevOps pipeline files' {

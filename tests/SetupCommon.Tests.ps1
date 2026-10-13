@@ -208,6 +208,15 @@ Describe 'Shared setup prompt and rendering contracts' {
         [Spectre.Console.AnsiConsole]::Output.Clear()
     }
 
+    It 'delegates bottom-row lookup and falls back when the console bar is unavailable' {
+        Show-SetupStatusBarAtBottom -PromptKind Menu -SearchEnabled
+        Clear-SetupStatusBarAtBottom
+        Should -Invoke Write-SetupConsoleBar -Times 2 -Exactly -ParameterFilter {
+            $AtBottom -and $RestoreCursorPosition
+        }
+        ([Spectre.Console.AnsiConsole]::Output -join "`n") | Should -Match 'Type=filter'
+    }
+
     It 'maps markup-safe menu values and supports single-choice cancellation' {
         [Spectre.Console.AnsiConsole]::Answers.Enqueue('[[One]]')
         Select-FromMenu -Title Test -Items @('[One]', 'Two') | Should -Be 0

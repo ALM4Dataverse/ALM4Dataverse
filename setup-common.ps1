@@ -1031,6 +1031,7 @@ function Write-SetupConsoleBar {
         [Parameter()][ConsoleColor]$ForegroundColor = [ConsoleColor]::Black,
         [Parameter()][ConsoleColor]$BackgroundColor = [ConsoleColor]::Gray,
         [Parameter()][int]$TargetRow = -1,
+        [Parameter()][switch]$AtBottom,
         [Parameter()][switch]$RestoreCursorPosition,
         [Parameter()][switch]$AdvanceCursor
     )
@@ -1042,7 +1043,10 @@ function Write-SetupConsoleBar {
             return $false
         }
 
-        $resolvedRow = if ($TargetRow -lt 0) {
+        $resolvedRow = if ($AtBottom) {
+            [Math]::Max($windowHeight - 1, 0)
+        }
+        elseif ($TargetRow -lt 0) {
             [Console]::CursorTop
         }
         else {
@@ -1136,7 +1140,7 @@ function Show-SetupStatusBarAtBottom {
 
     $statusText = ($segments -join '  -  ')
 
-    if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)) {
+    if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -AtBottom -RestoreCursorPosition)) {
         $markup = '[black on grey]' + (($segments | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '  -  ') + '[/]'
         [Spectre.Console.AnsiConsole]::MarkupLine($markup)
     }
@@ -1146,7 +1150,7 @@ function Clear-SetupStatusBarAtBottom {
     [CmdletBinding()]
     param()
 
-    [void](Write-SetupConsoleBar -Text '' -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)
+    [void](Write-SetupConsoleBar -Text '' -AtBottom -RestoreCursorPosition)
 }
 
 function Add-SetupConsoleCancelHandler {

@@ -3174,6 +3174,7 @@ function Merge-SecretJsonInput {
         [Parameter(Mandatory)][string]$GeneratedContent
     )
 
+    $GeneratedContent = [regex]::Replace($GeneratedContent, "`r`n|`n|`r", [Environment]::NewLine)
     if ([string]::IsNullOrEmpty($ExistingContent)) {
         return $GeneratedContent
     }
