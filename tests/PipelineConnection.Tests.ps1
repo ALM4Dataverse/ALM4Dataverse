@@ -1,8 +1,12 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:connectionScript = Join-Path $repoRoot 'pipelines/scripts/connect.ps1'
-    function Invoke-ConnectionTestPac { param($Verb, $Operation) }
+    function Invoke-ConnectionTestPac {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Verb, $Operation)
+    }
     function Get-DataverseConnection {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param([switch]$SetAsDefault, [switch]$DefaultAzureCredential, $Url)
     }
     function Get-DataverseWhoAmI {}

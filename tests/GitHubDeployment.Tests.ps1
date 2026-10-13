@@ -147,7 +147,7 @@ Describe 'GitHub deployment selection and gates' {
 
     It 'rejects incomplete metadata and ambiguous releases and ignores unrelated branches' {
         . $script:deploymentResolver
-        { Get-ReleaseMetadata -Release @{ body = ''; tag_name = 'invalid' } } | Should -Throw '*complete ALM build metadata*'
+        { Get-ReleaseInformation -Release @{ body = ''; tag_name = 'invalid' } } | Should -Throw '*complete ALM build metadata*'
         Mock Invoke-GitHubApi {
             if ($RelativePath -match 'page=1$') {
                 $release = [pscustomobject]@{ tag_name = 'release-1'; body = "<!-- alm4dataverse-build-branch:main -->`nBuild: release-1`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)" }

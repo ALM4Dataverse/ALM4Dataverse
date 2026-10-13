@@ -2,13 +2,16 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:buildScript = Join-Path $repoRoot 'pipelines/scripts/build.ps1'
     function Compress-DataverseSolutionFile {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($Path, $OutputPath, $PackageType)
     }
     function Invoke-TestDotnet {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $Operation)
     }
     function Invoke-TestPac {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $Operation)
     }
 }
@@ -80,7 +83,7 @@ Describe 'Build artifacts and solution-check helpers' {
 
     It 'parses severities, selects the highest, and rejects unsupported thresholds' {
         . $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
-        $counts = Parse-SolutionCheckSeverityCounts -ConsoleText "Critical: 1`nHigh issues: 2`nLow=3"
+        $counts = ConvertFrom-SolutionCheckSeverityText -ConsoleText "Critical: 1`nHigh issues: 2`nLow=3"
         $counts.Critical | Should -Be 1
         $counts.High | Should -Be 2
         $counts.Low | Should -Be 3
@@ -98,7 +101,7 @@ Describe 'Build artifacts and solution-check helpers' {
         . $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
         $filePath = Join-Path $script:sourceDirectory 'solutions/Example/script.js'
         Set-Content -LiteralPath $filePath -Value 'content'
-        $files = @(Resolve-SolutionCheckExcludedFiles -SourceDirectory $script:sourceDirectory -SolutionName Example -Patterns @($null, '', '*.js', $filePath, 'missing/*.js'))
+        $files = @(Resolve-SolutionCheckExcludedFile -SourceDirectory $script:sourceDirectory -SolutionName Example -Patterns @($null, '', '*.js', $filePath, 'missing/*.js'))
         $files | Should -Be @($filePath)
     }
 

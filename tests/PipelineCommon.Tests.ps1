@@ -2,6 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
     function Invoke-TestPac {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Area, $Operation)
     }
 }
@@ -29,14 +30,14 @@ Describe 'Pipeline hooks' {
         @{ Config = @{ hooks = @{ preBuild = @() } } }
     ) {
         Set-StrictMode -Version Latest
-        { Invoke-Hooks -HookType preBuild -BaseDirectory $TestDrive -Config $Config } | Should -Not -Throw
+        { Invoke-Hook -HookType preBuild -BaseDirectory $TestDrive -Config $Config } | Should -Not -Throw
     }
 
     It 'passes required and additional context to a string hook path' {
         $hookPath = Join-Path $TestDrive 'hook.ps1'
         Set-Content -LiteralPath $hookPath -Value 'param($Context); $Context'
         $config = @{ hooks = @{ preBuild = $hookPath } }
-        $context = Invoke-Hooks -HookType preBuild -BaseDirectory $TestDrive -Config $config -AdditionalContext @{ Extra = 42 }
+        $context = Invoke-Hook -HookType preBuild -BaseDirectory $TestDrive -Config $config -AdditionalContext @{ Extra = 42 }
         $context.HookType | Should -Be preBuild
         $context.BaseDirectory | Should -Be $TestDrive
         $context.Extra | Should -Be 42
@@ -44,13 +45,13 @@ Describe 'Pipeline hooks' {
     }
 
     It 'rejects missing hook scripts' {
-        { Invoke-Hooks -HookType preBuild -BaseDirectory $TestDrive -Config @{ hooks = @{ preBuild = 'missing-hook.ps1' } } } | Should -Throw '*Hook script not found*'
+        { Invoke-Hook -HookType preBuild -BaseDirectory $TestDrive -Config @{ hooks = @{ preBuild = 'missing-hook.ps1' } } } | Should -Throw '*Hook script not found*'
     }
 
     It 'propagates hook failures rather than continuing' {
         $hookPath = Join-Path $TestDrive 'failure.ps1'
         Set-Content -LiteralPath $hookPath -Value "param(`$Context); throw 'Hook operation failed'"
-        { Invoke-Hooks -HookType preBuild -BaseDirectory $TestDrive -Config @{ hooks = @{ preBuild = @($hookPath) } } } | Should -Throw '*Hook operation failed*'
+        { Invoke-Hook -HookType preBuild -BaseDirectory $TestDrive -Config @{ hooks = @{ preBuild = @($hookPath) } } } | Should -Throw '*Hook operation failed*'
     }
 }
 

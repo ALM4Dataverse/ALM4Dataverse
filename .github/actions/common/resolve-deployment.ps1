@@ -1,6 +1,6 @@
 $ErrorActionPreference = 'Stop'
 
-function Get-GitHubApiHeaders {
+function Get-GitHubApiHeader {
     return @{
         Authorization = "Bearer $($env:GITHUB_TOKEN)"
         Accept = 'application/vnd.github+json'
@@ -16,7 +16,7 @@ function Invoke-GitHubApi {
 
     $uri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/$RelativePath"
     try {
-        return Invoke-RestMethod -Uri $uri -Headers (Get-GitHubApiHeaders)
+        return Invoke-RestMethod -Uri $uri -Headers (Get-GitHubApiHeader)
     }
     catch {
         $statusCode = $null
@@ -224,7 +224,7 @@ function Get-BuildMetadataForTag {
     }
 }
 
-function Get-ReleaseMetadata {
+function Get-ReleaseInformation {
     param([Parameter(Mandatory)][object]$Release)
 
     $body = [string]$Release.body
@@ -253,7 +253,7 @@ function Find-LatestManagedReleaseForBranch {
         $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
-            try { $metadata = Get-ReleaseMetadata -Release $release } catch { continue }
+            try { $metadata = Get-ReleaseInformation -Release $release } catch { continue }
             if ($metadata.Branch -cne $BranchName) { continue }
 
             $match = [pscustomobject]@{
@@ -279,7 +279,7 @@ function Find-ReleaseForBuildRun {
         $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
-            try { $releaseMetadata = Get-ReleaseMetadata -Release $release } catch { continue }
+            try { $releaseMetadata = Get-ReleaseInformation -Release $release } catch { continue }
             if ($releaseMetadata.RunId -ceq $RunId) {
                 $matchingReleases += [pscustomobject]@{
                     Release = $release
@@ -385,7 +385,7 @@ if ([string]::IsNullOrWhiteSpace($requestedReleaseTag) -and [string]::IsNullOrWh
 if (-not [string]::IsNullOrWhiteSpace($requestedReleaseTag) -and $null -eq $release) {
     $release = Get-GitHubReleaseByTag $requestedReleaseTag
 }
-if ($null -ne $release) { $metadata = Get-ReleaseMetadata $release }
+if ($null -ne $release) { $metadata = Get-ReleaseInformation $release }
 if ($null -eq $metadata -and -not [string]::IsNullOrWhiteSpace($requestedReleaseTag)) { $metadata = Get-BuildMetadataForTag $requestedReleaseTag }
 if ($null -ne $metadata) {
     if ($metadata.Branch -cne $callerBranch) { throw "Release/build branch '$($metadata.Branch)' does not match deployment branch '$callerBranch'." }

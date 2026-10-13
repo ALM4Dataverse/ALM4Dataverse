@@ -34,7 +34,7 @@
         @{
             Path = 'setup-github.ps1'
             Rule = 'PSAvoidUsingPlainTextForPassword'
-            Function = 'Set-GitHubPrefixedEnvironmentCredentials'
+            Function = 'Set-GitHubPrefixedEnvironmentCredential'
             Source = '[Parameter(Mandatory)][object]$Credentials'
             Reason = 'The setup API consumes structured authentication configuration for GitHub credential provisioning; SecureString is not a compatible replacement.'
         }
@@ -55,7 +55,7 @@
         @{
             Path = 'setup-azdo.ps1'
             Rule = 'PSAvoidUsingPlainTextForPassword'
-            Function = 'Get-PowerPlatformSCCredentials'
+            Function = 'Get-PowerPlatformSCCredential'
             Source = '[Parameter()][object]$ExistingCredential'
             Reason = 'This is existing service-connection authentication configuration; changing its object contract requires a separate audit.'
         }
@@ -97,8 +97,8 @@
         @{
             Path = 'setup-common.ps1'
             Rule = 'PSUseShouldProcessForStateChangingFunctions'
-            Function = 'New-SpectreMetricColumns'
-            Source = 'New-SpectreMetricColumns'
+            Function = 'New-SpectreMetricColumn'
+            Source = 'New-SpectreMetricColumn'
             Reason = 'Builds transient console renderables. Console dependency initialization is a rendering prerequisite, not a user-selected provisioning operation.'
         }
         @{
@@ -167,15 +167,15 @@
         @{
             Path = 'pipelines/scripts/build.ps1'
             Rule = 'PSUseShouldProcessForStateChangingFunctions'
-            Function = 'New-SolutionCheckSeverityCounts'
-            Source = 'New-SolutionCheckSeverityCounts'
+            Function = 'New-SolutionCheckSeverityCount'
+            Source = 'New-SolutionCheckSeverityCount'
             Reason = 'Returns an in-memory severity counter dictionary; it does not change build artifacts or service configuration.'
         }
         @{
             Path = 'pipelines/scripts/build.ps1'
             Rule = 'PSUseShouldProcessForStateChangingFunctions'
-            Function = 'New-Counts'
-            Source = 'New-Counts'
+            Function = 'New-Count'
+            Source = 'New-Count'
             Reason = 'Returns an in-memory severity counter dictionary inside the parallel worker; it does not change build artifacts or service configuration.'
         }
         @{

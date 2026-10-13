@@ -54,7 +54,7 @@ function Get-PacCliInstalledPackageVersion {
     return ''
 }
 
-function New-SolutionCheckSeverityCounts {
+function New-SolutionCheckSeverityCount {
     return [ordered]@{
         Critical      = 0
         High          = 0
@@ -111,13 +111,13 @@ function Get-SolutionCheckHighestSeverity {
     return 'None'
 }
 
-function Parse-SolutionCheckSeverityCounts {
+function ConvertFrom-SolutionCheckSeverityText {
     param(
         [Parameter(Mandatory = $true)]
         [string]$ConsoleText
     )
 
-    $counts = New-SolutionCheckSeverityCounts
+    $counts = New-SolutionCheckSeverityCount
 
     foreach ($severity in @('Critical', 'High', 'Medium', 'Low', 'Informational')) {
         $escaped = [regex]::Escape($severity)
@@ -130,7 +130,7 @@ function Parse-SolutionCheckSeverityCounts {
     return $counts
 }
 
-function Resolve-SolutionCheckExcludedFiles {
+function Resolve-SolutionCheckExcludedFile {
     param(
         [Parameter(Mandatory = $true)]
         [string]$SourceDirectory,
@@ -371,7 +371,7 @@ function Invoke-SolutionCheck {
 
         $resolvedExcludedFiles = @()
         if (@($excludedFilesRaw).Count -gt 0) {
-            $resolvedExcludedFiles = Resolve-SolutionCheckExcludedFiles -SourceDirectory $SourceDirectory -SolutionName $solutionName -Patterns $excludedFilesRaw
+            $resolvedExcludedFiles = Resolve-SolutionCheckExcludedFile -SourceDirectory $SourceDirectory -SolutionName $solutionName -Patterns $excludedFilesRaw
         }
         $ruleOverrideFile = ConvertTo-SolutionCheckRuleOverrideFile -ReportRoot $solutionCheckRoot -SolutionName $solutionName -RuleLevelOverride $settings.ruleLevelOverride
 
@@ -398,14 +398,14 @@ function Invoke-SolutionCheck {
         $plan = $_
         $ErrorActionPreference = 'Stop'
 
-        function New-Counts {
+        function New-Count {
             return [ordered]@{ Critical = 0; High = 0; Medium = 0; Low = 0; Informational = 0 }
         }
 
-        function Parse-Counts {
+        function ConvertFrom-CountText {
             param([string]$Text)
 
-            $counts = New-Counts
+            $counts = New-Count
             foreach ($severity in @('Critical', 'High', 'Medium', 'Low', 'Informational')) {
                 $escaped = [regex]::Escape($severity)
                 $severityMatches = [regex]::Matches($Text, "(?im)\b$escaped\b(?:\s+issues?)?\s*[:=]\s*(\d+)\b")
@@ -459,7 +459,7 @@ function Invoke-SolutionCheck {
             $outputText = ($output | ForEach-Object { [string]$_ }) -join "`r`n"
             $outputText | Out-File -FilePath (Join-Path $reportDirectory 'pac-solution-check.log') -Encoding UTF8
 
-            $counts = Parse-Counts -Text $outputText
+            $counts = ConvertFrom-CountText -Text $outputText
             $highest = Get-Highest -Counts $counts
 
             return [pscustomobject]@{
@@ -484,7 +484,7 @@ function Invoke-SolutionCheck {
                 Error             = $true
                 ErrorMessage      = $message
                 ReportDirectory   = $reportDirectory
-                SeverityCounts    = (New-Counts)
+                SeverityCounts    = (New-Count)
                 HighestSeverity   = 'None'
                 FailThreshold     = $plan.FailThreshold
                 ThresholdBreached = $false
@@ -542,7 +542,7 @@ function Invoke-SolutionCheck {
 $config = Get-AlmConfig -BaseDirectory $SourceDirectory
 Write-Host "##[debug]Loaded configuration from alm-config.psd1"
 
-Invoke-Hooks -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
+Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }
@@ -620,7 +620,7 @@ Write-Host "##[endgroup]"
 
 Write-Host "##[section]Build completed successfully!"
 
-Invoke-Hooks -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
+Invoke-Hook -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }

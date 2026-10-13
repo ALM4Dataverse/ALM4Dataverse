@@ -1,3 +1,4 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'context', Justification = 'Required hook entry-point contract available to repository-specific implementations.')]
 param($context)
 ### Phase 1 - Upsert new and updated records
 

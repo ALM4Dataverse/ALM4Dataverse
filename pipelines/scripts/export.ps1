@@ -41,7 +41,7 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSettings -Config $solutionsConfig
 
-Invoke-Hooks -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
+Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
     TempDirectory = $TempDirectory
@@ -139,7 +139,7 @@ foreach ($solution in $solutionsConfig.solutions) {
     Write-Host "[$solutionName][Compare] Completed"
 }
 
-Invoke-Hooks -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
+Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
     TempDirectory = $TempDirectory

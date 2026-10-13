@@ -82,8 +82,8 @@ Describe 'Validation orchestration and coverage enforcement' {
     }
 
     It 'attributes name-only diagnostic extents to the nearest owning function' -ForEach @(
-        @{ FunctionName = 'New-SolutionCheckSeverityCounts' }
-        @{ FunctionName = 'New-Counts' }
+        @{ FunctionName = 'New-SolutionCheckSeverityCount' }
+        @{ FunctionName = 'New-Count' }
     ) {
         $tokens = $null
         $parseErrors = $null
@@ -124,6 +124,42 @@ Describe 'Validation orchestration and coverage enforcement' {
 }
 
 Describe 'Repository analyzer policy' {
+    It 'has no unused-parameter, singular-noun, or approved-verb findings' {
+        $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
+        $paths = @(& git -C $repoRoot ls-files --cached --others --exclude-standard |
+            Where-Object { $_ -match '\.(ps1|psm1|psd1)$' } | Sort-Object -Unique)
+        $findings = @(
+            foreach ($path in $paths) {
+                Invoke-ScriptAnalyzer -Path (Join-Path $repoRoot $path) -Settings $policy.AnalyzerSettings |
+                    Where-Object { $_.RuleName -in @('PSReviewUnusedParameter','PSUseSingularNouns','PSUseApprovedVerbs') }
+            }
+        )
+        $findings | Should -BeNullOrEmpty
+    }
+
+    It 'limits blanket unused-parameter suppressions to empty mock command stubs' {
+        $paths = @(& git -C $repoRoot ls-files --cached --others --exclude-standard |
+            Where-Object { $_ -match '\.(ps1|psm1)$' } | Sort-Object -Unique)
+        foreach ($path in $paths) {
+            $tokens = $null
+            $parseErrors = $null
+            $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $path), [ref]$tokens, [ref]$parseErrors)
+            foreach ($paramBlock in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.ParamBlockAst] }, $true)) {
+                foreach ($attribute in $paramBlock.Attributes) {
+                    if ($attribute.TypeName.FullName -notmatch 'SuppressMessage(Attribute)?$' -or
+                        $attribute.PositionalArguments.Count -lt 2 -or
+                        $attribute.PositionalArguments[0].Value -ne 'PSReviewUnusedParameter') { continue }
+                    @($attribute.NamedArguments | Where-Object { $_.ArgumentName -eq 'Justification' -and -not [string]::IsNullOrWhiteSpace($_.Argument.Value) }).Count | Should -Be 1
+                    if ([string]::IsNullOrWhiteSpace($attribute.PositionalArguments[1].Value)) {
+                        $path | Should -BeLike 'tests/*'
+                        $paramBlock.Parent.Parent | Should -BeOfType ([System.Management.Automation.Language.FunctionDefinitionAst])
+                        $paramBlock.Parent.EndBlock.Statements.Count | Should -Be 0
+                    }
+                }
+            }
+        }
+    }
+
     It 'matches each reviewed state-change exception exactly once without disabling the rule' {
         $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
         $exceptions = @($policy.Exceptions | Where-Object { $_.Rule -eq 'PSUseShouldProcessForStateChangingFunctions' })

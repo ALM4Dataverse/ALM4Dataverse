@@ -2,6 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:baselineScript = Join-Path $repoRoot 'pipelines/scripts/resolvebuildvalidationbaseline.ps1'
     function git {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $First, $Second, $Third, [Alias('t')][switch]$TagType, [Alias('p')][switch]$PrintContents)
     }
     function Invoke-BaselineFixture {

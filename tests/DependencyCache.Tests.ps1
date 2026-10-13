@@ -37,9 +37,9 @@ Describe 'Dependency cache resolution' {
         $output = Get-Content $env:GITHUB_OUTPUT -Raw
         $expectedModuleHash = Get-HashHex -Value 'LockedModule=1.2.3'
         $output | Should -Match "module_cache_key=alm4dataverse-unknown-psmodules-$expectedModuleHash"
-        Normalize-VersionSpecifier -Value '' | Should -Be latest
-        Normalize-VersionSpecifier -Value '   ' | Should -Be latest
-        Normalize-VersionSpecifier -Value ' PRERELEASE ' | Should -Be prerelease
+        ConvertTo-VersionSpecifier -Value '' | Should -Be latest
+        ConvertTo-VersionSpecifier -Value '   ' | Should -Be latest
+        ConvertTo-VersionSpecifier -Value ' PRERELEASE ' | Should -Be prerelease
     }
 
     It 'prints outputs when not running in GitHub Actions' {

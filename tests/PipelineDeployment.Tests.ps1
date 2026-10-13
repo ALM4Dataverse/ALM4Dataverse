@@ -4,27 +4,38 @@ BeforeAll {
     . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
 
     function Import-DataverseSolution {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($InFile, $Mode, $TimeoutSeconds, $EnvironmentVariables, $ConnectionReferences,
             [switch]$OverwriteUnmanagedCustomizations, [switch]$SkipIfSameVersion,
             [switch]$UseUpdateIfVersionMajorMinorMatches)
     }
     function Invoke-DataverseSolutionUpgrade {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($SolutionName, [switch]$IfExists)
     }
     function Get-DataverseRecord {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($TableName, $FilterValues, $Links, $Columns)
     }
     function Set-DataverseRecord {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($TableName, $Id, $InputObject)
     }
-    function Publish-DataverseCustomizations {}
+    function Publish-DataverseCustomizations {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
+        param()
+    }
     function Compress-DataverseSolutionFile {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($Path, $OutputPath, $PackageType)
     }
-    function Invoke-DeploymentTestDotnet { param($Verb, $Operation) }
+    function Invoke-DeploymentTestDotnet {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Verb, $Operation)
+    }
 
     function Write-DeploymentConfig {
         param([string]$Settings = '')

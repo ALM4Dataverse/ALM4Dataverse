@@ -75,7 +75,7 @@ function Get-SetupConsoleDependencyAssemblyPath {
     return $assemblyPath
 }
 
-function Initialize-SetupConsoleFrameworkDependencies {
+function Initialize-SetupConsoleFrameworkDependency {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PackageRoot
@@ -323,7 +323,7 @@ function Initialize-SpectreConsole {
         throw "Could not locate Spectre.Console.dll after extracting package version $spectreVersion."
     }
 
-    Initialize-SetupConsoleFrameworkDependencies -PackageRoot $packageRoot
+    Initialize-SetupConsoleFrameworkDependency -PackageRoot $packageRoot
     Add-Type -Path $spectreAssemblyPath -ErrorAction Stop
     $script:SpectreConsoleInitialized = $true
     $script:SpectreConsoleAssemblyPath = $spectreAssemblyPath
@@ -550,7 +550,7 @@ function New-SpectreInfoGrid {
     return $grid
 }
 
-function New-SpectreMetricColumns {
+function New-SpectreMetricColumn {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$Cards
@@ -604,7 +604,7 @@ function New-SpectreMetricColumns {
     return $columns
 }
 
-function Show-SpectreMetricCards {
+function Show-SpectreMetricCard {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$Cards
@@ -616,7 +616,7 @@ function Show-SpectreMetricCards {
     }
 
     Initialize-SpectreConsole
-    [Spectre.Console.AnsiConsole]::Write((New-SpectreMetricColumns -Cards $filteredCards))
+    [Spectre.Console.AnsiConsole]::Write((New-SpectreMetricColumn -Cards $filteredCards))
     [Spectre.Console.AnsiConsole]::WriteLine()
 }
 
@@ -628,7 +628,7 @@ function Show-SolutionSelectionOverview {
     )
 
     $remainingCount = [Math]::Max($AvailableCount - $SelectedCount, 0)
-    Show-SpectreMetricCards -Cards @(
+    Show-SpectreMetricCard -Cards @(
         @{ Label = 'Selected'; AccentColor = 'green3_1'; Value = [string]$SelectedCount; Detail = 'Chosen for source control' },
         @{ Label = 'Remaining'; AccentColor = $(if ($remainingCount -gt 0) { 'deepskyblue1' } else { 'grey42' }); Value = [string]$remainingCount; Detail = 'Still available to add' },
         @{ Label = 'Available total'; AccentColor = 'mediumpurple3'; Value = [string]$AvailableCount; Detail = 'Detected in the environment' }
@@ -681,7 +681,7 @@ function Show-EnvironmentConfigurationOverview {
         'Secret'
     }
 
-    Show-SpectreMetricCards -Cards @(
+    Show-SpectreMetricCard -Cards @(
         @{ Label = 'Environments'; AccentColor = 'yellow3'; Value = [string]$items.Count; Detail = 'Configured stages' },
         @{ Label = 'Pending setup'; AccentColor = $(if ($pendingCount -gt 0) { 'red3_1' } else { 'green3_1' }); Value = [string]$pendingCount; Detail = $(if ($pendingCount -gt 0) { 'Need credentials or service accounts' } else { 'Ready for apply' }) },
         @{ Label = 'Auth mode'; AccentColor = 'deepskyblue1'; Value = $authMix; Detail = "WIF: $wifCount - Secret: $secretCount" },
@@ -957,7 +957,6 @@ function Confirm-SetupReviewAction {
 function Show-SetupPromptGuidance {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter(Mandatory)][string]$PromptText,
         [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$DocRelativePath,
@@ -1244,7 +1243,6 @@ function Show-SelectionPromptWithInterruptHandling {
 function Write-SetupPromptFrame {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter(Mandatory)][string]$PromptText,
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
@@ -1265,7 +1263,6 @@ function Write-SetupPromptFrame {
 
     if (-not $SkipPromptGuidance) {
         Show-SetupPromptGuidance `
-            -PromptKind $PromptKind `
             -PromptText $PromptText `
             -GuidanceLines $PromptGuidanceLines `
             -DocRelativePath $PromptGuidanceDocRelativePath `
@@ -1307,7 +1304,7 @@ function Read-SecretText {
             throw 'Read-SecretText received an empty prompt label. This would create an ambiguous input prompt.'
         }
 
-        Write-SetupPromptFrame -PromptKind 'Secret' -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+        Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
         Show-SetupStatusBarAtBottom -PromptKind 'Secret'
         $textPrompt = [Spectre.Console.TextPrompt[string]]::new((Get-SetupPromptInlineText -PromptKind 'Secret' -PromptText $Prompt))
         $textPrompt.IsSecret = $true
@@ -1391,7 +1388,7 @@ function Select-FromMenu {
         $canRestoreTreatControlCAsInput = $false
     }
 
-    Write-SetupPromptFrame -PromptKind 'Menu' -PromptText $Title -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel -PreserveExistingContent:$PreserveExistingContent -SkipPromptGuidance:$SkipPromptGuidance
+    Write-SetupPromptFrame  -PromptText $Title -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel -PreserveExistingContent:$PreserveExistingContent -SkipPromptGuidance:$SkipPromptGuidance
 
     $effectiveItems = @($Items)
     $wizardContext = Get-SetupWizardContext
@@ -1532,7 +1529,7 @@ function Read-YesNo {
         throw 'Read-YesNo received an empty prompt label. This would create an ambiguous input prompt.'
     }
 
-    Write-SetupPromptFrame -PromptKind 'YesNo' -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+    Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
     Show-SetupStatusBarAtBottom -PromptKind 'YesNo'
     try {
         return [Spectre.Console.AnsiConsole]::Confirm((Get-SetupPromptInlineText -PromptKind 'YesNo' -PromptText $Prompt), (-not $DefaultNo))
@@ -1639,7 +1636,7 @@ function Assert-ValidTenantIdentifier {
     }
 }
 
-function Get-Alm4DataverseRefForDocs {
+function Get-Alm4DataverseDocumentationRef {
     [CmdletBinding()]
     param(
         [Parameter()][string]$Ref
@@ -1671,7 +1668,7 @@ function Get-Alm4DataverseDocUrl {
         [Parameter()][string]$Ref
     )
 
-    $effectiveRef = Get-Alm4DataverseRefForDocs -Ref $Ref
+    $effectiveRef = Get-Alm4DataverseDocumentationRef -Ref $Ref
     $normalizedPath = $RelativePath.TrimStart('/').Replace('\', '/')
     return "https://github.com/ALM4Dataverse/ALM4Dataverse/tree/$effectiveRef/$normalizedPath"
 }
@@ -1679,9 +1676,7 @@ function Get-Alm4DataverseDocUrl {
 function Get-SetupGuidanceHeaderMarkup {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Header,
-        [Parameter()][string]$DocUrl,
-        [Parameter()][string]$LinkLabel = 'Click for docs'
+        [Parameter(Mandatory)][string]$Header
     )
 
     Initialize-SpectreConsole
@@ -1769,7 +1764,7 @@ function Write-SetupGuidance {
     }
 
     $panelContentText = if ($contentLines.Count -gt 0) { $contentLines -join [Environment]::NewLine } else { '[grey][/]' }
-    $panelHeaderMarkup = Get-SetupGuidanceHeaderMarkup -Header $effectiveHeader -DocUrl $docUrl -LinkLabel $LinkLabel
+    $panelHeaderMarkup = Get-SetupGuidanceHeaderMarkup -Header $effectiveHeader
     $panelWriteStartTop = 0
     try {
         $panelWriteStartTop = [Console]::CursorTop
@@ -1812,7 +1807,7 @@ function Read-TextWithDefault {
         }
 
         $value = $null
-        Write-SetupPromptFrame -PromptKind 'Text' -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+        Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
         if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
             Show-SetupStatusBarAtBottom -PromptKind 'Text'
             try {
@@ -2099,7 +2094,7 @@ function Show-EnvironmentConfigurationTable {
     [Spectre.Console.AnsiConsole]::Write($table)
 }
 
-function Select-OrderedSolutions {
+function Select-OrderedSolution {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$AvailableSolutions,
@@ -2516,7 +2511,7 @@ function Select-BuildValidationBaselineEnvironment {
     return "@$($uniqueEnvironments[$selectedIndex - 1].ShortName)"
 }
 
-function Select-ConfiguredDeploymentEnvironments {
+function Select-ConfiguredDeploymentEnvironment {
     [CmdletBinding()]
     param(
         [Parameter()][array]$InitialEnvironments,
@@ -2690,7 +2685,7 @@ function Get-DefaultBranchEnvironmentMappingsFromStrategy {
     return @($mappings)
 }
 
-function Test-BranchEnvironmentMappingsHaveDuplicates {
+function Test-BranchEnvironmentMappingDuplicate {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$BranchMappings
@@ -2785,13 +2780,12 @@ function Show-BranchEnvironmentMappingTable {
     [Spectre.Console.AnsiConsole]::Write($table)
 }
 
-function Select-BranchEnvironmentMappings {
+function Select-BranchEnvironmentMapping {
     [CmdletBinding()]
     param(
         [Parameter()][AllowEmptyCollection()][array]$EnvironmentConfigurations = @(),
         [Parameter()][array]$InitialBranchMappings,
         [Parameter()][string]$Title = 'Manage deployment branches and environment mappings',
-        [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref,
         [Parameter()][switch]$BranchOnly,
@@ -3124,7 +3118,7 @@ function Select-BranchEnvironmentMappings {
                 }
             }
             'Done' {
-                if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappings) {
+                if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappings) {
                     [Spectre.Console.AnsiConsole]::MarkupLine('[red]Each environment can only be assigned to one branch. Resolve duplicates before continuing.[/]')
                     continue
                 }
@@ -3319,6 +3313,7 @@ function Show-SetupActivityOutputPanel {
 }
 
 function Invoke-WithSpectreStatus {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'context', Justification = 'Status-context callback argument forwarded into the nested captured-output script block.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Status,
@@ -3494,10 +3489,8 @@ function Show-SetupCompletionScreen {
         [Parameter(Mandatory)][string]$Heading,
         [Parameter(Mandatory)][string]$AccessLabel,
         [Parameter(Mandatory)][string]$AccessUrl,
-        [Parameter()][array]$MetricCards,
         [Parameter()][hashtable]$SummaryValues,
-        [Parameter()][array]$NextStepLinks,
-        [Parameter()][string[]]$Notes
+        [Parameter()][array]$NextStepLinks
     )
 
     Initialize-SpectreConsole

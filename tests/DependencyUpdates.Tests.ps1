@@ -2,8 +2,14 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:dependencyChecker = Join-Path $repoRoot '.github/scripts/check-outdated-dependencies.ps1'
     $script:dependencyUpdater = Join-Path $repoRoot '.github/scripts/update-dependency-prs.ps1'
-    function git { param($Verb, $First) }
-    function gh { param($Verb, $Operation) }
+    function git {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Verb, $First)
+    }
+    function gh {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Verb, $Operation)
+    }
 }
 
 Describe 'Dependency update automation' {

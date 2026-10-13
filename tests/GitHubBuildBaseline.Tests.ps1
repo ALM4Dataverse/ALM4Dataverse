@@ -2,6 +2,7 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:githubBaselineScript = Join-Path $repoRoot '.github/actions/common/deploy-build-validation.ps1'
     function gh {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Arguments', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
     }
 }
@@ -105,7 +106,7 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
 
     It 'validates metadata, pointer commits, and traversal selectors' {
         . $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
-        { Get-ReleaseMetadata -Release @{ tag_name = 'bad'; body = 'incomplete' } } | Should -Throw '*complete ALM4Dataverse build metadata*'
+        { Get-ReleaseInformation -Release @{ tag_name = 'bad'; body = 'incomplete' } } | Should -Throw '*complete ALM4Dataverse build metadata*'
         { Resolve-Baseline -Selector '@../PROD' } | Should -Throw '*Invalid BUILD validation baseline*'
         { Resolve-CommitFromTagReference -Reference @{ object = @{ type = 'blob'; sha = 'invalid' } } } | Should -Throw '*does not resolve to a source commit*'
         Resolve-CommitFromTagReference -Reference @{ object = @{ type = 'tag'; sha = 'tag-sha' } } | Should -Be ('a' * 40)
@@ -146,6 +147,6 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         Set-Content $invalidFile -Value 'not a package'
         Compress-Archive -LiteralPath $invalidFile -DestinationPath $invalidArchive
         { Expand-BaselineArchive -ArchivePath $invalidArchive -DestinationPath (Join-Path $env:RUNNER_TEMP 'extracted') } | Should -Throw '*does not contain*deploy.ps1*'
-        { Download-BaselineReleaseAsset -ReleaseTag 'first second' -DestinationPath $TestDrive } | Should -Throw '*single non-empty line*'
+        { Save-BaselineReleaseAsset -ReleaseTag 'first second' -DestinationPath $TestDrive } | Should -Throw '*single non-empty line*'
     }
 }

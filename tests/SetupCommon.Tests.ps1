@@ -67,7 +67,7 @@ Describe 'Setup configuration and validation helpers' {
         { Assert-ValidTenantIdentifier -TenantIdentifier invalid -Source TestTenant } | Should -Throw '*TestTenant*is invalid*'
         Assert-ValidTenantIdentifier -TenantIdentifier example.com
         Get-Alm4DataverseDocUrl -RelativePath '/docs\config' -Ref main | Should -Be 'https://github.com/ALM4Dataverse/ALM4Dataverse/tree/main/docs/config'
-        Get-Alm4DataverseRefForDocs | Should -Be stable
+        Get-Alm4DataverseDocumentationRef | Should -Be stable
         Get-DefaultSetupBranchName -BaseBranch '///' -Context '///' | Should -Match '^alm4dataverse/setup-main-\d{14}$'
     }
 
@@ -142,8 +142,8 @@ Describe 'Setup configuration and validation helpers' {
         $gitflow = @(Get-DefaultBranchEnvironmentMappingsFromStrategy -Strategy GitflowLike -EnvironmentConfigurations @($dev, $prod))
         $gitflow[0].Environments | Should -Be @($dev)
         $gitflow[2].Environments | Should -Be @($prod)
-        Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $gitflow | Should -BeFalse
-        Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings @(@{ BranchName = 'main'; Environments = @($dev) }, @{ BranchName = 'develop'; Environments = @($dev) }) | Should -BeTrue
+        Test-BranchEnvironmentMappingDuplicate -BranchMappings $gitflow | Should -BeFalse
+        Test-BranchEnvironmentMappingDuplicate -BranchMappings @(@{ BranchName = 'main'; Environments = @($dev) }, @{ BranchName = 'develop'; Environments = @($dev) }) | Should -BeTrue
         $noProduction = @(Get-DefaultBranchEnvironmentMappingsFromStrategy -Strategy GitflowLike -EnvironmentConfigurations @($dev))
         $noProduction[2].Environments.Count | Should -Be 0
     }

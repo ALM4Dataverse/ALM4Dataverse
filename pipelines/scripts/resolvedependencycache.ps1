@@ -26,7 +26,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Normalize-VersionSpecifier {
+function ConvertTo-VersionSpecifier {
     param(
         [Parameter(Mandatory = $false)]
         [string]$Value
@@ -102,7 +102,7 @@ else {
 $moduleSpecs = @{}
 if ($config.scriptDependencies -is [hashtable]) {
     foreach ($name in ($config.scriptDependencies.Keys | Sort-Object)) {
-        $moduleSpecs[$name] = Normalize-VersionSpecifier -Value ([string]$config.scriptDependencies[$name])
+        $moduleSpecs[$name] = ConvertTo-VersionSpecifier -Value ([string]$config.scriptDependencies[$name])
     }
 }
 
@@ -127,7 +127,7 @@ if ($config.ContainsKey('pacCliVersion') -and $null -ne $config.pacCliVersion) {
     $pacVersion = [string]$config.pacCliVersion
 }
 
-$pacSpec = Normalize-VersionSpecifier -Value $pacVersion
+$pacSpec = ConvertTo-VersionSpecifier -Value $pacVersion
 $pacCacheEnabled = $true
 $pacCacheKey = ''
 if ($pacCacheEnabled) {

@@ -1,3 +1,7 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CollectionUri', Justification = 'Used by nested Azure DevOps REST helpers.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Project', Justification = 'Used by nested Azure DevOps REST helpers.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DefinitionId', Justification = 'Used by nested build-selection helpers.')]
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Used by nested Azure DevOps REST helpers.')]
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ConfigPath,

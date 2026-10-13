@@ -1,4 +1,5 @@
-﻿[CmdletBinding()]
+﻿[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
+[CmdletBinding()]
 param(
     [Parameter()]
     [string]$TenantId,
@@ -260,7 +261,7 @@ function Invoke-GhApi {
     return $null
 }
 
-function Ensure-GitHubEnvironment {
+function Initialize-GitHubEnvironment {
     <#
     .SYNOPSIS
         Ensures a GitHub repository environment exists and optionally configures approvals.
@@ -469,7 +470,7 @@ function Set-GitHubRepoVariable {
     Write-Host "Set repo-level variable '$VariableName'." -ForegroundColor DarkGray
 }
 
-function Get-GitHubEnvironmentCapabilities {
+function Get-GitHubEnvironmentCapability {
     <#
     .SYNOPSIS
         Detects whether GitHub environments and environment approval rules are available for a repository.
@@ -547,7 +548,7 @@ function Get-GitHubEnvironmentPrefix {
     return "${normalized}_"
 }
 
-function Set-GitHubPrefixedEnvironmentCredentials {
+function Set-GitHubPrefixedEnvironmentCredential {
     <#
     .SYNOPSIS
         Stores non-sensitive values as prefixed repository variables and secrets in the matching environment.
@@ -571,7 +572,7 @@ function Set-GitHubPrefixedEnvironmentCredentials {
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID" -VariableValue $Credentials.TenantId
 
     if ($Credentials.AuthType -eq 'Secret' -and $Credentials.ClientSecret) {
-        [void](Ensure-GitHubEnvironment -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName)
+        [void](Initialize-GitHubEnvironment -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName)
         Set-GitHubEnvironmentSecret -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName `
             -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $Credentials.ClientSecret
     }
@@ -764,7 +765,7 @@ function Test-GitHubEnvironmentConfigurationUsesWif {
     return ($credentialPropertyNames -contains 'AuthType' -and [string]$EnvironmentConfiguration.Credentials.AuthType -eq 'WIF')
 }
 
-function Ensure-GitHubSharedWorkflowAccessPolicy {
+function Initialize-GitHubSharedWorkflowAccessPolicy {
     <#
     .SYNOPSIS
         Ensures a private shared action repository has its Actions access policy configured
@@ -833,7 +834,7 @@ function Get-GitHubActionsVariableValue {
     return $null
 }
 
-function Test-GitHubActionsSecretExists {
+function Test-GitHubActionSecretExistence {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -1081,14 +1082,14 @@ function Get-GitHubExistingEnvironmentState {
     $environmentTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'AZURE_TENANT_ID'
     $environmentUrl = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'DATAVERSE_URL'
     $environmentServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'DATAVERSESERVICEACCOUNTUPN'
-    $environmentSecretExists = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -SecretName 'AZURE_CLIENT_SECRET'
+    $environmentSecretExists = Test-GitHubActionSecretExistence -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -SecretName 'AZURE_CLIENT_SECRET'
 
     $prefix = Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName
     $prefixedClientId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_CLIENT_ID"
     $prefixedTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID"
     $prefixedUrl = ConvertTo-NormalizedEnvironmentUrl -Url (Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_URL")
     $prefixedServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_SERVICE_ACCOUNT_UPN"
-    $prefixedSecretExists = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
+    $prefixedSecretExists = Test-GitHubActionSecretExistence -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
 
     $applicationId = if (-not [string]::IsNullOrWhiteSpace($environmentClientId)) { $environmentClientId } else { $prefixedClientId }
     $resolvedTenantId = if (-not [string]::IsNullOrWhiteSpace($environmentTenantId)) { $environmentTenantId } else { $prefixedTenantId }
@@ -1280,7 +1281,7 @@ function Get-GitHubRepositoryExistingSetupState {
     }
 }
 
-function Get-GitHubInitialBranchMappings {
+function Get-GitHubInitialBranchMapping {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
@@ -1374,6 +1375,10 @@ function Get-GitHubOwnedReposForOwner {
         }
 
         if ([string]::IsNullOrWhiteSpace($repoFullName)) {
+            continue
+        }
+
+        if ($repoFullName.Split('/')[0] -ine $Owner) {
             continue
         }
 
@@ -1721,6 +1726,10 @@ function Get-GitHubForksOfRepositoryForOwner {
             continue
         }
 
+        if ($repoFullName.Split('/')[0] -ine $Owner) {
+            continue
+        }
+
         # Some API responses do not include 'parent'. Resolve using repo details when required.
         $parentFullName = $null
         if (
@@ -1750,7 +1759,8 @@ function Get-GitHubForksOfRepositoryForOwner {
     return @($matchingForks)
 }
 
-function Ensure-GitHubForkForSharedWorkflows {
+function Initialize-GitHubSharedWorkflowFork {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository-operation callback.')]
     <#
     .SYNOPSIS
         Ensures the user has a shared workflow repository and optionally updates it from upstream.
@@ -2119,7 +2129,7 @@ function New-GitHubRepositoryInteractive {
 
 #region Entra ID Operations
 
-function Ensure-EntraIdServicePrincipal {
+function Initialize-EntraIdServicePrincipal {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ApplicationId,
@@ -2303,7 +2313,7 @@ function New-EntraIdApplication {
         Write-Host "Created App Registration '$DisplayName' ($($app.appId))."
     }
 
-    [void](Ensure-EntraIdServicePrincipal -ApplicationId $app.appId -TenantId $TenantId)
+    [void](Initialize-EntraIdServicePrincipal -ApplicationId $app.appId -TenantId $TenantId)
 
     $result = [pscustomobject]@{
         Name                = $DisplayName
@@ -2497,7 +2507,7 @@ function Get-GitHubCredentialsForEnvironment {
             }
         }
 
-        [void](Ensure-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
+        [void](Initialize-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
 
         return [pscustomobject]@{
             Name                = $name
@@ -2658,7 +2668,8 @@ function Select-DataverseEnvironment {
     return $menuActions[$index].Environment
 }
 
-function Ensure-DataverseApplicationUser {
+function Initialize-DataverseApplicationUser {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -2728,7 +2739,8 @@ function Ensure-DataverseApplicationUser {
     }
 }
 
-function Ensure-DataverseServiceAccountUser {
+function Initialize-DataverseServiceAccountUser {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -2963,7 +2975,7 @@ function Get-DataverseSolutionsSelection {
         catch { Write-Verbose 'Could not preselect solutions from the existing configuration; continuing with manual selection.' }
     }
 
-    $selectedSolutions = @(Select-OrderedSolutions -AvailableSolutions $userSolutions -InitiallySelectedSolutions $selectedSolutions)
+    $selectedSolutions = @(Select-OrderedSolution -AvailableSolutions $userSolutions -InitiallySelectedSolutions $selectedSolutions)
 
     # Convert to alm-config.psd1 format
     $configSolutions = @()
@@ -3009,8 +3021,8 @@ function Get-GitHubEnvironmentConfiguration {
     }
 }
 
-function Apply-GitHubEnvironmentConfiguration {
-    [CmdletBinding()]
+function Set-GitHubEnvironmentConfiguration {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$EnvironmentConfiguration,
         [Parameter(Mandatory)][string]$TenantId,
@@ -3024,6 +3036,8 @@ function Apply-GitHubEnvironmentConfiguration {
         [Parameter()][bool]$EnableApprovals = $false,
         [Parameter()][array]$RequiredReviewerIds = @()
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$RepoOwner/$RepoName", 'Configure GitHub deployment environment')) { return }
 
     $creds = $EnvironmentConfiguration.Credentials
     $serviceAccountUPN = $EnvironmentConfiguration.ServiceAccountUPN
@@ -3046,7 +3060,7 @@ function Apply-GitHubEnvironmentConfiguration {
     }
 
     if ($UseGitHubEnvironments) {
-        [void](Ensure-GitHubEnvironment `
+        [void](Initialize-GitHubEnvironment `
             -Owner $RepoOwner `
             -Repo $RepoName `
             -EnvironmentName $EnvironmentConfiguration.ShortName `
@@ -3070,7 +3084,7 @@ function Apply-GitHubEnvironmentConfiguration {
             -VariableName 'DATAVERSESERVICEACCOUNTUPN' -VariableValue $serviceAccountUPN
     }
     else {
-        Set-GitHubPrefixedEnvironmentCredentials `
+        Set-GitHubPrefixedEnvironmentCredential `
             -Owner $RepoOwner `
             -Repo $RepoName `
             -EnvironmentName $EnvironmentConfiguration.ShortName `
@@ -3079,8 +3093,8 @@ function Apply-GitHubEnvironmentConfiguration {
             -ServiceAccountUPN $serviceAccountUPN
     }
 
-    Ensure-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $TenantId
-    Ensure-DataverseServiceAccountUser -EnvironmentUrl $EnvironmentConfiguration.Url -ServiceAccountUPN $serviceAccountUPN -TenantId $TenantId
+    Initialize-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $TenantId
+    Initialize-DataverseServiceAccountUser -EnvironmentUrl $EnvironmentConfiguration.Url -ServiceAccountUPN $serviceAccountUPN -TenantId $TenantId
 }
 
 #endregion
@@ -3088,7 +3102,7 @@ function Apply-GitHubEnvironmentConfiguration {
 #region Repository Setup
 
 # Preserve the input block verbatim because GitHub expressions are not valid JSON until runtime.
-function Get-SecretsJsonInputBlocks {
+function Get-SecretJsonInputBlock {
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
 
@@ -3140,7 +3154,7 @@ function Get-SecretsJsonInputBlocks {
     return $blocks.ToArray()
 }
 
-function Merge-SecretsJsonInputs {
+function Merge-SecretJsonInput {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$ExistingContent,
@@ -3153,8 +3167,8 @@ function Merge-SecretsJsonInputs {
 
     $existingLines = [regex]::Split($ExistingContent, "`r`n|`n|`r")
     $generatedLines = [regex]::Split($GeneratedContent, "`r`n|`n|`r")
-    $existingBlocks = @(Get-SecretsJsonInputBlocks -Lines $existingLines)
-    $generatedBlocks = @(Get-SecretsJsonInputBlocks -Lines $generatedLines)
+    $existingBlocks = @(Get-SecretJsonInputBlock -Lines $existingLines)
+    $generatedBlocks = @(Get-SecretJsonInputBlock -Lines $generatedLines)
     if ($existingBlocks.Count -eq 0 -or $generatedBlocks.Count -eq 0) {
         return $GeneratedContent
     }
@@ -3226,6 +3240,8 @@ function Merge-SecretsJsonInputs {
 }
 
 function Copy-WorkflowTemplatesToRepo {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Used by the nested workflow-update callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRef', Justification = 'Used by the nested workflow-update callback.')]
     <#
     .SYNOPSIS
         Copies ALM4Dataverse workflow templates into the user's GitHub repository clone.
@@ -3337,7 +3353,7 @@ function Copy-WorkflowTemplatesToRepo {
                 if ($normalizedRelativePath -like '.github/workflows/*.yml') {
                     $existingContent = [System.IO.File]::ReadAllText($destPath)
                     $sourceContent = [System.IO.File]::ReadAllText($sourceFileToUse)
-                    $mergedContent = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $sourceContent
+                    $mergedContent = Merge-SecretJsonInput -ExistingContent $existingContent -GeneratedContent $sourceContent
                     if ($mergedContent -cne $sourceContent) {
                         if ($isTempFile) {
                             Set-Content -LiteralPath $sourceFileToUse -Value $mergedContent -NoNewline
@@ -3509,7 +3525,7 @@ $environmentBlock        permissions:
 $secretsInput
 "@
 
-                    $newContent = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $newContent
+                    $newContent = Merge-SecretJsonInput -ExistingContent $existingContent -GeneratedContent $newContent
                     $buildWorkflowDirectory = Split-Path -Parent $buildWorkflowPath
                     if (-not (Test-Path -LiteralPath $buildWorkflowDirectory)) {
                         New-Item -ItemType Directory -Path $buildWorkflowDirectory -Force | Out-Null
@@ -3737,14 +3753,14 @@ function Update-DeployWorkflowInRepoClone {
     }
 
     $output = ($lines -join [Environment]::NewLine).TrimEnd() + [Environment]::NewLine
-    $output = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $output
+    $output = Merge-SecretJsonInput -ExistingContent $existingContent -GeneratedContent $output
     Set-Content -LiteralPath $deployFilePath -Value $output -NoNewline
 
     $envList = ($DeploymentEnvironments | ForEach-Object { $_.ShortName }) -join ', '
     Write-Host "Updated DEPLOY workflow '$deployFilePath' with environments: $envList (promotion mode: $PromotionMode)" -ForegroundColor Green
 }
 
-function Publish-GitHubRepoChanges {
+function Publish-GitHubRepoChange {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3830,7 +3846,7 @@ function Publish-GitHubRepoChanges {
     }
 }
 
-function Publish-GitHubBranchSetupChanges {
+function Publish-GitHubBranchSetupChange {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3983,7 +3999,7 @@ function Publish-GitHubBranchSetupChanges {
             }
         }
 
-        return Publish-GitHubRepoChanges -RepoRoot $RepoRoot -PublishPlan $PublishPlan
+        return Publish-GitHubRepoChange -RepoRoot $RepoRoot -PublishPlan $PublishPlan
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -4022,6 +4038,13 @@ function Get-GitHubPublishSummaryText {
 }
 
 function Invoke-GitHubBranchAwareSetup {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CloneRoot', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowReference', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested template-fetch callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseGitHubEnvironments', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DeploymentPromotionMode', Justification = 'Captured by the nested wizard actions.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$CloneRoot,
@@ -4036,8 +4059,6 @@ function Invoke-GitHubBranchAwareSetup {
         [Parameter(Mandatory)][string]$UpstreamGitSource,
         [Parameter(Mandatory)][string]$ALM4DataverseRef,
         [Parameter(Mandatory)][bool]$UseGitHubEnvironments,
-        [Parameter(Mandatory)][bool]$EnableEnvironmentApprovals,
-        [Parameter()][array]$EnvironmentApprovalReviewerIds = @(),
         [Parameter(Mandatory)][string]$DeploymentPromotionMode
     )
 
@@ -4047,7 +4068,7 @@ function Invoke-GitHubBranchAwareSetup {
     $copyRoot = $null
     $upstreamClone = $null
 
-    $initialBranchMappings = @(Get-GitHubInitialBranchMappings -ExistingSetupState $ExistingSetupState -DefaultBranch $DefaultBranch)
+    $initialBranchMappings = @(Get-GitHubInitialBranchMapping -ExistingSetupState $ExistingSetupState -DefaultBranch $DefaultBranch)
     $branchStates = @()
     foreach ($mapping in $initialBranchMappings) {
         $branchName = [string]$mapping.BranchName
@@ -4105,13 +4126,9 @@ function Invoke-GitHubBranchAwareSetup {
                     })
 
                     $selectedBranchMappings = @(Invoke-WithErrorHandling -OperationName 'Selecting deployment branches' -ScriptBlock {
-                        Select-BranchEnvironmentMappings `
+                        Select-BranchEnvironmentMapping `
                             -InitialBranchMappings $currentBranchMappings `
                             -Title 'Manage deployment branches' `
-                            -GuidanceLines @(
-                                'Start by choosing the Git branches that should receive ALM4Dataverse workflow setup.',
-                                'You can add long-lived release branches as well as mainline branches, and you can come back later to change the list.'
-                            ) `
                             -DocRelativePath 'docs/setup/github-setup.md' `
                             -Ref $ALM4DataverseRef `
                             -EditDevEnvironmentScriptBlock {
@@ -4227,7 +4244,7 @@ function Invoke-GitHubBranchAwareSetup {
 
                                 $branchName = [string]$mappingToEdit.BranchName
                                 $excludedDevUrl = if ($mappingToEdit.DevEnvironmentConfiguration) { $mappingToEdit.DevEnvironmentConfiguration.Url } else { $null }
-                                $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironments `
+                                $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironment `
                                     -InitialEnvironments @($mappingToEdit.Environments) `
                                     -Heading "Target deployment environments for branch '$branchName'" `
                                     -Title "Manage deployment environments for branch '$branchName'" `
@@ -4403,7 +4420,7 @@ function Invoke-GitHubBranchAwareSetup {
                             Environments = @($_.DeploymentEnvironments)
                         }
                     })
-                    if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappingsForValidation) {
+                    if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation) {
                         throw 'Each deployment environment can only be assigned to one branch. Resolve duplicate environment assignments before continuing.'
                     }
 
@@ -4584,7 +4601,7 @@ function Invoke-GitHubBranchAwareSetup {
                             }
                         }
 
-                        $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironments `
+                        $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironment `
                             -InitialEnvironments $initialDeploymentEnvironments `
                             -Heading "Target deployment environments for branch '$branchName'" `
                             -Title "Manage deployment environments for branch '$branchName'" `
@@ -4772,7 +4789,7 @@ function Invoke-GitHubBranchAwareSetup {
                             Environments = @($_.DeploymentEnvironments)
                         }
                     })
-                    if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappingsForValidation) {
+                    if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation) {
                         throw 'Each deployment environment can only be assigned to one branch. Resolve duplicate environment assignments before continuing.'
                     }
 
@@ -5082,7 +5099,7 @@ function Invoke-GitHubBranchAwareSetup {
             }
 
             $publishResult = Invoke-WithErrorHandling -OperationName "Publishing repository changes for branch '$($branchState.BranchName)'" -StatusMessage "Publishing repository changes for branch '$($branchState.BranchName)'..." -CaptureOutputInPanel -ScriptBlock {
-                Publish-GitHubBranchSetupChanges `
+                Publish-GitHubBranchSetupChange `
                     -RepoRoot $CloneRoot `
                     -ConfiguredBranch $branchState.BranchName `
                     -PublishPlan $branchState.PublishPlan `
@@ -5469,7 +5486,7 @@ Write-Section `
     -Message "Ensuring Shared Workflow Repository"
 
 $sharedWorkflowRepo = Invoke-WithErrorHandling -OperationName "Ensuring shared workflow repository" -ScriptBlock {
-    Ensure-GitHubForkForSharedWorkflows `
+    Initialize-GitHubSharedWorkflowFork `
         -UpstreamFullName $upstreamWorkflowRepoFullName `
         -ForkOwner $script:ghUser `
         -UpstreamGitSource $upstreamGitSource `
@@ -5488,7 +5505,7 @@ Write-Host "Shared workflow reference (synced branch): $sharedWorkflowReference"
 
 $sharedWorkflowRepoParts = $sharedWorkflowRepository.Split('/', 2)
 Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workflow repository '$sharedWorkflowRepository'..." -ScriptBlock {
-    Ensure-GitHubSharedWorkflowAccessPolicy -Owner $sharedWorkflowRepoParts[0] -Repo $sharedWorkflowRepoParts[1]
+    Initialize-GitHubSharedWorkflowAccessPolicy -Owner $sharedWorkflowRepoParts[0] -Repo $sharedWorkflowRepoParts[1]
 } | Out-Null
 
 $useGitHubEnvironments = $false
@@ -5497,7 +5514,7 @@ $environmentApprovalReviewerIds = @()
 $deploymentPromotionMode = 'manual-gate-tag'
 
 $environmentCapabilities = Invoke-WithSpectreStatus -Status "Checking GitHub environment capabilities for '$repoFullName'..." -ScriptBlock {
-    Get-GitHubEnvironmentCapabilities -Owner $repoOwner -Repo $repoName -ApprovalReviewerId $script:ghUserId
+    Get-GitHubEnvironmentCapability -Owner $repoOwner -Repo $repoName -ApprovalReviewerId $script:ghUserId
 }
 
 if ($existingSetupState.CredentialStorageScope -eq 'Environment' -and $environmentCapabilities.EnvironmentsAvailable) {
@@ -5556,8 +5573,6 @@ $githubSetupResult = Invoke-GitHubBranchAwareSetup `
     -UpstreamGitSource $upstreamGitSource `
     -ALM4DataverseRef $ALM4DataverseRef `
     -UseGitHubEnvironments $useGitHubEnvironments `
-    -EnableEnvironmentApprovals $enableEnvironmentApprovals `
-    -EnvironmentApprovalReviewerIds $environmentApprovalReviewerIds `
     -DeploymentPromotionMode $deploymentPromotionMode
 
 $branchStates = @($githubSetupResult.BranchStates)
@@ -5653,7 +5668,7 @@ else {
         Write-Host ""
 
         Invoke-WithErrorHandling -OperationName "Setting up DEV credentials for branch '$($branchState.BranchName)'" -StatusMessage "Applying DEV environment credentials for branch '$($branchState.BranchName)'..." -CaptureOutputInPanel -ScriptBlock {
-            Apply-GitHubEnvironmentConfiguration `
+            Set-GitHubEnvironmentConfiguration `
                 -EnvironmentConfiguration $devEnvironmentConfiguration `
                 -TenantId $TenantId `
                 -RepoOwner $repoOwner `
@@ -5680,7 +5695,7 @@ else {
     Write-Host ""
 
     Invoke-WithErrorHandling -OperationName 'Applying global BUILD validation environment configuration' -AllowSkip -ScriptBlock {
-        Apply-GitHubEnvironmentConfiguration `
+        Set-GitHubEnvironmentConfiguration `
             -EnvironmentConfiguration $buildValidationEnvironmentConfiguration `
             -TenantId $TenantId `
             -RepoOwner $repoOwner `
@@ -5718,7 +5733,7 @@ else {
             Write-Host ""
 
             Invoke-WithErrorHandling -OperationName "Applying environment configuration for $($env.ShortName)" -AllowSkip -ScriptBlock {
-                Apply-GitHubEnvironmentConfiguration `
+                Set-GitHubEnvironmentConfiguration `
                     -EnvironmentConfiguration $env `
                     -TenantId $TenantId `
                     -RepoOwner $repoOwner `

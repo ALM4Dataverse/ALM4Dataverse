@@ -84,6 +84,11 @@ instead of treating them as missing resources. Best-effort cleanup failures
 emit static verbose diagnostics without replacing the original operation failure
 or discarding an otherwise successful result.
 
+> [!WARNING]
+> The legacy `-UseDeviceAuthentication` installer switch remains accepted for
+> compatibility but does not select device-code authentication. Setup continues
+> to use its existing authentication flow.
+
 ## Coverage Gate
 
 Each added, modified, copied, or renamed `.ps1` or `.psm1` source file must have
@@ -168,6 +173,18 @@ objects, OIDC subject formatting, and test fixtures/stubs. Rendering prerequisit
 may initialize console dependencies; these exceptions do not imply that the
 complete wizard is safe to run under `-WhatIf`. Actual provisioning and file-change
 helpers identified by this rule use `ShouldProcess` guards instead of exceptions.
+
+Required mock signatures, hook entry points, fixed callback arguments, and
+parameters used inside nested callbacks have justified local
+`SuppressMessageAttribute` declarations. Production declarations name the exact
+parameter. Blanket unused-parameter suppressions are restricted to empty test
+command stubs; a regression test enforces that boundary. Two naming suppressions
+preserve external Dataverse cmdlet names in their corresponding test stubs.
+
+Internal helpers use approved verbs and singular nouns, even when they return
+collections. Dead internal parameters and their callers have been removed.
+Regression tests require zero findings for unused parameters, singular nouns,
+and approved verbs without adding global rule exclusions.
 
 Each exception names the exact file, function, rule, source expression, and reason.
 Unexpected findings fail validation. Exceptions that match zero or multiple

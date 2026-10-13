@@ -2,21 +2,29 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:exportScript = Join-Path $repoRoot 'pipelines/scripts/export.ps1'
     function Export-DataverseSolution {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($SolutionName, $OutFolder, [switch]$UnpackMsApp)
     }
     function Compress-DataverseSolutionFile {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($PackageType, $OutputPath, $Path)
     }
     function Compare-DataverseSolutionComponents {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param([switch]$FileToFile, $SolutionFile, $TargetSolutionFile, [switch]$TestIfAdditive)
     }
     function Set-DataverseSolution {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($UniqueName, $Version)
     }
-    function git { param($Command) }
+    function git {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Command', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Command)
+    }
 }
 
 Describe 'Export and version changes' {

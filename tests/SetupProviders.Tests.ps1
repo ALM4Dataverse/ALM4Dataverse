@@ -1,17 +1,28 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'setup-common.ps1')
-    function Get-DataverseEnvironment { param($AccessToken) }
+    function Get-DataverseEnvironment {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($AccessToken)
+    }
     function Get-VSTeamServiceEndpoint {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($ProjectName)
     }
     function Get-VSTeamVariableGroup {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
         param($ProjectName, $Name)
     }
-    function Add-VSTeamVariableGroup { param($ProjectName, $Name, $Type, $Variables, $Description) }
-    function Ensure-AzDoVariableGroupExclusiveLock { param($Organization, $Project, $VariableGroupId, $VariableGroupName) }
+    function Add-VSTeamVariableGroup {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($ProjectName, $Name, $Type, $Variables, $Description)
+    }
+    function Initialize-AzDoVariableGroupExclusiveLock {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Organization, $Project, $VariableGroupId, $VariableGroupName)
+    }
 }
 
 Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
@@ -80,7 +91,7 @@ Describe 'Azure DevOps lookup failure handling' {
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
-        foreach ($name in @('Get-PowerPlatformSCCredentials', 'Ensure-AzDoVariableGroupExists')) {
+        foreach ($name in @('Get-PowerPlatformSCCredential', 'Initialize-AzDoVariableGroup')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -93,17 +104,17 @@ Describe 'Azure DevOps lookup failure handling' {
         Mock Get-VSTeamServiceEndpoint { throw 'Service connection lookup denied' }
         Mock Get-VSTeamVariableGroup { throw 'Variable group lookup denied' }
         Mock Add-VSTeamVariableGroup { [pscustomobject]@{ id = 7 } }
-        Mock Ensure-AzDoVariableGroupExclusiveLock {}
+        Mock Initialize-AzDoVariableGroupExclusiveLock {}
         Mock Select-FromMenu { throw 'Unexpected interactive selection' }
     }
 
     It 'does not start credential provisioning after a failed service connection lookup' {
-        { Get-PowerPlatformSCCredentials -ProjectName project -EnvironmentName TEST } | Should -Throw '*Service connection lookup denied*'
+        { Get-PowerPlatformSCCredential -ProjectName project -EnvironmentName TEST } | Should -Throw '*Service connection lookup denied*'
         Should -Invoke Select-FromMenu -Times 0 -Exactly
     }
 
     It 'does not create a variable group after an unclassified lookup failure' {
-        { Ensure-AzDoVariableGroupExists -Organization org -Project project -ProjectId project-id -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false } | Should -Throw '*Variable group lookup denied*'
+        { Initialize-AzDoVariableGroup -Organization org -Project project  -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false } | Should -Throw '*Variable group lookup denied*'
         Should -Invoke Add-VSTeamVariableGroup -Times 0 -Exactly
     }
 
@@ -111,7 +122,7 @@ Describe 'Azure DevOps lookup failure handling' {
         Mock Get-VSTeamVariableGroup {
             throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Permission denied', [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden))
         }
-        { Ensure-AzDoVariableGroupExists -Organization org -Project project -ProjectId project-id -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false } | Should -Throw '*Permission denied*'
+        { Initialize-AzDoVariableGroup -Organization org -Project project  -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false } | Should -Throw '*Permission denied*'
         Should -Invoke Add-VSTeamVariableGroup -Times 0 -Exactly
     }
 
@@ -119,7 +130,7 @@ Describe 'Azure DevOps lookup failure handling' {
         Mock Get-VSTeamVariableGroup {
             throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Not found', [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound))
         }
-        $result = Ensure-AzDoVariableGroupExists -Organization org -Project project -ProjectId project-id -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false
+        $result = Initialize-AzDoVariableGroup -Organization org -Project project  -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false
         $result.id | Should -Be 7
         Should -Invoke Add-VSTeamVariableGroup -Times 1 -Exactly
     }
@@ -136,17 +147,19 @@ Describe 'Provider mutation guards in <ScriptName>: <Helper>' -ForEach @(
     @{ ScriptName = 'setup-azdo.ps1'; Helper = 'Update-AzDoBuildPipelineInWorkingTree' }
     @{ ScriptName = 'setup-azdo.ps1'; Helper = 'Update-DeployPipelineInWorkingTree' }
     @{ ScriptName = 'setup-azdo.ps1'; Helper = 'New-AzDoPullRequest' }
+    @{ ScriptName = 'setup-azdo.ps1'; Helper = 'Set-AzDoEnvironmentConfiguration' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubEnvironmentSecret' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubEnvironmentVariable' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubRepoSecret' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubRepoVariable' }
-    @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubPrefixedEnvironmentCredentials' }
+    @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubPrefixedEnvironmentCredential' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubRepositoryImmutableSubject' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'New-GitHubRepositoryInteractive' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'New-EntraIdApplication' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Update-AlmConfigInRepoClone' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Update-BuildWorkflowInRepoClone' }
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Update-DeployWorkflowInRepoClone' }
+    @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubEnvironmentConfiguration' }
 ) {
     BeforeAll {
         $tokens = $null
@@ -245,11 +258,53 @@ Describe 'GitHub credential writes: <Helper>' -ForEach @(
     }
 }
 
+Describe 'GitHub repository owner filtering' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        foreach ($name in @('Get-GitHubOwnedReposForOwner', 'Get-GitHubForksOfRepositoryForOwner')) {
+            $definition = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $false)
+            Set-Item -Path "Function:$name" -Value $definition.Body.GetScriptBlock()
+        }
+        function Invoke-GhApi {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($Endpoint, [switch]$AllowNotFound)
+        }
+    }
+
+    BeforeEach {
+        Mock Invoke-GhApi {
+            @(
+                [pscustomobject]@{ full_name = 'OWNER/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
+                [pscustomobject]@{ full_name = 'other/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
+                [pscustomobject]@{ full_name = 'owner/unrelated'; fork = $true; parent = [pscustomobject]@{ full_name = 'other/upstream' } }
+            )
+        }
+    }
+
+    It 'returns only repositories owned by the requested account, ignoring case' {
+        @(Get-GitHubOwnedReposForOwner -Owner owner).full_name | Should -Be @('OWNER/shared', 'owner/unrelated')
+    }
+
+    It 'returns only matching upstream forks owned by the requested account' {
+        @(Get-GitHubForksOfRepositoryForOwner -Owner owner -UpstreamFullName upstream/shared).full_name | Should -Be @('OWNER/shared')
+    }
+
+    It 'returns no repository for an unmatched owner' {
+        @(Get-GitHubOwnedReposForOwner -Owner missing).Count | Should -Be 0
+        @(Get-GitHubForksOfRepositoryForOwner -Owner missing -UpstreamFullName upstream/shared).Count | Should -Be 0
+    }
+}
+
 Describe 'Provider cleanup failure handling' {
     BeforeAll {
         foreach ($provider in @(
             @{ Path = 'setup-azdo.ps1'; Name = 'New-AzDoRepoWorkingTree' }
-            @{ Path = 'setup-github.ps1'; Name = 'Get-GitHubEnvironmentCapabilities' }
+            @{ Path = 'setup-github.ps1'; Name = 'Get-GitHubEnvironmentCapability' }
         )) {
             $tokens = $null
             $parseErrors = $null
@@ -261,7 +316,10 @@ Describe 'Provider cleanup failure handling' {
             Set-Item -Path "Function:$($provider.Name)" -Value $definition.Body.GetScriptBlock()
         }
         function git { throw 'Unmocked Git call' }
-        function Invoke-GhApi { param($Endpoint, $Method, $Body, [switch]$AllowNotFound) }
+        function Invoke-GhApi {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($Endpoint, $Method, $Body, [switch]$AllowNotFound)
+        }
     }
 
     BeforeEach {
@@ -289,7 +347,7 @@ Describe 'Provider cleanup failure handling' {
     It 'preserves successful capability results and emits a nonsensitive cleanup diagnostic' {
         Mock Invoke-GhApi {} -ParameterFilter { $Method -eq 'PUT' }
         Mock Invoke-GhApi { throw 'fake-cleanup-secret' } -ParameterFilter { $Method -eq 'DELETE' }
-        $output = @(Get-GitHubEnvironmentCapabilities -Owner owner -Repo repo -ApprovalReviewerId 7 -Verbose 4>&1)
+        $output = @(Get-GitHubEnvironmentCapability -Owner owner -Repo repo -ApprovalReviewerId 7 -Verbose 4>&1)
         $result = $output | Where-Object { $_ -isnot [System.Management.Automation.VerboseRecord] }
         $result.EnvironmentsAvailable | Should -BeTrue
         $result.ApprovalsAvailable | Should -BeTrue
@@ -302,7 +360,7 @@ Describe 'Provider cleanup failure handling' {
     It 'reports an unavailable probe and still attempts cleanup' {
         Mock Invoke-GhApi { throw 'Environments unavailable' } -ParameterFilter { $Method -eq 'PUT' }
         Mock Invoke-GhApi {} -ParameterFilter { $Method -eq 'DELETE' }
-        $result = Get-GitHubEnvironmentCapabilities -Owner owner -Repo repo
+        $result = Get-GitHubEnvironmentCapability -Owner owner -Repo repo
         $result.EnvironmentsAvailable | Should -BeFalse
         $result.Message | Should -Match 'Environments unavailable'
         Should -Invoke Invoke-GhApi -Times 1 -Exactly -ParameterFilter { $Method -eq 'DELETE' }

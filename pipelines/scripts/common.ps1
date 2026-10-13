@@ -163,7 +163,7 @@ function Get-AlmConfig {
         Write-Host "##[endgroup]"
     }
 
-function Invoke-Hooks {
+function Invoke-Hook {
     param(
         [string]$HookType,
         [string]$BaseDirectory,
