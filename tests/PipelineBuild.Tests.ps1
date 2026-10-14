@@ -23,9 +23,13 @@ Describe 'Build artifacts and solution-check helpers' {
             TF_BUILD                        = $env:TF_BUILD
             ALM_BUILD_TEST_REAL_PARALLEL    = $env:ALM_BUILD_TEST_REAL_PARALLEL
             ALM_BUILD_TEST_MODULE_PATH      = $env:ALM_BUILD_TEST_MODULE_PATH
+            ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND
+            ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED
         }
         $env:ALM_BUILD_TEST_REAL_PARALLEL = $null
         $env:ALM_BUILD_TEST_MODULE_PATH = $null
+        $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = $null
+        $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = $null
         $script:savedExitCode = $global:LASTEXITCODE
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:sourceDirectory = Join-Path $fixtureRoot 'source'
@@ -44,12 +48,19 @@ Describe 'Build artifacts and solution-check helpers' {
         Mock Compress-DataverseSolutionFile { Set-Content -LiteralPath $OutputPath -Value 'packed solution' }
         Mock Copy-Item { New-Item -ItemType Directory -Path $Destination -Force | Out-Null } -ParameterFilter { $Destination -match '[\\/]alm$' }
         Mock Get-Module {
+            if ($env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND -eq 'true' -and $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED -ne 'true') {
+                throw 'Pack command was not resolved before module lookup.'
+            }
             [pscustomobject]@{
                 Path        = $env:ALM_BUILD_TEST_MODULE_PATH
                 Version     = [version]'3.0.4'
                 PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } }
             }
         } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
+        Mock Get-Command {
+            $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = 'true'
+            [pscustomobject]@{ Name = 'Compress-DataverseSolutionFile' }
+        } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
         Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4+build pac' }
@@ -91,6 +102,21 @@ Describe 'Build artifacts and solution-check helpers' {
     It 'fails when a required module is not loaded' {
         Mock Get-Module { $null } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } | Should -Throw '*not found in loaded modules*'
+    }
+
+    It 'resolves the pack command before checking loaded modules' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example' })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = 'true'
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+        $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED | Should -Be 'true'
+        Should -Invoke Get-Command -Times 1 -Exactly -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
     }
 
     It 'fails when PAC package version cannot be resolved' {

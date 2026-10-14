@@ -586,6 +586,7 @@ $packPlans = @(
         }
     }
 )
+$null = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
 $packModule = Get-Module -Name 'Rnwood.Dataverse.Data.PowerShell' | Select-Object -First 1
 if ($null -eq $packModule) {
     Write-Host "##[error]Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
