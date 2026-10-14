@@ -18,6 +18,14 @@ The `EXPORT` pipeline for each repo takes the state of the solution(s) (and othe
 - Check the selected branch and its development Dataverse URL. EXPORT writes to that branch directly; it does not open a pull request.
 - Coordinate with other makers using the same development environment. All configured solution changes are exported, not just the caller's changes.
 
+> [!IMPORTANT]
+> Ensure the automation identity can export solutions, update solution versions,
+> and push to the branch. Branch protection may require an integration branch
+> instead of exporting directly to `main`.
+>
+> Review data hooks before running them: exported records become repository
+> contents and must not contain secrets or inappropriate personal data.
+
 > [!TIP]
 > Export frequently; there is no need to wait until you are ready to deploy. Each export
 > captures your work in source control and creates a useful history.
@@ -78,39 +86,48 @@ No detected changes means no new commit. Data-only hook changes can create a com
 
 ### Version Increments
 
-The branch's configured `buildVersion` MAJOR.MINOR sets the solution's
-`Major.Build` base. The solution version format is `Major.Minor.Build.Revision`;
-`Minor` remains the non-additive upgrade counter used by DEPLOY. If an exported
-solution's `Major.Build` differs from the branch base, EXPORT resets its minor
-and revision counters before applying the current change's increment.
+EXPORT increments changed solution versions according to the branch's configured
+base and detected change type. During deployment, matching solution Major.Minor
+versions permit updates; a different Major.Minor can require an upgrade.
 
-| Detected solution change | Version effect | Example |
-| --- | --- | --- |
-| Additive change (or first export) with matching `Major.Build` | Increment revision | With base `2.3`, `2.4.3.7` becomes `2.4.3.8` |
-| Non-additive change with matching `Major.Build` | Increment minor and reset revision | With base `2.3`, `2.4.3.7` becomes `2.5.3.0` |
-| Additive change with mismatched `Major.Build` | Reset minor/revision, then increment revision | With base `2.3`, `1.9.8.9` becomes `2.0.3.1` |
-| Non-additive change with mismatched `Major.Build` | Reset minor/revision, then increment minor | With base `2.3`, `1.9.8.9` becomes `2.1.3.0` |
-| No source changes | No increment | Version remains unchanged |
-
-Changed solutions reserve their four-part version using a lightweight Git tag named
-`alm4dv/solution-version/<solution-unique-name>/<version>` (for example,
-`alm4dv/solution-version/Example/2.4.3.8`). The reservation tag is pushed to
-`origin` before the version is written to the exported solution. If another branch
-already reserved that version, EXPORT applies the same change-type increment again
-and retries. The push is the atomic claim, so simultaneous exports cannot both
-reserve the same version.
-
-Reservation tags are not release tags and do not trigger BUILD workflows. They are
-not removed when a later export step fails; this leaves a gap rather than allowing
-another branch to reuse the version. Do not delete or force-update these tags.
-GitHub EXPORT needs `contents: write`; the Azure DevOps build identity needs
-permission to create repository tags.
-
-When EXPORT runs on a non-default branch without a matching
-`buildVersion.branches` entry, it warns that `buildVersion.default` is being used.
-Configure an explicit branch base when that branch needs a different MAJOR.MINOR.
-
-During deployment, matching solution Major.Minor versions permit updates; a different Major.Minor can require an upgrade that removes obsolete components. Detection is based on solution component comparison, not a guarantee that a business change is backward-compatible. The CI build/release identity is separate from each solution's version.
+> [!NOTE]
+> **Advanced: version calculation and reservations.** The branch's configured
+> `buildVersion` MAJOR.MINOR sets the solution's `Major.Build` base. The solution
+> version format is `Major.Minor.Build.Revision`; `Minor` remains the
+> non-additive upgrade counter used by DEPLOY. If an exported solution's
+> `Major.Build` differs from the branch base, EXPORT resets its minor and
+> revision counters before applying the current change's increment.
+>
+> | Detected solution change | Version effect | Example |
+> | --- | --- | --- |
+> | Additive change (or first export) with matching `Major.Build` | Increment revision | With base `2.3`, `2.4.3.7` becomes `2.4.3.8` |
+> | Non-additive change with matching `Major.Build` | Increment minor and reset revision | With base `2.3`, `2.4.3.7` becomes `2.5.3.0` |
+> | Additive change with mismatched `Major.Build` | Reset minor/revision, then increment revision | With base `2.3`, `1.9.8.9` becomes `2.0.3.1` |
+> | Non-additive change with mismatched `Major.Build` | Reset minor/revision, then increment minor | With base `2.3`, `1.9.8.9` becomes `2.1.3.0` |
+> | No source changes | No increment | Version remains unchanged |
+>
+> Changed solutions reserve their four-part version using a lightweight Git
+> tag named `alm4dv/solution-version/<solution-unique-name>/<version>` (for
+> example, `alm4dv/solution-version/Example/2.4.3.8`). The reservation tag is
+> pushed to `origin` before the version is written to the exported solution.
+> If another branch already reserved that version, EXPORT applies the same
+> change-type increment again and retries. The push is the atomic claim, so
+> simultaneous exports cannot both reserve the same version.
+>
+> Reservation tags are not release tags and do not trigger BUILD workflows.
+> They are not removed when a later export step fails; this leaves a gap rather
+> than allowing another branch to reuse the version. Do not delete or
+> force-update these tags. GitHub EXPORT needs `contents: write`; the Azure
+> DevOps build identity needs permission to create repository tags.
+>
+> When EXPORT runs on a non-default branch without a matching
+> `buildVersion.branches` entry, it warns that `buildVersion.default` is being
+> used. Configure an explicit branch base when that branch needs a different
+> MAJOR.MINOR.
+>
+> Component comparison determines the change type, but does not guarantee that
+> a business change is backward-compatible. The CI build/release identity is
+> separate from each solution's version.
 
 ## Verify And Continue
 

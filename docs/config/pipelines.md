@@ -53,7 +53,15 @@ Source: [export action](../../.github/actions/export/action.yml).
 
 Outputs: `pushed` (`true` or `false`) and `pushed-sha` (the new commit SHA, empty when nothing was committed).
 
-The action commits all working-tree changes, pushes to the selected branch, and sends `alm4dataverse-export-build` through `repository_dispatch` only when it created a commit. Changed solutions reserve their versions with non-force-pushed tags under `alm4dv/solution-version/`; the GitHub token therefore needs `contents: write`. The target BUILD workflow must be present on the repository's default branch. Configure an optional `WORKFLOW_DISPATCH_TOKEN` through `secrets-json` only when repository policy requires a separate token.
+The action commits all working-tree changes, pushes to the selected branch, and sends `alm4dataverse-export-build` through `repository_dispatch` only when it created a commit.
+
+> [!NOTE]
+> **Advanced: solution version reservations.** Changed solutions reserve their
+> versions with non-force-pushed tags under `alm4dv/solution-version/`. The
+> GitHub token therefore needs `contents: write`. The target BUILD workflow
+> must be present on the repository's default branch. Configure an optional
+> `WORKFLOW_DISPATCH_TOKEN` through `secrets-json` only when repository policy
+> requires a separate token.
 
 ### Import
 

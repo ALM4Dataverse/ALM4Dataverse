@@ -55,14 +55,8 @@ The supplied template additionally includes the `data` asset and example data ho
 
 ### BUILD SemVer
 
-`buildVersion` assigns a MAJOR.MINOR version line to each branch. The CI run
-number supplies PATCH, and the normalized branch name is the SemVer prerelease
-identifier. For example, `main` might produce `2.1.42-main`, while
-`feat/abc` with the default `1.0` base might produce `1.0.43-feat-abc`. Slashes
-and other branch punctuation become hyphens. Every build retains this branch
-suffix in its version and source tag; no stable build promotion is provided.
-Numeric-only branch slugs with leading zeroes get a `b` prefix to remain valid
-SemVer identifiers (for example, branch `01` becomes `b01`).
+`buildVersion` assigns a MAJOR.MINOR version line to each branch. Set a shared
+default and, when needed, full branch-name overrides:
 
 ```powershell
 buildVersion = @{
@@ -77,18 +71,30 @@ buildVersion = @{
 
 The shared configuration defaults `buildVersion.default` to `'1.0'`. Set
 `default` to override the base for unlisted branches, and add entries under
-`branches` for branch-specific release lines. Branch keys are full branch
-names (including any slash-separated prefix), not the final component alone.
-Values must be two non-negative SemVer integers without leading zeroes, such
-as `'2.1'`. BUILD and EXPORT fail early if the selected value is invalid.
+`branches` for branch-specific release lines.
 
-For solution versions, the configured MAJOR.MINOR maps to the Dataverse
-solution's `Major.Build` components. The solution's `Minor` component remains
-the non-additive upgrade counter used by DEPLOY.
-
-`build-version.json` in each artifact records its version, branch, provider,
-source commit, and exact CI run ID. Azure DevOps and GitHub keep the original
-branch-suffixed build identity for deployment and baseline selection.
+> [!NOTE]
+> **Advanced: version derivation.** Branch keys are full branch names, including
+> any slash-separated prefix. Values must be two non-negative SemVer integers
+> without leading zeroes, such as `'2.1'`; BUILD and EXPORT fail early if the
+> selected value is invalid.
+>
+> The CI run number supplies PATCH, and the normalized branch name is the
+> SemVer prerelease identifier. For example, `main` might produce
+> `2.1.42-main`, while `feat/abc` with the default `1.0` base might produce
+> `1.0.43-feat-abc`. Slashes and other branch punctuation become hyphens.
+> Numeric-only branch slugs with leading zeroes get a `b` prefix to remain
+> valid SemVer identifiers (for example, branch `01` becomes `b01`). Every
+> build retains this branch suffix in its version and source tag; no stable
+> build promotion is provided.
+>
+> For solution versions, the configured MAJOR.MINOR maps to the Dataverse
+> solution's `Major.Build` components. The solution's `Minor` component remains
+> the non-additive upgrade counter used by DEPLOY.
+>
+> `build-version.json` in each artifact records its version, branch, provider,
+> source commit, and exact CI run ID. Azure DevOps and GitHub keep the original
+> branch-suffixed build identity for deployment and baseline selection.
 
 ### Solutions
 

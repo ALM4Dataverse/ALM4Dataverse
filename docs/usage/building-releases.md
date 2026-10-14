@@ -20,19 +20,21 @@ The `BUILD` pipeline collates a numbered release by extracting and building the 
 
 The shared configuration defaults `buildVersion.default` to `1.0`. Override
 that default or add full branch-name overrides in `alm-config.psd1` when
-branches need distinct version lines. BUILD uses the CI run number as PATCH and
-the normalized branch name as the prerelease identifier; for example,
-`2.1.42-main` or `1.0.43-feat-abc` for `feat/abc`. Slashes and other branch
-punctuation become hyphens. The repository name remains in the displayed run
-name, not in the SemVer version. All BUILD versions and source tags retain this
-branch suffix; there is no stable build promotion workflow or pipeline. See
-[BUILD SemVer configuration](../config/alm-config.md#build-semver) for the setting
-and validation rules.
+branches need distinct version lines. See
+[BUILD SemVer configuration](../config/alm-config.md#build-semver) for details.
 
-Every successful BUILD artifact includes `build-version.json`, which records
-the version, source branch and commit, provider, and exact run ID. DEPLOY and
-baseline validation consume the selected successful BUILD and its exact
-provider-specific artifacts; they do not change or rebuild the package.
+> [!NOTE]
+> **Advanced: version and artifact identity.** BUILD uses the CI run number as
+> PATCH and the normalized branch name as the prerelease identifier; for example,
+> `2.1.42-main` or `1.0.43-feat-abc` for `feat/abc`. Slashes and other branch
+> punctuation become hyphens. The repository name remains in the displayed run
+> name, not in the SemVer version. All BUILD versions and source tags retain
+> this branch suffix; there is no stable build promotion workflow or pipeline.
+>
+> Every successful BUILD artifact includes `build-version.json`, which records
+> the version, source branch and commit, provider, and exact run ID. DEPLOY and
+> baseline validation consume the selected successful BUILD and its exact
+> provider-specific artifacts; they do not change or rebuild the package.
 
 ## Prerequisites And Outputs
 
