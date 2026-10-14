@@ -41,7 +41,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | Setting | Type | Default or template value |
 | --- | --- | --- |
 | `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. |
-| `buildVersion` | Hashtable | Required for BUILD; default MAJOR.MINOR plus optional full-branch overrides. |
+| `buildVersion` | Hashtable | Shared default is `'1.0'`; optional MAJOR.MINOR override and full-branch overrides. |
 | `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
@@ -72,11 +72,16 @@ buildVersion = @{
 }
 ```
 
-The `default` is required and applies to branches without an explicit entry.
-Branch keys are full branch names (including any slash-separated prefix), not
-the final component alone. Values must be two non-negative SemVer integers
-without leading zeroes, such as `'2.1'`. BUILD fails early if the setting or
-the selected value is invalid.
+The shared configuration defaults `buildVersion.default` to `'1.0'`. Set
+`default` to override the base for unlisted branches, and add entries under
+`branches` for branch-specific release lines. Branch keys are full branch
+names (including any slash-separated prefix), not the final component alone.
+Values must be two non-negative SemVer integers without leading zeroes, such
+as `'2.1'`. BUILD and EXPORT fail early if the selected value is invalid.
+
+For solution versions, the configured MAJOR.MINOR maps to the Dataverse
+solution's `Major.Build` components. The solution's `Minor` component remains
+the non-additive upgrade counter used by DEPLOY.
 
 `build-version.json` in each artifact records its version, branch, provider,
 source commit, and exact CI run ID. Stable promotion reuses that successful

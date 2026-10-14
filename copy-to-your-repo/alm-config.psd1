@@ -48,6 +48,7 @@
 
     # BUILD SemVer settings. PATCH is the CI run number; the branch/provider
     # prerelease suffix is removed when the successful build is promoted.
+    # MAJOR.MINOR also maps to solution Major.Build; solution Minor tracks upgrades.
     buildVersion = @{
         # MAJOR.MINOR used for branches without a specific entry.
         default = '1.0'

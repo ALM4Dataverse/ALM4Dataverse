@@ -85,9 +85,10 @@ pin the shared repository to a tag/branch instead of its default branch.
 > name for your deployment branch. The supplied DEPLOY stages are commented out until
 > you configure targets.
 
-Configure `buildVersion.default` and any branch-specific MAJOR.MINOR entries in
-`alm-config.psd1` before running BUILD. To promote a successful BUILD without
-rebuilding it, create an Azure DevOps pipeline from `pipelines/RELEASE.yml`, select
+The shared configuration defaults `buildVersion.default` to `1.0`; override it
+or add branch-specific MAJOR.MINOR entries in `alm-config.psd1` when needed.
+To promote a successful BUILD without rebuilding it, create an Azure DevOps
+pipeline from `pipelines/RELEASE.yml`, select
 the exact BUILD under **Resources**, and grant its pipeline identity permission to
 create Git tags and add tags to builds. Set the RELEASE caller's `build` resource
 `source` to the same full BUILD pipeline name used by DEPLOY.

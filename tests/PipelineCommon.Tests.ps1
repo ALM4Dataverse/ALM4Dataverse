@@ -19,6 +19,8 @@ Describe 'ALM configuration loading' {
         $config.importTimeoutSeconds | Should -Be 30
         $config.solutionCheck.enabled | Should -BeTrue
         $config.solutionCheck.geo | Should -Be 'Europe'
+        $config.buildVersion.default | Should -Be '1.0'
+        $config.buildVersion.branches | Should -BeOfType [hashtable]
     }
 }
 
@@ -43,6 +45,13 @@ Describe 'BUILD SemVer resolution' {
         $version.StableTagName | Should -Be 'v2.1.42'
     }
 
+    It 'maps branch MAJOR.MINOR to the solution Major.Build base' {
+        $baseVersion = Resolve-AlmBranchBaseVersion -Config $script:buildVersionConfig -BranchName 'refs/heads/main'
+        $baseVersion.Major | Should -Be 2
+        $baseVersion.Build | Should -Be 1
+        $baseVersion.MajorMinor | Should -Be '2.1'
+    }
+
     It 'uses the configured default for an unlisted branch and normalizes branch separators' {
         $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'feature/new-ui' -RunNumber 7 -Provider azdo
         $version.Version | Should -Be '1.0.7-azdo.branch-feature-new-ui'
@@ -52,6 +61,7 @@ Describe 'BUILD SemVer resolution' {
     It 'rejects missing, malformed, and invalid version inputs' {
         { Resolve-AlmBuildVersion -Config @{} -BranchName main -RunNumber 1 -Provider github } | Should -Throw '*buildVersion.default*'
         { Resolve-AlmBuildVersion -Config @{ buildVersion = @{ default = '01.2' } } -BranchName main -RunNumber 1 -Provider github } | Should -Throw '*Invalid MAJOR.MINOR*'
+        { Resolve-AlmBranchBaseVersion -Config @{ buildVersion = @{ default = '2147483648.2' } } -BranchName main } | Should -Throw '*32-bit integer*'
         { Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName main -RunNumber '01' -Provider github } | Should -Throw '*SemVer PATCH*'
         { Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'refs/tags/v1.2.3' -RunNumber 1 -Provider github } | Should -Throw '*requires a branch ref*'
     }

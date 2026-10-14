@@ -80,13 +80,21 @@ No detected changes means no new commit. Data-only hook changes can create a com
 
 ### Version Increments
 
+The branch's configured `buildVersion` MAJOR.MINOR sets the solution's
+`Major.Build` base. The solution version format is `Major.Minor.Build.Revision`;
+`Minor` remains the non-additive upgrade counter used by DEPLOY. If an exported
+solution's `Major.Build` differs from the branch base, EXPORT resets its minor
+and revision counters before applying the current change's increment.
+
 | Detected solution change | Version effect | Example |
 | --- | --- | --- |
-| Additive change, or first export with no prior source | Increment revision | `1.2.3.4` becomes `1.2.3.5` |
-| Non-additive component change | Increment minor and reset build/revision | `1.2.3.4` becomes `1.3.0.0` |
+| Additive change (or first export) with matching `Major.Build` | Increment revision | With base `2.3`, `2.4.3.7` becomes `2.4.3.8` |
+| Non-additive change with matching `Major.Build` | Increment minor and reset revision | With base `2.3`, `2.4.3.7` becomes `2.5.3.0` |
+| Additive change with mismatched `Major.Build` | Reset minor/revision, then increment revision | With base `2.3`, `1.9.8.9` becomes `2.0.3.1` |
+| Non-additive change with mismatched `Major.Build` | Reset minor/revision, then increment minor | With base `2.3`, `1.9.8.9` becomes `2.1.3.0` |
 | No source changes | No increment | Version remains unchanged |
 
-This matters during deployment: matching major/minor versions permit updates; a different major/minor can require an upgrade that removes obsolete components. Detection is based on solution component comparison, not a guarantee that a business change is backward-compatible. The CI build/release identity is separate from each solution's version.
+During deployment, matching solution Major.Minor versions permit updates; a different Major.Minor can require an upgrade that removes obsolete components. Detection is based on solution component comparison, not a guarantee that a business change is backward-compatible. The CI build/release identity is separate from each solution's version.
 
 ## Verify And Continue
 

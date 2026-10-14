@@ -26,6 +26,9 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$EnvironmentName = "Unknown",
 
+    [Parameter(Mandatory=$true)]
+    [string]$BranchName,
+
     [switch]$PassThru
 )
 
@@ -40,6 +43,7 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSetting -Config $solutionsConfig
+$branchBaseVersion = Resolve-AlmBranchBaseVersion -Config $solutionsConfig -BranchName $BranchName
 
 Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
@@ -117,12 +121,26 @@ foreach ($solution in $solutionsConfig.solutions) {
         [xml]$solutionXml = Get-Content -Path $solutionXmlPath
         $currentVersion = [version] $solutionXml.ImportExportXml.SolutionManifest.Version
 
-        if ($changesareadditive) {
-            $newversion = [version] "$($currentVersion.Major).$($currentVersion.Minor).$([Math]::Max(0, $currentVersion.Build)).$([Math]::Max(0, $currentVersion.Revision) + 1)"
-        } else {
-            $newversion = [version] "$($currentVersion.Major).$([Math]::Max(0, $currentVersion.Minor)+1).0.0"
-
+        $baseMatches = $currentVersion.Major -eq $branchBaseVersion.Major -and
+            [Math]::Max(0, $currentVersion.Build) -eq $branchBaseVersion.Build
+        if ($baseMatches) {
+            $minorVersion = [Math]::Max(0, $currentVersion.Minor)
+            $revisionVersion = [Math]::Max(0, $currentVersion.Revision)
         }
+        else {
+            Write-Host "##[debug][$solutionName][Version] Resetting solution version to branch base $($branchBaseVersion.Major).$($branchBaseVersion.Build)"
+            $minorVersion = 0
+            $revisionVersion = 0
+        }
+
+        if ($changesareadditive) {
+            $revisionVersion++
+        } else {
+            $minorVersion++
+            $revisionVersion = 0
+        }
+        $newversion = [version] "$($branchBaseVersion.Major).$minorVersion.$($branchBaseVersion.Build).$revisionVersion"
+
         $solutionXml.ImportExportXml.SolutionManifest.Version = $newversion.ToString()
         $solutionXml.Save($solutionXmlPath)
 

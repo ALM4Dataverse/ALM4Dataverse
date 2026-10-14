@@ -106,7 +106,8 @@ runs:
           -SourceDirectory "${{ github.workspace }}/self" `
           -ArtifactStagingDirectory "${{ runner.temp }}/export-staging" `
           -TempDirectory "${{ runner.temp }}/export-temp" `
-          -EnvironmentName $devEnvLabel
+          -EnvironmentName $devEnvLabel `
+          -BranchName $env:GITHUB_REF_NAME
 
     - name: Upload export diagnostics
       if: always()

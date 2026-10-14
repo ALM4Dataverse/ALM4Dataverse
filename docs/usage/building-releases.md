@@ -18,8 +18,9 @@ The `BUILD` pipeline collates a numbered release by extracting and building the 
 
 ## SemVer build versions and promotion
 
-Configure `buildVersion` in `alm-config.psd1` with a `default` MAJOR.MINOR and
-optional full branch-name overrides. BUILD uses the CI run number as PATCH and
+The shared configuration defaults `buildVersion.default` to `1.0`. Override
+that default or add full branch-name overrides in `alm-config.psd1` when
+branches need distinct version lines. BUILD uses the CI run number as PATCH and
 adds a provider/branch prerelease suffix; for example,
 `2.1.42-github.branch-main`. The repository name remains in the displayed run
 name, not in the SemVer version. See [BUILD SemVer configuration](../config/alm-config.md#build-semver)

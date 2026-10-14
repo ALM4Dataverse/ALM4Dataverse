@@ -111,30 +111,23 @@ function Get-AlmConfig {
     return $config
 }
 
-function Resolve-AlmBuildVersion {
+function Resolve-AlmBranchBaseVersion {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Config,
 
         [Parameter(Mandatory = $true)]
-        [string]$BranchName,
-
-        [Parameter(Mandatory = $true)]
-        [string]$RunNumber,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('github', 'azdo')]
-        [string]$Provider
+        [string]$BranchName
     )
 
     if (-not $Config.ContainsKey('buildVersion') -or $Config.buildVersion -isnot [hashtable]) {
-        throw "BUILD version configuration is missing. Add buildVersion.default and buildVersion.branches to alm-config.psd1."
+        throw "BUILD version configuration is missing. Add buildVersion.default and buildVersion.branches to alm-config-defaults.psd1 or alm-config.psd1."
     }
 
     $versionConfig = $Config.buildVersion
     if (-not $versionConfig.ContainsKey('default')) {
-        throw "BUILD version configuration is missing buildVersion.default in alm-config.psd1."
+        throw "BUILD version configuration is missing buildVersion.default in alm-config-defaults.psd1 or alm-config.psd1."
     }
 
     $branch = $BranchName.Trim()
@@ -165,6 +158,44 @@ function Resolve-AlmBuildVersion {
     if ($majorMinor -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
         throw "Invalid MAJOR.MINOR value '$majorMinor' for branch '$branch'. Use two non-negative SemVer integers, for example '1.4'."
     }
+
+    $versionParts = $majorMinor.Split('.')
+    [int]$major = 0
+    [int]$minor = 0
+    if (-not [int]::TryParse($versionParts[0], [ref]$major) -or
+        -not [int]::TryParse($versionParts[1], [ref]$minor)) {
+        throw "Invalid MAJOR.MINOR value '$majorMinor' for branch '$branch'. Dataverse solution version components must fit in a 32-bit integer."
+    }
+
+    return [pscustomobject]@{
+        Major      = $major
+        Build      = $minor
+        MajorMinor = $majorMinor
+        BranchName = $branch
+    }
+}
+
+function Resolve-AlmBuildVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Config,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BranchName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RunNumber,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('github', 'azdo')]
+        [string]$Provider
+    )
+
+    $branchBaseVersion = Resolve-AlmBranchBaseVersion -Config $Config -BranchName $BranchName
+    $branch = $branchBaseVersion.BranchName
+    $majorMinor = $branchBaseVersion.MajorMinor
+
     if ($RunNumber -notmatch '^(0|[1-9][0-9]*)$') {
         throw "CI run number '$RunNumber' cannot be used as a SemVer PATCH value."
     }
