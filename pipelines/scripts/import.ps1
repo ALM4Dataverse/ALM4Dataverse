@@ -14,7 +14,7 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$SourceDirectory,
-    
+
     [Parameter(Mandatory=$true)]
     [string]$ArtifactStagingDirectory
 )

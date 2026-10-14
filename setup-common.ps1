@@ -1,6 +1,7 @@
 function New-DirectoryIfMissing {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory)][string]$Path)
-    if (-not (Test-Path -LiteralPath $Path)) {
+    if (-not (Test-Path -LiteralPath $Path) -and $PSCmdlet.ShouldProcess($Path, 'Create directory')) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
 }
@@ -43,7 +44,7 @@ function Get-SetupConsoleDependencyAssemblyPath {
                 }
             }
             catch {
-                # Non-fatal; continue.
+                Write-Verbose 'Could not set the legacy TLS preference; continuing with the current protocol settings.'
             }
 
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
@@ -74,7 +75,7 @@ function Get-SetupConsoleDependencyAssemblyPath {
     return $assemblyPath
 }
 
-function Initialize-SetupConsoleFrameworkDependencies {
+function Initialize-SetupConsoleFrameworkDependency {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PackageRoot
@@ -236,7 +237,7 @@ function Initialize-SpectreConsole {
         return
     }
     catch {
-        # Continue and load the assembly from the NuGet package.
+        Write-Verbose 'The console assembly is not loaded; loading it from the configured package.'
     }
 
     # Spectre.Console 0.50+ uses a System.Memory build that references .NET 8
@@ -270,7 +271,7 @@ function Initialize-SpectreConsole {
                 }
             }
             catch {
-                # Non-fatal; continue.
+                Write-Verbose 'Could not set the legacy TLS preference; continuing with the current protocol settings.'
             }
 
             Invoke-WebRequest -Uri $packageUrl -OutFile $packagePath -UseBasicParsing
@@ -322,7 +323,7 @@ function Initialize-SpectreConsole {
         throw "Could not locate Spectre.Console.dll after extracting package version $spectreVersion."
     }
 
-    Initialize-SetupConsoleFrameworkDependencies -PackageRoot $packageRoot
+    Initialize-SetupConsoleFrameworkDependency -PackageRoot $packageRoot
     Add-Type -Path $spectreAssemblyPath -ErrorAction Stop
     $script:SpectreConsoleInitialized = $true
     $script:SpectreConsoleAssemblyPath = $spectreAssemblyPath
@@ -330,6 +331,7 @@ function Initialize-SpectreConsole {
 
 function ConvertTo-SpectreMarkupLiteral {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][AllowNull()][string]$Text
     )
@@ -360,11 +362,30 @@ function Get-OptionalObjectPropertyValue {
         return $null
     }
 
-    if ($InputObject.PSObject -and $InputObject.PSObject.Properties.Name -contains $PropertyName) {
+    if ($InputObject.PSObject -and $null -ne $InputObject.PSObject.Properties[$PropertyName]) {
         return $InputObject.$PropertyName
     }
 
     return $null
+}
+
+function Test-SetupResourceNotFound {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    $exception = $ErrorRecord.Exception
+    while ($null -ne $exception) {
+        $response = Get-OptionalObjectPropertyValue -InputObject $exception -PropertyName 'Response'
+        $statusCode = Get-OptionalObjectPropertyValue -InputObject $response -PropertyName 'StatusCode'
+        if ($null -ne $statusCode -and [int]$statusCode -eq 404) {
+            return $true
+        }
+        $exception = $exception.InnerException
+    }
+    return $false
 }
 
 function Invoke-GenericStaticMethod {
@@ -412,6 +433,7 @@ function Invoke-GenericStaticMethod {
 
 function Test-SetupDebugEnabled {
     [CmdletBinding()]
+    [OutputType([bool])]
     param()
 
     $debugValue = $env:ALM4DATAVERSE_DEBUG
@@ -436,7 +458,9 @@ function Write-SetupDebug {
 }
 
 function New-SpectreTable {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Table')]
     param(
         [Parameter(Mandatory)][string[]]$Columns
     )
@@ -471,7 +495,9 @@ function Add-SpectreTableRow {
 }
 
 function New-SpectrePanel {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Panel')]
     param(
         [Parameter(Mandatory)]$Content,
         [Parameter()][string]$Header,
@@ -501,7 +527,9 @@ function New-SpectrePanel {
 }
 
 function New-SpectreInfoGrid {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Grid')]
     param(
         [Parameter(Mandatory)][hashtable]$Values,
         [Parameter()][int]$LabelWidth = 18
@@ -530,8 +558,10 @@ function New-SpectreInfoGrid {
     return $grid
 }
 
-function New-SpectreMetricColumns {
+function New-SpectreMetricColumn {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
+    [OutputType('Spectre.Console.Columns')]
     param(
         [Parameter(Mandatory)][array]$Cards
     )
@@ -584,7 +614,7 @@ function New-SpectreMetricColumns {
     return $columns
 }
 
-function Show-SpectreMetricCards {
+function Show-SpectreMetricCard {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$Cards
@@ -596,7 +626,7 @@ function Show-SpectreMetricCards {
     }
 
     Initialize-SpectreConsole
-    [Spectre.Console.AnsiConsole]::Write((New-SpectreMetricColumns -Cards $filteredCards))
+    [Spectre.Console.AnsiConsole]::Write((New-SpectreMetricColumn -Cards $filteredCards))
     [Spectre.Console.AnsiConsole]::WriteLine()
 }
 
@@ -608,7 +638,7 @@ function Show-SolutionSelectionOverview {
     )
 
     $remainingCount = [Math]::Max($AvailableCount - $SelectedCount, 0)
-    Show-SpectreMetricCards -Cards @(
+    Show-SpectreMetricCard -Cards @(
         @{ Label = 'Selected'; AccentColor = 'green3_1'; Value = [string]$SelectedCount; Detail = 'Chosen for source control' },
         @{ Label = 'Remaining'; AccentColor = $(if ($remainingCount -gt 0) { 'deepskyblue1' } else { 'grey42' }); Value = [string]$remainingCount; Detail = 'Still available to add' },
         @{ Label = 'Available total'; AccentColor = 'mediumpurple3'; Value = [string]$AvailableCount; Detail = 'Detected in the environment' }
@@ -661,7 +691,7 @@ function Show-EnvironmentConfigurationOverview {
         'Secret'
     }
 
-    Show-SpectreMetricCards -Cards @(
+    Show-SpectreMetricCard -Cards @(
         @{ Label = 'Environments'; AccentColor = 'yellow3'; Value = [string]$items.Count; Detail = 'Configured stages' },
         @{ Label = 'Pending setup'; AccentColor = $(if ($pendingCount -gt 0) { 'red3_1' } else { 'green3_1' }); Value = [string]$pendingCount; Detail = $(if ($pendingCount -gt 0) { 'Need credentials or service accounts' } else { 'Ready for apply' }) },
         @{ Label = 'Auth mode'; AccentColor = 'deepskyblue1'; Value = $authMix; Detail = "WIF: $wifCount - Secret: $secretCount" },
@@ -788,6 +818,7 @@ function Request-SetupWizardBack {
 
 function Test-IsSetupWizardBackException {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][System.Exception]$Exception
     )
@@ -806,6 +837,7 @@ function Test-IsSetupWizardBackException {
 
 function New-SetupHeroPanel {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Message
     )
@@ -852,6 +884,7 @@ function Write-SetupDashboard {
 
 function Test-IsUserInterruptException {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][System.Exception]$Exception
     )
@@ -937,7 +970,6 @@ function Confirm-SetupReviewAction {
 function Show-SetupPromptGuidance {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter(Mandatory)][string]$PromptText,
         [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$DocRelativePath,
@@ -947,7 +979,7 @@ function Show-SetupPromptGuidance {
     )
 
     $effectiveGuidanceLines = @($GuidanceLines)
-    
+
     if (
         @($effectiveGuidanceLines).Count -eq 0 -and
         [string]::IsNullOrWhiteSpace($DocRelativePath)
@@ -969,6 +1001,7 @@ function Show-SetupPromptGuidance {
 
 function Get-SetupPromptInlineText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][ValidateSet('Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter()][string]$PromptText
@@ -992,11 +1025,13 @@ function Get-SetupPromptInlineText {
 
 function Write-SetupConsoleBar {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter()][string]$Text,
         [Parameter()][ConsoleColor]$ForegroundColor = [ConsoleColor]::Black,
         [Parameter()][ConsoleColor]$BackgroundColor = [ConsoleColor]::Gray,
         [Parameter()][int]$TargetRow = -1,
+        [Parameter()][switch]$AtBottom,
         [Parameter()][switch]$RestoreCursorPosition,
         [Parameter()][switch]$AdvanceCursor
     )
@@ -1008,7 +1043,10 @@ function Write-SetupConsoleBar {
             return $false
         }
 
-        $resolvedRow = if ($TargetRow -lt 0) {
+        $resolvedRow = if ($AtBottom) {
+            [Math]::Max($windowHeight - 1, 0)
+        }
+        elseif ($TargetRow -lt 0) {
             [Console]::CursorTop
         }
         else {
@@ -1102,7 +1140,7 @@ function Show-SetupStatusBarAtBottom {
 
     $statusText = ($segments -join '  -  ')
 
-    if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)) {
+    if (-not (Write-SetupConsoleBar -Text $statusText -ForegroundColor ([ConsoleColor]::Black) -BackgroundColor ([ConsoleColor]::Gray) -AtBottom -RestoreCursorPosition)) {
         $markup = '[black on grey]' + (($segments | ForEach-Object { ConvertTo-SpectreMarkupLiteral -Text $_ }) -join '  -  ') + '[/]'
         [Spectre.Console.AnsiConsole]::MarkupLine($markup)
     }
@@ -1112,11 +1150,12 @@ function Clear-SetupStatusBarAtBottom {
     [CmdletBinding()]
     param()
 
-    [void](Write-SetupConsoleBar -Text '' -TargetRow ([Math]::Max([Console]::WindowHeight - 1, 0)) -RestoreCursorPosition)
+    [void](Write-SetupConsoleBar -Text '' -AtBottom -RestoreCursorPosition)
 }
 
 function Add-SetupConsoleCancelHandler {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][System.ConsoleCancelEventHandler]$Handler
     )
@@ -1137,7 +1176,7 @@ function Add-SetupConsoleCancelHandler {
             }
         }
         catch {
-            # Some hosts do not expose a usable console cancel event. Continue without explicit Ctrl+C interception.
+            Write-Verbose 'The console host does not support cancellation interception; continuing without a cancel handler.'
         }
     }
 
@@ -1165,7 +1204,7 @@ function Remove-SetupConsoleCancelHandler {
             }
         }
         catch {
-            # Ignore cleanup failures when the host does not support console cancel events.
+            Write-Verbose 'Could not remove the console cancel handler; continuing cleanup.'
         }
     }
 }
@@ -1212,7 +1251,7 @@ function Show-SelectionPromptWithInterruptHandling {
                 [void]$stopMethod.Invoke($null, [object[]]@($cancellationTokenSource))
             }
             catch {
-                # Ignore cleanup failures.
+                Write-Verbose 'Could not stop the console cancellation handler; continuing cleanup.'
             }
         }
         elseif ($null -ne $cancellationTokenSource) {
@@ -1224,7 +1263,6 @@ function Show-SelectionPromptWithInterruptHandling {
 function Write-SetupPromptFrame {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter(Mandatory)][string]$PromptText,
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
@@ -1245,7 +1283,6 @@ function Write-SetupPromptFrame {
 
     if (-not $SkipPromptGuidance) {
         Show-SetupPromptGuidance `
-            -PromptKind $PromptKind `
             -PromptText $PromptText `
             -GuidanceLines $PromptGuidanceLines `
             -DocRelativePath $PromptGuidanceDocRelativePath `
@@ -1271,6 +1308,7 @@ function Wait-ForUserAcknowledgement {
 
 function Read-SecretText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter()][string[]]$PromptGuidanceLines,
@@ -1287,7 +1325,7 @@ function Read-SecretText {
             throw 'Read-SecretText received an empty prompt label. This would create an ambiguous input prompt.'
         }
 
-        Write-SetupPromptFrame -PromptKind 'Secret' -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+        Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
         Show-SetupStatusBarAtBottom -PromptKind 'Secret'
         $textPrompt = [Spectre.Console.TextPrompt[string]]::new((Get-SetupPromptInlineText -PromptKind 'Secret' -PromptText $Prompt))
         $textPrompt.IsSecret = $true
@@ -1347,7 +1385,7 @@ function Select-FromMenu {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][string[]]$Items,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Items,
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
@@ -1371,7 +1409,7 @@ function Select-FromMenu {
         $canRestoreTreatControlCAsInput = $false
     }
 
-    Write-SetupPromptFrame -PromptKind 'Menu' -PromptText $Title -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel -PreserveExistingContent:$PreserveExistingContent -SkipPromptGuidance:$SkipPromptGuidance
+    Write-SetupPromptFrame  -PromptText $Title -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel -PreserveExistingContent:$PreserveExistingContent -SkipPromptGuidance:$SkipPromptGuidance
 
     $effectiveItems = @($Items)
     $wizardContext = Get-SetupWizardContext
@@ -1490,7 +1528,7 @@ function Select-FromMenu {
                 [Console]::TreatControlCAsInput = $originalTreatControlCAsInput
             }
             catch {
-                # Ignore cleanup failures.
+                Write-Verbose 'Could not restore console input settings; continuing cleanup.'
             }
         }
     }
@@ -1498,6 +1536,7 @@ function Select-FromMenu {
 
 function Read-YesNo {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter()][string[]]$PromptGuidanceLines,
@@ -1512,7 +1551,7 @@ function Read-YesNo {
         throw 'Read-YesNo received an empty prompt label. This would create an ambiguous input prompt.'
     }
 
-    Write-SetupPromptFrame -PromptKind 'YesNo' -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+    Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
     Show-SetupStatusBarAtBottom -PromptKind 'YesNo'
     try {
         return [Spectre.Console.AnsiConsole]::Confirm((Get-SetupPromptInlineText -PromptKind 'YesNo' -PromptText $Prompt), (-not $DefaultNo))
@@ -1619,8 +1658,9 @@ function Assert-ValidTenantIdentifier {
     }
 }
 
-function Get-Alm4DataverseRefForDocs {
+function Get-Alm4DataverseDocumentationRef {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$Ref
     )
@@ -1646,12 +1686,13 @@ function Get-Alm4DataverseRefForDocs {
 
 function Get-Alm4DataverseDocUrl {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RelativePath,
         [Parameter()][string]$Ref
     )
 
-    $effectiveRef = Get-Alm4DataverseRefForDocs -Ref $Ref
+    $effectiveRef = Get-Alm4DataverseDocumentationRef -Ref $Ref
     $normalizedPath = $RelativePath.TrimStart('/').Replace('\', '/')
     return "https://github.com/ALM4Dataverse/ALM4Dataverse/tree/$effectiveRef/$normalizedPath"
 }
@@ -1659,9 +1700,7 @@ function Get-Alm4DataverseDocUrl {
 function Get-SetupGuidanceHeaderMarkup {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Header,
-        [Parameter()][string]$DocUrl,
-        [Parameter()][string]$LinkLabel = 'Click for docs'
+        [Parameter(Mandatory)][string]$Header
     )
 
     Initialize-SpectreConsole
@@ -1704,7 +1743,7 @@ function Write-SetupPanelBottomBorderOverlay {
         [Console]::SetCursorPosition($savedLeft, $savedTop)
     }
     catch {
-        # Ignore overlay failures in hosts that do not expose reliable cursor positioning.
+        Write-Verbose 'The console host could not display the guidance overlay; continuing without the overlay.'
     }
 }
 
@@ -1749,7 +1788,7 @@ function Write-SetupGuidance {
     }
 
     $panelContentText = if ($contentLines.Count -gt 0) { $contentLines -join [Environment]::NewLine } else { '[grey][/]' }
-    $panelHeaderMarkup = Get-SetupGuidanceHeaderMarkup -Header $effectiveHeader -DocUrl $docUrl -LinkLabel $LinkLabel
+    $panelHeaderMarkup = Get-SetupGuidanceHeaderMarkup -Header $effectiveHeader
     $panelWriteStartTop = 0
     try {
         $panelWriteStartTop = [Console]::CursorTop
@@ -1774,6 +1813,7 @@ function Write-SetupGuidance {
 
 function Read-TextWithDefault {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Prompt,
         [Parameter()][string]$DefaultValue,
@@ -1792,7 +1832,7 @@ function Read-TextWithDefault {
         }
 
         $value = $null
-        Write-SetupPromptFrame -PromptKind 'Text' -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+        Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
         if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
             Show-SetupStatusBarAtBottom -PromptKind 'Text'
             try {
@@ -1839,6 +1879,7 @@ function Read-TextWithDefault {
 
 function Get-DefaultSetupBranchName {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$BaseBranch,
         [Parameter()][string]$Context = 'setup'
@@ -2010,6 +2051,7 @@ function Get-BranchTargetedRepoChangePublishPlan {
 
 function Get-CredentialSummaryText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()]$Credentials
     )
@@ -2019,14 +2061,14 @@ function Get-CredentialSummaryText {
     }
 
     $name = ''
-    if ($Credentials.PSObject.Properties.Name -contains 'Name' -and -not [string]::IsNullOrWhiteSpace($Credentials.Name)) {
+    if ($null -ne $Credentials.PSObject.Properties['Name'] -and -not [string]::IsNullOrWhiteSpace($Credentials.Name)) {
         $name = [string]$Credentials.Name
     }
-    elseif ($Credentials.PSObject.Properties.Name -contains 'ApplicationId' -and -not [string]::IsNullOrWhiteSpace($Credentials.ApplicationId)) {
+    elseif ($null -ne $Credentials.PSObject.Properties['ApplicationId'] -and -not [string]::IsNullOrWhiteSpace($Credentials.ApplicationId)) {
         $name = [string]$Credentials.ApplicationId
     }
 
-    if ($Credentials.PSObject.Properties.Name -contains 'IsExistingServiceConnection' -and $Credentials.IsExistingServiceConnection) {
+    if ($null -ne $Credentials.PSObject.Properties['IsExistingServiceConnection'] -and $Credentials.IsExistingServiceConnection) {
         if (-not [string]::IsNullOrWhiteSpace($name)) {
             return "Existing service connection - $name"
         }
@@ -2034,7 +2076,7 @@ function Get-CredentialSummaryText {
     }
 
     $authType = 'Credential'
-    if ($Credentials.PSObject.Properties.Name -contains 'AuthType' -and -not [string]::IsNullOrWhiteSpace($Credentials.AuthType)) {
+    if ($null -ne $Credentials.PSObject.Properties['AuthType'] -and -not [string]::IsNullOrWhiteSpace($Credentials.AuthType)) {
         $authType = [string]$Credentials.AuthType
     }
 
@@ -2079,8 +2121,9 @@ function Show-EnvironmentConfigurationTable {
     [Spectre.Console.AnsiConsole]::Write($table)
 }
 
-function Select-OrderedSolutions {
+function Select-OrderedSolution {
     [CmdletBinding()]
+    [OutputType([object[]])]
     param(
         [Parameter(Mandatory)][array]$AvailableSolutions,
         [Parameter()][array]$InitiallySelectedSolutions
@@ -2204,13 +2247,15 @@ function Select-OrderedSolutions {
 }
 
 function Set-AlmConfigSolutionsInFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][array]$Solutions,
         [Parameter()][switch]$CreateIfMissing,
         [Parameter()][string]$TemplatePath
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update configured solutions')) { return $false }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         if (-not $CreateIfMissing) {
@@ -2235,7 +2280,7 @@ function Set-AlmConfigSolutionsInFile {
             $escapedSolutionName = ([string]$solution.name).Replace("'", "''")
             $solutionsArray += "        @{`n"
             $solutionsArray += "            name = '$escapedSolutionName'`n"
-            if ($solution.deployUnmanaged) {
+            if (Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'deployUnmanaged') {
                 $solutionsArray += "            deployUnmanaged = `$true`n"
             }
             $solutionsArray += "        }`n"
@@ -2287,13 +2332,15 @@ function Set-AlmConfigSolutionsInFile {
 }
 
 function Set-AlmConfigSolutionCheckEnabledInFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][bool]$Enabled,
         [Parameter()][switch]$CreateIfMissing,
         [Parameter()][string]$TemplatePath
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update solution checker configuration')) { return $false }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         if (-not $CreateIfMissing) {
@@ -2353,13 +2400,15 @@ function Set-AlmConfigSolutionCheckEnabledInFile {
 }
 
 function Set-AlmConfigBuildValidationBaselineReleaseInFile {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
         [Parameter(Mandatory)][AllowEmptyString()][string]$BaselineRelease,
         [Parameter()][switch]$CreateIfMissing,
         [Parameter()][string]$TemplatePath
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update BUILD validation baseline')) { return $false }
 
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         if (-not $CreateIfMissing) {
@@ -2441,6 +2490,7 @@ function Set-AlmConfigBuildValidationBaselineReleaseInFile {
 
 function Select-BuildValidationBaselineEnvironment {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentName = '',
@@ -2490,8 +2540,9 @@ function Select-BuildValidationBaselineEnvironment {
     return "@$($uniqueEnvironments[$selectedIndex - 1].ShortName)"
 }
 
-function Select-ConfiguredDeploymentEnvironments {
+function Select-ConfiguredDeploymentEnvironment {
     [CmdletBinding()]
+    [OutputType([object[]])]
     param(
         [Parameter()][array]$InitialEnvironments,
         [Parameter(Mandatory)][scriptblock]$AddEnvironmentScriptBlock,
@@ -2607,6 +2658,7 @@ function Select-ConfiguredDeploymentEnvironments {
 
 function Get-DefaultBranchEnvironmentMappingsFromStrategy {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][ValidateSet('Simple', 'GitflowLike')][string]$Strategy,
         [Parameter(Mandatory)][array]$EnvironmentConfigurations,
@@ -2664,7 +2716,7 @@ function Get-DefaultBranchEnvironmentMappingsFromStrategy {
     return @($mappings)
 }
 
-function Test-BranchEnvironmentMappingsHaveDuplicates {
+function Test-BranchEnvironmentMappingDuplicate {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$BranchMappings
@@ -2759,13 +2811,13 @@ function Show-BranchEnvironmentMappingTable {
     [Spectre.Console.AnsiConsole]::Write($table)
 }
 
-function Select-BranchEnvironmentMappings {
+function Select-BranchEnvironmentMapping {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter()][AllowEmptyCollection()][array]$EnvironmentConfigurations = @(),
         [Parameter()][array]$InitialBranchMappings,
         [Parameter()][string]$Title = 'Manage deployment branches and environment mappings',
-        [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref,
         [Parameter()][switch]$BranchOnly,
@@ -3098,7 +3150,7 @@ function Select-BranchEnvironmentMappings {
                 }
             }
             'Done' {
-                if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappings) {
+                if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappings) {
                     [Spectre.Console.AnsiConsole]::MarkupLine('[red]Each environment can only be assigned to one branch. Resolve duplicates before continuing.[/]')
                     continue
                 }
@@ -3226,6 +3278,7 @@ function Resolve-DevelopmentDefaultAlm4DataverseRef {
 
 function ConvertTo-SetupActivityOutputLine {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][AllowNull()]$Entry
     )
@@ -3293,6 +3346,7 @@ function Show-SetupActivityOutputPanel {
 }
 
 function Invoke-WithSpectreStatus {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'context', Justification = 'Status-context callback argument forwarded into the nested captured-output script block.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Status,
@@ -3302,9 +3356,11 @@ function Invoke-WithSpectreStatus {
 
     Initialize-SpectreConsole
 
-    $scriptExecutionStarted = $false
-    $scriptExecutionCompleted = $false
-    $scriptExecutionResult = $null
+    $statusExecutionState = @{
+        Started = $false
+        Completed = $false
+        Result = $null
+    }
 
     try {
         $statusDisplay = [Spectre.Console.AnsiConsole]::Status()
@@ -3328,7 +3384,7 @@ function Invoke-WithSpectreStatus {
             [System.Func[Spectre.Console.StatusContext, object]]{
                 param($context)
 
-                $scriptExecutionStarted = $true
+                $statusExecutionState.Started = $true
                 $capturedOutput = @(& { & $ScriptBlock $context } 6>&1 5>&1 4>&1 3>&1 2>&1)
                 $capturedResult = $null
                 foreach ($entry in $capturedOutput) {
@@ -3350,8 +3406,8 @@ function Invoke-WithSpectreStatus {
                     }
                 }
 
-                $scriptExecutionCompleted = $true
-                $scriptExecutionResult = $capturedResult
+                $statusExecutionState.Completed = $true
+                $statusExecutionState.Result = $capturedResult
                 return $capturedResult
             }
         )
@@ -3368,9 +3424,9 @@ function Invoke-WithSpectreStatus {
             throw
         }
 
-        if ($CaptureOutputInPanel -and ($scriptExecutionStarted -or $scriptExecutionCompleted)) {
-            if ($scriptExecutionCompleted) {
-                return $scriptExecutionResult
+        if ($CaptureOutputInPanel -and ($statusExecutionState.Started -or $statusExecutionState.Completed)) {
+            if ($statusExecutionState.Completed) {
+                return $statusExecutionState.Result
             }
 
             throw
@@ -3466,10 +3522,8 @@ function Show-SetupCompletionScreen {
         [Parameter(Mandatory)][string]$Heading,
         [Parameter(Mandatory)][string]$AccessLabel,
         [Parameter(Mandatory)][string]$AccessUrl,
-        [Parameter()][array]$MetricCards,
         [Parameter()][hashtable]$SummaryValues,
-        [Parameter()][array]$NextStepLinks,
-        [Parameter()][string[]]$Notes
+        [Parameter()][array]$NextStepLinks
     )
 
     Initialize-SpectreConsole
@@ -3667,7 +3721,7 @@ function Get-AuthToken {
         }
     }
     catch {
-        # Silent acquisition failed, try interactive.
+        Write-Verbose 'Silent token acquisition failed; retrying interactively.'
     }
 
     if (-not $authResult) {
@@ -3704,12 +3758,14 @@ function Get-AuthToken {
 }
 
 function New-EntraIdApplicationSecret {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ApplicationObjectId,
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter()][string]$DisplayName = 'ALM4Dataverse Setup'
     )
+
+    if (-not $PSCmdlet.ShouldProcess($ApplicationObjectId, 'Create Entra application secret')) { return }
 
     $graphToken = Get-AuthToken -ResourceUrl 'https://graph.microsoft.com' -TenantId $TenantId
     $headers = @{
@@ -3730,6 +3786,7 @@ function New-EntraIdApplicationSecret {
 
 function Resolve-DataverseEnvironmentFriendlyName {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$EnvironmentUrl,
         [Parameter()][string]$FallbackName

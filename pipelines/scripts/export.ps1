@@ -17,12 +17,12 @@
 param(
     [Parameter(Mandatory=$true)]
     [string]$SourceDirectory,
-    
+
     [Parameter(Mandatory=$true)]
     [string]$ArtifactStagingDirectory,
 
     [string]$TempDirectory = "([IO.Path]::GetTempPath())\$([IO.Path]::GetTempFileName())",
-    
+
     [Parameter(Mandatory=$false)]
     [string]$EnvironmentName = "Unknown",
 
@@ -39,9 +39,9 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
-$exportSettings = Get-AlmExportSettings -Config $solutionsConfig
+$exportSettings = Get-AlmExportSetting -Config $solutionsConfig
 
-Invoke-Hooks -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
+Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
     TempDirectory = $TempDirectory
@@ -55,18 +55,18 @@ try {
 if ($exportSettings.parallel) {
     $exportPipeline = Start-AlmExportPipeline -Config $solutionsConfig -TempDirectory $TempDirectory -MaxParallel $exportSettings.maxParallel
     $exportPipeline.LogDirectory = $exportLogDirectory
-    Start-AlmQueuedExports -State $exportPipeline
+    Start-AlmQueuedExport -State $exportPipeline
 }
 foreach ($solution in $solutionsConfig.solutions) {
     $solutionName = $solution.name
     $exportZipPath = $null
-    if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExports -State $exportPipeline -SolutionName $solutionName }
-    
+    if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExport -State $exportPipeline -SolutionName $solutionName }
+
     Write-Host "[$solutionName][Unpack] Started (managed and unmanaged)"
-    
+
     if (-not (Test-Path "$SourceDirectory/solutions")) {
         New-Item -ItemType Directory -Path "$SourceDirectory/solutions" | Out-Null
-    } 
+    }
 
     if ((Test-Path $SourceDirectory/solutions/$solutionName)) {
         Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.old.zip" -Path "$SourceDirectory/solutions/$solutionName"
@@ -80,9 +80,9 @@ foreach ($solution in $solutionsConfig.solutions) {
         & { $ProgressPreference = 'SilentlyContinue'; Export-DataverseSolution -Verbose -SolutionName $solutionName -OutFolder "$SourceDirectory/solutions/$solutionName" -UnpackMsApp } *>&1 |
             ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase ExportUnpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
     }
-    
+
     Write-Host "[$solutionName][Unpack] Completed"
-   
+
     Write-Host "[$solutionName][Compare] Checking for changes"
 
     # This ensures that when we compare, the file is normalized compared to what we will generate
@@ -98,7 +98,7 @@ foreach ($solution in $solutionsConfig.solutions) {
     } else {
         Format-AlmLogLine -SolutionName $solutionName -Phase Compare -Text "##[debug]Changes detected`n$gitStatus" | ForEach-Object { Write-Host $_ }
 
-        if ((Test-Path "$TempDirectory/$solutionName-managed.old.zip")) {       
+        if ((Test-Path "$TempDirectory/$solutionName-managed.old.zip")) {
             Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.new.zip" -Path "$SourceDirectory/solutions/$solutionName"
 
             $changesareadditive = (Compare-DataverseSolutionComponents -FileToFile -SolutionFile "$TempDirectory/$solutionName-managed.new.zip" -TargetSolutionFile "$TempDirectory/$solutionName-managed.old.zip" -TestIfAdditive -Verbose)
@@ -136,12 +136,10 @@ foreach ($solution in $solutionsConfig.solutions) {
         Write-Host "##[debug][$solutionName][Version] Updated environment to $newversion"
     }
 
- 
-    
     Write-Host "[$solutionName][Compare] Completed"
 }
 
-Invoke-Hooks -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
+Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
     TempDirectory = $TempDirectory

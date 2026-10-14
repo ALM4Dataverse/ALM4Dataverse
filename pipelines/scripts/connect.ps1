@@ -3,7 +3,7 @@
     Connects to a Dataverse environment using the provided connection string.
 .DESCRIPTION
 
-    This script establishes a connection to the Dataverse environment specified 
+    This script establishes a connection to the Dataverse environment specified
     by the URL. After connecting, it validates the connection by
     calling WhoAmI to ensure the identity has access to the target environment.
 

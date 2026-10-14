@@ -24,7 +24,7 @@ $pipelineBuilder = [Markdig.MarkdownPipelineBuilder]::new()
 $null = [Markdig.MarkdownExtensions]::UseAutoIdentifiers($pipelineBuilder, [Markdig.Extensions.AutoIdentifiers.AutoIdentifierOptions]::GitHub)
 $markdownPipeline = $pipelineBuilder.Build()
 
-function Get-HeadingIds {
+function Get-HeadingId {
     param([string]$Path)
 
     if (-not $headingCache.ContainsKey($Path)) {
@@ -40,7 +40,7 @@ function Get-HeadingIds {
 foreach ($path in $Paths) {
     $file = Get-Item -LiteralPath $path
     $text = Get-Content -LiteralPath $file.FullName -Raw
-    $null = Get-HeadingIds -Path $file.FullName
+    $null = Get-HeadingId -Path $file.FullName
     $document = [Markdig.Markdown]::Parse($text)
 
     foreach ($node in [Markdig.Syntax.MarkdownObjectExtensions]::Descendants($document)) {
@@ -61,7 +61,7 @@ foreach ($path in $Paths) {
             }
             elseif ($parts.Count -gt 1 -and $parts[1] -and [IO.Path]::GetExtension($target) -eq '.md') {
                 $fragment = [Uri]::UnescapeDataString($parts[1])
-                if ($fragment -notin @(Get-HeadingIds -Path $target)) {
+                if ($fragment -notin @(Get-HeadingId -Path $target)) {
                     $failures.Add("$($file.Name): missing heading '$($node.Url)'.")
                 }
             }

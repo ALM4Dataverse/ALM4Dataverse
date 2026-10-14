@@ -37,7 +37,7 @@ Write-Host "##[section]Deploying "
 $solutionsConfig = Get-AlmConfig -BaseDirectory $ArtifactsPath
 Write-Host "##[debug]Loaded configuration"
 
-Invoke-Hooks -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
+Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }
@@ -45,17 +45,24 @@ Invoke-Hooks -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $soluti
 # Define solutions to deploy
 $solutions = @()
 foreach ($solutionConfig in $solutionsConfig.solutions) {
-    if ($UseUnmanagedSolutions -or ($solutionConfig.ContainsKey('deployUnmanaged') -and $solutionConfig.deployUnmanaged -eq $true)) {
+    $deployUnmanaged = $UseUnmanagedSolutions -or ($solutionConfig.ContainsKey('deployUnmanaged') -and $solutionConfig.deployUnmanaged -eq $true)
+    if ($deployUnmanaged) {
         $fileName = "$($solutionConfig.name).zip"
     }
     else {
         $fileName = "$($solutionConfig.name)_managed.zip"
     }
-    
+
+    $serviceAccountUpnKey = 'DataverseServiceAccountUpn'
+    if ($solutionConfig.ContainsKey('serviceAccountUpnConfigKey') -and -not [string]::IsNullOrWhiteSpace($solutionConfig.serviceAccountUpnConfigKey)) {
+        $serviceAccountUpnKey = $solutionConfig.serviceAccountUpnConfigKey
+    }
+
     $solutions += @{
         Name = $solutionConfig.name
-        File = Join-Path $ArtifactsPath solutions $fileName
-        serviceAccountUpnConfigKey = if ($solutionConfig.ContainsKey('serviceAccountUpnConfigKey')) { $solutionConfig.serviceAccountUpnConfigKey } else { $null }
+        File = Join-Path -Path $ArtifactsPath -ChildPath solutions -AdditionalChildPath $fileName
+        DeployUnmanaged = $deployUnmanaged
+        ServiceAccountUpnConfigKey = $serviceAccountUpnKey
     }
 }
 $connectionReferences = @{}
@@ -86,15 +93,15 @@ $environmentVariables.GetEnumerator() | ForEach-Object {
 foreach ($solution in $solutions) {
     Write-Host "##[group]Staging solution: $($solution.Name) from file: $($solution.File)"
 
-    $mode = if ($UseUnmanagedSolutions) { 
+    $mode = if ($solution.DeployUnmanaged) {
         "NoUpgrade"
     }
     elseif ($solutions.Count -eq 1) {
         # Optimisation: if only one solution, can do "Auto" mode
-        "Auto" 
+        "Auto"
     }
-    else { 
-        "HoldingSolution" 
+    else {
+        "HoldingSolution"
     }
 
     Import-DataverseSolution `
@@ -104,14 +111,14 @@ foreach ($solution in $solutions) {
         -TimeoutSeconds $importTimeoutSeconds `
         -EnvironmentVariables $environmentVariables `
         -ConnectionReferences $connectionReferences `
-        -OverwriteUnmanagedCustomizations:(-not $UseUnmanagedSolutions) `
+        -OverwriteUnmanagedCustomizations:(-not $solution.DeployUnmanaged) `
         -SkipIfSameVersion `
-        -UseUpdateIfVersionMajorMinorMatches:(-not $UseUnmanagedSolutions)
+        -UseUpdateIfVersionMajorMinorMatches:(-not $solution.DeployUnmanaged)
     Write-Host "##[endgroup]"
 }
 
 
-Invoke-Hooks -HookType "dataMigrations" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
+Invoke-Hook -HookType "dataMigrations" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }
@@ -120,6 +127,9 @@ Invoke-Hooks -HookType "dataMigrations" -BaseDirectory $ArtifactsPath -Config $s
 Write-Host "##[section]Applying solution upgrades"
 [array]::Reverse($solutions)
 foreach ($solution in $solutions) {
+    if ($solution.DeployUnmanaged) {
+        continue
+    }
     Write-Host "##[group]Apply solution upgrade (if required): $($solution.Name)"
     Invoke-DataverseSolutionUpgrade -Verbose -SolutionName $solution.Name -IfExists
     Write-Host "##[endgroup]"
@@ -132,14 +142,8 @@ Write-Host "##[section]Activating Processes"
 foreach ($solution in $solutions) {
     Write-Host "##[group]Activating processes for solution: $($solution.Name)"
 
-    if ($solution.ContainsKey('serviceAccountUpnConfigKey') -and $solution.serviceAccountUpnConfigKey) {
-        $serviceAccountUpnKey = $solution.serviceAccountUpnConfigKey
-    }
-    else {
-        $serviceAccountUpnKey = 'DataverseServiceAccountUpn'
-    }
-    $serviceAccountUpnKey = $serviceAccountUpnKey.ToUpper()
-    [string] $serviceAccountUpn = get-content env:$serviceAccountUpnKey -erroraction continue
+    $serviceAccountUpnKey = $solution.ServiceAccountUpnConfigKey.ToUpperInvariant()
+    [string] $serviceAccountUpn = [System.Environment]::GetEnvironmentVariable($serviceAccountUpnKey)
     if ([string]::IsNullOrEmpty($serviceAccountUpn)) {
         Write-Host "##[error]Service account UPN not specified in environment variable '$serviceAccountUpnKey'."
         throw "Service account UPN not specified."
@@ -156,7 +160,7 @@ foreach ($solution in $solutions) {
         Write-Host "##[debug]Found service account user: $($serviceAccountUser.fullname) (ID: $($serviceAccountUser.Id))"
     }
 
-    $processes = Get-DataverseRecord -TableName workflow `
+    $processes = @(Get-DataverseRecord -TableName workflow `
         -FilterValues @{"and" = @(
                 @{"solution.uniquename" = "$($solution.Name)"}
                 @{"or" = @(
@@ -166,18 +170,18 @@ foreach ($solution in $solutions) {
              )
         } `
         -Links @{"workflow.solutionid" = "solution.solutionid" } `
-        -Columns name, workflowid
+        -Columns name, workflowid)
 
     if ($processes.Count -gt 0) {
         foreach ($process in $processes) {
             if ($process.ownerid -ne $serviceAccountUser.Id) {
                 Write-Host "Reassigning process: $($process.name) to service account user: $($serviceAccountUser.fullname)"
-                
+
                 Set-DataverseRecord `
                     -TableName workflow `
                     -Id $process.workflowid `
                     -InputObject @{statecode = 0; statuscode = 1; }
-                    
+
                 Set-DataverseRecord `
                     -TableName workflow `
                     -Id $process.workflowid `
@@ -202,7 +206,7 @@ Write-Host "##[endgroup]"
 Write-Host "##[section]Publishing Customizations"
 Publish-DataverseCustomizations
 
-Invoke-Hooks -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
+Invoke-Hook -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }

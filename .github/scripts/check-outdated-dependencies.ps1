@@ -1,8 +1,8 @@
-<#
+﻿<#
 .SYNOPSIS
     Checks for outdated script dependencies in alm-config-defaults.psd1
 .DESCRIPTION
-    Reads the scriptDependencies from alm-config-defaults.psd1 and checks 
+    Reads the scriptDependencies from alm-config-defaults.psd1 and checks
     PowerShell Gallery for newer versions. Outputs information about outdated
     dependencies for use in the next workflow step.
 #>
@@ -23,7 +23,7 @@ $scriptDependencies = $config.scriptDependencies
 
 if (-not $scriptDependencies -or $scriptDependencies.Count -eq 0) {
     Write-Host "No script dependencies found in $configPath"
-    echo "has_updates=false" >> $env:GITHUB_OUTPUT
+    Write-Output "has_updates=false" >> $env:GITHUB_OUTPUT
     exit 0
 }
 
@@ -33,21 +33,21 @@ $outdatedDeps = @()
 
 foreach ($moduleName in $scriptDependencies.Keys) {
     $currentVersion = $scriptDependencies[$moduleName]
-    
+
     Write-Host "Checking $moduleName (current: $currentVersion)..."
-    
+
     try {
         # Find the latest version from PowerShell Gallery
         $latestModule = Find-Module -Name $moduleName -ErrorAction Stop
         $latestVersion = $latestModule.Version.ToString()
-        
+
         Write-Host "  Latest version: $latestVersion"
-        
+
         # Compare versions
         if ($currentVersion -ne $latestVersion) {
             $currentVersionObj = [version]$currentVersion
             $latestVersionObj = [version]$latestVersion
-            
+
             if ($latestVersionObj -gt $currentVersionObj) {
                 Write-Host "  ✓ Update available: $currentVersion -> $latestVersion"
                 $outdatedDeps += @{
@@ -69,12 +69,12 @@ foreach ($moduleName in $scriptDependencies.Keys) {
 
 if ($outdatedDeps.Count -eq 0) {
     Write-Host "All dependencies are up to date!"
-    echo "has_updates=false" >> $env:GITHUB_OUTPUT
+    Write-Output "has_updates=false" >> $env:GITHUB_OUTPUT
 } else {
     Write-Host "`nFound $($outdatedDeps.Count) outdated dependencies"
-    
+
     # Save outdated dependencies to a file for the next step
     $outdatedDeps | ConvertTo-Json | Out-File -FilePath "outdated-deps.json" -Encoding UTF8
-    
-    echo "has_updates=true" >> $env:GITHUB_OUTPUT
+
+    Write-Output "has_updates=true" >> $env:GITHUB_OUTPUT
 }

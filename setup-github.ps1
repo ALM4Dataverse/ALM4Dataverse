@@ -1,3 +1,4 @@
+﻿[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
 [CmdletBinding()]
 param(
     [Parameter()]
@@ -49,7 +50,7 @@ else {
 #region Initialization
 
 Write-Section `
-    -Message "Initialising setup" 
+    -Message "Initialising setup"
 
 $TempModuleRoot = Join-Path ([System.IO.Path]::GetTempPath()) "ALM4Dataverse\Modules"
 New-DirectoryIfMissing -Path $TempModuleRoot
@@ -220,7 +221,7 @@ function Invoke-GhApi {
     )
 
     $ghArgs = @('api', '--method', $Method, $Endpoint)
-    
+
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
@@ -248,7 +249,7 @@ function Invoke-GhApi {
         }
         throw "gh api call failed (exit code $ghExitCode): $errText"
     }
-    
+
     if ($result) {
         try {
             return (@($result) -join [Environment]::NewLine) | ConvertFrom-Json
@@ -260,7 +261,7 @@ function Invoke-GhApi {
     return $null
 }
 
-function Ensure-GitHubEnvironment {
+function Initialize-GitHubEnvironment {
     <#
     .SYNOPSIS
         Ensures a GitHub repository environment exists and optionally configures approvals.
@@ -322,7 +323,7 @@ function Set-GitHubEnvironmentSecret {
     .SYNOPSIS
         Sets a secret in a GitHub repository environment using the gh CLI.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
@@ -330,6 +331,8 @@ function Set-GitHubEnvironmentSecret {
         [Parameter(Mandatory)][string]$SecretName,
         [Parameter(Mandatory)][string]$SecretValue
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo/$EnvironmentName", 'Set GitHub environment secret')) { return }
 
     Write-Host "Setting secret '$SecretName' in environment '$EnvironmentName'..." -ForegroundColor DarkGray
 
@@ -361,7 +364,7 @@ function Set-GitHubEnvironmentVariable {
     .SYNOPSIS
         Sets a variable in a GitHub repository environment using the gh CLI.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
@@ -369,6 +372,8 @@ function Set-GitHubEnvironmentVariable {
         [Parameter(Mandatory)][string]$VariableName,
         [Parameter(Mandatory)][string]$VariableValue
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo/$EnvironmentName", 'Set GitHub environment variable')) { return }
 
     Write-Host "Setting variable '$VariableName' in environment '$EnvironmentName'..." -ForegroundColor DarkGray
 
@@ -396,13 +401,15 @@ function Set-GitHubRepoSecret {
     .SYNOPSIS
         Sets a repository-level secret using the gh CLI.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][string]$SecretName,
         [Parameter(Mandatory)][string]$SecretValue
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo", 'Set GitHub repository secret')) { return }
 
     Write-Host "Setting repo-level secret '$SecretName'..." -ForegroundColor DarkGray
 
@@ -433,13 +440,15 @@ function Set-GitHubRepoVariable {
     .SYNOPSIS
         Sets a repository-level variable using the gh CLI.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][string]$VariableName,
         [Parameter(Mandatory)][string]$VariableValue
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo", 'Set GitHub repository variable')) { return }
 
     Write-Host "Setting repo-level variable '$VariableName'..." -ForegroundColor DarkGray
 
@@ -461,7 +470,7 @@ function Set-GitHubRepoVariable {
     Write-Host "Set repo-level variable '$VariableName'." -ForegroundColor DarkGray
 }
 
-function Get-GitHubEnvironmentCapabilities {
+function Get-GitHubEnvironmentCapability {
     <#
     .SYNOPSIS
         Detects whether GitHub environments and environment approval rules are available for a repository.
@@ -514,7 +523,7 @@ function Get-GitHubEnvironmentCapabilities {
             [void](Invoke-GhApi -Endpoint $probeEndpoint -Method 'DELETE' -AllowNotFound)
         }
         catch {
-            # ignore probe cleanup errors
+            Write-Verbose 'Could not remove the temporary environment probe; continuing cleanup.'
         }
     }
 
@@ -527,6 +536,7 @@ function Get-GitHubEnvironmentPrefix {
         Derives a repository-level prefix from an environment name.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$EnvironmentName
     )
@@ -539,12 +549,12 @@ function Get-GitHubEnvironmentPrefix {
     return "${normalized}_"
 }
 
-function Set-GitHubPrefixedEnvironmentCredentials {
+function Set-GitHubPrefixedEnvironmentCredential {
     <#
     .SYNOPSIS
         Stores non-sensitive values as prefixed repository variables and secrets in the matching environment.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
@@ -554,6 +564,8 @@ function Set-GitHubPrefixedEnvironmentCredentials {
         [Parameter(Mandatory)][string]$ServiceAccountUPN
     )
 
+    if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo/$EnvironmentName", 'Configure GitHub environment credentials')) { return }
+
     $prefix = Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName
     Write-Host "Setting prefixed repo-level credentials for '$EnvironmentName' using prefix '$prefix'..." -ForegroundColor DarkGray
 
@@ -561,7 +573,7 @@ function Set-GitHubPrefixedEnvironmentCredentials {
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID" -VariableValue $Credentials.TenantId
 
     if ($Credentials.AuthType -eq 'Secret' -and $Credentials.ClientSecret) {
-        [void](Ensure-GitHubEnvironment -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName)
+        [void](Initialize-GitHubEnvironment -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName)
         Set-GitHubEnvironmentSecret -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName `
             -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $Credentials.ClientSecret
     }
@@ -667,12 +679,14 @@ function Get-GitHubRepositoryIdentity {
 }
 
 function Set-GitHubRepositoryImmutableSubject {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
         [Parameter(Mandatory)][object]$CurrentCustomization
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo", 'Enable immutable GitHub OIDC subject')) { return }
 
     $customizationPropertyNames = @($CurrentCustomization.PSObject.Properties.Name)
     if ($customizationPropertyNames -notcontains 'use_default') {
@@ -713,6 +727,7 @@ function Set-GitHubRepositoryImmutableSubject {
 
 function New-GitHubEnvironmentWifSubject {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RepoOwner,
         [Parameter(Mandatory)][string]$RepoName,
@@ -752,7 +767,7 @@ function Test-GitHubEnvironmentConfigurationUsesWif {
     return ($credentialPropertyNames -contains 'AuthType' -and [string]$EnvironmentConfiguration.Credentials.AuthType -eq 'WIF')
 }
 
-function Ensure-GitHubSharedWorkflowAccessPolicy {
+function Initialize-GitHubSharedWorkflowAccessPolicy {
     <#
     .SYNOPSIS
         Ensures a private shared action repository has its Actions access policy configured
@@ -793,6 +808,7 @@ function Ensure-GitHubSharedWorkflowAccessPolicy {
 
 function Get-GitHubActionsVariableValue {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
@@ -821,7 +837,7 @@ function Get-GitHubActionsVariableValue {
     return $null
 }
 
-function Test-GitHubActionsSecretExists {
+function Test-GitHubActionSecretExistence {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -877,6 +893,7 @@ function Get-GitHubWorkflowReferenceFromRepoClone {
 
 function Get-GitHubDeploymentEnvironmentNamesFromRepoClone {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$DefaultBranch
@@ -902,6 +919,7 @@ function Get-GitHubDeploymentEnvironmentNamesFromRepoClone {
 
 function Get-GitHubDeploymentEnvironmentNamesFromWorkflowContent {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter()][string]$WorkflowContent
     )
@@ -1002,6 +1020,7 @@ function Get-GitRepoFileContentFromRemoteBranch {
 
 function Get-GitHubDeployWorkflowBranchMappingsFromRepoClone {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot
     )
@@ -1069,14 +1088,14 @@ function Get-GitHubExistingEnvironmentState {
     $environmentTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'AZURE_TENANT_ID'
     $environmentUrl = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'DATAVERSE_URL'
     $environmentServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -VariableName 'DATAVERSESERVICEACCOUNTUPN'
-    $environmentSecretExists = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -SecretName 'AZURE_CLIENT_SECRET'
+    $environmentSecretExists = Test-GitHubActionSecretExistence -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName -SecretName 'AZURE_CLIENT_SECRET'
 
     $prefix = Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName
     $prefixedClientId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_CLIENT_ID"
     $prefixedTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID"
     $prefixedUrl = ConvertTo-NormalizedEnvironmentUrl -Url (Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_URL")
     $prefixedServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_SERVICE_ACCOUNT_UPN"
-    $prefixedSecretExists = Test-GitHubActionsSecretExists -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
+    $prefixedSecretExists = Test-GitHubActionSecretExistence -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
 
     $applicationId = if (-not [string]::IsNullOrWhiteSpace($environmentClientId)) { $environmentClientId } else { $prefixedClientId }
     $resolvedTenantId = if (-not [string]::IsNullOrWhiteSpace($environmentTenantId)) { $environmentTenantId } else { $prefixedTenantId }
@@ -1268,8 +1287,9 @@ function Get-GitHubRepositoryExistingSetupState {
     }
 }
 
-function Get-GitHubInitialBranchMappings {
+function Get-GitHubInitialBranchMapping {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
         [Parameter(Mandatory)][string]$DefaultBranch
@@ -1335,6 +1355,7 @@ function Get-GitHubOwnedReposForOwner {
         Returns repositories owned by the specified GitHub account.
     #>
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$Owner
     )
@@ -1365,6 +1386,10 @@ function Get-GitHubOwnedReposForOwner {
             continue
         }
 
+        if ($repoFullName.Split('/')[0] -ine $Owner) {
+            continue
+        }
+
         $normalized += [pscustomobject]@{
             full_name = $repoFullName
         }
@@ -1379,6 +1404,7 @@ function Resolve-GitHubRepoFullNameFromSource {
         Resolves a GitHub repository full name (owner/repo) from URL, owner/repo text, or a local git repository path.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$Source,
         [Parameter()][string]$Fallback = 'ALM4Dataverse/ALM4Dataverse'
@@ -1403,7 +1429,7 @@ function Resolve-GitHubRepoFullNameFromSource {
                 }
             }
             catch {
-                # Fall through to fallback
+                Write-Verbose 'Could not resolve the local repository origin; using the fallback repository.'
             }
         }
     }
@@ -1417,6 +1443,7 @@ function Resolve-UpstreamGitRemoteSource {
         Resolves an upstream git remote source usable by `git fetch`/`git clone`.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][string]$ConfiguredSource,
         [Parameter(Mandatory)][string]$GitHubFullName
@@ -1451,6 +1478,7 @@ function Resolve-GitTargetRefFromRemote {
         Resolves a branch/tag/commit ref against a remote to a local git ref for checkout/merge operations.
     #>
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RemoteName,
         [Parameter(Mandatory)][string]$Ref,
@@ -1510,10 +1538,10 @@ function Get-GitHubForkSyncState {
 
     if (Test-Path -LiteralPath $WorkRoot) {
         try {
-            Remove-Item -LiteralPath $WorkRoot -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $WorkRoot -Recurse -Force -ErrorAction Stop
         }
         catch {
-            # Best effort cleanup before clone.
+            throw
         }
     }
 
@@ -1671,6 +1699,7 @@ function Get-GitHubForksOfRepositoryForOwner {
         Lists repositories owned by a user that are forks of the specified upstream repository.
     #>
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$UpstreamFullName
@@ -1709,6 +1738,10 @@ function Get-GitHubForksOfRepositoryForOwner {
             continue
         }
 
+        if ($repoFullName.Split('/')[0] -ine $Owner) {
+            continue
+        }
+
         # Some API responses do not include 'parent'. Resolve using repo details when required.
         $parentFullName = $null
         if (
@@ -1738,7 +1771,8 @@ function Get-GitHubForksOfRepositoryForOwner {
     return @($matchingForks)
 }
 
-function Ensure-GitHubForkForSharedWorkflows {
+function Initialize-GitHubSharedWorkflowFork {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository-operation callback.')]
     <#
     .SYNOPSIS
         Ensures the user has a shared workflow repository and optionally updates it from upstream.
@@ -1805,7 +1839,7 @@ function Ensure-GitHubForkForSharedWorkflows {
         $menuActions += @{ Type = 'UseExisting'; FullName = $repo.full_name }
     }
 
-  
+
 
     $selection = Select-FromMenu `
         -Title "Select shared workflow repository" `
@@ -2033,7 +2067,7 @@ function Ensure-GitHubForkForSharedWorkflows {
         }
     }
     finally {
-        try { Remove-Item -LiteralPath $workParent -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Item -LiteralPath $workParent -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared workflow repository; continuing cleanup.' }
     }
 
     return Get-GitHubRepo -Owner $sharedRepoOwnerName -Repo $sharedRepoName
@@ -2044,10 +2078,12 @@ function New-GitHubRepositoryInteractive {
     .SYNOPSIS
         Interactively creates a new GitHub repository.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$DefaultOwner
     )
+
+    if (-not $PSCmdlet.ShouldProcess($DefaultOwner, 'Create GitHub repository interactively')) { return }
 
     Write-Host ""
     Write-Host "Create a new GitHub repository" -ForegroundColor Green
@@ -2105,7 +2141,7 @@ function New-GitHubRepositoryInteractive {
 
 #region Entra ID Operations
 
-function Ensure-EntraIdServicePrincipal {
+function Initialize-EntraIdServicePrincipal {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ApplicationId,
@@ -2137,7 +2173,7 @@ function Add-EntraIdFederatedCredential {
     <#
     .SYNOPSIS
         Adds a federated identity credential to an Entra ID application for Workload Identity Federation.
-    
+
     .DESCRIPTION
         Creates a federated identity credential that allows GitHub Actions to authenticate to Azure
         without a client secret.
@@ -2252,12 +2288,15 @@ function Add-EntraIdFederatedCredential {
 }
 
 function New-EntraIdApplication {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$DisplayName,
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter()][string]$AuthType = 'WIF'
     )
-    
+
+    if (-not $PSCmdlet.ShouldProcess($DisplayName, 'Create or configure Entra application')) { return }
+
     # Get token for Graph
     $graphToken = Get-AuthToken -ResourceUrl "https://graph.microsoft.com" -TenantId $TenantId
     $headers = @{
@@ -2268,9 +2307,9 @@ function New-EntraIdApplication {
     # Check if app exists
     $filter = "displayName eq '$DisplayName'"
     $uri = "https://graph.microsoft.com/v1.0/applications?`$filter=$filter"
-    
+
     $existing = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-    
+
     $app = $null
     if ($existing.value.Count -gt 0) {
         $app = $existing.value[0]
@@ -2286,7 +2325,7 @@ function New-EntraIdApplication {
         Write-Host "Created App Registration '$DisplayName' ($($app.appId))."
     }
 
-    [void](Ensure-EntraIdServicePrincipal -ApplicationId $app.appId -TenantId $TenantId)
+    [void](Initialize-EntraIdServicePrincipal -ApplicationId $app.appId -TenantId $TenantId)
 
     $result = [pscustomobject]@{
         Name                = $DisplayName
@@ -2353,7 +2392,7 @@ function Get-GitHubCredentialsForEnvironment {
         "App Registration credentials are used to authenticate the workflow to Dataverse.",
         "Best practice: use a separate App Registration per environment and prefer Workload Identity Federation where possible."
     ) -DocRelativePath 'docs/config/github-secrets.md' -Ref $ALM4DataverseRef -Header 'App registration guidance'
-    
+
     $selection = Select-FromMenu -Title "Select App Registration credentials for '$EnvironmentName'" -Items $menuItems -PromptGuidanceLines @(
         'Select existing credentials or create a new App Registration for this environment.',
         'Prefer workload identity federation where possible to avoid client-secret rotation overhead.'
@@ -2418,18 +2457,18 @@ function Get-GitHubCredentialsForEnvironment {
             'Workload identity federation is recommended when supported because it removes shared secret management.'
         ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
-        
+
         $authType = if ($authTypeSelection -eq 0) { 'WIF' } else { 'Secret' }
-        
+
         $appName = "$RepoName - $EnvironmentName - deployment"
-        
+
         return New-EntraIdApplication -DisplayName $appName -TenantId $TenantId -AuthType $authType
     }
     else { # Manual
         Write-Host "Enter App Registration details:" -ForegroundColor Cyan
         $name = Read-TextWithDefault -Prompt 'Friendly name (for reuse reference)' -AllowEmpty
         if ([string]::IsNullOrWhiteSpace($name)) { $name = "Credential-" + (Get-Date -Format "HHmm") }
-        
+
         while ($true) {
             $appId = Read-TextWithDefault -Prompt 'Application ID (Client ID)'
             if ($appId -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
@@ -2461,14 +2500,14 @@ function Get-GitHubCredentialsForEnvironment {
             'Use secret-based auth only when workload identity federation is not suitable for your scenario.'
         ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
-        
+
         $authType = if ($authTypeSelection -eq 0) { 'WIF' } else { 'Secret' }
-        
+
         $secret = $null
         if ($authType -eq 'Secret') {
             while ($true) {
                 $secret = Read-SecretText -Prompt 'Client Secret'
-                
+
                 if ($secret -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                     Write-Warning "The Client Secret looks like a GUID. You should enter the Secret VALUE, not the Secret ID."
                     if (Read-YesNo -Prompt "Are you sure this is the Secret Value?" -DefaultNo) {
@@ -2480,7 +2519,7 @@ function Get-GitHubCredentialsForEnvironment {
             }
         }
 
-        [void](Ensure-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
+        [void](Initialize-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
 
         return [pscustomobject]@{
             Name                = $name
@@ -2524,6 +2563,7 @@ function Get-GitHubExistingEnvironmentSelectionSummary {
 
 function Get-DataverseEnvironmentCatalog {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter()][switch]$ForceRefresh,
         [Parameter()][switch]$ShowStatus
@@ -2542,7 +2582,7 @@ function Get-DataverseEnvironmentCatalog {
                 $uri = [System.Uri]$resource
                 $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
             }
-            catch {}
+            catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
 
             $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
             return $auth.AccessToken
@@ -2629,7 +2669,7 @@ function Select-DataverseEnvironment {
         $menuItems += "$($environment.FriendlyName) ($($environment.Endpoints['WebApplication']))"
         $menuActions += [pscustomobject]@{ Environment = $environment }
     }
-    
+
     $index = Select-FromMenu `
         -Title $Prompt `
         -Items $menuItems `
@@ -2641,7 +2681,8 @@ function Select-DataverseEnvironment {
     return $menuActions[$index].Environment
 }
 
-function Ensure-DataverseApplicationUser {
+function Initialize-DataverseApplicationUser {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -2651,13 +2692,13 @@ function Ensure-DataverseApplicationUser {
 
     Write-Host "Ensuring application user '$ApplicationId' exists in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken { 
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
         param($resource)
         if (-not $resource) { $resource = $EnvironmentUrl }
         try {
             $uri = [System.Uri]$resource
             $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
+        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
         $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
         return $auth.AccessToken
     }
@@ -2711,7 +2752,8 @@ function Ensure-DataverseApplicationUser {
     }
 }
 
-function Ensure-DataverseServiceAccountUser {
+function Initialize-DataverseServiceAccountUser {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -2721,13 +2763,13 @@ function Ensure-DataverseServiceAccountUser {
 
     Write-Host "Ensuring service account '$ServiceAccountUPN' has System Administrator role in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken { 
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
         param($resource)
         if (-not $resource) { $resource = $EnvironmentUrl }
         try {
             $uri = [System.Uri]$resource
             $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
+        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
         $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
         return $auth.AccessToken
     }
@@ -2810,7 +2852,7 @@ function Get-DataverseServiceAccountUPN {
         "Use a licensed user account with System Administrator role.",
         "Best practice: keep this separate from your personal admin account so automation ownership stays stable."
     ) -DocRelativePath 'docs/config/github-secrets.md' -Ref $ALM4DataverseRef -Header 'Service account guidance'
-    
+
     $selection = Select-FromMenu `
         -Title "Select Dataverse Service Account for '$EnvironmentName'" `
         -Items $menuItems `
@@ -2831,7 +2873,7 @@ function Get-DataverseServiceAccountUPN {
         Write-Host ""
         Write-Host "IMPORTANT: The service account must be licensed with an appropriate D365/PowerApps/etc licence." -ForegroundColor Yellow
         Write-Host ""
-        
+
         while ($true) {
             $upn = Read-TextWithDefault -Prompt 'Service Account UPN (for example: serviceaccount@contoso.com)'
             if ([string]::IsNullOrWhiteSpace($upn)) {
@@ -2855,7 +2897,7 @@ function Get-DataverseSolutionsSelection {
         [Parameter()][string]$ExistingEnvironmentUrl,
         [Parameter()][object]$ExistingEnvironmentConfiguration
     )
-    
+
     Write-Host ""
     Write-SetupGuidance -Lines @(
         "Select the Dataverse DEV environment that contains the unmanaged solutions you want ALM4Dataverse to export and build from source control.",
@@ -2895,33 +2937,33 @@ function Get-DataverseSolutionsSelection {
             try {
                 $uri = [System.Uri]$resource
                 $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-            } catch {}
+            } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
             $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
             return $auth.AccessToken
         }
     }
-    
+
     if (-not $connection) { throw "Failed to connect to Dataverse environment." }
-    
+
     Write-Host "Connected to: $($connection.ConnectedOrgFriendlyName)"
-    
+
     $allSolutions = Invoke-WithSpectreStatus -Status 'Retrieving unmanaged solutions from Dataverse...' -ScriptBlock {
         Get-DataverseRecord -Connection $connection -TableName 'solution' -Columns @('solutionid','uniquename','friendlyname','version','ismanaged') -FilterValues @{
             'isvisible' = $true
             'ismanaged' = $false
         }
     }
-    
+
     if (-not $allSolutions -or $allSolutions.Count -eq 0) {
         Write-Host "No unmanaged solutions found in the environment." -ForegroundColor Yellow
         return [pscustomobject]@{ Solutions = @(); EnvironmentUrl = $devEnvUrl; ReuseExistingConfiguration = $reuseExistingConfiguration }
     }
-    
-    $userSolutions = @($allSolutions | Where-Object { 
-        $_.uniquename -notmatch '^(Default|Active|Basic|msdyn_|ms|MicrosoftFlow|PowerPlatform)' -and 
-        $_.uniquename -ne 'System' 
+
+    $userSolutions = @($allSolutions | Where-Object {
+        $_.uniquename -notmatch '^(Default|Active|Basic|msdyn_|ms|MicrosoftFlow|PowerPlatform)' -and
+        $_.uniquename -ne 'System'
     } | Sort-Object friendlyname)
-    
+
     if ($userSolutions.Count -eq 0) {
         Write-Host "No user-created solutions found." -ForegroundColor Yellow
         return [pscustomobject]@{ Solutions = @(); EnvironmentUrl = $devEnvUrl; ReuseExistingConfiguration = $reuseExistingConfiguration }
@@ -2943,17 +2985,17 @@ function Get-DataverseSolutionsSelection {
                 }
             }
         }
-        catch { <# ignore #> }
+        catch { Write-Verbose 'Could not preselect solutions from the existing configuration; continuing with manual selection.' }
     }
 
-    $selectedSolutions = @(Select-OrderedSolutions -AvailableSolutions $userSolutions -InitiallySelectedSolutions $selectedSolutions)
-    
+    $selectedSolutions = @(Select-OrderedSolution -AvailableSolutions $userSolutions -InitiallySelectedSolutions $selectedSolutions)
+
     # Convert to alm-config.psd1 format
     $configSolutions = @()
     foreach ($sol in $selectedSolutions) {
         $configSolutions += @{ name = $sol.uniquename; deployUnmanaged = $false }
     }
-    
+
     return [pscustomobject]@{ Solutions = $configSolutions; EnvironmentUrl = $devEnvUrl; EnvironmentFriendlyName = $selectedEnv.FriendlyName; ReuseExistingConfiguration = $reuseExistingConfiguration }
 }
 
@@ -2992,8 +3034,8 @@ function Get-GitHubEnvironmentConfiguration {
     }
 }
 
-function Apply-GitHubEnvironmentConfiguration {
-    [CmdletBinding()]
+function Set-GitHubEnvironmentConfiguration {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$EnvironmentConfiguration,
         [Parameter(Mandatory)][string]$TenantId,
@@ -3007,6 +3049,8 @@ function Apply-GitHubEnvironmentConfiguration {
         [Parameter()][bool]$EnableApprovals = $false,
         [Parameter()][array]$RequiredReviewerIds = @()
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$RepoOwner/$RepoName", 'Configure GitHub deployment environment')) { return }
 
     $creds = $EnvironmentConfiguration.Credentials
     $serviceAccountUPN = $EnvironmentConfiguration.ServiceAccountUPN
@@ -3029,7 +3073,7 @@ function Apply-GitHubEnvironmentConfiguration {
     }
 
     if ($UseGitHubEnvironments) {
-        [void](Ensure-GitHubEnvironment `
+        [void](Initialize-GitHubEnvironment `
             -Owner $RepoOwner `
             -Repo $RepoName `
             -EnvironmentName $EnvironmentConfiguration.ShortName `
@@ -3053,7 +3097,7 @@ function Apply-GitHubEnvironmentConfiguration {
             -VariableName 'DATAVERSESERVICEACCOUNTUPN' -VariableValue $serviceAccountUPN
     }
     else {
-        Set-GitHubPrefixedEnvironmentCredentials `
+        Set-GitHubPrefixedEnvironmentCredential `
             -Owner $RepoOwner `
             -Repo $RepoName `
             -EnvironmentName $EnvironmentConfiguration.ShortName `
@@ -3062,8 +3106,8 @@ function Apply-GitHubEnvironmentConfiguration {
             -ServiceAccountUPN $serviceAccountUPN
     }
 
-    Ensure-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $TenantId
-    Ensure-DataverseServiceAccountUser -EnvironmentUrl $EnvironmentConfiguration.Url -ServiceAccountUPN $serviceAccountUPN -TenantId $TenantId
+    Initialize-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $TenantId
+    Initialize-DataverseServiceAccountUser -EnvironmentUrl $EnvironmentConfiguration.Url -ServiceAccountUPN $serviceAccountUPN -TenantId $TenantId
 }
 
 #endregion
@@ -3071,7 +3115,7 @@ function Apply-GitHubEnvironmentConfiguration {
 #region Repository Setup
 
 # Preserve the input block verbatim because GitHub expressions are not valid JSON until runtime.
-function Get-SecretsJsonInputBlocks {
+function Get-SecretJsonInputBlock {
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
 
@@ -3123,21 +3167,22 @@ function Get-SecretsJsonInputBlocks {
     return $blocks.ToArray()
 }
 
-function Merge-SecretsJsonInputs {
+function Merge-SecretJsonInput {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$ExistingContent,
         [Parameter(Mandatory)][string]$GeneratedContent
     )
 
+    $GeneratedContent = [regex]::Replace($GeneratedContent, "`r`n|`n|`r", [Environment]::NewLine)
     if ([string]::IsNullOrEmpty($ExistingContent)) {
         return $GeneratedContent
     }
 
     $existingLines = [regex]::Split($ExistingContent, "`r`n|`n|`r")
     $generatedLines = [regex]::Split($GeneratedContent, "`r`n|`n|`r")
-    $existingBlocks = @(Get-SecretsJsonInputBlocks -Lines $existingLines)
-    $generatedBlocks = @(Get-SecretsJsonInputBlocks -Lines $generatedLines)
+    $existingBlocks = @(Get-SecretJsonInputBlock -Lines $existingLines)
+    $generatedBlocks = @(Get-SecretJsonInputBlock -Lines $generatedLines)
     if ($existingBlocks.Count -eq 0 -or $generatedBlocks.Count -eq 0) {
         return $GeneratedContent
     }
@@ -3209,6 +3254,8 @@ function Merge-SecretsJsonInputs {
 }
 
 function Copy-WorkflowTemplatesToRepo {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Used by the nested workflow-update callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRef', Justification = 'Used by the nested workflow-update callback.')]
     <#
     .SYNOPSIS
         Copies ALM4Dataverse workflow templates into the user's GitHub repository clone.
@@ -3320,7 +3367,7 @@ function Copy-WorkflowTemplatesToRepo {
                 if ($normalizedRelativePath -like '.github/workflows/*.yml') {
                     $existingContent = [System.IO.File]::ReadAllText($destPath)
                     $sourceContent = [System.IO.File]::ReadAllText($sourceFileToUse)
-                    $mergedContent = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $sourceContent
+                    $mergedContent = Merge-SecretJsonInput -ExistingContent $existingContent -GeneratedContent $sourceContent
                     if ($mergedContent -cne $sourceContent) {
                         if ($isTempFile) {
                             Set-Content -LiteralPath $sourceFileToUse -Value $mergedContent -NoNewline
@@ -3334,8 +3381,8 @@ function Copy-WorkflowTemplatesToRepo {
                     }
                 }
 
-                $srcHash = Get-FileHash -LiteralPath $sourceFileToUse -Algorithm MD5
-                $dstHash = Get-FileHash -LiteralPath $destPath        -Algorithm MD5
+                $srcHash = Get-FileHash -LiteralPath $sourceFileToUse -Algorithm SHA256
+                $dstHash = Get-FileHash -LiteralPath $destPath        -Algorithm SHA256
 
                 if ($srcHash.Hash -ne $dstHash.Hash) {
                     Copy-Item -LiteralPath $sourceFileToUse -Destination $destPath -Force
@@ -3368,13 +3415,15 @@ function Update-AlmConfigInRepoClone {
     .SYNOPSIS
         Updates the alm-config.psd1 file in a local clone with the selected solutions.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter()][AllowNull()][array]$Solutions,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled,
         [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter(Mandatory)][string]$RepoRoot
     )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update ALM configuration')) { return $false }
 
     $configPath = Join-Path $RepoRoot 'alm-config.psd1'
     $templatePath = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'copy-to-your-repo\alm-config.psd1' } else { $null }
@@ -3394,7 +3443,7 @@ function Update-AlmConfigInRepoClone {
 }
 
 function Update-BuildWorkflowInRepoClone {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$SharedWorkflowRepository,
@@ -3402,6 +3451,8 @@ function Update-BuildWorkflowInRepoClone {
         [Parameter(Mandatory)][AllowEmptyString()][string]$BuildEnvironmentName,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled
     )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update GitHub BUILD workflow')) { return $false }
 
     $buildWorkflowPath = Join-Path $RepoRoot '.github/workflows/BUILD.yml'
     $existingContent = if (Test-Path -LiteralPath $buildWorkflowPath) {
@@ -3488,7 +3539,7 @@ $environmentBlock        permissions:
 $secretsInput
 "@
 
-                    $newContent = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $newContent
+                    $newContent = Merge-SecretJsonInput -ExistingContent $existingContent -GeneratedContent $newContent
                     $buildWorkflowDirectory = Split-Path -Parent $buildWorkflowPath
                     if (-not (Test-Path -LiteralPath $buildWorkflowDirectory)) {
                         New-Item -ItemType Directory -Path $buildWorkflowDirectory -Force | Out-Null
@@ -3501,7 +3552,7 @@ function Update-DeployWorkflowInRepoClone {
     .SYNOPSIS
         Rebuilds DEPLOY-{branch}.yml using selected deployment environments.
     #>
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch,
@@ -3510,6 +3561,8 @@ function Update-DeployWorkflowInRepoClone {
         [Parameter(Mandatory)][string]$SharedWorkflowRef,
         [Parameter()][ValidateSet('manual-gate-tag','environment-approval')][string]$PromotionMode = 'manual-gate-tag'
     )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update GitHub DEPLOY workflow')) { return $false }
 
     $deployFilePath = Join-Path $RepoRoot ".github/workflows/DEPLOY-$Branch.yml"
     $existingContent = if (Test-Path -LiteralPath $deployFilePath) {
@@ -3714,14 +3767,14 @@ function Update-DeployWorkflowInRepoClone {
     }
 
     $output = ($lines -join [Environment]::NewLine).TrimEnd() + [Environment]::NewLine
-    $output = Merge-SecretsJsonInputs -ExistingContent $existingContent -GeneratedContent $output
+    $output = Merge-SecretJsonInput -ExistingContent $existingContent -GeneratedContent $output
     Set-Content -LiteralPath $deployFilePath -Value $output -NoNewline
 
     $envList = ($DeploymentEnvironments | ForEach-Object { $_.ShortName }) -join ', '
     Write-Host "Updated DEPLOY workflow '$deployFilePath' with environments: $envList (promotion mode: $PromotionMode)" -ForegroundColor Green
 }
 
-function Publish-GitHubRepoChanges {
+function Publish-GitHubRepoChange {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3807,7 +3860,7 @@ function Publish-GitHubRepoChanges {
     }
 }
 
-function Publish-GitHubBranchSetupChanges {
+function Publish-GitHubBranchSetupChange {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3960,7 +4013,7 @@ function Publish-GitHubBranchSetupChanges {
             }
         }
 
-        return Publish-GitHubRepoChanges -RepoRoot $RepoRoot -PublishPlan $PublishPlan
+        return Publish-GitHubRepoChange -RepoRoot $RepoRoot -PublishPlan $PublishPlan
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -3970,6 +4023,7 @@ function Publish-GitHubBranchSetupChanges {
 
 function Get-GitHubPublishSummaryText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][array]$PublishResults
     )
@@ -3999,6 +4053,13 @@ function Get-GitHubPublishSummaryText {
 }
 
 function Invoke-GitHubBranchAwareSetup {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CloneRoot', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowReference', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested template-fetch callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseGitHubEnvironments', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DeploymentPromotionMode', Justification = 'Captured by the nested wizard actions.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$CloneRoot,
@@ -4013,20 +4074,16 @@ function Invoke-GitHubBranchAwareSetup {
         [Parameter(Mandatory)][string]$UpstreamGitSource,
         [Parameter(Mandatory)][string]$ALM4DataverseRef,
         [Parameter(Mandatory)][bool]$UseGitHubEnvironments,
-        [Parameter(Mandatory)][bool]$EnableEnvironmentApprovals,
-        [Parameter()][array]$EnvironmentApprovalReviewerIds = @(),
         [Parameter(Mandatory)][string]$DeploymentPromotionMode
     )
 
     $cachedCredentials = @()
     $cachedServiceAccounts = @()
     $publishResults = @()
-    $solutionResult = $null
-    $solutionSourceBranch = $null
     $copyRoot = $null
     $upstreamClone = $null
 
-    $initialBranchMappings = @(Get-GitHubInitialBranchMappings -ExistingSetupState $ExistingSetupState -DefaultBranch $DefaultBranch)
+    $initialBranchMappings = @(Get-GitHubInitialBranchMapping -ExistingSetupState $ExistingSetupState -DefaultBranch $DefaultBranch)
     $branchStates = @()
     foreach ($mapping in $initialBranchMappings) {
         $branchName = [string]$mapping.BranchName
@@ -4084,13 +4141,9 @@ function Invoke-GitHubBranchAwareSetup {
                     })
 
                     $selectedBranchMappings = @(Invoke-WithErrorHandling -OperationName 'Selecting deployment branches' -ScriptBlock {
-                        Select-BranchEnvironmentMappings `
+                        Select-BranchEnvironmentMapping `
                             -InitialBranchMappings $currentBranchMappings `
                             -Title 'Manage deployment branches' `
-                            -GuidanceLines @(
-                                'Start by choosing the Git branches that should receive ALM4Dataverse workflow setup.',
-                                'You can add long-lived release branches as well as mainline branches, and you can come back later to change the list.'
-                            ) `
                             -DocRelativePath 'docs/setup/github-setup.md' `
                             -Ref $ALM4DataverseRef `
                             -EditDevEnvironmentScriptBlock {
@@ -4206,7 +4259,7 @@ function Invoke-GitHubBranchAwareSetup {
 
                                 $branchName = [string]$mappingToEdit.BranchName
                                 $excludedDevUrl = if ($mappingToEdit.DevEnvironmentConfiguration) { $mappingToEdit.DevEnvironmentConfiguration.Url } else { $null }
-                                $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironments `
+                                $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironment `
                                     -InitialEnvironments @($mappingToEdit.Environments) `
                                     -Heading "Target deployment environments for branch '$branchName'" `
                                     -Title "Manage deployment environments for branch '$branchName'" `
@@ -4382,7 +4435,7 @@ function Invoke-GitHubBranchAwareSetup {
                             Environments = @($_.DeploymentEnvironments)
                         }
                     })
-                    if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappingsForValidation) {
+                    if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation) {
                         throw 'Each deployment environment can only be assigned to one branch. Resolve duplicate environment assignments before continuing.'
                     }
 
@@ -4563,7 +4616,7 @@ function Invoke-GitHubBranchAwareSetup {
                             }
                         }
 
-                        $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironments `
+                        $selectedDeploymentEnvironments = @(Select-ConfiguredDeploymentEnvironment `
                             -InitialEnvironments $initialDeploymentEnvironments `
                             -Heading "Target deployment environments for branch '$branchName'" `
                             -Title "Manage deployment environments for branch '$branchName'" `
@@ -4751,7 +4804,7 @@ function Invoke-GitHubBranchAwareSetup {
                             Environments = @($_.DeploymentEnvironments)
                         }
                     })
-                    if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappingsForValidation) {
+                    if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation) {
                         throw 'Each deployment environment can only be assigned to one branch. Resolve duplicate environment assignments before continuing.'
                     }
 
@@ -5061,7 +5114,7 @@ function Invoke-GitHubBranchAwareSetup {
             }
 
             $publishResult = Invoke-WithErrorHandling -OperationName "Publishing repository changes for branch '$($branchState.BranchName)'" -StatusMessage "Publishing repository changes for branch '$($branchState.BranchName)'..." -CaptureOutputInPanel -ScriptBlock {
-                Publish-GitHubBranchSetupChanges `
+                Publish-GitHubBranchSetupChange `
                     -RepoRoot $CloneRoot `
                     -ConfiguredBranch $branchState.BranchName `
                     -PublishPlan $branchState.PublishPlan `
@@ -5102,7 +5155,7 @@ function Invoke-GitHubBranchAwareSetup {
     }
     finally {
         if ($upstreamClone -and (Test-Path -LiteralPath $upstreamClone)) {
-            try { Remove-Item -LiteralPath $upstreamClone -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+            try { Remove-Item -LiteralPath $upstreamClone -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the upstream repository clone; continuing cleanup.' }
         }
     }
 }
@@ -5123,7 +5176,6 @@ $ghStatusProbe = Invoke-WithSpectreStatus -Status 'Checking GitHub CLI authentic
         ExitCode = $LASTEXITCODE
     }
 }
-$ghStatus = @($ghStatusProbe.Output)
 $hasExistingGitHubLogin = ($ghStatusProbe.ExitCode -eq 0)
 
 if ($hasExistingGitHubLogin) {
@@ -5417,8 +5469,6 @@ $existingSetupState = Invoke-WithSpectreStatus -Status 'Inspecting the existing 
 
 $existingDevEnvironment = $existingSetupState.DevEnvironment
 $existingDevEnvironmentUrl = $null
-$existingDevEnvironmentCredentials = $null
-$existingDevEnvironmentServiceAccountUPN = $null
 
 if ($existingDevEnvironment) {
     foreach ($urlPropertyName in @('Url', 'EnvironmentUrl', 'DataverseUrl', 'WebApplicationUrl')) {
@@ -5437,13 +5487,6 @@ if ($existingDevEnvironment) {
         }
     }
 
-    if ($existingDevEnvironment.PSObject.Properties.Name -contains 'Credentials') {
-        $existingDevEnvironmentCredentials = $existingDevEnvironment.Credentials
-    }
-
-    if ($existingDevEnvironment.PSObject.Properties.Name -contains 'ServiceAccountUPN') {
-        $existingDevEnvironmentServiceAccountUPN = $existingDevEnvironment.ServiceAccountUPN
-    }
 }
 
 if ($existingSetupState.SharedWorkflowRepository) {
@@ -5458,7 +5501,7 @@ Write-Section `
     -Message "Ensuring Shared Workflow Repository"
 
 $sharedWorkflowRepo = Invoke-WithErrorHandling -OperationName "Ensuring shared workflow repository" -ScriptBlock {
-    Ensure-GitHubForkForSharedWorkflows `
+    Initialize-GitHubSharedWorkflowFork `
         -UpstreamFullName $upstreamWorkflowRepoFullName `
         -ForkOwner $script:ghUser `
         -UpstreamGitSource $upstreamGitSource `
@@ -5477,7 +5520,7 @@ Write-Host "Shared workflow reference (synced branch): $sharedWorkflowReference"
 
 $sharedWorkflowRepoParts = $sharedWorkflowRepository.Split('/', 2)
 Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workflow repository '$sharedWorkflowRepository'..." -ScriptBlock {
-    Ensure-GitHubSharedWorkflowAccessPolicy -Owner $sharedWorkflowRepoParts[0] -Repo $sharedWorkflowRepoParts[1]
+    Initialize-GitHubSharedWorkflowAccessPolicy -Owner $sharedWorkflowRepoParts[0] -Repo $sharedWorkflowRepoParts[1]
 } | Out-Null
 
 $useGitHubEnvironments = $false
@@ -5486,7 +5529,7 @@ $environmentApprovalReviewerIds = @()
 $deploymentPromotionMode = 'manual-gate-tag'
 
 $environmentCapabilities = Invoke-WithSpectreStatus -Status "Checking GitHub environment capabilities for '$repoFullName'..." -ScriptBlock {
-    Get-GitHubEnvironmentCapabilities -Owner $repoOwner -Repo $repoName -ApprovalReviewerId $script:ghUserId
+    Get-GitHubEnvironmentCapability -Owner $repoOwner -Repo $repoName -ApprovalReviewerId $script:ghUserId
 }
 
 if ($existingSetupState.CredentialStorageScope -eq 'Environment' -and $environmentCapabilities.EnvironmentsAvailable) {
@@ -5545,12 +5588,9 @@ $githubSetupResult = Invoke-GitHubBranchAwareSetup `
     -UpstreamGitSource $upstreamGitSource `
     -ALM4DataverseRef $ALM4DataverseRef `
     -UseGitHubEnvironments $useGitHubEnvironments `
-    -EnableEnvironmentApprovals $enableEnvironmentApprovals `
-    -EnvironmentApprovalReviewerIds $environmentApprovalReviewerIds `
     -DeploymentPromotionMode $deploymentPromotionMode
 
 $branchStates = @($githubSetupResult.BranchStates)
-$solutionResult = $githubSetupResult.SolutionResult
 $solutionSourceBranch = $githubSetupResult.SolutionSourceBranch
 $buildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $githubSetupResult -PropertyName 'BuildValidationEnabled')
 $buildValidationEnvironmentConfiguration = Get-OptionalObjectPropertyValue -InputObject $githubSetupResult -PropertyName 'BuildValidationEnvironmentConfiguration'
@@ -5619,7 +5659,7 @@ if (-not $useImmutableWifSubject -and $hasWifCredential) {
     }
 }
 
-try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the repository clone; continuing cleanup.' }
 
 # ─────────────────────────────────────────────────────────────
 Write-Section `
@@ -5643,7 +5683,7 @@ else {
         Write-Host ""
 
         Invoke-WithErrorHandling -OperationName "Setting up DEV credentials for branch '$($branchState.BranchName)'" -StatusMessage "Applying DEV environment credentials for branch '$($branchState.BranchName)'..." -CaptureOutputInPanel -ScriptBlock {
-            Apply-GitHubEnvironmentConfiguration `
+            Set-GitHubEnvironmentConfiguration `
                 -EnvironmentConfiguration $devEnvironmentConfiguration `
                 -TenantId $TenantId `
                 -RepoOwner $repoOwner `
@@ -5670,7 +5710,7 @@ else {
     Write-Host ""
 
     Invoke-WithErrorHandling -OperationName 'Applying global BUILD validation environment configuration' -AllowSkip -ScriptBlock {
-        Apply-GitHubEnvironmentConfiguration `
+        Set-GitHubEnvironmentConfiguration `
             -EnvironmentConfiguration $buildValidationEnvironmentConfiguration `
             -TenantId $TenantId `
             -RepoOwner $repoOwner `
@@ -5708,7 +5748,7 @@ else {
             Write-Host ""
 
             Invoke-WithErrorHandling -OperationName "Applying environment configuration for $($env.ShortName)" -AllowSkip -ScriptBlock {
-                Apply-GitHubEnvironmentConfiguration `
+                Set-GitHubEnvironmentConfiguration `
                     -EnvironmentConfiguration $env `
                     -TenantId $TenantId `
                     -RepoOwner $repoOwner `

@@ -6,7 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Get-GitHubApiHeaders {
+function Get-GitHubApiHeader {
     return @{
         Authorization = "Bearer $env:GITHUB_TOKEN"
         Accept = 'application/vnd.github+json'
@@ -22,7 +22,7 @@ function Invoke-GitHubApi {
 
     $uri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/$RelativePath"
     try {
-        return Invoke-RestMethod -Method Get -Uri $uri -Headers (Get-GitHubApiHeaders)
+        return Invoke-RestMethod -Method Get -Uri $uri -Headers (Get-GitHubApiHeader)
     }
     catch {
         $statusCode = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
@@ -33,7 +33,7 @@ function Invoke-GitHubApi {
     }
 }
 
-function Get-ReleaseMetadata {
+function Get-ReleaseInformation {
     param([Parameter(Mandatory)][object]$Release)
 
     $body = [string]$Release.body
@@ -85,7 +85,7 @@ function Find-UniqueReleaseForCommit {
         }
         foreach ($release in $releases) {
             try {
-                $metadata = Get-ReleaseMetadata -Release $release
+                $metadata = Get-ReleaseInformation -Release $release
             }
             catch {
                 continue
@@ -119,7 +119,7 @@ function Find-ReleaseForRunId {
         }
         foreach ($release in $releases) {
             try {
-                $metadata = Get-ReleaseMetadata -Release $release
+                $metadata = Get-ReleaseInformation -Release $release
             }
             catch {
                 continue
@@ -182,7 +182,7 @@ function Resolve-Baseline {
     if ($null -eq $release) {
         throw "GitHub Release tag '$Selector' was not found. Use a BUILD run ID, an existing BUILD Release tag, or @environment-name."
     }
-    $metadata = Get-ReleaseMetadata -Release $release
+    $metadata = Get-ReleaseInformation -Release $release
     return [pscustomobject]@{
         RunId = $metadata.RunId
         TagName = $metadata.TagName
@@ -200,7 +200,8 @@ function Resolve-BaselineReleaseTag {
                 }
             }
         }
-    ) | Select-Object -Unique
+    )
+    $tagCandidates = @($tagCandidates | Select-Object -Unique)
 
     if ($tagCandidates.Count -eq 0) {
         throw "The BUILD baseline for run '$($Baseline.RunId)' has no Release tag."
@@ -219,7 +220,7 @@ function Resolve-BaselineReleaseTag {
             continue
         }
         try {
-            $metadata = Get-ReleaseMetadata -Release $release
+            $metadata = Get-ReleaseInformation -Release $release
         }
         catch {
             continue
@@ -252,7 +253,7 @@ function Expand-BaselineArchive {
     }
 }
 
-function Download-BaselineReleaseAsset {
+function Save-BaselineReleaseAsset {
     param(
         [Parameter(Mandatory)][string]$ReleaseTag,
         [Parameter(Mandatory)][string]$DestinationPath
@@ -325,7 +326,7 @@ if ($null -eq $baseline) {
 $baselineArtifactsPath = Join-Path $env:RUNNER_TEMP "alm4dataverse-baseline-$([guid]::NewGuid().ToString('N'))"
 try {
     $baselineReleaseTag = Resolve-BaselineReleaseTag -Baseline $baseline
-    Download-BaselineReleaseAsset -ReleaseTag $baselineReleaseTag -DestinationPath $baselineArtifactsPath
+    Save-BaselineReleaseAsset -ReleaseTag $baselineReleaseTag -DestinationPath $baselineArtifactsPath
 
     Write-Host "Deploying GitHub Release '$baselineReleaseTag' (BUILD run $($baseline.RunId)) to validation environment '$EnvironmentName'."
     & (Join-Path $baselineArtifactsPath 'alm/pipelines/scripts/deploy.ps1') -ArtifactsPath $baselineArtifactsPath

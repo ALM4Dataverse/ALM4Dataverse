@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+﻿#Requires -Version 7.0
 
 <#
 .SYNOPSIS
@@ -66,21 +66,21 @@ if (-not (Test-Path $ConfigFile)) {
 # Use Import-PowerShellDataFile to reliably read the version
 try {
     $config = Import-PowerShellDataFile -Path $ConfigFile
-    
+
     if (-not $config.ContainsKey('scriptDependencies')) {
         throw "Config file is missing 'scriptDependencies' key"
     }
-    
+
     if (-not $config.scriptDependencies.ContainsKey('Rnwood.Dataverse.Data.PowerShell')) {
         throw "Config file scriptDependencies is missing 'Rnwood.Dataverse.Data.PowerShell' key"
     }
-    
+
     $DataverseVersion = $config.scriptDependencies.'Rnwood.Dataverse.Data.PowerShell'
-    
+
     if ([string]::IsNullOrWhiteSpace($DataverseVersion)) {
         throw "Version string is empty or null"
     }
-    
+
     Write-Host "  Found version: $DataverseVersion" -ForegroundColor Green
 }
 catch {

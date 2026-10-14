@@ -14,6 +14,8 @@
     - specific version number (e.g. '1.2.3' or '1.2.3-beta.1'): installs that specific version
 #>
 
+$ErrorActionPreference = 'Stop'
+
 . $PSScriptRoot/common.ps1
 
 Write-Host "##[group] Installing Dependencies"
@@ -45,10 +47,12 @@ foreach ($module in $config.scriptDependencies.Keys) {
         $installedModule = Install-Module -Name $module -Scope CurrentUser -Force -RequiredVersion $version -AllowPrerelease:($version.Contains("-")) -PassThru
     }
     Write-Host "Installed $module version $($installedModule.Version)"
-    
+
     if ($config._defaults.scriptDependencies.ContainsKey($module)) {
         $defaultVersion = $config._defaults.scriptDependencies[$module]
-        if (([version] $version) -lt ([version]$defaultVersion)) {
+        $installedNumericVersion = [version](([string]$installedModule.Version -split '-', 2)[0])
+        $minimumNumericVersion = [version](([string]$defaultVersion -split '-', 2)[0])
+        if ($installedNumericVersion -lt $minimumNumericVersion) {
             throw "Installed version $($installedModule.Version) of $module is less than the default minimum required version $defaultVersion. Please update the version in alm-config.psd1."
         }
     }
@@ -63,11 +67,11 @@ foreach ($module in $config.scriptDependencies.Keys) {
 
     if (-not $moduletoload) {
         Write-Host "##[error]Failed to find installed module $module version $($installedModule.Version)"
-        
+
         throw "Failed to find installed module $module version $($installedModule.Version)"
     }
     Import-Module "$($moduletoload.InstalledLocation)/*.psd1"
-  
+
     $loadedModule = Get-Module -Name $module
     Write-Host "Loaded $module version $($loadedModule.Version) $($loadedModule.Prerelease)"
 }

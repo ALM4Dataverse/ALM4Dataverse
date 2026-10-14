@@ -1,4 +1,5 @@
 
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
 [CmdletBinding()]
 param(
     [Parameter()]
@@ -58,7 +59,7 @@ function Install-PortableGit {
 
     $gitDir = Join-Path $Destination "Git"
     $gitExe = Join-Path $gitDir "bin\git.exe"
-    
+
     if (Test-Path $gitExe) {
         Write-Host "Git already available at: $gitExe"
         return $gitDir
@@ -67,7 +68,7 @@ function Install-PortableGit {
     Write-Host "Downloading portable Git..." -ForegroundColor Yellow
     $gitUrl = "https://github.com/git-for-windows/git/releases/download/v2.52.0.windows.1/PortableGit-2.52.0-64-bit.7z.exe"
     $gitInstaller = Join-Path $Destination "PortableGit.exe"
-    
+
     try {
         # PowerShell 5.1 sometimes needs TLS 1.2 explicitly.
         try {
@@ -76,22 +77,22 @@ function Install-PortableGit {
             }
         }
         catch {
-            # Non-fatal; continue.
+            Write-Verbose 'Could not set the legacy TLS preference; continuing with the current protocol settings.'
         }
 
         Invoke-WebRequest -Uri $gitUrl -OutFile $gitInstaller -UseBasicParsing
-        
+
         if (-not (Test-Path $gitInstaller)) {
             throw "Failed to download Git installer"
         }
 
         Write-Host "Extracting portable Git to $gitDir..." -ForegroundColor Yellow
         New-DirectoryIfMissing -Path $gitDir
-        
+
         # The .7z.exe is a self-extracting archive
         $extractArgs = @('-o"' + $gitDir + '"', '-y')
         $process = Start-Process -FilePath $gitInstaller -ArgumentList $extractArgs -Wait -NoNewWindow -PassThru
-        
+
         if ($process.ExitCode -ne 0) {
             throw "Git extraction failed with exit code $($process.ExitCode)"
         }
@@ -245,11 +246,11 @@ else {
 
 $authResult = Invoke-WithErrorHandling -OperationName "Authentication" -ScriptBlock {
     $result = Get-AuthToken -ResourceUrl $adoResourceUrl -TenantId $TenantId -PreferredUsername $preferredAzureUsername -ForceInteractive:$forceAzureInteractive
-    
+
     if (-not $result -or -not $result.AccessToken) {
         throw "Failed to acquire an Azure DevOps access token."
     }
-    
+
     return $result
 }
 
@@ -284,7 +285,7 @@ function ConvertTo-AzDoOrganizationName {
 }
 
 function New-AzDoProject {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$ProjectName,
@@ -295,6 +296,8 @@ function New-AzDoProject {
     if ([string]::IsNullOrWhiteSpace($ProjectName)) {
         throw "Project name cannot be empty."
     }
+
+    if (-not $PSCmdlet.ShouldProcess("$Organization/$ProjectName", 'Create Azure DevOps project')) { return }
 
     Write-Section `
         -Message "Creating new Azure DevOps project"
@@ -342,7 +345,7 @@ function New-AzDoProject {
         $created = Invoke-WithSpectreStatus -Status "Creating project '$ProjectName' using process template '$selectedProcessName'..." -ScriptBlock {
             Add-VSTeamProject @addParams
         }
-        
+
         if ($created -and $created.name) {
             Write-Host "Project '$ProjectName' created successfully."
             return $created
@@ -357,10 +360,10 @@ function New-AzDoProject {
     }
 }
 
-function Test-AzDoGitRepositoryHasCommits {
+function Test-AzDoGitRepositoryCommit {
     [CmdletBinding()]
+    [OutputType([bool])]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$RepositoryId
     )
@@ -377,15 +380,15 @@ function Test-AzDoGitRepositoryHasCommits {
 }
 
 function Start-AzDoGitRepositoryImport {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
-        [Parameter(Mandatory)][string]$Organization,
-        [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$RepositoryId,
         [Parameter(Mandatory)][string]$SourceGitUrl
     )
 
     # Use Invoke-VSTeamRequest since VSTeam doesn't support repository import directly
+    if (-not $PSCmdlet.ShouldProcess($RepositoryId, 'Start repository import')) { return }
+
     $resource = "git/repositories/$RepositoryId/importRequests"
     $body = @{
         parameters = @{
@@ -400,8 +403,6 @@ function Start-AzDoGitRepositoryImport {
 function Wait-AzDoGitRepositoryImport {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
-        [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][string]$RepositoryId,
         [Parameter(Mandatory)][object]$ImportResponse,
         [Parameter()][int]$TimeoutSeconds = 600
@@ -425,7 +426,7 @@ function Wait-AzDoGitRepositoryImport {
 
     while ((Get-Date) -lt $deadline) {
         Start-Sleep -Seconds 5
-        
+
         $status = Invoke-VSTeamRequest -Method GET -Resource $resource -Version '7.1-preview.1'
 
         if (-not $status) { continue }
@@ -542,7 +543,7 @@ $orgData = Invoke-WithErrorHandling -OperationName "Discovering Azure DevOps Org
     # Get current user profile to obtain member ID
     $profileUrl = "https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=6.0"
     $profileResponse = Invoke-RestMethod -Uri $profileUrl -Method Get -Headers $headers
-    
+
     $memberId = $profileResponse.publicAlias
     if (-not $memberId) {
         $memberId = $profileResponse.id
@@ -550,10 +551,10 @@ $orgData = Invoke-WithErrorHandling -OperationName "Discovering Azure DevOps Org
     if (-not $memberId) {
         throw "Unable to determine memberId from profile response."
     }
-   
+
     $accountsUrl = "https://app.vssps.visualstudio.com/_apis/accounts?memberId=$memberId&api-version=6.0"
     $accountsResponse = Invoke-RestMethod -Uri $accountsUrl -Method Get -Headers $headers
-    
+
     $orgs = @($accountsResponse.value)
     Write-SetupDebug -Message "Azure DevOps accounts API returned $($orgs.Count) rows for memberId '$memberId'."
     if (Test-SetupDebugEnabled) {
@@ -565,7 +566,7 @@ $orgData = Invoke-WithErrorHandling -OperationName "Discovering Azure DevOps Org
             Write-SetupDebug -Message "  raw[$orgIndex] name='$debugName' id='$debugId' uri='$debugUri'"
         }
     }
-    
+
     if ($orgs.Count -eq 0) {
         throw "No Azure DevOps organizations were returned for this user."
     }
@@ -627,7 +628,7 @@ $orgData = Invoke-WithErrorHandling -OperationName "Discovering Azure DevOps Org
         }
     )
     $orgNames = @($orgsSorted | ForEach-Object { [string]$_.accountName })
-    
+
     return @{
         Orgs      = $orgsSorted
         OrgNames  = $orgNames
@@ -657,7 +658,6 @@ if ($null -eq $orgIndex) {
 }
 
 $orgName = $orgNames[$orgIndex]
-$orgId = $orgsSorted[$orgIndex].accountId
 $orgUri = $orgsSorted[$orgIndex].accountUri
 Write-Host "Selected organization: $orgName"
 if ($orgUri) {
@@ -668,7 +668,7 @@ if ($orgUri) {
 Set-VSTeamAccount -Account $orgName -SecurePersonalAccessToken $secureToken -UseBearerToken -Force
 Write-Host "VSTeam configured for organization '$orgName' using a bearer token."
 
-function Initialize-AzDoProjectAndRepositories {
+function Initialize-AzDoProjectAndRepository {
     [CmdletBinding()]
     param()
 
@@ -849,7 +849,7 @@ function Initialize-AzDoProjectAndRepositories {
     Write-Section `
         -Message "Creating/updating shared repository '$sharedRepoName'"
 
-    $hasCommits = Test-AzDoGitRepositoryHasCommits -Organization $orgName -Project $selectedProject.Name -RepositoryId $repo.Id
+    $hasCommits = Test-AzDoGitRepositoryCommit  -Project $selectedProject.Name -RepositoryId $repo.Id
     $justInitialized = $false
     if (-not $hasCommits) {
         $justInitialized = Invoke-WithErrorHandling -OperationName "Initializing Shared Repository" -ScriptBlock {
@@ -915,7 +915,7 @@ function Initialize-AzDoProjectAndRepositories {
             }
             finally {
                 if ((Get-Location).Path -eq $workRoot) { Pop-Location }
-                try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+                try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
             }
             }
             finally {
@@ -1037,7 +1037,7 @@ function Initialize-AzDoProjectAndRepositories {
         }
         finally {
             if ((Get-Location).Path -eq $workRoot) { Pop-Location }
-            try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+            try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
         }
     }
 
@@ -1058,6 +1058,7 @@ function Initialize-AzDoProjectAndRepositories {
 
 function Get-DataverseEnvironmentCatalog {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter()][switch]$ForceRefresh,
         [Parameter()][switch]$ShowStatus
@@ -1076,7 +1077,7 @@ function Get-DataverseEnvironmentCatalog {
                 $uri = [System.Uri]$resource
                 $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
             }
-            catch {}
+            catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
 
             $auth = Get-AuthToken -ResourceUrl $resource
             return $auth.AccessToken
@@ -1115,8 +1116,8 @@ function Select-DataverseEnvironment {
 
     # Filter out excluded URL if provided
     if ($ExcludeUrl) {
-        $environments = @($environments | Where-Object { 
-            (ConvertTo-NormalizedEnvironmentUrl -Url $_.Endpoints["WebApplication"]) -ne $normalizedExcludeUrl 
+        $environments = @($environments | Where-Object {
+            (ConvertTo-NormalizedEnvironmentUrl -Url $_.Endpoints["WebApplication"]) -ne $normalizedExcludeUrl
         })
         if ($environments.Count -eq 0) {
             throw "No environments available after filtering."
@@ -1285,6 +1286,7 @@ function Get-AzDoSharedRepositoryNameFromWorkingTree {
 
 function Get-AzDoDeploymentEnvironmentNamesFromWorkingTree {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch
@@ -1517,8 +1519,8 @@ function Sync-CopyToYourRepoIntoGitRepo {
 
         try {
             if (Test-Path -LiteralPath $destPath) {
-                $srcHash = Get-FileHash -LiteralPath $sourceFileToUse -Algorithm MD5
-                $dstHash = Get-FileHash -LiteralPath $destPath -Algorithm MD5
+                $srcHash = Get-FileHash -LiteralPath $sourceFileToUse -Algorithm SHA256
+                $dstHash = Get-FileHash -LiteralPath $destPath -Algorithm SHA256
 
                 if ($srcHash.Hash -ne $dstHash.Hash) {
                     Copy-Item -LiteralPath $sourceFileToUse -Destination $destPath -Force
@@ -1547,7 +1549,7 @@ function Sync-CopyToYourRepoIntoGitRepo {
 }
 
 function New-AzDoRepoWorkingTree {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$TargetRepo,
         [Parameter(Mandatory)][string]$AccessToken,
@@ -1555,13 +1557,15 @@ function New-AzDoRepoWorkingTree {
         [Parameter()][string]$WorkBranch
     )
 
+    if (-not $PSCmdlet.ShouldProcess($TargetRepo.Name, 'Clone repository and prepare working branch')) { return }
+
     if (-not $TargetRepo.remoteUrl) {
         throw "Could not determine remoteUrl for repository '$($TargetRepo.Name)'."
     }
 
     $cloneRoot = Join-Path $env:TEMP ("ALM4Dataverse-MainRepo-" + [guid]::NewGuid().ToString('n'))
     if (Test-Path -LiteralPath $cloneRoot) {
-        try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction Stop } catch { throw }
     }
 
     Write-Host "Cloning '$($TargetRepo.Name)' to a temp folder..." -ForegroundColor Yellow
@@ -1628,7 +1632,7 @@ function New-AzDoRepoWorkingTree {
         }
     }
     catch {
-        try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the failed repository clone; preserving the original failure.' }
         throw
     }
     finally {
@@ -1638,8 +1642,8 @@ function New-AzDoRepoWorkingTree {
 
 function Get-AzDoDefaultAgentQueueId {
     [CmdletBinding()]
+    [OutputType([int])]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Project
     )
 
@@ -1666,7 +1670,6 @@ function Get-AzDoDefaultAgentQueueId {
 function Get-AzDoSecurityNamespaceByName {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Name
     )
 
@@ -1681,6 +1684,7 @@ function Get-AzDoSecurityNamespaceByName {
 
 function Get-AzDoSecurityNamespaceActionBit {
     [CmdletBinding()]
+    [OutputType([long])]
     param(
         [Parameter(Mandatory)][object]$Namespace,
         [Parameter(Mandatory)][string]$ActionName
@@ -1705,32 +1709,31 @@ function Get-AzDoSecurityNamespaceActionBit {
 function Get-AzDoBuildServiceIdentity {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$ProjectId,
         [Parameter()][string]$ProjectName
     )
 
     # Use VSTeam command to search for Build Service identity
     $serviceIdentities = @(Get-VSTeamUser -SubjectTypes svc)
-    
+
     $buildServicePattern = "Build:$ProjectId"
     $buildIdentity = $null
-    
+
     foreach ($identity in $serviceIdentities) {
         if ($identity.descriptor -and $identity.descriptor.StartsWith('svc.')) {
             try {
                 # Remove "svc." prefix and base64 decode
                 $encodedPart = $identity.descriptor.Substring(4)
-                
+
                 # Add padding if needed for proper base64 decoding
                 $padding = (4 - ($encodedPart.Length % 4)) % 4
                 if ($padding -gt 0) {
                     $encodedPart += '=' * $padding
                 }
-                
+
                 $decodedBytes = [Convert]::FromBase64String($encodedPart)
                 $decodedString = [Text.Encoding]::UTF8.GetString($decodedBytes)
-                
+
                 # Check if decoded string ends with "Build:$ProjectId"
                 if ($decodedString.EndsWith($buildServicePattern)) {
                     $buildIdentity = $identity
@@ -1760,7 +1763,6 @@ function Get-AzDoBuildServiceIdentity {
 function Get-AzDoAccessControlEntry {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$NamespaceId,
         [Parameter(Mandatory)][string]$Token,
         [Parameter(Mandatory)][string]$Descriptor
@@ -1769,7 +1771,7 @@ function Get-AzDoAccessControlEntry {
     try {
         # Use VSTeam command to get access control list
         $acls = Get-VSTeamAccessControlList -SecurityNamespaceId $NamespaceId -Token $Token -Descriptors $Descriptor
-        
+
         if (-not $acls -or $acls.Count -eq 0) {
             return $null
         }
@@ -1802,9 +1804,8 @@ function Get-AzDoAccessControlEntry {
 }
 
 function Set-AzDoAccessControlEntry {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$NamespaceId,
         [Parameter(Mandatory)][string]$Token,
         [Parameter(Mandatory)][string]$Descriptor,
@@ -1814,32 +1815,33 @@ function Set-AzDoAccessControlEntry {
 
     # Use VSTeam command to set access control entry
     # Note: Add-VSTeamAccessControlEntry requires a SecurityNamespace object, so we need to get it first
+    if (-not $PSCmdlet.ShouldProcess($Descriptor, 'Update Azure DevOps access control entry')) { return }
+
     $ns = Get-VSTeamSecurityNamespace -Id $NamespaceId
     Add-VSTeamAccessControlEntry -SecurityNamespace $ns -Token $Token -Descriptor $Descriptor -AllowMask $Allow -DenyMask $Deny -OverwriteMask
 }
 
-function Ensure-AzDoBuildServiceHasContributeOnRepo {
+function Initialize-AzDoBuildServiceRepositoryPermission {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$ProjectName,
         [Parameter(Mandatory)][string]$ProjectId,
         [Parameter(Mandatory)][string]$RepositoryId
     )
 
     # Find the Build Service identity by searching identities
-    $descriptor = Get-AzDoBuildServiceIdentity -Organization $Organization -ProjectId $ProjectId -ProjectName $ProjectName
+    $descriptor = Get-AzDoBuildServiceIdentity  -ProjectId $ProjectId -ProjectName $ProjectName
     $descriptor = $descriptor.Trim()  # Clean any whitespace
     Write-Host "Found Build Service descriptor: $descriptor" -ForegroundColor DarkGray
 
-    $ns = Get-AzDoSecurityNamespaceByName -Organization $Organization -Name 'Git Repositories'
+    $ns = Get-AzDoSecurityNamespaceByName  -Name 'Git Repositories'
     $contributeBit = Get-AzDoSecurityNamespaceActionBit -Namespace $ns -ActionName 'Contribute'
 
     # Repo token format for Git Repositories namespace:
     #   repoV2/<projectId>/<repoId>
     $token = "repoV2/$ProjectId/$RepositoryId"
 
-    $existing = Get-AzDoAccessControlEntry -Organization $Organization -NamespaceId $ns.Id -Token $token -Descriptor $descriptor
+    $existing = Get-AzDoAccessControlEntry  -NamespaceId $ns.Id -Token $token -Descriptor $descriptor
     $existingAllow = 0L
     $existingDeny = 0L
 
@@ -1860,14 +1862,13 @@ function Ensure-AzDoBuildServiceHasContributeOnRepo {
     $desiredDeny = ($existingDeny -band (-bnot $contributeBit))
 
     Write-Host "Granting Build Service 'Contribute' on repo..." -ForegroundColor Yellow
-    Set-AzDoAccessControlEntry -Organization $Organization -NamespaceId $ns.Id -Token $token -Descriptor $descriptor -Allow $desiredAllow -Deny $desiredDeny | out-null
+    Set-AzDoAccessControlEntry  -NamespaceId $ns.Id -Token $token -Descriptor $descriptor -Allow $desiredAllow -Deny $desiredDeny | out-null
     Write-Host "Granted 'Contribute' to Build Service on repository."
 }
 
-function Ensure-AzDoYamlPipelineDefinition {
+function Initialize-AzDoYamlPipelineDefinition {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][object]$Repository,
         [Parameter(Mandatory)][string]$DefinitionName,
@@ -1978,10 +1979,9 @@ function Ensure-AzDoYamlPipelineDefinition {
     Write-Host "Updated pipeline '$DefinitionName'."
 }
 
-function Ensure-AzDoPipelinesForMainRepo {
+function Initialize-AzDoMainRepositoryPipeline {
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Project,
         [Parameter(Mandatory)][object]$Repository,
         [Parameter(Mandatory)][string[]]$YamlFiles,
@@ -1991,7 +1991,7 @@ function Ensure-AzDoPipelinesForMainRepo {
     Write-Section `
         -Message "Ensuring Azure DevOps pipeline definitions exist"
 
-    $queueId = Get-AzDoDefaultAgentQueueId -Organization $Organization -Project $Project
+    $queueId = Get-AzDoDefaultAgentQueueId  -Project $Project
     Write-Host "Using agent queue id: $queueId" -ForegroundColor DarkGray
 
     $defaultBranchName = 'main'
@@ -2006,11 +2006,11 @@ function Ensure-AzDoPipelinesForMainRepo {
             $definitionBranchName = [string]$Matches[1]
         }
 
-        Ensure-AzDoYamlPipelineDefinition -Organization $Organization -Project $Project -Repository $Repository -DefinitionName $name -YamlPath $yaml -DefinitionBranch $definitionBranchName -QueueId $queueId -FolderPath $FolderPath
+        Initialize-AzDoYamlPipelineDefinition  -Project $Project -Repository $Repository -DefinitionName $name -YamlPath $yaml -DefinitionBranch $definitionBranchName -QueueId $queueId -FolderPath $FolderPath
     }
 }
 
-function Ensure-AzDoDeploymentApproversTeam {
+function Initialize-AzDoDeploymentApproverTeam {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -2021,18 +2021,18 @@ function Ensure-AzDoDeploymentApproversTeam {
     Write-Host "Ensuring team '$teamName' exists..." -ForegroundColor DarkGray
 
     $team = Get-VSTeam -ProjectName $ProjectName -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $teamName } | Select-Object -First 1
-    
+
     if (-not $team) {
         Write-Host "Creating team '$teamName'..." -ForegroundColor Yellow
         Add-VSTeam -ProjectName $ProjectName -Name $teamName -Description "Approvers for $EnvironmentName deployment" | Out-Null
         $team = Get-VSTeam -ProjectName $ProjectName | Where-Object { $_.Name -eq $teamName } | Select-Object -First 1
     }
-       
+
     # Add current user to the team
-    
+
     $me = Invoke-VSTeamRequest -NoProject -Method GET -Url "https://app.vssps.visualstudio.com/_apis/profile/profiles/me" -Version "7.1"
     Write-Host "Adding current user ($($me.emailAddress)) to team '$teamName'..." -ForegroundColor Yellow
-    
+
     $user = Get-VSTeamUser | Where-Object { $_.UniqueName -eq $me.emailAddress } | Select-Object -First 1
     $group = Get-VSTeamGroup -ProjectName $ProjectName | Where-Object { $_.DisplayName -eq $teamName } | Select-Object -First 1
 
@@ -2043,11 +2043,11 @@ function Ensure-AzDoDeploymentApproversTeam {
         throw "Could not resolve user or group to add membership."
     }
 
-    
+
     return $team
 }
 
-function Ensure-AzDoVariableGroupApproval {
+function Initialize-AzDoVariableGroupApproval {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2062,12 +2062,12 @@ function Ensure-AzDoVariableGroupApproval {
     # Check for existing checks
     $uri = "https://dev.azure.com/$Organization/$Project/_apis/pipelines/checks/configurations?resourceType=variablegroup&resourceId=$VariableGroupId&api-version=7.1-preview.1"
     $headers = @{ Authorization = "Bearer $($adoAccessToken.Token)" }
-    
+
     $existingChecks = $null
 
     $existingChecks = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
 
-    
+
     $hasApproval = $false
     if ($existingChecks -and $existingChecks.count -gt 0) {
         foreach ($check in $existingChecks.value) {
@@ -2088,7 +2088,7 @@ function Ensure-AzDoVariableGroupApproval {
     # We need the descriptor for the team. Get-VSTeamTeam doesn't return it directly.
     # We can find the group identity using Get-VSTeamGroup.
     $teamIdentity = Get-VSTeamGroup -ProjectName $Project | Where-Object { $_.principalName -eq $ApproverTeam.name -or $_.displayName -eq $ApproverTeam.name } | Select-Object -First 1
-    
+
     if (-not $teamIdentity) {
         throw "Could not resolve identity for team '$($ApproverTeam.name)' for approval check creation."
     }
@@ -2123,7 +2123,7 @@ function Ensure-AzDoVariableGroupApproval {
     Write-Host "Approval check added."
 }
 
-function Ensure-AzDoVariableGroupExclusiveLock {
+function Initialize-AzDoVariableGroupExclusiveLock {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2137,7 +2137,7 @@ function Ensure-AzDoVariableGroupExclusiveLock {
     # Check for existing checks
     $uri = "https://dev.azure.com/$Organization/$Project/_apis/pipelines/checks/configurations?resourceType=variablegroup&resourceId=$VariableGroupId&api-version=7.1-preview.1"
     $headers = @{ Authorization = "Bearer $($adoAccessToken.Token)" }
-    
+
     $existingChecks = $null
     $existingChecks = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
 
@@ -2177,7 +2177,7 @@ function Ensure-AzDoVariableGroupExclusiveLock {
     Write-Host "ExclusiveLock check added."
 }
 
-function Ensure-AzDoEnvironment {
+function Initialize-AzDoEnvironment {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2189,21 +2189,21 @@ function Ensure-AzDoEnvironment {
     Write-Host "Ensuring Environment '$EnvironmentName'..." -ForegroundColor DarkGray
 
     $headers = @{ Authorization = "Bearer $($adoAccessToken.Token)" }
-    
+
     # List environments to check if it exists
     $uri = "https://dev.azure.com/$Organization/$Project/_apis/pipelines/environments?name=$EnvironmentName&api-version=7.2-preview.1"
-    
+
     try {
         $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
         $env = $response.value | Where-Object { $_.name -eq $EnvironmentName } | Select-Object -First 1
-        
+
         if ($env) {
             Write-Host "Environment '$EnvironmentName' already exists (id: $($env.id))."
             return $env
         }
 
         Write-Host "Creating Environment '$EnvironmentName'..." -ForegroundColor Yellow
-        
+
         $body = @{
             name = $EnvironmentName
             description = $Description
@@ -2211,7 +2211,7 @@ function Ensure-AzDoEnvironment {
 
         $createUri = "https://dev.azure.com/$Organization/$Project/_apis/pipelines/environments?api-version=7.2-preview.1"
         $created = Invoke-RestMethod -Uri $createUri -Method Post -Headers $headers -Body ($body | ConvertTo-Json) -ContentType "application/json"
-        
+
         Write-Host "Created Environment '$EnvironmentName' (id: $($created.id))."
         return $created
     }
@@ -2221,7 +2221,7 @@ function Ensure-AzDoEnvironment {
     }
 }
 
-function Ensure-AzDoPipelinePermission {
+function Initialize-AzDoPipelinePermission {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2234,13 +2234,13 @@ function Ensure-AzDoPipelinePermission {
     Write-Host "Ensuring pipeline $PipelineId has permission on $ResourceType $ResourceId..." -ForegroundColor DarkGray
 
     $headers = @{ Authorization = "Bearer $($adoAccessToken.Token)" }
-    
+
     # Check existing permissions
     $uri = "https://dev.azure.com/$Organization/$Project/_apis/pipelines/pipelinePermissions/$ResourceType/$ResourceId`?api-version=7.1-preview.1"
-    
+
     try {
         $response = Invoke-RestMethod -Uri $uri -Method Get -Headers $headers
-        
+
         $isAuthorized = $false
         if ($response.pipelines) {
             foreach ($p in $response.pipelines) {
@@ -2257,7 +2257,7 @@ function Ensure-AzDoPipelinePermission {
         }
 
         Write-Host "Authorizing pipeline $PipelineId..." -ForegroundColor Yellow
-        
+
         $body = @{
             pipelines = @(
                 @{
@@ -2269,7 +2269,7 @@ function Ensure-AzDoPipelinePermission {
 
         $patchUri = "https://dev.azure.com/$Organization/$Project/_apis/pipelines/pipelinePermissions/$ResourceType/$ResourceId`?api-version=7.1-preview.1"
         [void](Invoke-RestMethod -Uri $patchUri -Method Patch -Headers $headers -Body ($body | ConvertTo-Json) -ContentType "application/json")
-        
+
         Write-Host "Pipeline authorized successfully."
     }
     catch {
@@ -2278,7 +2278,7 @@ function Ensure-AzDoPipelinePermission {
     }
 }
 
-function Ensure-AzDoServiceEndpoint {
+function Initialize-AzDoServiceEndpoint {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -2295,7 +2295,7 @@ function Ensure-AzDoServiceEndpoint {
     # Get-VSTeamServiceEndpoint does not support -Name, so we filter client-side
     $endpoints = @(Get-VSTeamServiceEndpoint -ProjectName $ProjectName -ErrorAction SilentlyContinue)
     $existing = $endpoints | Where-Object { $_.name -eq $ServiceEndpointName } | Select-Object -First 1
-    
+
     if ($existing) {
         $existingAuthParameters = $existing.authorization.parameters
         $existingApplicationId = $null
@@ -2353,7 +2353,7 @@ function Ensure-AzDoServiceEndpoint {
             if ([string]::IsNullOrWhiteSpace($ClientSecret)) {
                 throw "ClientSecret is required when AuthType is 'Secret'."
             }
-            
+
             $payload.authorization = @{
                 parameters = @{
                     "tenantId" = $TenantId
@@ -2382,7 +2382,7 @@ function Ensure-AzDoServiceEndpoint {
     }
 }
 
-function Ensure-EntraIdServicePrincipal {
+function Initialize-EntraIdServicePrincipal {
     param(
         [Parameter(Mandatory)][string]$ApplicationId,
         [Parameter(Mandatory)][string]$TenantId
@@ -2412,7 +2412,7 @@ function Ensure-EntraIdServicePrincipal {
     $body = @{
         appId = $ApplicationId
     }
-    
+
     try {
         $sp = Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/servicePrincipals" -Headers $headers -Method Post -Body ($body | ConvertTo-Json)
         Write-Host "Created Service Principal ($($sp.id))."
@@ -2429,7 +2429,7 @@ function Add-EntraIdFederatedCredential {
     <#
     .SYNOPSIS
         Adds a federated identity credential to an Entra ID application for Workload Identity Federation.
-    
+
     .DESCRIPTION
         Creates a federated identity credential that allows Azure DevOps to authenticate to Azure
         using Workload Identity Federation (WIF) without requiring client secrets.
@@ -2458,10 +2458,10 @@ function Add-EntraIdFederatedCredential {
     $listUri = "https://graph.microsoft.com/beta/applications/$ApplicationObjectId/federatedIdentityCredentials"
     try {
         $existing = Invoke-RestMethod -Uri $listUri -Headers $headers -Method Get
-        $existingCred = $existing.value | Where-Object { 
-            $_.issuer -eq $issuer -and $_.subject -eq $subject 
+        $existingCred = $existing.value | Where-Object {
+            $_.issuer -eq $issuer -and $_.subject -eq $subject
         } | Select-Object -First 1
-        
+
         if ($existingCred) {
             Write-Host "Federated identity credential already exists for this issuer and subject."
             return $existingCred
@@ -2492,12 +2492,15 @@ function Add-EntraIdFederatedCredential {
 }
 
 function New-EntraIdApplication {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$DisplayName,
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter()][string]$AuthType = 'Secret'
     )
-    
+
+    if (-not $PSCmdlet.ShouldProcess($DisplayName, 'Create or configure Entra application')) { return }
+
     # Get token for Graph
     $graphToken = Get-AuthToken -ResourceUrl "https://graph.microsoft.com" -TenantId $TenantId
     $headers = @{
@@ -2508,9 +2511,9 @@ function New-EntraIdApplication {
     # Check if app exists
     $filter = "displayName eq '$DisplayName'"
     $uri = "https://graph.microsoft.com/v1.0/applications?`$filter=$filter"
-    
+
     $existing = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
-    
+
     $app = $null
     if ($existing.value.Count -gt 0) {
         $app = $existing.value[0]
@@ -2526,7 +2529,7 @@ function New-EntraIdApplication {
         Write-Host "Created App Registration '$DisplayName' ($($app.appId))."
     }
 
-    [void](Ensure-EntraIdServicePrincipal -ApplicationId $app.appId -TenantId $TenantId)
+    [void](Initialize-EntraIdServicePrincipal -ApplicationId $app.appId -TenantId $TenantId)
 
     $result = [pscustomobject]@{
         Name = $DisplayName
@@ -2547,15 +2550,13 @@ function New-EntraIdApplication {
     return $result
 }
 
-function Get-PowerPlatformSCCredentials {
+function Get-PowerPlatformSCCredential {
     [CmdletBinding()]
     param(
         [Parameter()][array]$ExistingCredentials,
         [Parameter()][string]$TenantId,
         [Parameter()][string]$ProjectName,
         [Parameter()][string]$EnvironmentName,
-        [Parameter()][string]$OrganizationId,
-        [Parameter()][string]$OrganizationName,
         [Parameter()][bool]$UseAlm4DataverseExtension = $true,
         [Parameter()][object]$ExistingCredential
     )
@@ -2564,7 +2565,7 @@ function Get-PowerPlatformSCCredentials {
     $existingEndpoint = $null
     $existingScAppId = $null
     try {
-        $endpoints = @(Get-VSTeamServiceEndpoint -ProjectName $ProjectName -ErrorAction SilentlyContinue)
+        $endpoints = @(Get-VSTeamServiceEndpoint -ProjectName $ProjectName -ErrorAction Stop)
         $existingEndpoint = $endpoints | Where-Object { $_.name -eq $EnvironmentName } | Select-Object -First 1
         if ($existingEndpoint -and $existingEndpoint.authorization -and $existingEndpoint.authorization.parameters) {
             if ($existingEndpoint.authorization.parameters.PSObject.Properties.Name -contains 'applicationId') {
@@ -2576,7 +2577,8 @@ function Get-PowerPlatformSCCredentials {
         }
     }
     catch {
-        # Ignore errors checking for existing SC
+        if (-not (Test-SetupResourceNotFound -ErrorRecord $_)) { throw }
+        Write-Verbose 'No service connection was found; continuing credential selection.'
     }
 
     if (-not $ExistingCredential -and $existingEndpoint -and -not [string]::IsNullOrWhiteSpace($existingScAppId)) {
@@ -2646,15 +2648,15 @@ function Get-PowerPlatformSCCredentials {
 
     # Priority 1: Recommended App (Existing SC or Exact Name Match)
     $recommendedApp = $null
-    
+
     if ($existingScAppId) {
         $recommendedApp = $foundApps | Where-Object { $_.appId -eq $existingScAppId } | Select-Object -First 1
     }
-   
+
     if ($UseAlm4DataverseExtension -and $recommendedApp) {
         $menuItems += "Use existing: $($recommendedApp.displayName) ($($recommendedApp.appId))"
         $menuActions += @{ Type = 'ExistingSCApp'; App = $recommendedApp }
-        
+
         # Remove from foundApps to avoid duplicate listing
         $foundApps = $foundApps | Where-Object { $_.appId -ne $recommendedApp.appId }
     }
@@ -2671,7 +2673,7 @@ function Get-PowerPlatformSCCredentials {
         $menuItems += "Reuse: $($c.Name) ($($c.ApplicationId))"
         $menuActions += @{ Type = 'Cached'; Creds = $c }
     }
- 
+
 
     # 4. Show Menu
     Write-Host ""
@@ -2679,7 +2681,7 @@ function Get-PowerPlatformSCCredentials {
         "Service Principal credentials are used to authenticate the pipeline to Dataverse.",
         "Best practice: use a separate App Registration per environment and prefer Workload Identity Federation when ALM4Dataverse extension mode stays enabled."
     ) -DocRelativePath 'docs/config/azdo-environment-service-connection.md' -Ref $ALM4DataverseRef -Header 'Service principal credential guidance'
-    
+
     $selection = Select-FromMenu -Title "Select Service Principal credentials for '$EnvironmentName'" -Items $menuItems -PromptGuidanceLines @(
         'Select existing credentials or create new Service Principal credentials for this environment.',
         'Prefer workload identity federation when available to reduce client secret management.'
@@ -2747,15 +2749,15 @@ function Get-PowerPlatformSCCredentials {
                 'Workload identity federation is recommended when supported.'
             ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
             if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
-            
+
             $authType = if ($authTypeSelection -eq 1) { 'Secret' } else { 'WIF' }
         }
         else {
             Write-Host "Using Service Principal with Secret authentication because ALM4Dataverse extension mode is disabled." -ForegroundColor Yellow
         }
-        
+
         $appName = "$ProjectName - $EnvironmentName - deployment"
-        
+
         if ($authType -eq 'WIF') {
             return New-EntraIdApplication `
                 -DisplayName $appName `
@@ -2775,7 +2777,7 @@ function Get-PowerPlatformSCCredentials {
         }
         $app = $action.App
         Write-Host "Using existing service connection with App: $($app.displayName) ($($app.appId))" -ForegroundColor Cyan
-     
+
         # Since the service connection already exists, we just return a marker object
         # The credentials are already configured in the existing service connection
         return [pscustomobject]@{
@@ -2792,7 +2794,7 @@ function Get-PowerPlatformSCCredentials {
         Write-Host "Enter Service Principal details:" -ForegroundColor Cyan
         $name = Read-TextWithDefault -Prompt 'Credential name (for reuse reference)' -AllowEmpty
         if ([string]::IsNullOrWhiteSpace($name)) { $name = "Credential-" + (Get-Date -Format "HHmm") }
-        
+
         while ($true) {
             $appId = Read-TextWithDefault -Prompt 'Application ID (Client ID)'
             if ($appId -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
@@ -2816,18 +2818,18 @@ function Get-PowerPlatformSCCredentials {
                 'Use secret-based auth only when workload identity federation is not the intended option.'
             ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
             if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
-            
+
             $authType = if ($authTypeSelection -eq 0) { 'Secret' } else { 'WIF' }
         }
         else {
             Write-Host "Using Service Principal with Secret authentication because ALM4Dataverse extension mode is disabled." -ForegroundColor Yellow
         }
-        
+
         $secret = $null
         if ($authType -eq 'Secret') {
             while ($true) {
                 $secret = Read-SecretText -Prompt 'Client Secret'
-                
+
                 if ($secret -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                     Write-Warning "The Client Secret looks like a GUID. You should enter the Secret VALUE, not the Secret ID."
                     if (Read-YesNo -Prompt "Are you sure this is the Secret Value?" -DefaultNo) {
@@ -2839,7 +2841,7 @@ function Get-PowerPlatformSCCredentials {
             }
         }
 
-        [void](Ensure-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
+        [void](Initialize-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
 
         return [pscustomobject]@{
             Name = $name
@@ -2890,7 +2892,7 @@ function Get-DataverseServiceAccountUPN {
         "Use a licensed user account with System Administrator role.",
         "Best practice: keep this separate from your personal admin account so automation ownership stays stable."
     ) -DocRelativePath 'docs/config/azdo-environment-service-connection.md' -Ref $ALM4DataverseRef -Header 'Service account guidance'
-    
+
     $selection = Select-FromMenu `
         -Title "Select Dataverse Service Account for '$EnvironmentName'" `
         -Items $menuItems `
@@ -2911,7 +2913,7 @@ function Get-DataverseServiceAccountUPN {
         Write-Host ""
         Write-Host "IMPORTANT: The service account must be licenced with an appropriate D365/PowerApps/etc licence for your use-case." -ForegroundColor Yellow
         Write-Host ""
-        
+
         while ($true) {
             $upn = Read-TextWithDefault -Prompt 'Service Account UPN (for example: serviceaccount@contoso.com)'
             if ([string]::IsNullOrWhiteSpace($upn)) {
@@ -2929,12 +2931,11 @@ function Get-DataverseServiceAccountUPN {
     }
 }
 
-function Ensure-AzDoVariableGroupExists {
+function Initialize-AzDoVariableGroup {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Project,
-        [Parameter(Mandatory)][string]$ProjectId,
         [Parameter(Mandatory)][string]$GroupName,
         [Parameter(Mandatory)][hashtable]$Variables,
         [Parameter()][bool]$RequireDeploymentApproval = $true
@@ -2944,14 +2945,15 @@ function Ensure-AzDoVariableGroupExists {
 
     # Use VSTeam command to check for existing variable groups
     try {
-        $existing = Get-VSTeamVariableGroup -ProjectName $Project -Name $GroupName -ErrorAction SilentlyContinue
+        $existing = Get-VSTeamVariableGroup -ProjectName $Project -Name $GroupName -ErrorAction Stop
         if ($existing) {
             Write-Host "Variable group '$GroupName' already exists (id: $($existing.id))."
             $group = $existing
         }
     }
     catch {
-        # Group doesn't exist, continue with creation
+        if (-not (Test-SetupResourceNotFound -ErrorRecord $_)) { throw }
+        Write-Verbose 'No variable group was found; continuing with creation.'
     }
 
     if (-not $group) {
@@ -2977,13 +2979,13 @@ function Ensure-AzDoVariableGroupExists {
     }
 
     if ($group -and $group.id) {
-        Ensure-AzDoVariableGroupExclusiveLock -Organization $Organization -Project $Project -VariableGroupId $group.id -VariableGroupName $GroupName
+        Initialize-AzDoVariableGroupExclusiveLock -Organization $Organization -Project $Project -VariableGroupId $group.id -VariableGroupName $GroupName
 
         if ($RequireDeploymentApproval) {
             $envName = $GroupName -replace '^Environment-', ''
-            $team = Ensure-AzDoDeploymentApproversTeam -ProjectName $Project -EnvironmentName $envName
-            Ensure-AzDoVariableGroupApproval -Organization $Organization -Project $Project -VariableGroupId $group.id -VariableGroupName $GroupName -ApproverTeam $team
-            
+            $team = Initialize-AzDoDeploymentApproverTeam -ProjectName $Project -EnvironmentName $envName
+            Initialize-AzDoVariableGroupApproval -Organization $Organization -Project $Project -VariableGroupId $group.id -VariableGroupName $GroupName -ApproverTeam $team
+
         }
     }
 
@@ -2991,12 +2993,14 @@ function Ensure-AzDoVariableGroupExists {
 }
 
 function Update-AzDoVariableGroup {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
         [Parameter(Mandatory)][string]$GroupName,
         [Parameter(Mandatory)][hashtable]$Variables
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$ProjectName/$GroupName", 'Update Azure DevOps variable group')) { return }
 
     try {
         $group = Get-VSTeamVariableGroup -ProjectName $ProjectName -Name $GroupName -ErrorAction SilentlyContinue
@@ -3009,7 +3013,7 @@ function Update-AzDoVariableGroup {
 
         # Build variables payload in the format expected by Update-VSTeamVariableGroup
         $variablesPayload = @{}
-        
+
         # First, copy existing variables if the group has any
         if ($group.variables) {
             foreach ($key in $group.variables.PSObject.Properties.Name) {
@@ -3034,7 +3038,7 @@ function Update-AzDoVariableGroup {
     }
 }
 
-$initialization = Initialize-AzDoProjectAndRepositories
+$initialization = Initialize-AzDoProjectAndRepository
 if (-not $initialization) {
     return
 }
@@ -3132,7 +3136,7 @@ function Get-DataverseSolutionsSelection {
         [Parameter()][string]$ExistingConfigPath,
         [Parameter()][string]$ExistingEnvironmentUrl
     )
-    
+
     try {
         Write-Host ""
         Write-Host "When prompted, select your dataverse DEV environment containing the solution(s) you want to manage" -ForegroundColor Green
@@ -3163,18 +3167,18 @@ function Get-DataverseSolutionsSelection {
                 try {
                     $uri = [System.Uri]$resource
                     $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-                } catch {}
+                } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
                 $auth = Get-AuthToken -ResourceUrl $resource
                 return $auth.AccessToken
             }
         }
-        
+
         if (-not $connection) {
             throw "Failed to connect to Dataverse environment."
         }
-        
+
         Write-Host "Connected to environment: $($connection.ConnectedOrgFriendlyName)"
-        
+
         # Get all solutions (excluding system solutions)
         $allSolutions = Invoke-WithSpectreStatus -Status 'Retrieving unmanaged solutions from Dataverse...' -ScriptBlock {
             Get-DataverseRecord -Connection $connection -TableName 'solution' -Columns @('solutionid', 'uniquename', 'friendlyname', 'version', 'ismanaged', 'description') -FilterValues @{
@@ -3182,18 +3186,18 @@ function Get-DataverseSolutionsSelection {
                 'ismanaged' = $false
             }
         }
-        
+
         if (-not $allSolutions -or $allSolutions.Count -eq 0) {
             Write-Host "No unmanaged solutions found in the environment." -ForegroundColor Yellow
             return [pscustomobject]@{ Solutions = @(); EnvironmentUrl = $devEnvUrl }
         }
-        
+
         # Filter out system solutions and prepare for selection
-        $userSolutions = $allSolutions | Where-Object { 
-            $_.uniquename -notmatch '^(Default|Active|Basic|msdyn_|ms|MicrosoftFlow|PowerPlatform)' -and 
-            $_.uniquename -ne 'System' 
+        $userSolutions = $allSolutions | Where-Object {
+            $_.uniquename -notmatch '^(Default|Active|Basic|msdyn_|ms|MicrosoftFlow|PowerPlatform)' -and
+            $_.uniquename -ne 'System'
         } | Sort-Object friendlyname
-        
+
         if (-not $userSolutions -or $userSolutions.Count -eq 0) {
             Write-Host "No user-created solutions found in the environment." -ForegroundColor Yellow
             return [pscustomobject]@{ Solutions = @(); EnvironmentUrl = $devEnvUrl }
@@ -3220,20 +3224,20 @@ function Get-DataverseSolutionsSelection {
             Write-Host "Pre-selected $($selectedSolutions.Count) solution(s) from existing configuration." -ForegroundColor Green
             Start-Sleep -Seconds 2
         }
-        
 
-        $selectedSolutions = @(Select-OrderedSolutions -AvailableSolutions $userSolutions -InitiallySelectedSolutions $selectedSolutions)
-        
+
+        $selectedSolutions = @(Select-OrderedSolution -AvailableSolutions $userSolutions -InitiallySelectedSolutions $selectedSolutions)
+
         if ($selectedSolutions.Count -eq 0) {
             Write-Host "No solutions selected." -ForegroundColor Yellow
             return [pscustomobject]@{ Solutions = @(); EnvironmentUrl = $devEnvUrl; EnvironmentFriendlyName = $selectedEnv.FriendlyName }
         }
-        
+
         Write-Host "Final selection:"
         foreach ($sol in $selectedSolutions) {
             Write-Host "  - $($sol.friendlyname) ($($sol.uniquename))"
         }
-        
+
         # Convert to the format needed for alm-config.psd1
         $configSolutions = @()
         foreach ($sol in $selectedSolutions) {
@@ -3242,9 +3246,9 @@ function Get-DataverseSolutionsSelection {
                 deployUnmanaged = $false
             }
         }
-        
+
         return [pscustomobject]@{ Solutions = $configSolutions; EnvironmentUrl = $devEnvUrl; EnvironmentFriendlyName = $selectedEnv.FriendlyName }
-        
+
     }
     catch {
         Write-Host "Error retrieving solutions from Dataverse: $($_.Exception.Message)" -ForegroundColor Red
@@ -3253,13 +3257,15 @@ function Get-DataverseSolutionsSelection {
 }
 
 function Update-AlmConfigInWorkingTree {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter()][AllowNull()][array]$Solutions,
         [Parameter(Mandatory)][bool]$BuildValidationEnabled,
         [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter(Mandatory)][string]$RepoRoot
     )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update ALM configuration')) { return $false }
 
     $configPath = Join-Path $RepoRoot 'alm-config.psd1'
     $templatePath = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'copy-to-your-repo\alm-config.psd1' } else { $null }
@@ -3285,13 +3291,15 @@ function Update-AlmConfigInWorkingTree {
 }
 
 function Update-AzDoBuildPipelineInWorkingTree {
-        [CmdletBinding()]
+        [CmdletBinding(SupportsShouldProcess = $true)]
         param(
                 [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$SharedRepositoryName,
                 [Parameter(Mandatory)][AllowEmptyString()][string]$BuildEnvironmentName,
                 [Parameter(Mandatory)][bool]$UseAlm4DataverseExtension
         )
+
+        if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update Azure DevOps BUILD pipeline')) { return $false }
 
         $buildPipelinePath = Join-Path $RepoRoot 'pipelines/BUILD.yml'
         if (-not (Test-Path -LiteralPath $buildPipelinePath)) {
@@ -3327,7 +3335,8 @@ stages:
 
 #region Deployment Environments Selection
 
-function Ensure-DataverseApplicationUser {
+function Initialize-DataverseApplicationUser {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -3337,13 +3346,13 @@ function Ensure-DataverseApplicationUser {
 
     Write-Host "Ensuring application user '$ApplicationId' exists in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken { 
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
         param($resource)
         if (-not $resource) { $resource = $EnvironmentUrl }
         try {
             $uri = [System.Uri]$resource
             $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
+        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
         $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
         return $auth.AccessToken
     }
@@ -3397,7 +3406,8 @@ function Ensure-DataverseApplicationUser {
     }
 }
 
-function Ensure-DataverseServiceAccountUser {
+function Initialize-DataverseServiceAccountUser {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -3407,13 +3417,13 @@ function Ensure-DataverseServiceAccountUser {
 
     Write-Host "Ensuring service account '$ServiceAccountUPN' has System Administrator role in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken { 
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
         param($resource)
         if (-not $resource) { $resource = $EnvironmentUrl }
         try {
             $uri = [System.Uri]$resource
             $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch {}
+        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
         $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
         return $auth.AccessToken
     }
@@ -3434,10 +3444,10 @@ function Ensure-DataverseServiceAccountUser {
     $roleId = $role.roleid
 
     # 3. Find the System User by UPN
-    $user = Get-DataverseRecord -Connection $conn -TableName "systemuser" -FilterValues @{ 
+    $user = Get-DataverseRecord -Connection $conn -TableName "systemuser" -FilterValues @{
         domainname = $ServiceAccountUPN
     } -Columns "systemuserid","fullname" | Select-Object -First 1
-    
+
     $userId = $null
     if ($user) {
         $userId = $user.systemuserid
@@ -3474,6 +3484,7 @@ function Ensure-DataverseServiceAccountUser {
 
 function Get-ExistingEnvironmentsFromWorkingTree {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch
@@ -3640,6 +3651,7 @@ function Resolve-GitExistingBranchRef {
 
 function Get-AzDoDeploymentEnvironmentNamesFromPipelineContent {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter()][string]$PipelineContent
     )
@@ -3720,6 +3732,7 @@ function Get-AzDoBuildValidationEnabledFromRepoClone {
 
 function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][string]$RepoRoot
     )
@@ -3760,8 +3773,9 @@ function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
     return @($mappings | Sort-Object BranchName -Unique)
 }
 
-function Get-AzDoRegisteredDeployPipelineBranches {
+function Get-AzDoRegisteredDeployPipelineBranch {
     [CmdletBinding()]
+    [OutputType([string], [object[]])]
     param(
         [Parameter(Mandatory)][string]$ProjectName
     )
@@ -3803,7 +3817,7 @@ function Get-AzDoRepositoryExistingSetupState {
     if (-not [string]::IsNullOrWhiteSpace($defaultBranchBuildEnvironmentName)) {
         $existingBuildValidationEnvironment = Get-AzDoExistingEnvironmentState -ProjectName $ProjectName -EnvironmentName $defaultBranchBuildEnvironmentName -TenantId $TenantId
     }
-    $registeredBranches = @(Get-AzDoRegisteredDeployPipelineBranches -ProjectName $ProjectName)
+    $registeredBranches = @(Get-AzDoRegisteredDeployPipelineBranch -ProjectName $ProjectName)
     $branchNames = @($pipelineBranchMappings | ForEach-Object { [string]$_.BranchName }) + $registeredBranches
     if ($branchNames.Count -eq 0) {
         $branchNames = @($DefaultBranch)
@@ -3877,8 +3891,9 @@ function Get-AzDoRepositoryExistingSetupState {
     }
 }
 
-function Get-AzDoInitialBranchMappings {
+function Get-AzDoInitialBranchMapping {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
         [Parameter(Mandatory)][string]$DefaultBranch
@@ -3938,8 +3953,6 @@ function Get-AzDoEnvironmentConfiguration {
         [Parameter()][array]$ExistingServiceAccounts,
         [Parameter()][string]$TenantId,
         [Parameter()][string]$ProjectName,
-        [Parameter()][string]$OrganizationId,
-        [Parameter()][string]$OrganizationName,
         [Parameter()][bool]$UseAlm4DataverseExtension = $true,
         [Parameter()][object]$ExistingCredential,
         [Parameter()][string]$ExistingServiceAccountUPN,
@@ -3947,13 +3960,11 @@ function Get-AzDoEnvironmentConfiguration {
         [Parameter()][bool]$IsBuildValidationEnvironment = $false
     )
 
-    $creds = Get-PowerPlatformSCCredentials `
+    $creds = Get-PowerPlatformSCCredential `
         -ExistingCredentials $ExistingCredentials `
         -TenantId $TenantId `
         -ProjectName $ProjectName `
         -EnvironmentName $EnvironmentName `
-        -OrganizationId $OrganizationId `
-        -OrganizationName $OrganizationName `
         -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
         -ExistingCredential $ExistingCredential
 
@@ -3975,6 +3986,7 @@ function Get-AzDoEnvironmentConfiguration {
 
 function Get-DataverseEnvironmentsSelection {
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory = $false)][string]$ExcludedUrl,
         [Parameter()][string]$RepoRoot,
@@ -3984,13 +3996,11 @@ function Get-DataverseEnvironmentsSelection {
         [Parameter()][array]$ExistingCredentials,
         [Parameter()][array]$ExistingServiceAccounts,
         [Parameter()][string]$TenantId,
-        [Parameter()][string]$OrganizationId,
-        [Parameter()][string]$OrganizationName,
         [Parameter()][bool]$UseAlm4DataverseExtension = $true
     )
 
     $selectedEnvironments = @($InitialEnvironments | Where-Object { $null -ne $_ })
-    $credentialsForReuse = @($ExistingCredentials)
+    $credentialsForReuse = @($ExistingCredentials | Where-Object { $null -ne $_ })
     $serviceAccountsForReuse = @($ExistingServiceAccounts)
     $normalizedExcludedUrl = ConvertTo-NormalizedEnvironmentUrl -Url $ExcludedUrl
 
@@ -4011,7 +4021,7 @@ function Get-DataverseEnvironmentsSelection {
                     $existingEnvironmentState = Get-AzDoExistingEnvironmentState -ProjectName $ProjectName -EnvironmentName $name -TenantId $TenantId
 
                     $existingEnvironmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $existingEnvironmentState.Url
-                    if ($existingEnvironmentUrl -eq $normalizedExcludedUrl) {
+                    if (-not [string]::IsNullOrWhiteSpace($normalizedExcludedUrl) -and $existingEnvironmentUrl -eq $normalizedExcludedUrl) {
                         Write-Warning "Skipping existing deployment stage '$name' because it points at the selected DEV environment URL."
                         continue
                     }
@@ -4034,7 +4044,7 @@ function Get-DataverseEnvironmentsSelection {
 
     $resolvedHeading = if ([string]::IsNullOrWhiteSpace($Branch)) { 'Target Deployment Environments' } else { "Target Deployment Environments for branch '$Branch'" }
 
-    $selectedEnvironments = @(Select-ConfiguredDeploymentEnvironments `
+    $selectedEnvironments = @(Select-ConfiguredDeploymentEnvironment `
         -InitialEnvironments $selectedEnvironments `
         -Heading $resolvedHeading `
         -Title 'Manage deployment environments' `
@@ -4081,8 +4091,6 @@ function Get-DataverseEnvironmentsSelection {
                 -ExistingServiceAccounts $currentServiceAccounts `
                 -TenantId $TenantId `
                 -ProjectName $ProjectName `
-                -OrganizationId $OrganizationId `
-                -OrganizationName $OrganizationName `
                 -UseAlm4DataverseExtension $UseAlm4DataverseExtension
         } `
         -EditEnvironmentScriptBlock {
@@ -4129,8 +4137,6 @@ function Get-DataverseEnvironmentsSelection {
                 -ExistingServiceAccounts $currentServiceAccounts `
                 -TenantId $TenantId `
                 -ProjectName $ProjectName `
-                -OrganizationId $OrganizationId `
-                -OrganizationName $OrganizationName `
                 -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                 -ExistingCredential $environmentToEdit.Credentials `
                 -ExistingServiceAccountUPN $environmentToEdit.ServiceAccountUPN
@@ -4156,7 +4162,7 @@ function Get-DataverseEnvironmentsSelection {
             $resolvedFriendlyName = $resolvedEnvironment.FriendlyName
         }
 
-        if ($resolvedEnvironmentUrl -eq $normalizedExcludedUrl) {
+        if (-not [string]::IsNullOrWhiteSpace($normalizedExcludedUrl) -and $resolvedEnvironmentUrl -eq $normalizedExcludedUrl) {
             Write-Warning "Skipping deployment environment '$($selectedEnvironment.ShortName)' because it points at the selected DEV environment URL."
             continue
         }
@@ -4177,8 +4183,6 @@ function Get-DataverseEnvironmentsSelection {
                 -ExistingServiceAccounts $serviceAccountsForReuse `
                 -TenantId $TenantId `
                 -ProjectName $ProjectName `
-                -OrganizationId $OrganizationId `
-                -OrganizationName $OrganizationName `
                 -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                 -ExistingCredential $selectedEnvironment.Credentials `
                 -ExistingServiceAccountUPN $selectedEnvironment.ServiceAccountUPN
@@ -4207,13 +4211,15 @@ function Get-DataverseEnvironmentsSelection {
 }
 
 function Update-DeployPipelineInWorkingTree {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][array]$Environments,
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Branch,
         [Parameter()][bool]$UseAlm4DataverseExtension = $true
     )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update Azure DevOps DEPLOY pipeline')) { return $false }
 
     $deployYamlName = "DEPLOY-$Branch.yml"
     $deployYamlPath = Join-Path $RepoRoot "pipelines\$deployYamlName"
@@ -4274,7 +4280,7 @@ function Update-DeployPipelineInWorkingTree {
 }
 
 function New-AzDoPullRequest {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$RepositoryId,
         [Parameter(Mandatory)][string]$SourceBranch,
@@ -4282,6 +4288,8 @@ function New-AzDoPullRequest {
         [Parameter(Mandatory)][string]$Title,
         [Parameter()][string]$Description
     )
+
+    if (-not $PSCmdlet.ShouldProcess($RepositoryId, 'Create Azure DevOps pull request')) { return }
 
     $body = @{
         sourceRefName = "refs/heads/$SourceBranch"
@@ -4293,7 +4301,7 @@ function New-AzDoPullRequest {
     return Invoke-VSTeamRequest -Method POST -Resource "git/repositories/$RepositoryId/pullrequests" -Body ($body | ConvertTo-Json -Depth 10) -ContentType 'application/json' -Version '7.1'
 }
 
-function Publish-AzDoRepoChanges {
+function Publish-AzDoRepoChange {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -4377,7 +4385,7 @@ function Publish-AzDoRepoChanges {
     }
 }
 
-function Publish-AzDoBranchSetupChanges {
+function Publish-AzDoBranchSetupChange {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -4509,7 +4517,7 @@ function Publish-AzDoBranchSetupChanges {
 
         [void](Update-DeployPipelineInWorkingTree -Environments @($DeploymentEnvironments) -RepoRoot $RepoRoot -Branch $ConfiguredBranch -UseAlm4DataverseExtension $UseAlm4DataverseExtension)
 
-        return Publish-AzDoRepoChanges -RepoRoot $RepoRoot -PublishPlan $PublishPlan -AccessToken $AccessToken -Repository $Repository
+        return Publish-AzDoRepoChange -RepoRoot $RepoRoot -PublishPlan $PublishPlan -AccessToken $AccessToken -Repository $Repository
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
@@ -4519,6 +4527,7 @@ function Publish-AzDoBranchSetupChanges {
 
 function Get-AzDoPublishSummaryText {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter()][array]$PublishResults
     )
@@ -4547,17 +4556,17 @@ function Get-AzDoPublishSummaryText {
     return ($summaryParts -join ' - ')
 }
 
-function Apply-AzDoEnvironmentConfiguration {
-    [CmdletBinding()]
+function Set-AzDoEnvironmentConfiguration {
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$EnvironmentConfiguration,
         [Parameter(Mandatory)][string]$OrganizationName,
         [Parameter(Mandatory)][string]$ProjectName,
-        [Parameter(Mandatory)][string]$ProjectId,
         [Parameter()][object]$ExportPipeline,
-        [Parameter()][object]$DeployPipeline,
-        [Parameter()][bool]$UseAlm4DataverseExtension = $true
+        [Parameter()][object]$DeployPipeline
     )
+
+    if (-not $PSCmdlet.ShouldProcess("$OrganizationName/$ProjectName", 'Configure Azure DevOps deployment environment')) { return }
 
     $creds = $EnvironmentConfiguration.Credentials
     $serviceAccountUPN = $EnvironmentConfiguration.ServiceAccountUPN
@@ -4590,7 +4599,7 @@ function Apply-AzDoEnvironmentConfiguration {
             $endpointParams.AuthType = 'Secret'
         }
 
-        $endpoint = Ensure-AzDoServiceEndpoint @endpointParams
+        $endpoint = Initialize-AzDoServiceEndpoint @endpointParams
 
         if ($creds.AuthType -eq 'WIF') {
             $wifIssuer = $endpoint.authorization.parameters.workloadIdentityFederationIssuer
@@ -4630,18 +4639,18 @@ function Apply-AzDoEnvironmentConfiguration {
     }
 
     if ($endpoint -and $endpoint.id -and $pipelineForPermissions) {
-        Ensure-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'endpoint' -ResourceId $endpoint.id -PipelineId $pipelineForPermissions.id
+        Initialize-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'endpoint' -ResourceId $endpoint.id -PipelineId $pipelineForPermissions.id
     }
 
     if (-not $isDevelopmentEnvironment) {
-        $azDoEnv = Ensure-AzDoEnvironment -Organization $OrganizationName -Project $ProjectName -EnvironmentName $EnvironmentConfiguration.ShortName -Description "Deployment environment for $($EnvironmentConfiguration.ShortName)"
+        $azDoEnv = Initialize-AzDoEnvironment -Organization $OrganizationName -Project $ProjectName -EnvironmentName $EnvironmentConfiguration.ShortName -Description "Deployment environment for $($EnvironmentConfiguration.ShortName)"
         if ($azDoEnv -and $DeployPipeline) {
-            Ensure-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'environment' -ResourceId $azDoEnv.id -PipelineId $DeployPipeline.id
+            Initialize-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'environment' -ResourceId $azDoEnv.id -PipelineId $DeployPipeline.id
         }
     }
 
-    Ensure-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $creds.TenantId
-    Ensure-DataverseServiceAccountUser -EnvironmentUrl $EnvironmentConfiguration.Url -ServiceAccountUPN $serviceAccountUPN -TenantId $creds.TenantId
+    Initialize-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $creds.TenantId
+    Initialize-DataverseServiceAccountUser -EnvironmentUrl $EnvironmentConfiguration.Url -ServiceAccountUPN $serviceAccountUPN -TenantId $creds.TenantId
 
     $groupName = "Environment-$($EnvironmentConfiguration.ShortName)"
     $variables = @{
@@ -4650,26 +4659,33 @@ function Apply-AzDoEnvironmentConfiguration {
         'DataverseServiceAccountUPN' = $serviceAccountUPN
     }
 
-    $varGroup = Ensure-AzDoVariableGroupExists `
+    $varGroup = Initialize-AzDoVariableGroup `
         -Organization $OrganizationName `
         -Project $ProjectName `
-        -ProjectId $ProjectId `
         -GroupName $groupName `
         -Variables $variables `
         -RequireDeploymentApproval (-not $isDevelopmentEnvironment -and -not $isBuildValidationEnvironment)
 
     if ($varGroup -and $varGroup.id -and $pipelineForPermissions) {
-        Ensure-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'variablegroup' -ResourceId $varGroup.id -PipelineId $pipelineForPermissions.id
+        Initialize-AzDoPipelinePermission -Organization $OrganizationName -Project $ProjectName -ResourceType 'variablegroup' -ResourceId $varGroup.id -PipelineId $pipelineForPermissions.id
     }
 }
 
 function Invoke-AzDoBranchAwareSetup {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'MainRepoWorkingRoot', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'MainRepo', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectedProject', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'OrganizationName', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedRepositoryName', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseAlm4DataverseExtension', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ALM4DataverseRef', Justification = 'Captured by the nested wizard actions.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$MainRepoWorkingRoot,
         [Parameter(Mandatory)][object]$MainRepo,
         [Parameter(Mandatory)][object]$SelectedProject,
-        [Parameter(Mandatory)][string]$OrganizationId,
         [Parameter(Mandatory)][string]$OrganizationName,
         [Parameter(Mandatory)][string]$TenantId,
         [Parameter(Mandatory)][string]$DefaultBranch,
@@ -4685,7 +4701,7 @@ function Invoke-AzDoBranchAwareSetup {
         Get-AzDoRepositoryExistingSetupState -RepoRoot $MainRepoWorkingRoot -ProjectName $SelectedProject.Name -DefaultBranch $DefaultBranch -TenantId $TenantId
     }
 
-    $initialBranchMappings = @(Get-AzDoInitialBranchMappings -ExistingSetupState $existingSetupState -DefaultBranch $DefaultBranch)
+    $initialBranchMappings = @(Get-AzDoInitialBranchMapping -ExistingSetupState $existingSetupState -DefaultBranch $DefaultBranch)
     $branchStates = @()
     foreach ($selectedBranchMapping in $initialBranchMappings) {
         $branchName = [string]$selectedBranchMapping.BranchName
@@ -4722,14 +4738,10 @@ function Invoke-AzDoBranchAwareSetup {
                     }
                 })
 
-                $selectedBranchMappings = @(Select-BranchEnvironmentMappings `
+                $selectedBranchMappings = @(Select-BranchEnvironmentMapping `
                     -EnvironmentConfigurations $existingEnvironmentConfigurations `
                     -InitialBranchMappings $currentBranchMappings `
                     -Title 'Manage deployment branches' `
-                    -GuidanceLines @(
-                        'Start by listing the Git branches that should carry ALM4Dataverse automation. Each branch becomes its own setup track with branch-specific DEV and DEPLOY configuration.',
-                        'Best practice: include only the branches that should really own a DEV environment or a DEPLOY pipeline so setup does not create noise on inactive branches.'
-                    ) `
                     -DocRelativePath 'docs/setup/azdo-automated-setup.md' `
                     -Ref $ALM4DataverseRef `
                     -EditDevEnvironmentScriptBlock {
@@ -4766,8 +4778,6 @@ function Invoke-AzDoBranchAwareSetup {
                                 -ExistingServiceAccounts $serviceAccountsCache `
                                 -TenantId $TenantId `
                                 -ProjectName $SelectedProject.Name `
-                                -OrganizationId $OrganizationId `
-                                -OrganizationName $OrganizationName `
                                 -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                                 -ExistingCredential $existingDevEnvironmentCredential `
                                 -ExistingServiceAccountUPN $existingDevEnvironmentServiceAccountUPN `
@@ -4806,8 +4816,6 @@ function Invoke-AzDoBranchAwareSetup {
                                 -ExistingCredentials $credentialsCache `
                                 -ExistingServiceAccounts $serviceAccountsCache `
                                 -TenantId $TenantId `
-                                -OrganizationId $OrganizationId `
-                                -OrganizationName $OrganizationName `
                                 -UseAlm4DataverseExtension $UseAlm4DataverseExtension
                         })
 
@@ -4870,13 +4878,13 @@ function Invoke-AzDoBranchAwareSetup {
 
                 $wizardState.BranchStates = @($updatedBranchStates | Sort-Object BranchName)
 
-                $branchMappingsForValidation = @($wizardState.BranchStates | ForEach-Object {
+                $branchMappingsForValidation = @($selectedBranchMappings | ForEach-Object {
                     [pscustomobject]@{
                         BranchName   = [string]$_.BranchName
-                        Environments = @($_.DeploymentEnvironments)
+                        Environments = @($_.Environments)
                     }
                 })
-                if (Test-BranchEnvironmentMappingsHaveDuplicates -BranchMappings $branchMappingsForValidation) {
+                if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation) {
                     throw 'Each deployment environment can only be assigned to one branch. Resolve duplicate environment assignments before continuing.'
                 }
 
@@ -4952,8 +4960,6 @@ function Invoke-AzDoBranchAwareSetup {
                             -ExistingServiceAccounts $serviceAccountsCache `
                             -TenantId $TenantId `
                             -ProjectName $SelectedProject.Name `
-                            -OrganizationId $OrganizationId `
-                            -OrganizationName $OrganizationName `
                             -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                             -ExistingCredential $existingDevEnvironmentCredential `
                             -ExistingServiceAccountUPN $existingDevEnvironmentServiceAccountUPN `
@@ -5005,8 +5011,6 @@ function Invoke-AzDoBranchAwareSetup {
                             -ExistingCredentials $credentialsCache `
                             -ExistingServiceAccounts $serviceAccountsCache `
                             -TenantId $TenantId `
-                            -OrganizationId $OrganizationId `
-                            -OrganizationName $OrganizationName `
                             -UseAlm4DataverseExtension $UseAlm4DataverseExtension
                     })
 
@@ -5079,8 +5083,6 @@ function Invoke-AzDoBranchAwareSetup {
                         -ExistingServiceAccounts $serviceAccountsCache `
                         -TenantId $TenantId `
                         -ProjectName $SelectedProject.Name `
-                        -OrganizationId $OrganizationId `
-                        -OrganizationName $OrganizationName `
                         -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                         -ExistingCredential $existingBuildValidationCredential `
                         -ExistingServiceAccountUPN $existingBuildValidationServiceAccountUPN `
@@ -5215,7 +5217,6 @@ $azDoSetupResult = Invoke-AzDoBranchAwareSetup `
     -MainRepoWorkingRoot $mainRepoWorkingRoot `
     -MainRepo $mainRepo `
     -SelectedProject $selectedProject `
-    -OrganizationId $orgId `
     -OrganizationName $orgName `
     -TenantId $adoAuthResult.TenantId `
     -DefaultBranch $script:mainRepoBranch `
@@ -5259,7 +5260,7 @@ else {
 try {
     foreach ($branchState in @($branchStates)) {
         $publishResult = Invoke-WithErrorHandling -OperationName "Publishing repository changes for branch '$($branchState.BranchName)'" -StatusMessage "Publishing repository changes for branch '$($branchState.BranchName)'..." -CaptureOutputInPanel -ScriptBlock {
-            Publish-AzDoBranchSetupChanges `
+            Publish-AzDoBranchSetupChange `
                 -RepoRoot $mainRepoWorkingRoot `
                 -ConfiguredBranch $branchState.BranchName `
                 -PublishPlan $branchState.PublishPlan `
@@ -5281,7 +5282,7 @@ try {
 }
 finally {
     if ($sharedRepoClone -and (Test-Path -LiteralPath $sharedRepoClone)) {
-        try { Remove-Item -LiteralPath $sharedRepoClone -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Item -LiteralPath $sharedRepoClone -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared repository clone; continuing cleanup.' }
     }
 }
 
@@ -5295,11 +5296,11 @@ $script:yamlFiles += @($branchStates | Where-Object { @($_.DeploymentEnvironment
 Write-Section `
     -Message 'Ensuring Build Service has Contribute on main repo'
 Invoke-WithErrorHandling -OperationName 'Setting Up Build Service Permissions' -StatusMessage 'Granting build service permissions for the main repository...' -CaptureOutputInPanel -ScriptBlock {
-    Ensure-AzDoBuildServiceHasContributeOnRepo -Organization $orgName -ProjectName $selectedProject.Name -ProjectId $selectedProject.Id -RepositoryId $mainRepo.Id
+    Initialize-AzDoBuildServiceRepositoryPermission  -ProjectName $selectedProject.Name -ProjectId $selectedProject.Id -RepositoryId $mainRepo.Id
 } | Out-Null
 
 Invoke-WithErrorHandling -OperationName 'Creating Pipeline Definitions' -StatusMessage 'Creating Azure DevOps pipeline definitions...' -CaptureOutputInPanel -ScriptBlock {
-    Ensure-AzDoPipelinesForMainRepo -Organization $orgName -Project $selectedProject.Name -Repository $mainRepo -YamlFiles $script:yamlFiles -FolderPath "\$($mainRepo.Name)"
+    Initialize-AzDoMainRepositoryPipeline  -Project $selectedProject.Name -Repository $mainRepo -YamlFiles $script:yamlFiles -FolderPath "\$($mainRepo.Name)"
 } | Out-Null
 
 Write-Section `
@@ -5313,10 +5314,10 @@ Invoke-WithErrorHandling -OperationName 'Authorizing Pipelines for Repositories'
         $pipeline = $allPipelines | Where-Object { $_.name -eq $name -and $_.path -eq $pipelineFolder } | Select-Object -First 1
         if ($pipeline) {
             $mainRepoResourceId = "$($selectedProject.Id).$($mainRepo.Id)"
-            Ensure-AzDoPipelinePermission -Organization $orgName -Project $selectedProject.Name -ResourceType 'repository' -ResourceId $mainRepoResourceId -PipelineId $pipeline.id
+            Initialize-AzDoPipelinePermission -Organization $orgName -Project $selectedProject.Name -ResourceType 'repository' -ResourceId $mainRepoResourceId -PipelineId $pipeline.id
 
             $sharedRepoResourceId = "$($selectedProject.Id).$($repo.Id)"
-            Ensure-AzDoPipelinePermission -Organization $orgName -Project $selectedProject.Name -ResourceType 'repository' -ResourceId $sharedRepoResourceId -PipelineId $pipeline.id
+            Initialize-AzDoPipelinePermission -Organization $orgName -Project $selectedProject.Name -ResourceType 'repository' -ResourceId $sharedRepoResourceId -PipelineId $pipeline.id
         }
     }
 } | Out-Null
@@ -5355,14 +5356,12 @@ else {
         }
 
         Invoke-WithErrorHandling -OperationName "Applying DEV environment configuration for branch '$($branchState.BranchName)'" -AllowSkip -ScriptBlock {
-            Apply-AzDoEnvironmentConfiguration `
+            Set-AzDoEnvironmentConfiguration `
                 -EnvironmentConfiguration $branchState.DevEnvironmentConfiguration `
                 -OrganizationName $orgName `
                 -ProjectName $selectedProject.Name `
-                -ProjectId $selectedProject.Id `
                 -ExportPipeline $exportPipeline `
-                -DeployPipeline $deployPipeline `
-                -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+                -DeployPipeline $deployPipeline
         } -StatusMessage "Applying DEV environment configuration for branch '$($branchState.BranchName)'..." -CaptureOutputInPanel | Out-Null
     }
 }
@@ -5378,14 +5377,12 @@ elseif (-not $buildPipeline) {
 }
 else {
     Invoke-WithErrorHandling -OperationName 'Applying global BUILD validation environment configuration' -AllowSkip -ScriptBlock {
-        Apply-AzDoEnvironmentConfiguration `
+        Set-AzDoEnvironmentConfiguration `
             -EnvironmentConfiguration $buildValidationEnvironmentConfiguration `
             -OrganizationName $orgName `
             -ProjectName $selectedProject.Name `
-            -ProjectId $selectedProject.Id `
             -ExportPipeline $null `
-            -DeployPipeline $buildPipeline `
-            -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+            -DeployPipeline $buildPipeline
     } -StatusMessage 'Applying global BUILD validation environment configuration...' -CaptureOutputInPanel | Out-Null
 }
 
@@ -5407,14 +5404,12 @@ else {
             Write-Section `
                 -Message "Applying environment configuration for '$($deploymentEnvironment.ShortName)' on branch '$($branchState.BranchName)'"
             Invoke-WithErrorHandling -OperationName "Applying environment configuration for '$($deploymentEnvironment.ShortName)' on branch '$($branchState.BranchName)'" -AllowSkip -ScriptBlock {
-                Apply-AzDoEnvironmentConfiguration `
+                Set-AzDoEnvironmentConfiguration `
                     -EnvironmentConfiguration $deploymentEnvironment `
                     -OrganizationName $orgName `
                     -ProjectName $selectedProject.Name `
-                    -ProjectId $selectedProject.Id `
                     -ExportPipeline $exportPipeline `
-                    -DeployPipeline $deployPipeline `
-                    -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+                    -DeployPipeline $deployPipeline
             } -StatusMessage "Applying configuration for environment '$($deploymentEnvironment.ShortName)' on branch '$($branchState.BranchName)'..." -CaptureOutputInPanel | Out-Null
         }
     }
@@ -5423,7 +5418,7 @@ else {
 #endregion
 
 if ($mainRepoWorkingRoot -and (Test-Path $mainRepoWorkingRoot)) {
-    try { Remove-Item -LiteralPath $mainRepoWorkingRoot -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+    try { Remove-Item -LiteralPath $mainRepoWorkingRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the main repository clone; continuing cleanup.' }
 }
 
 Show-SetupCompletionScreen `
