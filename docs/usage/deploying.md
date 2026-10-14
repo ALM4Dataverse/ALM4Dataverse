@@ -23,12 +23,8 @@ Actions artifact as fallback.
 On GitHub Actions with `environment-approval`, BUILD dispatches the deployment
 workflow with the exact Release/build identity. In `manual-gate-tag` mode, an
 operator starts deployment from Actions. Azure DevOps continues to use its
-selected pipeline resource artifact.
-
-Stable GitHub Releases contain the same successful BUILD artifact archive under
-the stable SemVer tag. In Azure DevOps, stable promotion labels the original
-successful BUILD run; select that exact run as the DEPLOY pipeline resource so
-deployment still consumes its unchanged `artifacts` pipeline artifact.
+selected pipeline resource artifact. Build versions and Git tags retain their
+provider/branch suffix; there is no separate stable build promotion step.
 
 ## Before You Deploy
 

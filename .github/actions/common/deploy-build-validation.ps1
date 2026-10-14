@@ -84,28 +84,6 @@ function Test-GitHubReleasePrerelease {
     return $null -ne $property -and [bool]$property.Value
 }
 
-function Select-PreferredBuildRelease {
-    param(
-        [Parameter(Mandatory)][object[]]$Candidates,
-        [Parameter(Mandatory)][string]$AmbiguousMessage
-    )
-
-    if ($Candidates.Count -eq 1) { return $Candidates[0] }
-
-    $stablePromotions = @($Candidates | Where-Object {
-        -not (Test-GitHubReleasePrerelease -Release $_.Release) -and
-            [string]$_.Release.body -match '(?im)^Promoted from:\s*\S+\s*$'
-    })
-    if ($stablePromotions.Count -eq 1) { return $stablePromotions[0] }
-    if ($stablePromotions.Count -gt 1) {
-        throw "Multiple stable promoted Releases match this BUILD identity."
-    }
-
-    $buildReleases = @($Candidates | Where-Object { Test-GitHubReleasePrerelease -Release $_.Release })
-    if ($buildReleases.Count -eq 1) { return $buildReleases[0] }
-    throw $AmbiguousMessage
-}
-
 function Find-UniqueReleaseForCommit {
     param([Parameter(Mandatory)][string]$CommitSha)
 
@@ -116,6 +94,9 @@ function Find-UniqueReleaseForCommit {
             break
         }
         foreach ($release in $releases) {
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) {
+                continue
+            }
             try {
                 $metadata = Get-ReleaseInformation -Release $release
             }
@@ -133,9 +114,7 @@ function Find-UniqueReleaseForCommit {
         }
     }
     if ($matchingReleases.Count -gt 1) {
-        return Select-PreferredBuildRelease `
-            -Candidates $matchingReleases `
-            -AmbiguousMessage "Multiple successful BUILD releases match legacy deployment pointer commit '$CommitSha'. Configure a fixed BUILD run ID instead of @environment-name."
+        throw "Multiple successful BUILD releases match legacy deployment pointer commit '$CommitSha'. Configure a fixed BUILD run ID instead of @environment-name."
     }
     if ($matchingReleases.Count -eq 1) {
         return $matchingReleases[0]
@@ -153,6 +132,9 @@ function Find-ReleaseForRunId {
             break
         }
         foreach ($release in $releases) {
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) {
+                continue
+            }
             try {
                 $metadata = Get-ReleaseInformation -Release $release
             }
@@ -169,9 +151,7 @@ function Find-ReleaseForRunId {
         }
     }
     if ($matchingReleases.Count -gt 1) {
-        return Select-PreferredBuildRelease `
-            -Candidates $matchingReleases `
-            -AmbiguousMessage "Multiple GitHub Releases match BUILD run '$RunId'; select a Release tag directly."
+        throw "Multiple GitHub Releases match BUILD run '$RunId'; select a Release tag directly."
     }
     if ($matchingReleases.Count -eq 0) {
         throw "No GitHub Release was found for BUILD run '$RunId'. Baseline packages must be downloaded from the BUILD Release asset."

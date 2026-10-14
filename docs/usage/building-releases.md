@@ -16,35 +16,22 @@ flowchart LR
 
 The `BUILD` pipeline collates a numbered release by extracting and building the assets required to deploy from source control. This can then be used later to deploy to any number of environments using the exact same, unchanged assets. When configured, BUILD also deploys its generated artifacts to a Dataverse validation environment, exercising the deployment process before promotion. BUILD can additionally run PAC Solution Checker against packed solutions.
 
-## SemVer build versions and promotion
+## SemVer BUILD versions
 
 The shared configuration defaults `buildVersion.default` to `1.0`. Override
 that default or add full branch-name overrides in `alm-config.psd1` when
 branches need distinct version lines. BUILD uses the CI run number as PATCH and
 adds a provider/branch prerelease suffix; for example,
 `2.1.42-github.branch-main`. The repository name remains in the displayed run
-name, not in the SemVer version. See [BUILD SemVer configuration](../config/alm-config.md#build-semver)
-for the setting and validation rules.
+name, not in the SemVer version. All BUILD versions and source tags retain this
+suffix; there is no stable build promotion workflow or pipeline. See
+[BUILD SemVer configuration](../config/alm-config.md#build-semver) for the setting
+and validation rules.
 
 Every successful BUILD artifact includes `build-version.json`, which records
-the version, source branch and commit, provider, and exact run ID. Promote only
-a successful BUILD for the intended source commit:
-
-- **GitHub Actions:** run **Stable Release** from **Actions > Run workflow** and
-  enter the successful BUILD workflow run ID. The workflow derives the stable
-  `vMAJOR.MINOR.PATCH` version, creates its tag at that BUILD's source commit,
-  and includes the unchanged `artifacts.zip` and optional solution-check report,
-  in addition to the setup scripts.
-- **Azure DevOps:** run the copied `pipelines/RELEASE.yml` pipeline and select
-  the exact successful BUILD in **Resources**. RELEASE verifies its artifact
-  metadata, creates the stable `vMAJOR.MINOR.PATCH` Git tag, and labels the
-  original BUILD run with the stable version. The original pipeline artifact
-  remains the deployable package; no rebuild or artifact substitution occurs.
-
-Both platforms promote a selected successful BUILD run and reuse its exact
-artifacts. Stable promotion removes only the prerelease suffix. It does not
-change the package or Dataverse solution versions. Existing builds and baseline
-selectors continue to use their exact run IDs/tags; old tags are not rewritten.
+the version, source branch and commit, provider, and exact run ID. DEPLOY and
+baseline validation consume the selected successful BUILD and its exact
+provider-specific artifacts; they do not change or rebuild the package.
 
 ## Prerequisites And Outputs
 
@@ -58,7 +45,7 @@ Run [EXPORT](exporting-changes.md) first if configured solution folders are not 
 > [!NOTE]
 > The build/run identity is not the same as a solution version. Multiple solutions in one
 > build can have different versions, and several builds may reference one source commit.
-> Use the exact build identity when promoting or selecting a baseline.
+> Use the exact build identity when deploying or selecting a baseline.
 
 On GitHub Actions, each successful branch BUILD publishes the same separate
 deployment archives as both Actions artifacts and GitHub prerelease assets:
@@ -67,9 +54,8 @@ deployment archives as both Actions artifacts and GitHub prerelease assets:
   assets, scripts, configuration, and dependency locks.
 - `solution-check-report.zip` — published when a solution-check report exists.
 
-The prerelease is not a different deployment package. Stable promotion copies
-these exact assets to the stable Release. Existing Actions artifacts remain
-available for compatibility and fallback deployments.
+The prerelease assets and Actions artifacts contain the same deployment package.
+Both retain the provider/branch-suffixed BUILD tag and version.
 
 The `BUILD` job triggers automatically when any changes are made in the associated repo, including when `EXPORT` completes (unless no changes were found). The copied GitHub workflow and Azure Pipeline trigger on pushes to branches; setting a repository's PR or branch policy to require successful validation is a separate configuration step.
 
@@ -258,10 +244,9 @@ manually. Keep it on the default branch for scheduled runs. It operates only on 
 recognized by ALM4Dataverse build metadata, not arbitrary Releases.
 
 For existing branches it retains the newest `max-releases-per-branch` builds (default
-`10`), **plus stable promoted Releases and Releases referenced by active annotated
-`deployed/<environment>` pointers**. For deleted branches it removes managed Releases
-except those protected by active pointers and stable promoted Releases. The count can
-therefore exceed the configured cap.
+`10`), plus Releases referenced by active annotated `deployed/<environment>` pointers.
+For deleted branches it removes managed Releases except those protected by active
+pointers. The count can therefore exceed the configured cap.
 
 Before deleting a Release, cleanup creates an annotated
 `alm4dataverse/metadata/<release-tag>` tag containing branch, build name, source commit,

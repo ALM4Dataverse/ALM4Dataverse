@@ -37,7 +37,7 @@ Source: [build action](../../.github/actions/build/action.yml).
 | `source-branch` | No | `''` | Source branch recorded for Release metadata and deployment dispatch. Custom callers should supply it explicitly. |
 | `environment-name` | No | `''` | Nonempty enables authentication and baseline/candidate deployment validation. |
 
-Outputs: `run-id` (numeric Actions run ID), `run-name` (the supplied display name), `build-version` (SemVer prerelease), `stable-version` (its stable numeric version), `release-tag` (SemVer source tag), and `release-url`.
+Outputs: `run-id` (numeric Actions run ID), `run-name` (the supplied display name), `build-version` (provider/branch-suffixed SemVer), `release-tag` (the same suffixed version as a source tag), and `release-url`.
 
 Build artifacts are uploaded as `artifacts` and, when present, `solution-check-report`, with a requested 90-day retention. Upload steps run even after failure to aid diagnosis; partial artifacts from a failed run are not a deployable release. Successful builds publish `artifacts.zip` and optionally `solution-check-report.zip` as prerelease assets, then send a branch-scoped deployment dispatch. See [building releases](../usage/building-releases.md).
 
@@ -92,10 +92,6 @@ The selector accepts a Release tag, exact BUILD name, or numeric BUILD run ID; b
 | `DEPLOY-<branch>` | Manual dispatch and, in approval mode, branch-scoped build dispatch | `contents: write`, `actions: read`, `id-token: write` |
 | `CLEANUP-RELEASES` | Delete events, daily at 03:17 UTC, manual dispatch | `contents: write` |
 
-Azure DevOps uses the manually queued `RELEASE.yml` caller to promote an exact
-successful BUILD. Its job token must be authorized to read the selected build and
-add build tags, and the pipeline identity needs Git tag creation permission.
-
 `id-token: write` permits OIDC authentication; it does not grant Dataverse permissions. `contents: write` supports commits, dispatches, Releases, and/or deployment tags depending on the caller. Grant only what each job needs, subject to organization policy.
 
 Shipped action callers run on `ubuntu-latest` with `timeout-minutes: 360`.
@@ -116,7 +112,6 @@ The [caller pipelines](../../copy-to-your-repo/pipelines) declare the shared rep
 | --- | --- | --- | --- | --- |
 | [build](../../pipelines/templates/build.yml) | `buildEnvironmentName` | String | `''` | Nonempty selects a validation service connection and `Environment-<name>` variable group. |
 | build | `useAlm4DataverseExtension` | Boolean | `true` | Use the ALM4Dataverse connection-variable task. |
-| [release](../../pipelines/templates/release.yml) | None | — | — | Promotes a selected successful BUILD by adding its stable SemVer Git tag and Azure DevOps build tag; does not rebuild or copy artifacts. |
 | [export](../../pipelines/templates/export.yml) | `commitMessage` | String | Required | Commit message for exported changes. |
 | export | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
 | [import](../../pipelines/templates/import.yml) | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
@@ -129,12 +124,6 @@ With `useAlm4DataverseExtension: false`, the Microsoft Power Platform Build Tool
 EXPORT and IMPORT resolve their development service connection from `Dev-$(Build.SourceBranchName)`. Azure DevOps's `Build.SourceBranchName` is the final branch path component: `feature/customer-import` resolves to `Dev-customer-import`, unlike GitHub's full branch name. Avoid branch-leaf collisions or customize the naming logic consistently.
 
 DEPLOY expects a pipeline resource alias `build`, whose source names the application's BUILD pipeline, including its folder if applicable. The deployment job downloads that resource's `artifacts` and runs its packaged scripts. It updates the annotated `deployed/<environmentName>` tag after success. Grant repository tag creation and force-update permissions only to the trusted build identity and required scope.
-
-The copied [RELEASE caller](../../copy-to-your-repo/pipelines/RELEASE.yml) is manually
-queued with the exact successful BUILD selected under **Resources**. Its job access
-token needs permission to read the BUILD and add a build tag; the pipeline identity
-also needs permission to create Git tags. The stable version tag and build tag point
-to the original BUILD run, whose exact pipeline artifact remains the deployable output.
 
 ## Setup Script Parameters
 

@@ -42,8 +42,6 @@ stages:
             Write-Host "##vso[build.updatebuildnumber]$(Build.Repository.Name)-$($version.Version)"
             Write-Host "##vso[task.setvariable variable=BuildSemVer]$($version.Version)"
             Write-Host "##vso[task.setvariable variable=BuildSemVerTag]$($version.TagName)"
-            Write-Host "##vso[task.setvariable variable=BuildStableVersion]$($version.StableVersion)"
-            Write-Host "##vso[task.setvariable variable=BuildStableTag]$($version.StableTagName)"
             Write-Host "Resolved BUILD version $($version.Version)"
           displayName: 'Resolve BUILD SemVer and set run name'
 

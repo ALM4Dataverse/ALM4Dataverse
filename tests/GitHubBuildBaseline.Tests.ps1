@@ -29,6 +29,7 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         Mock Invoke-RestMethod {
             $release = [pscustomobject]@{
                 tag_name = 'release-1'
+                prerelease = $true
                 body = "<!-- alm4dataverse-build-branch:main -->`nBuild: release-1`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)"
                 assets = @([pscustomobject]@{ name = 'artifacts.zip' })
             }
@@ -112,7 +113,7 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         Resolve-CommitFromTagReference -Reference @{ object = @{ type = 'tag'; sha = 'tag-sha' } } | Should -Be ('a' * 40)
     }
 
-    It 'uses the stable promoted Release for BUILD ID and legacy commit baseline selectors' {
+    It 'prefers the branch-suffixed BUILD Release when multiple releases share an identity' {
         . $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
         $metadataBody = "<!-- alm4dataverse-build-branch:main -->`nBuild: example-main-1`nBranch: main`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)"
         $buildRelease = @{
@@ -120,18 +121,18 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
             prerelease = $true
             body = "Version: 1.2.123-github.branch-main`n$metadataBody"
         }
-        $stableRelease = @{
+        $nonPrereleaseRelease = @{
             tag_name = 'v1.2.123'
             prerelease = $false
-            body = "Version: 1.2.123`n$metadataBody`nPromoted from: $($buildRelease.tag_name)"
+            body = "Version: 1.2.123`n$metadataBody"
         }
         Mock Invoke-GitHubApi {
-            if ($RelativePath -match '^releases\?.*page=1$') { return @($buildRelease, $stableRelease) }
+            if ($RelativePath -match '^releases\?.*page=1$') { return @($buildRelease, $nonPrereleaseRelease) }
             return @()
         }
 
-        (Find-ReleaseForRunId -RunId 123).TagName | Should -Be 'v1.2.123'
-        (Find-UniqueReleaseForCommit -CommitSha ('a' * 40)).TagName | Should -Be 'v1.2.123'
+        (Find-ReleaseForRunId -RunId 123).TagName | Should -Be $buildRelease.tag_name
+        (Find-UniqueReleaseForCommit -CommitSha ('a' * 40)).TagName | Should -Be $buildRelease.tag_name
     }
 
     It 'rejects missing and ambiguous release matches rather than choosing one' {
@@ -141,7 +142,7 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         Find-UniqueReleaseForCommit -CommitSha ('b' * 40) | Should -BeNullOrEmpty
         Mock Invoke-GitHubApi {
             if ($RelativePath -match 'page=1$') {
-                $release = @{ tag_name = 'release-1'; body = "<!-- alm4dataverse-build-branch:main -->`nBuild: release-1`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)" }
+                $release = @{ tag_name = 'release-1'; prerelease = $true; body = "<!-- alm4dataverse-build-branch:main -->`nBuild: release-1`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)" }
                 @($release, $release, @{ tag_name = 'invalid'; body = '' })
             }
         }

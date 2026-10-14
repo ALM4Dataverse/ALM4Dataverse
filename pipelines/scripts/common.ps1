@@ -207,13 +207,10 @@ function Resolve-AlmBuildVersion {
         throw "Source branch '$branch' cannot be converted to a SemVer prerelease identifier."
     }
 
-    $stableVersion = "$majorMinor.$RunNumber"
-    $version = "$stableVersion-$Provider.branch-$branchIdentifier"
+    $version = "$majorMinor.$RunNumber-$Provider.branch-$branchIdentifier"
     return [pscustomobject]@{
         Version       = $version
         TagName       = "v$version"
-        StableVersion = $stableVersion
-        StableTagName = "v$stableVersion"
         BranchName    = $branch
         Provider      = $Provider
         RunNumber     = $RunNumber
@@ -249,8 +246,6 @@ function Write-AlmBuildVersionInfo {
     $metadata = [ordered]@{
         version       = $BuildVersion.Version
         tag            = $BuildVersion.TagName
-        stableVersion = $BuildVersion.StableVersion
-        stableTag      = $BuildVersion.StableTagName
         branch         = $BuildVersion.BranchName
         provider       = $BuildVersion.Provider
         runNumber      = $BuildVersion.RunNumber

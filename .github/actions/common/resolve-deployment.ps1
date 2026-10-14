@@ -254,6 +254,7 @@ function Find-LatestManagedReleaseForBranch {
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
             try { $metadata = Get-ReleaseInformation -Release $release } catch { continue }
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) { continue }
             if ($metadata.Branch -cne $BranchName) { continue }
 
             $match = [pscustomobject]@{
@@ -289,6 +290,7 @@ function Find-ReleaseForBuildRun {
         $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) { continue }
             try { $releaseMetadata = Get-ReleaseInformation -Release $release } catch { continue }
             if ($releaseMetadata.RunId -ceq $RunId) {
                 $matchingReleases += [pscustomobject]@{
@@ -300,17 +302,6 @@ function Find-ReleaseForBuildRun {
     }
 
     if ($matchingReleases.Count -gt 1) {
-        $stablePromotions = @($matchingReleases | Where-Object {
-            -not (Test-GitHubReleasePrerelease -Release $_.Release) -and
-                [string]$_.Release.body -match '(?im)^Promoted from:\s*\S+\s*$'
-        })
-        if ($stablePromotions.Count -eq 1) { return $stablePromotions[0] }
-        if ($stablePromotions.Count -gt 1) {
-            throw "Multiple stable GitHub Releases match BUILD run '$RunId'; refusing to write an ambiguous deployment pointer."
-        }
-
-        $buildReleases = @($matchingReleases | Where-Object { Test-GitHubReleasePrerelease -Release $_.Release })
-        if ($buildReleases.Count -eq 1) { return $buildReleases[0] }
         throw "Multiple GitHub Releases match BUILD run '$RunId'; refusing to write an ambiguous deployment pointer."
     }
     if ($matchingReleases.Count -eq 1) {

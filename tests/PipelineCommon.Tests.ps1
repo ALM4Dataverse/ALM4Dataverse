@@ -41,8 +41,8 @@ Describe 'BUILD SemVer resolution' {
         $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'refs/heads/main' -RunNumber 42 -Provider github
         $version.Version | Should -Be '2.1.42-github.branch-main'
         $version.TagName | Should -Be 'v2.1.42-github.branch-main'
-        $version.StableVersion | Should -Be '2.1.42'
-        $version.StableTagName | Should -Be 'v2.1.42'
+        $version.PSObject.Properties.Name | Should -Not -Contain 'StableVersion'
+        $version.PSObject.Properties.Name | Should -Not -Contain 'StableTagName'
     }
 
     It 'maps branch MAJOR.MINOR to the solution Major.Build base' {
@@ -76,6 +76,8 @@ Describe 'BUILD SemVer resolution' {
         $metadata.version | Should -Be '2.1.42-github.branch-main'
         $metadata.runId | Should -Be '123456'
         $metadata.sourceCommit | Should -Be ('a' * 40)
+        $metadata.PSObject.Properties.Name | Should -Not -Contain 'stableVersion'
+        $metadata.PSObject.Properties.Name | Should -Not -Contain 'stableTag'
     }
 }
 

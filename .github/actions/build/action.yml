@@ -38,9 +38,6 @@ outputs:
   build-version:
     description: SemVer prerelease version assigned to this BUILD.
     value: ${{ steps.resolve-version.outputs.version }}
-  stable-version:
-    description: Stable SemVer version associated with this BUILD.
-    value: ${{ steps.resolve-version.outputs.stable_version }}
   release-tag:
     description: Git tag used by the GitHub Release for this build.
     value: ${{ steps.tag-source.outputs.tag_name }}
@@ -77,8 +74,6 @@ runs:
         $version = Resolve-AlmBuildVersion -Config $config -BranchName $env:BUILD_BRANCH -RunNumber $env:BUILD_RUN_NUMBER -Provider github
         "version=$($version.Version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "tag_name=$($version.TagName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-        "stable_version=$($version.StableVersion)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-        "stable_tag=$($version.StableTagName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "BUILD_VERSION=$($version.Version)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         "BUILD_TAG=$($version.TagName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         Write-Host "Resolved BUILD version $($version.Version)"

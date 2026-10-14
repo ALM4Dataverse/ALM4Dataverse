@@ -58,8 +58,8 @@ The supplied template additionally includes the `data` asset and example data ho
 `buildVersion` assigns a MAJOR.MINOR version line to each branch. The CI run
 number supplies PATCH, while a provider and normalized branch prerelease suffix
 make each BUILD version distinct. For example, `main` might produce
-`2.1.42-github.branch-main`; stable promotion removes the suffix to produce
-`2.1.42` (Git tag `v2.1.42`).
+`2.1.42-github.branch-main`. Every build retains this provider/branch suffix in
+its version and source tag; no stable build promotion is provided.
 
 ```powershell
 buildVersion = @{
@@ -84,10 +84,8 @@ solution's `Major.Build` components. The solution's `Minor` component remains
 the non-additive upgrade counter used by DEPLOY.
 
 `build-version.json` in each artifact records its version, branch, provider,
-source commit, and exact CI run ID. Stable promotion reuses that successful
-BUILD; it does not rebuild solutions. Azure DevOps records the stable version
-against the original BUILD run and source tag. GitHub publishes the same
-artifact archives under the stable Release tag.
+source commit, and exact CI run ID. Azure DevOps and GitHub keep the original
+provider/branch-suffixed build identity for deployment and baseline selection.
 
 ### Solutions
 
