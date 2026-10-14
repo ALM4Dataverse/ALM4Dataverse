@@ -46,6 +46,7 @@ Run these checks without Dataverse or platform credentials:
 
 | Check | What it verifies | Boundary |
 | --- | --- | --- |
+| Workflow and pipeline validation | `actionlint` checks checked-in and setup-generated GitHub workflows; the pinned [Microsoft Azure Pipelines schema](https://github.com/microsoft/azure-pipelines-vscode/blob/9e40e814abd20917f273dd587497086f0476a563/service-schema.json) checks checked-in and setup-generated Azure pipeline YAML through Microsoft's language service. | The generic Azure schema does not include organization-specific extensions or expand templates against a live Azure DevOps organization. Known ALM4Dataverse extension tasks and inputs are allowlisted. |
 | Dependency workflow | Data-file parsing, version JSON, update pattern, and branch naming. | Uses fixtures; does not query Gallery or create a PR. |
 | Deployment options | Actual deployment scripts with missing, null, empty, false, and true keys under strict mode; generated/copied workflow promotion guards. | Dataverse calls are mocked; generator tests create temporary callers. |
 | Environment mapping | Direct/prefixed variables, selected-secret precedence, and preservation of existing runtime values. | Synthetic process values only; no Azure login. |
@@ -59,7 +60,7 @@ For a focused documentation check:
 ```
 
 Omit `-SkipCoverage` for the full reference-name check. Review editor Markdown/PowerShell
-diagnostics and `git diff --check` as well. The PowerShell Checks workflow runs the
+diagnostics and `git diff --check` as well. The Repository Validation workflow runs the
 same shared validator on Windows and Linux. See [PowerShell development](development/powershell.md)
 for suite organization, coverage gates and saved reports.
 
