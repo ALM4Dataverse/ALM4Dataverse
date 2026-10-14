@@ -161,7 +161,7 @@ runs:
         . "${{ github.action_path }}/../../../pipelines/scripts/common.ps1"
         $config = Get-AlmConfig -BaseDirectory "${{ github.workspace }}/self" -LogConfig $false
         $version = Resolve-AlmBuildVersion -Config $config -BranchName $env:BUILD_BRANCH -RunNumber '${{ github.run_number }}' -Provider github
-        Write-AlmBuildVersionMetadata `
+        Write-AlmBuildVersionInfo `
           -ArtifactsPath (Join-Path $env:GITHUB_WORKSPACE 'artifacts') `
           -BuildVersion $version `
           -RunId '${{ github.run_id }}' `

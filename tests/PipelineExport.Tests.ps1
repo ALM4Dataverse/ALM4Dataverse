@@ -102,6 +102,22 @@ Describe 'Export and version changes' {
         Should -Invoke Set-DataverseSolution -Times 1 -Exactly -ParameterFilter { $Version -eq '1.0.3.1' }
     }
 
+    It 'uses checked increments when a solution version component is at its limit' -ForEach @(
+        @{ CurrentVersion = '1.2.3.2147483647'; Additive = $true; Message = '*Cannot increment solution revision beyond*' }
+        @{ CurrentVersion = '1.2147483647.3.0'; Additive = $false; Message = '*Cannot increment solution minor beyond*' }
+    ) {
+        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'solutions/Example') -Force | Out-Null
+        Mock Export-DataverseSolution {
+            New-Item -ItemType Directory -Path (Join-Path $OutFolder 'Other') -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $OutFolder 'Other/Solution.xml') -Value "<ImportExportXml><SolutionManifest><Version>$CurrentVersion</Version></SolutionManifest></ImportExportXml>"
+        }
+        Mock Compare-DataverseSolutionComponents { $Additive }
+
+        { & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main } |
+            Should -Throw $Message
+        Should -Invoke Set-DataverseSolution -Times 0 -Exactly
+    }
+
     It 'leaves unchanged solution versions alone' {
         Mock git { '' }
         & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main

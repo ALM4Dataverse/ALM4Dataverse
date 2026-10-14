@@ -87,6 +87,15 @@ Describe 'BUILD SemVer resolution' {
         $metadata.PSObject.Properties.Name | Should -Not -Contain 'stableVersion'
         $metadata.PSObject.Properties.Name | Should -Not -Contain 'stableTag'
     }
+
+    It 'uses the shared metadata writer in the GitHub BUILD action' {
+        $actionPath = Join-Path $repoRoot '.github/actions/build/action.yml'
+        $action = Get-Content -LiteralPath $actionPath -Raw
+
+        $action | Should -Match '\bWrite-AlmBuildVersionInfo\b'
+        $action | Should -Not -Match '\bWrite-AlmBuildVersionMetadata\b'
+        (Get-Command Write-AlmBuildVersionInfo).Name | Should -Be 'Write-AlmBuildVersionInfo'
+    }
 }
 
 Describe 'Pipeline hooks' {

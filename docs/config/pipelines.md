@@ -165,7 +165,7 @@ Use PowerShell 7 with Git and a .NET SDK compatible with the selected PAC tool, 
 | [installdependencies.ps1](../../pipelines/scripts/installdependencies.ps1) | None | Application or artifact root; installs/imports configured modules and PAC, honoring `scriptDependencies.lock.json` when present. |
 | [connect.ps1](../../pipelines/scripts/connect.ps1) | `Url` (required string) | Authenticates to the supplied Dataverse URL using the process's Azure identity. |
 | [build.ps1](../../pipelines/scripts/build.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required strings) | Application root; packs both solution types, runs checker/build hooks, copies assets, snapshots scripts, writes dependency lock. No validation-environment deployment on its own. |
-| [export.ps1](../../pipelines/scripts/export.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required); `TempDirectory`; `EnvironmentName` (default `Unknown`); `PassThru` (switch, off) | Application root; exports and updates source and Dataverse versions. Always pass a real writable temporary directory. `EnvironmentName` is a label, not authentication. `PassThru` additionally returns elapsed seconds and package timings; it does not disable source or version updates. |
+| [export.ps1](../../pipelines/scripts/export.ps1) | `SourceDirectory`, `ArtifactStagingDirectory`, `BranchName` (required); `TempDirectory`; `EnvironmentName` (default `Unknown`); `DefaultBranchName` (optional); `PassThru` (switch, off) | Application root; exports and updates source and Dataverse versions. `BranchName` is the exact source branch; `DefaultBranchName` identifies the repository default branch for the default-version warning and otherwise resolves from `origin/HEAD`. Always pass a real writable temporary directory. `EnvironmentName` is a label, not authentication. `PassThru` additionally returns elapsed seconds and package timings; it does not disable source or version updates. |
 | [deploy.ps1](../../pipelines/scripts/deploy.ps1) | `ArtifactsPath` (required); `UseUnmanagedSolutions` (switch, off by default) | Artifact root; imports, upgrades, activates processes, publishes, and runs deployment hooks. |
 | [import.ps1](../../pipelines/scripts/import.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required strings) | Application root; builds and deploys unmanaged. Already requires a connection. |
 | [resolvedependencycache.ps1](../../pipelines/scripts/resolvedependencycache.ps1) | `BaseDirectory` (default `.`); `AlmScriptsRoot` (default script directory) | Emits `module_cache_enabled`, `module_cache_key`, `pac_cache_enabled`, `pac_cache_key` for GitHub caching. |
@@ -180,6 +180,24 @@ New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 
 & "$almRoot/pipelines/scripts/installdependencies.ps1"
 & "$almRoot/pipelines/scripts/build.ps1" -SourceDirectory $sourceRoot -ArtifactStagingDirectory $artifactRoot
+```
+
+For direct EXPORT calls, connect to the development environment first and pass
+the exact branch name. Supply the repository default branch when known; otherwise
+EXPORT resolves it from `origin/HEAD` for the default-version warning.
+
+```powershell
+$exportArtifacts = Join-Path ([IO.Path]::GetTempPath()) 'contoso-export-artifacts'
+$exportTemp = Join-Path ([IO.Path]::GetTempPath()) 'contoso-export-temp'
+New-Item -ItemType Directory -Path $exportArtifacts, $exportTemp -Force | Out-Null
+
+& "$almRoot/pipelines/scripts/export.ps1" `
+    -SourceDirectory $sourceRoot `
+    -ArtifactStagingDirectory $exportArtifacts `
+    -TempDirectory $exportTemp `
+    -BranchName 'feature/customer-import' `
+    -DefaultBranchName 'main' `
+    -EnvironmentName 'Development'
 ```
 
 Use a fresh artifact directory for each build. If checker rules or custom hooks require

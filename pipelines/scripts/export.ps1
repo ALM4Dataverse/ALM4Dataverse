@@ -132,22 +132,24 @@ foreach ($solution in $solutionsConfig.solutions) {
         $baseMatches = $currentVersion.Major -eq $branchBaseVersion.Major -and
             [Math]::Max(0, $currentVersion.Build) -eq $branchBaseVersion.Build
         if ($baseMatches) {
-            $minorVersion = [Math]::Max(0, $currentVersion.Minor)
-            $revisionVersion = [Math]::Max(0, $currentVersion.Revision)
+            $versionBeforeIncrement = [version]::new(
+                $branchBaseVersion.Major,
+                [Math]::Max(0, $currentVersion.Minor),
+                $branchBaseVersion.Build,
+                [Math]::Max(0, $currentVersion.Revision)
+            )
         }
         else {
             Write-Host "##[debug][$solutionName][Version] Resetting solution version to branch base $($branchBaseVersion.Major).$($branchBaseVersion.Build)"
-            $minorVersion = 0
-            $revisionVersion = 0
+            $versionBeforeIncrement = [version]::new(
+                $branchBaseVersion.Major,
+                0,
+                $branchBaseVersion.Build,
+                0
+            )
         }
 
-        if ($changesareadditive) {
-            $revisionVersion++
-        } else {
-            $minorVersion++
-            $revisionVersion = 0
-        }
-        $newversion = [version] "$($branchBaseVersion.Major).$minorVersion.$($branchBaseVersion.Build).$revisionVersion"
+        $newversion = Get-NextAlmSolutionVersion -Version $versionBeforeIncrement -IsAdditive $changesareadditive
         $newversion = Register-AlmSolutionVersion `
             -RepositoryPath $SourceDirectory `
             -SolutionName $solutionName `

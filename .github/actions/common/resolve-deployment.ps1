@@ -374,24 +374,13 @@ if ($eventName -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($m
             break
         }
     }
-    if ([string]::IsNullOrWhiteSpace($requestedReleaseTag)) { $requestedReleaseTag = $normalizedTag }
 }
 if ([string]::IsNullOrWhiteSpace($requestedReleaseTag) -and [string]::IsNullOrWhiteSpace($manualSelector)) {
     $latest = Find-LatestManagedReleaseForBranch $callerBranch
     if ($null -ne $latest) {
         $metadata = $latest.Metadata
-        $normalizedTag = ConvertTo-BuildReleaseTag $metadata.BuildName
-        $tagCandidates = @($normalizedTag, "v$normalizedTag")
-        foreach ($tagCandidate in $tagCandidates) {
-            $release = Get-GitHubReleaseByTag $tagCandidate
-            if ($null -ne $release) {
-                $requestedReleaseTag = [string]$release.tag_name
-                break
-            }
-        }
-        if ([string]::IsNullOrWhiteSpace($requestedReleaseTag)) {
-            $requestedReleaseTag = $normalizedTag
-        }
+        $release = $latest.Release
+        $requestedReleaseTag = [string]$release.tag_name
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($requestedReleaseTag) -and $null -eq $release) {
