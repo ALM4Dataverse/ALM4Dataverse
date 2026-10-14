@@ -87,7 +87,7 @@ pin the shared repository to a tag/branch instead of its default branch.
 
 The shared configuration defaults `buildVersion.default` to `1.0`; override it
 or add branch-specific MAJOR.MINOR entries in `alm-config.psd1` when needed.
-Every BUILD keeps its provider/branch-suffixed SemVer version and source tag.
+Every BUILD keeps its branch-suffixed SemVer version and source tag.
 
 ## 4. Service Principal Setup
 

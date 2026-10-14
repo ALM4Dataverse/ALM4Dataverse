@@ -37,7 +37,7 @@ Source: [build action](../../.github/actions/build/action.yml).
 | `source-branch` | No | `''` | Source branch recorded for Release metadata and deployment dispatch. Custom callers should supply it explicitly. |
 | `environment-name` | No | `''` | Nonempty enables authentication and baseline/candidate deployment validation. |
 
-Outputs: `run-id` (numeric Actions run ID), `run-name` (the supplied display name), `build-version` (provider/branch-suffixed SemVer), `release-tag` (the same suffixed version as a source tag), and `release-url`.
+Outputs: `run-id` (numeric Actions run ID), `run-name` (the supplied display name), `build-version` (branch-suffixed SemVer), `release-tag` (the same suffixed version as a source tag), and `release-url`.
 
 Build artifacts are uploaded as `artifacts` and, when present, `solution-check-report`, with a requested 90-day retention. Upload steps run even after failure to aid diagnosis; partial artifacts from a failed run are not a deployable release. Successful builds publish `artifacts.zip` and optionally `solution-check-report.zip` as prerelease assets, then send a branch-scoped deployment dispatch. See [building releases](../usage/building-releases.md).
 

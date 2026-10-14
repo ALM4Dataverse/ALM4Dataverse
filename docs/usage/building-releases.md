@@ -21,10 +21,11 @@ The `BUILD` pipeline collates a numbered release by extracting and building the 
 The shared configuration defaults `buildVersion.default` to `1.0`. Override
 that default or add full branch-name overrides in `alm-config.psd1` when
 branches need distinct version lines. BUILD uses the CI run number as PATCH and
-adds a provider/branch prerelease suffix; for example,
-`2.1.42-github.branch-main`. The repository name remains in the displayed run
+the normalized branch name as the prerelease identifier; for example,
+`2.1.42-main` or `1.0.43-feat-abc` for `feat/abc`. Slashes and other branch
+punctuation become hyphens. The repository name remains in the displayed run
 name, not in the SemVer version. All BUILD versions and source tags retain this
-suffix; there is no stable build promotion workflow or pipeline. See
+branch suffix; there is no stable build promotion workflow or pipeline. See
 [BUILD SemVer configuration](../config/alm-config.md#build-semver) for the setting
 and validation rules.
 
@@ -55,7 +56,7 @@ deployment archives as both Actions artifacts and GitHub prerelease assets:
 - `solution-check-report.zip` — published when a solution-check report exists.
 
 The prerelease assets and Actions artifacts contain the same deployment package.
-Both retain the provider/branch-suffixed BUILD tag and version.
+Both retain the branch-suffixed BUILD tag and version.
 
 The `BUILD` job triggers automatically when any changes are made in the associated repo, including when `EXPORT` completes (unless no changes were found). The copied GitHub workflow and Azure Pipeline trigger on pushes to branches; setting a repository's PR or branch policy to require successful validation is a separate configuration step.
 

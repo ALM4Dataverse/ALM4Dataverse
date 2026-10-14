@@ -56,10 +56,13 @@ The supplied template additionally includes the `data` asset and example data ho
 ### BUILD SemVer
 
 `buildVersion` assigns a MAJOR.MINOR version line to each branch. The CI run
-number supplies PATCH, while a provider and normalized branch prerelease suffix
-make each BUILD version distinct. For example, `main` might produce
-`2.1.42-github.branch-main`. Every build retains this provider/branch suffix in
-its version and source tag; no stable build promotion is provided.
+number supplies PATCH, and the normalized branch name is the SemVer prerelease
+identifier. For example, `main` might produce `2.1.42-main`, while
+`feat/abc` with the default `1.0` base might produce `1.0.43-feat-abc`. Slashes
+and other branch punctuation become hyphens. Every build retains this branch
+suffix in its version and source tag; no stable build promotion is provided.
+Numeric-only branch slugs with leading zeroes get a `b` prefix to remain valid
+SemVer identifiers (for example, branch `01` becomes `b01`).
 
 ```powershell
 buildVersion = @{
@@ -85,7 +88,7 @@ the non-additive upgrade counter used by DEPLOY.
 
 `build-version.json` in each artifact records its version, branch, provider,
 source commit, and exact CI run ID. Azure DevOps and GitHub keep the original
-provider/branch-suffixed build identity for deployment and baseline selection.
+branch-suffixed build identity for deployment and baseline selection.
 
 ### Solutions
 

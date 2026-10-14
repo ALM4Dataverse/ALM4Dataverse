@@ -42,7 +42,7 @@ and environment-specific values are supplied at runtime.
 - Pinned module/PAC dependencies, cache-aware installation, and a per-build dependency lock.
 - Optional PAC Solution Checker and deployment validation, including a retained release or last-deployed environment baseline.
 - Branch-specific development and deployment workflows, with platform-specific approval, permission, and concurrency controls.
-- Provider/branch-suffixed GitHub BUILD releases, deployment pointers, and branch-aware Release cleanup.
+- Branch-suffixed GitHub BUILD releases, deployment pointers, and branch-aware Release cleanup.
 
 > [!IMPORTANT]
 > ALM4Dataverse does not provision Dataverse environments, replace functional testing,

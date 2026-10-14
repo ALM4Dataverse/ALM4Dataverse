@@ -206,8 +206,11 @@ function Resolve-AlmBuildVersion {
     if ([string]::IsNullOrWhiteSpace($branchIdentifier)) {
         throw "Source branch '$branch' cannot be converted to a SemVer prerelease identifier."
     }
+    if ($branchIdentifier -match '^0[0-9]+$') {
+        $branchIdentifier = "b$branchIdentifier"
+    }
 
-    $version = "$majorMinor.$RunNumber-$Provider.branch-$branchIdentifier"
+    $version = "$majorMinor.$RunNumber-$branchIdentifier"
     return [pscustomobject]@{
         Version       = $version
         TagName       = "v$version"

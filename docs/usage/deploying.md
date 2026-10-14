@@ -24,7 +24,7 @@ On GitHub Actions with `environment-approval`, BUILD dispatches the deployment
 workflow with the exact Release/build identity. In `manual-gate-tag` mode, an
 operator starts deployment from Actions. Azure DevOps continues to use its
 selected pipeline resource artifact. Build versions and Git tags retain their
-provider/branch suffix; there is no separate stable build promotion step.
+branch suffix; there is no separate stable build promotion step.
 
 ## Before You Deploy
 

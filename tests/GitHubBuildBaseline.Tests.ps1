@@ -117,9 +117,9 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         . $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
         $metadataBody = "<!-- alm4dataverse-build-branch:main -->`nBuild: example-main-1`nBranch: main`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)"
         $buildRelease = @{
-            tag_name = 'v1.2.123-github.branch-main'
+            tag_name = 'v1.2.123-main'
             prerelease = $true
-            body = "Version: 1.2.123-github.branch-main`n$metadataBody"
+            body = "Version: 1.2.123-main`n$metadataBody"
         }
         $nonPrereleaseRelease = @{
             tag_name = 'v1.2.123'

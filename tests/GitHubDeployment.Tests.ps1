@@ -72,9 +72,9 @@ Describe 'GitHub deployment selection and gates' {
     It 'selects the branch-suffixed BUILD Release for a numeric BUILD selector' {
         $metadataBody = "<!-- alm4dataverse-build-branch:main -->`nBuild: example-main-1`nBranch: main`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)"
         $buildRelease = [pscustomobject]@{
-            tag_name = 'v1.2.123-github.branch-main'
+            tag_name = 'v1.2.123-main'
             prerelease = $true
-            body = "Version: 1.2.123-github.branch-main`n$metadataBody"
+            body = "Version: 1.2.123-main`n$metadataBody"
             assets = @([pscustomobject]@{ name = 'artifacts.zip' })
         }
         $nonPrereleaseRelease = [pscustomobject]@{
@@ -99,7 +99,7 @@ Describe 'GitHub deployment selection and gates' {
         Set-DeploymentDispatchFixture -Selector '123'
 
         & $script:deploymentResolver
-        Get-Content $env:GITHUB_OUTPUT -Raw | Should -Match 'release_tag=v1\.2\.123-github\.branch-main'
+        Get-Content $env:GITHUB_OUTPUT -Raw | Should -Match 'release_tag=v1\.2\.123-main'
         Get-Content $env:GITHUB_OUTPUT -Raw | Should -Match 'artifact_source=release'
     }
 

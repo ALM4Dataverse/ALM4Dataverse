@@ -37,12 +37,14 @@ Describe 'BUILD SemVer resolution' {
         }
     }
 
-    It 'uses branch MAJOR.MINOR and emits a valid provider-specific prerelease version' {
+    It 'uses branch MAJOR.MINOR and emits a branch-suffixed prerelease version' {
         $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'refs/heads/main' -RunNumber 42 -Provider github
-        $version.Version | Should -Be '2.1.42-github.branch-main'
-        $version.TagName | Should -Be 'v2.1.42-github.branch-main'
+        $version.Version | Should -Be '2.1.42-main'
+        $version.TagName | Should -Be 'v2.1.42-main'
         $version.PSObject.Properties.Name | Should -Not -Contain 'StableVersion'
         $version.PSObject.Properties.Name | Should -Not -Contain 'StableTagName'
+        $azdoVersion = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'main' -RunNumber 42 -Provider azdo
+        $azdoVersion.Version | Should -Be $version.Version
     }
 
     It 'maps branch MAJOR.MINOR to the solution Major.Build base' {
@@ -54,8 +56,12 @@ Describe 'BUILD SemVer resolution' {
 
     It 'uses the configured default for an unlisted branch and normalizes branch separators' {
         $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'feature/new-ui' -RunNumber 7 -Provider azdo
-        $version.Version | Should -Be '1.0.7-azdo.branch-feature-new-ui'
+        $version.Version | Should -Be '1.0.7-feature-new-ui'
         $version.BranchName | Should -Be 'feature/new-ui'
+        $featureVersion = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'feat/abc' -RunNumber 8 -Provider github
+        $featureVersion.Version | Should -Be '1.0.8-feat-abc'
+        $numericVersion = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName '01' -RunNumber 9 -Provider github
+        $numericVersion.Version | Should -Be '1.0.9-b01'
     }
 
     It 'rejects missing, malformed, and invalid version inputs' {
@@ -73,7 +79,7 @@ Describe 'BUILD SemVer resolution' {
             -RunId 123456 `
             -SourceCommit ('a' * 40)
         $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
-        $metadata.version | Should -Be '2.1.42-github.branch-main'
+        $metadata.version | Should -Be '2.1.42-main'
         $metadata.runId | Should -Be '123456'
         $metadata.sourceCommit | Should -Be ('a' * 40)
         $metadata.PSObject.Properties.Name | Should -Not -Contain 'stableVersion'
