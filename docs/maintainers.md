@@ -120,17 +120,19 @@ $outputDirectory = Join-Path ([IO.Path]::GetTempPath()) ('alm-release-' + [guid]
 
 ## Publish A Shared Release
 
-The [stable-release workflow](../.github/workflows/stable-release.yml) responds to pushed
-version tags in the configured three/four-part `v` formats, such as `v1.2.3` or `v1.2.3.4`.
+The [stable-release workflow](../.github/workflows/stable-release.yml) is started
+manually with the run ID of the successful GitHub BUILD to promote. It derives
+the stable version from that BUILD's SemVer prerelease and creates the version
+tag at the BUILD source commit, matching Azure DevOps RELEASE behavior.
 Releasing is a deliberate remote operation:
 
-1. Review the intended source commit, docs, compatibility changes, local checks, and non-production hosted/Dataverse test results.
-2. Create and push the intended version tag through the maintainer's authorized release process.
-3. The workflow prepares standalone setup scripts and force-moves `stable` to that version commit.
-4. It creates/updates a non-draft, non-prerelease GitHub Release, generates setup links/notes, and uploads/replaces both setup-script assets.
-5. Verify the version Release, assets, `stable` ref, and onboarding links. Communicate required caller/configuration changes.
+1. Review the intended successful BUILD run, source commit, docs, compatibility changes, local checks, and non-production hosted/Dataverse test results.
+2. Run **Stable Release** from **Actions > Run workflow** with that BUILD run ID.
+3. The workflow validates the run, prepares standalone setup scripts from its source commit, promotes its exact artifacts, and creates/updates the version Release.
+4. It force-moves `stable` to the promoted version commit.
+5. Verify the version tag and Release, assets, `stable` ref, and onboarding links. Communicate required caller/configuration changes.
 
-The workflow requires `contents: write` and permission to move `stable`.
+The workflow requires `actions: read`, `contents: write`, and permission to move `stable`.
 
 > [!CAUTION]
 > Release publication moves `stable`, so consumers following it can pick up changed

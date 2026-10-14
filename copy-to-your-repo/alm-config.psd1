@@ -46,6 +46,19 @@
         # }
     )
 
+    # BUILD SemVer settings. PATCH is the CI run number; the branch/provider
+    # prerelease suffix is removed when the successful build is promoted.
+    buildVersion = @{
+        # MAJOR.MINOR used for branches without a specific entry.
+        default = '1.0'
+
+        # Keys are full branch names; values are MAJOR.MINOR.
+        branches = @{
+            main = '1.0'
+            # 'develop' = '1.1'
+            # 'release/1.x' = '1.0'
+        }
+    }
 
     export = @{
         parallel = $true

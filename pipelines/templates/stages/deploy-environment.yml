@@ -141,10 +141,23 @@ stages:
                     }
 
                     $rawBuildRunName = '$(resources.pipeline.build.runName)'
-                    $sanitizedBuildRunName = ConvertTo-TagSegment -Value $rawBuildRunName
-                    $versionTag = $sanitizedBuildRunName
-                    $environmentTag = 'deployed/${{ parameters.environmentName }}'
                     $buildRunId = '$(resources.pipeline.build.runID)'
+                    $metadataPath = Join-Path '$(Pipeline.Workspace)/build/artifacts' 'build-version.json'
+                    if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
+                      $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+                      if ($metadata.provider -cne 'azdo' -or
+                          $metadata.runId -cne $buildRunId -or
+                          $metadata.sourceCommit -ine '$(resources.pipeline.build.sourceCommit)' -or
+                          $metadata.tag -cne "v$($metadata.version)") {
+                        throw "BUILD version metadata does not match selected BUILD run '$buildRunId'."
+                      }
+                      $versionTag = [string]$metadata.tag
+                    }
+                    else {
+                      $sanitizedBuildRunName = ConvertTo-TagSegment -Value $rawBuildRunName
+                      $versionTag = $sanitizedBuildRunName
+                    }
+                    $environmentTag = 'deployed/${{ parameters.environmentName }}'
                     if ($buildRunId -notmatch '^\d+$') {
                       throw "Could not resolve the Azure DevOps BUILD run ID '$buildRunId'."
                     }

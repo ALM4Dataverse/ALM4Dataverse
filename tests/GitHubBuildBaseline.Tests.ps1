@@ -112,6 +112,28 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         Resolve-CommitFromTagReference -Reference @{ object = @{ type = 'tag'; sha = 'tag-sha' } } | Should -Be ('a' * 40)
     }
 
+    It 'uses the stable promoted Release for BUILD ID and legacy commit baseline selectors' {
+        . $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
+        $metadataBody = "<!-- alm4dataverse-build-branch:main -->`nBuild: example-main-1`nBranch: main`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)"
+        $buildRelease = @{
+            tag_name = 'v1.2.123-github.branch-main'
+            prerelease = $true
+            body = "Version: 1.2.123-github.branch-main`n$metadataBody"
+        }
+        $stableRelease = @{
+            tag_name = 'v1.2.123'
+            prerelease = $false
+            body = "Version: 1.2.123`n$metadataBody`nPromoted from: $($buildRelease.tag_name)"
+        }
+        Mock Invoke-GitHubApi {
+            if ($RelativePath -match '^releases\?.*page=1$') { return @($buildRelease, $stableRelease) }
+            return @()
+        }
+
+        (Find-ReleaseForRunId -RunId 123).TagName | Should -Be 'v1.2.123'
+        (Find-UniqueReleaseForCommit -CommitSha ('a' * 40)).TagName | Should -Be 'v1.2.123'
+    }
+
     It 'rejects missing and ambiguous release matches rather than choosing one' {
         . $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
         Mock Invoke-GitHubApi { @() }

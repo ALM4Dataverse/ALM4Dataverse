@@ -60,6 +60,10 @@ jobs:
               return metadata ? metadata.branch : null;
             }
 
+            function isStablePromotion(release) {
+              return !release.prerelease && /^Promoted from:\s*\S+\s*$/im.test(String(release.body || ''));
+            }
+
             async function ensureMetadataTag(release) {
               const metadata = getBuildMetadata(release);
               if (!metadata) {
@@ -155,7 +159,9 @@ jobs:
                     const dateDifference = (Number.isFinite(rightDate) ? rightDate : 0) - (Number.isFinite(leftDate) ? leftDate : 0);
                     return dateDifference !== 0 ? dateDifference : Number(right.id || 0) - Number(left.id || 0);
                   }).slice(maxReleasesPerBranch);
-              const releasesToDelete = retentionCandidates.filter(release => !activeDeploymentReleaseTags.has(String(release.tag_name)));
+              const releasesToDelete = retentionCandidates.filter(release =>
+                !activeDeploymentReleaseTags.has(String(release.tag_name)) && !isStablePromotion(release)
+              );
 
               for (const release of releasesToDelete) {
                 const metadataTagName = await ensureMetadataTag(release);

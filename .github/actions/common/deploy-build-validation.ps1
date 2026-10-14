@@ -74,6 +74,38 @@ function Resolve-CommitFromTagReference {
     return [string]$tagObject.sha
 }
 
+function Test-GitHubReleasePrerelease {
+    param([Parameter(Mandatory)][object]$Release)
+
+    if ($Release -is [System.Collections.IDictionary]) {
+        return $Release.Contains('prerelease') -and [bool]$Release['prerelease']
+    }
+    $property = $Release.PSObject.Properties['prerelease']
+    return $null -ne $property -and [bool]$property.Value
+}
+
+function Select-PreferredBuildRelease {
+    param(
+        [Parameter(Mandatory)][object[]]$Candidates,
+        [Parameter(Mandatory)][string]$AmbiguousMessage
+    )
+
+    if ($Candidates.Count -eq 1) { return $Candidates[0] }
+
+    $stablePromotions = @($Candidates | Where-Object {
+        -not (Test-GitHubReleasePrerelease -Release $_.Release) -and
+            [string]$_.Release.body -match '(?im)^Promoted from:\s*\S+\s*$'
+    })
+    if ($stablePromotions.Count -eq 1) { return $stablePromotions[0] }
+    if ($stablePromotions.Count -gt 1) {
+        throw "Multiple stable promoted Releases match this BUILD identity."
+    }
+
+    $buildReleases = @($Candidates | Where-Object { Test-GitHubReleasePrerelease -Release $_.Release })
+    if ($buildReleases.Count -eq 1) { return $buildReleases[0] }
+    throw $AmbiguousMessage
+}
+
 function Find-UniqueReleaseForCommit {
     param([Parameter(Mandatory)][string]$CommitSha)
 
@@ -96,11 +128,14 @@ function Find-UniqueReleaseForCommit {
             $matchingReleases += [pscustomobject]@{
                 RunId = $metadata.RunId
                 TagName = $metadata.TagName
+                Release = $release
             }
         }
     }
     if ($matchingReleases.Count -gt 1) {
-        throw "Multiple successful BUILD releases match legacy deployment pointer commit '$CommitSha'. Configure a fixed BUILD run ID instead of @environment-name."
+        return Select-PreferredBuildRelease `
+            -Candidates $matchingReleases `
+            -AmbiguousMessage "Multiple successful BUILD releases match legacy deployment pointer commit '$CommitSha'. Configure a fixed BUILD run ID instead of @environment-name."
     }
     if ($matchingReleases.Count -eq 1) {
         return $matchingReleases[0]
@@ -128,12 +163,15 @@ function Find-ReleaseForRunId {
                 $matchingReleases += [pscustomobject]@{
                     RunId = $metadata.RunId
                     TagName = $metadata.TagName
+                    Release = $release
                 }
             }
         }
     }
     if ($matchingReleases.Count -gt 1) {
-        throw "Multiple GitHub Releases match BUILD run '$RunId'; select a Release tag directly."
+        return Select-PreferredBuildRelease `
+            -Candidates $matchingReleases `
+            -AmbiguousMessage "Multiple GitHub Releases match BUILD run '$RunId'; select a Release tag directly."
     }
     if ($matchingReleases.Count -eq 0) {
         throw "No GitHub Release was found for BUILD run '$RunId'. Baseline packages must be downloaded from the BUILD Release asset."

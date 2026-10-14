@@ -41,6 +41,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | Setting | Type | Default or template value |
 | --- | --- | --- |
 | `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. |
+| `buildVersion` | Hashtable | Required for BUILD; default MAJOR.MINOR plus optional full-branch overrides. |
 | `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
@@ -51,6 +52,37 @@ The supplied template additionally includes the `data` asset and example data ho
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
+
+### BUILD SemVer
+
+`buildVersion` assigns a MAJOR.MINOR version line to each branch. The CI run
+number supplies PATCH, while a provider and normalized branch prerelease suffix
+make each BUILD version distinct. For example, `main` might produce
+`2.1.42-github.branch-main`; stable promotion removes the suffix to produce
+`2.1.42` (Git tag `v2.1.42`).
+
+```powershell
+buildVersion = @{
+    default = '1.0'
+    branches = @{
+        main          = '2.0'
+        develop       = '1.5'
+        'release/1.x' = '1.4'
+    }
+}
+```
+
+The `default` is required and applies to branches without an explicit entry.
+Branch keys are full branch names (including any slash-separated prefix), not
+the final component alone. Values must be two non-negative SemVer integers
+without leading zeroes, such as `'2.1'`. BUILD fails early if the setting or
+the selected value is invalid.
+
+`build-version.json` in each artifact records its version, branch, provider,
+source commit, and exact CI run ID. Stable promotion reuses that successful
+BUILD; it does not rebuild solutions. Azure DevOps records the stable version
+against the original BUILD run and source tag. GitHub publishes the same
+artifact archives under the stable Release tag.
 
 ### Solutions
 

@@ -111,6 +111,126 @@ function Get-AlmConfig {
     return $config
 }
 
+function Resolve-AlmBuildVersion {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Config,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BranchName,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RunNumber,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('github', 'azdo')]
+        [string]$Provider
+    )
+
+    if (-not $Config.ContainsKey('buildVersion') -or $Config.buildVersion -isnot [hashtable]) {
+        throw "BUILD version configuration is missing. Add buildVersion.default and buildVersion.branches to alm-config.psd1."
+    }
+
+    $versionConfig = $Config.buildVersion
+    if (-not $versionConfig.ContainsKey('default')) {
+        throw "BUILD version configuration is missing buildVersion.default in alm-config.psd1."
+    }
+
+    $branch = $BranchName.Trim()
+    if ($branch -match '^refs/heads/(?<name>.+)$') {
+        $branch = $Matches.name
+    }
+    elseif ($branch -match '^refs/') {
+        throw "BUILD versioning requires a branch ref; '$BranchName' is not a refs/heads branch."
+    }
+    if ([string]::IsNullOrWhiteSpace($branch)) {
+        throw 'BUILD versioning requires a non-empty source branch.'
+    }
+
+    $majorMinor = [string]$versionConfig.default
+    if ($versionConfig.ContainsKey('branches')) {
+        if ($versionConfig.branches -isnot [hashtable]) {
+            throw 'buildVersion.branches must be a hashtable of full branch names to MAJOR.MINOR values.'
+        }
+
+        foreach ($configuredBranch in $versionConfig.branches.Keys) {
+            if ([string]$configuredBranch -ceq $branch) {
+                $majorMinor = [string]$versionConfig.branches[$configuredBranch]
+                break
+            }
+        }
+    }
+
+    if ($majorMinor -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') {
+        throw "Invalid MAJOR.MINOR value '$majorMinor' for branch '$branch'. Use two non-negative SemVer integers, for example '1.4'."
+    }
+    if ($RunNumber -notmatch '^(0|[1-9][0-9]*)$') {
+        throw "CI run number '$RunNumber' cannot be used as a SemVer PATCH value."
+    }
+
+    $branchIdentifier = $branch.ToLowerInvariant() -replace '[^a-z0-9-]+', '-'
+    $branchIdentifier = $branchIdentifier -replace '-{2,}', '-'
+    $branchIdentifier = $branchIdentifier.Trim('-')
+    if ([string]::IsNullOrWhiteSpace($branchIdentifier)) {
+        throw "Source branch '$branch' cannot be converted to a SemVer prerelease identifier."
+    }
+
+    $stableVersion = "$majorMinor.$RunNumber"
+    $version = "$stableVersion-$Provider.branch-$branchIdentifier"
+    return [pscustomobject]@{
+        Version       = $version
+        TagName       = "v$version"
+        StableVersion = $stableVersion
+        StableTagName = "v$stableVersion"
+        BranchName    = $branch
+        Provider      = $Provider
+        RunNumber     = $RunNumber
+    }
+}
+
+function Write-AlmBuildVersionInfo {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$ArtifactsPath,
+
+        [Parameter(Mandatory = $true)]
+        [psobject]$BuildVersion,
+
+        [Parameter(Mandatory = $true)]
+        [string]$RunId,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SourceCommit
+    )
+
+    if ($RunId -notmatch '^[0-9]+$') {
+        throw "Build run ID '$RunId' must contain only digits."
+    }
+    if ($SourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+        throw "Source commit '$SourceCommit' must be a 40-character Git SHA."
+    }
+    if (-not (Test-Path -LiteralPath $ArtifactsPath -PathType Container)) {
+        throw "Artifacts directory '$ArtifactsPath' does not exist."
+    }
+
+    $metadata = [ordered]@{
+        version       = $BuildVersion.Version
+        tag            = $BuildVersion.TagName
+        stableVersion = $BuildVersion.StableVersion
+        stableTag      = $BuildVersion.StableTagName
+        branch         = $BuildVersion.BranchName
+        provider       = $BuildVersion.Provider
+        runNumber      = $BuildVersion.RunNumber
+        runId          = $RunId
+        sourceCommit   = $SourceCommit.ToLowerInvariant()
+    }
+    $metadataPath = Join-Path $ArtifactsPath 'build-version.json'
+    Set-Content -LiteralPath $metadataPath -Value ($metadata | ConvertTo-Json) -Encoding utf8
+    return $metadataPath
+}
+
     function Initialize-PacAuthentication {
         param(
             [string]$ProfileName = 'ALM4Dataverse-SolutionCheck',

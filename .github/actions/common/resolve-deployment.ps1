@@ -271,6 +271,16 @@ function Find-LatestManagedReleaseForBranch {
     return $latestMatch
 }
 
+function Test-GitHubReleasePrerelease {
+    param([Parameter(Mandatory)][object]$Release)
+
+    if ($Release -is [System.Collections.IDictionary]) {
+        return $Release.Contains('prerelease') -and [bool]$Release['prerelease']
+    }
+    $property = $Release.PSObject.Properties['prerelease']
+    return $null -ne $property -and [bool]$property.Value
+}
+
 function Find-ReleaseForBuildRun {
     param([Parameter(Mandatory)][string]$RunId)
 
@@ -290,6 +300,17 @@ function Find-ReleaseForBuildRun {
     }
 
     if ($matchingReleases.Count -gt 1) {
+        $stablePromotions = @($matchingReleases | Where-Object {
+            -not (Test-GitHubReleasePrerelease -Release $_.Release) -and
+                [string]$_.Release.body -match '(?im)^Promoted from:\s*\S+\s*$'
+        })
+        if ($stablePromotions.Count -eq 1) { return $stablePromotions[0] }
+        if ($stablePromotions.Count -gt 1) {
+            throw "Multiple stable GitHub Releases match BUILD run '$RunId'; refusing to write an ambiguous deployment pointer."
+        }
+
+        $buildReleases = @($matchingReleases | Where-Object { Test-GitHubReleasePrerelease -Release $_.Release })
+        if ($buildReleases.Count -eq 1) { return $buildReleases[0] }
         throw "Multiple GitHub Releases match BUILD run '$RunId'; refusing to write an ambiguous deployment pointer."
     }
     if ($matchingReleases.Count -eq 1) {

@@ -1,33 +1,173 @@
 name: Stable Release
 
-run-name: Release ${{ github.ref_name }}
+run-name: Promote BUILD ${{ inputs.build_run_id }} to stable
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: Successful GitHub BUILD workflow run ID to promote
+        required: true
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   create-stable-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Resolve and download successful BUILD assets
+        id: source_build
+        uses: actions/github-script@v7
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const runIdText = process.env.BUILD_RUN_ID;
+            if (!/^\d+$/.test(runIdText)) {
+              throw new Error(`BUILD run ID must be a positive integer; got '${runIdText}'.`);
+            }
+            const runId = Number(runIdText);
+            if (!Number.isSafeInteger(runId) || runId < 1) {
+              throw new Error(`BUILD run ID is out of range: '${runIdText}'.`);
+            }
+
+            const { data: buildRun } = await github.rest.actions.getWorkflowRun({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            if (buildRun.status !== 'completed' || buildRun.conclusion !== 'success') {
+              throw new Error(`BUILD run ${runId} is not successful (status '${buildRun.status}', conclusion '${buildRun.conclusion}').`);
+            }
+            if (!/\.github\/workflows\/BUILD\.ya?ml@/i.test(String(buildRun.path || ''))) {
+              throw new Error(`Workflow run ${runId} is not a BUILD workflow run.`);
+            }
+            const sourceCommit = String(buildRun.head_sha || '').toLowerCase();
+            if (!/^[0-9a-f]{40}$/.test(sourceCommit)) {
+              throw new Error(`BUILD run ${runId} does not contain a valid source commit.`);
+            }
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const candidates = releases.filter(release => {
+              if (!release.prerelease) return false;
+              return new RegExp(`^BUILD run:\\s*\\[${runId}\\]\\s*\\(`, 'm').test(String(release.body || ''));
+            });
+            if (candidates.length !== 1) {
+              throw new Error(`Expected exactly one BUILD prerelease for successful BUILD run ${runId}; found ${candidates.length}.`);
+            }
+
+            const sourceRelease = candidates[0];
+            const sourceBody = String(sourceRelease.body || '');
+            const version = sourceBody.match(/^Version:\s*(\S+)\s*$/im)?.[1]?.trim();
+            const buildName = sourceBody.match(/^Build:\s*(.+)\s*$/im)?.[1]?.trim();
+            const branch = sourceBody.match(/^Branch:\s*(.+)\s*$/im)?.[1]?.trim();
+            const releaseCommit = sourceBody.match(/^Source commit:\s*([0-9a-f]{40})\s*$/im)?.[1]?.toLowerCase();
+            const versionMatch = version?.match(/^((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-github\.branch-[a-z0-9-]+$/);
+            if (!versionMatch || !buildName || !branch || releaseCommit !== sourceCommit || sourceRelease.tag_name !== `v${version}`) {
+              throw new Error(`BUILD Release '${sourceRelease.tag_name}' has incomplete promotion metadata.`);
+            }
+            const stableVersion = versionMatch[1];
+            const stableTag = `v${stableVersion}`;
+
+            const artifacts = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: sourceRelease.id,
+              per_page: 100,
+            });
+            if (!artifacts.some(asset => asset.name === 'artifacts.zip')) {
+              throw new Error(`BUILD Release '${sourceRelease.tag_name}' does not contain artifacts.zip.`);
+            }
+
+            const assetDirectory = path.join(process.env.RUNNER_TEMP, 'stable-release-assets');
+            fs.mkdirSync(assetDirectory, { recursive: true });
+            for (const asset of artifacts.filter(item => ['artifacts.zip', 'solution-check-report.zip'].includes(item.name))) {
+              const response = await fetch(asset.url, {
+                headers: {
+                  Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+                  Accept: 'application/octet-stream',
+                  'X-GitHub-Api-Version': '2022-11-28',
+                },
+              });
+              if (!response.ok) throw new Error(`Could not download ${asset.name} from BUILD Release '${sourceRelease.tag_name}': HTTP ${response.status}.`);
+              fs.writeFileSync(path.join(assetDirectory, asset.name), Buffer.from(await response.arrayBuffer()));
+            }
+
+            const metadataPath = path.join(assetDirectory, 'source-build.json');
+            fs.writeFileSync(metadataPath, JSON.stringify({
+              tag: sourceRelease.tag_name,
+              buildName,
+              version,
+              stableVersion,
+              stableTag,
+              branch,
+              sourceCommit,
+              runId,
+            }, null, 2));
+            core.setOutput('tag_name', stableTag);
+            core.setOutput('stable_version', stableVersion);
+            core.setOutput('build_run_id', String(runId));
+            core.setOutput('source_commit', sourceCommit);
+            core.setOutput('source_tag', sourceRelease.tag_name);
+            core.setOutput('metadata_file', metadataPath);
+            core.setOutput('asset_directory', assetDirectory);
+
+      - name: Checkout selected BUILD source
         uses: actions/checkout@v4
         with:
+          ref: ${{ steps.source_build.outputs.source_commit }}
           fetch-depth: 0
 
-      - name: Get tag name
-        id: get_tag
-        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      - name: Create or verify stable version tag
+        env:
+          TAG_NAME: ${{ steps.source_build.outputs.tag_name }}
+          SOURCE_TAG: ${{ steps.source_build.outputs.source_tag }}
+          SOURCE_COMMIT: ${{ steps.source_build.outputs.source_commit }}
+          BUILD_RUN_ID: ${{ steps.source_build.outputs.build_run_id }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          tag_ref="refs/tags/$TAG_NAME"
+          existing_refs="$(git ls-remote --tags origin "$tag_ref" "$tag_ref^{}")"
+          if [[ -n "$existing_refs" ]]; then
+            git fetch --force origin "$tag_ref:$tag_ref"
+            existing_commit="$(git rev-list -n 1 "$TAG_NAME^{commit}")"
+            if [[ "$existing_commit" != "$SOURCE_COMMIT" ]]; then
+              echo "Stable tag '$TAG_NAME' already points to another source commit." >&2
+              exit 1
+            fi
+            tag_message="$(git for-each-ref --format='%(contents)' "refs/tags/$TAG_NAME")"
+            if ! grep -Fxq "BUILD run: $BUILD_RUN_ID" <<< "$tag_message"; then
+              echo "Stable tag '$TAG_NAME' already identifies another BUILD run." >&2
+              exit 1
+            fi
+          else
+            git fetch origin "$SOURCE_TAG:$SOURCE_TAG"
+            source_tag_commit="$(git rev-list -n 1 "$SOURCE_TAG^{commit}")"
+            if [[ "$source_tag_commit" != "$SOURCE_COMMIT" ]]; then
+              echo "BUILD source tag '$SOURCE_TAG' does not point to '$SOURCE_COMMIT'." >&2
+              exit 1
+            fi
+            tag_message="$(printf 'ALM4Dataverse stable BUILD promotion\nVersion: %s\nBUILD run: %s\nSource commit: %s' "${TAG_NAME#v}" "$BUILD_RUN_ID" "$SOURCE_COMMIT")"
+            git tag -a "$TAG_NAME" -m "$tag_message" "$SOURCE_COMMIT"
+            git push origin "$TAG_NAME"
+          fi
 
       - name: Prepare setup scripts for release
         id: prepare_setup
+        env:
+          TAG_NAME: ${{ steps.source_build.outputs.tag_name }}
         run: |
-          TAG_NAME="${{ steps.get_tag.outputs.TAG_NAME }}"
           UPSTREAM_REPO="https://github.com/${{ github.repository }}.git"
           
           # Use the prepare-release.ps1 script (produces release/setup-azdo.ps1 and release/setup-github.ps1)
@@ -36,22 +176,11 @@ jobs:
           echo "SETUP_AZDO_FILE=release/setup-azdo.ps1" >> $GITHUB_OUTPUT
           echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> $GITHUB_OUTPUT
 
-      - name: Update stable tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Create or update the stable tag to point to the current commit
-          git tag -f stable
-          git push -f origin stable
-          
-          echo "Updated stable tag to point to ${{ steps.get_tag.outputs.TAG_NAME }}"
-
       - name: Generate release notes body
         id: release_notes
+        env:
+          TAG_NAME: ${{ steps.source_build.outputs.tag_name }}
         run: |
-          TAG_NAME="${{ steps.get_tag.outputs.TAG_NAME }}"
-          
           # Create release notes with automated setup command and links
           cat << EOF > release_notes.md
           ## Getting Started
@@ -86,9 +215,22 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const tagName = '${{ steps.get_tag.outputs.TAG_NAME }}';
+            const path = require('path');
+            const tagName = '${{ steps.source_build.outputs.tag_name }}';
             const releaseNotesFile = '${{ steps.release_notes.outputs.RELEASE_NOTES_FILE }}';
             const customNotes = fs.readFileSync(releaseNotesFile, 'utf8');
+            const sourceMetadata = JSON.parse(fs.readFileSync('${{ steps.source_build.outputs.metadata_file }}', 'utf8'));
+            const sourceAssetsDirectory = '${{ steps.source_build.outputs.asset_directory }}';
+            const branchMarker = `<!-- alm4dataverse-build-branch:${encodeURIComponent(sourceMetadata.branch)} -->`;
+            const promotionMetadata = [
+              branchMarker,
+              `Build: ${sourceMetadata.buildName}`,
+              `Version: ${tagName.slice(1)}`,
+              `Branch: ${sourceMetadata.branch}`,
+              `Source commit: ${sourceMetadata.sourceCommit}`,
+              `BUILD run: [${sourceMetadata.runId}](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${sourceMetadata.runId})`,
+              `Promoted from: ${sourceMetadata.tag}`,
+            ].join('\n');
             
             // Generate release notes using GitHub API
             let generatedNotes = '';
@@ -104,9 +246,7 @@ jobs:
             }
             
             // Combine custom notes with generated notes
-            const body = generatedNotes 
-              ? customNotes + '\n\n' + generatedNotes
-              : customNotes;
+            const body = [promotionMetadata, customNotes, generatedNotes].filter(Boolean).join('\n\n');
             
             // Create or update release
             let releaseId;
@@ -119,17 +259,29 @@ jobs:
               });
               
               // Update existing release
+              if (!String(existingRelease.body || '').includes('Promoted from:')) {
+                throw new Error(`Existing Release for ${tagName} is not an ALM4Dataverse promoted Release.`);
+              }
+              const existingBody = String(existingRelease.body || '');
+              if (!existingBody.includes(`Promoted from: ${sourceMetadata.tag}`) ||
+                  !existingBody.includes(`Source commit: ${sourceMetadata.sourceCommit}`) ||
+                  !existingBody.match(new RegExp(`^BUILD run:\\s*\\[${sourceMetadata.runId}\\]`, 'm'))) {
+                throw new Error(`Existing Release for ${tagName} is associated with a different BUILD; stable versions cannot be reassigned.`);
+              }
               await github.rest.repos.updateRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 release_id: existingRelease.id,
+                name: tagName,
                 body: body,
+                draft: false,
+                prerelease: false,
               });
               
               releaseId = existingRelease.id;
               console.log('Updated existing release');
             } catch (error) {
-              // Create new release
+              if (error.status !== 404) throw error;
               const { data: newRelease } = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -145,38 +297,39 @@ jobs:
             }
             
             // Upload setup scripts as release assets
-            const setupFiles = [
+            const releaseFiles = [
               { path: '${{ steps.prepare_setup.outputs.SETUP_AZDO_FILE }}',   name: 'setup-azdo.ps1' },
               { path: '${{ steps.prepare_setup.outputs.SETUP_GITHUB_FILE }}', name: 'setup-github.ps1' },
-            ];
+              { path: path.join(sourceAssetsDirectory, 'artifacts.zip'), name: 'artifacts.zip' },
+              { path: path.join(sourceAssetsDirectory, 'solution-check-report.zip'), name: 'solution-check-report.zip' },
+            ].filter(item => fs.existsSync(item.path));
 
             // Fetch existing assets once
-            let existingAssets = [];
-            try {
-              const { data: assets } = await github.rest.repos.listReleaseAssets({
+            const existingAssets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              per_page: 100,
+            });
+
+            for (const oldAsset of existingAssets.filter(asset => !releaseFiles.some(file => file.name === asset.name))) {
+              await github.rest.repos.deleteReleaseAsset({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                release_id: releaseId,
+                asset_id: oldAsset.id,
               });
-              existingAssets = assets;
-            } catch (error) {
-              console.warn('Could not list existing assets:', error.message);
             }
 
-            for (const { path: filePath, name: assetName } of setupFiles) {
+            for (const { path: filePath, name: assetName } of releaseFiles) {
               // Delete any existing asset with the same name
               const existingAsset = existingAssets.find(a => a.name === assetName);
               if (existingAsset) {
-                try {
-                  await github.rest.repos.deleteReleaseAsset({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    asset_id: existingAsset.id,
-                  });
-                  console.log(`Deleted existing ${assetName} asset`);
-                } catch (error) {
-                  console.warn(`Could not delete existing ${assetName} asset:`, error.message);
-                }
+                await github.rest.repos.deleteReleaseAsset({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  asset_id: existingAsset.id,
+                });
+                console.log(`Deleted existing ${assetName} asset`);
               }
 
               // Upload new asset
@@ -191,3 +344,13 @@ jobs:
               console.log(`Uploaded ${assetName} as release asset`);
             }
 
+      - name: Update stable tag
+        env:
+          TAG_NAME: ${{ steps.source_build.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f stable "$TAG_NAME"
+          git push -f origin stable
+          echo "Updated stable tag to point to $TAG_NAME"

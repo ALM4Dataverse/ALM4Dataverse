@@ -1,0 +1,106 @@
+parameters: []
+
+stages:
+  - stage: PromoteBuild
+    displayName: 'Promote BUILD to stable SemVer'
+    jobs:
+      - job: PromoteBuild
+        pool:
+          vmImage: windows-2022
+        steps:
+          - checkout: self
+            persistCredentials: true
+            fetchDepth: 0
+            displayName: 'Checkout Source Repository'
+
+          - task: DownloadPipelineArtifact@2
+            displayName: 'Download selected BUILD artifacts'
+            inputs:
+              buildType: 'specific'
+              project: '$(System.TeamProject)'
+              definition: '$(resources.pipeline.build.pipelineID)'
+              buildVersionToDownload: 'specific'
+              pipelineId: '$(resources.pipeline.build.runID)'
+              artifactName: 'artifacts'
+              targetPath: '$(Pipeline.Workspace)/build/artifacts'
+
+          - pwsh: |
+              $ErrorActionPreference = 'Stop'
+              $metadataPath = '$(Pipeline.Workspace)/build/artifacts/build-version.json'
+              if (-not (Test-Path -LiteralPath $metadataPath -PathType Leaf)) {
+                throw "Selected BUILD run does not contain build-version.json."
+              }
+
+              $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+              if ($metadata.provider -cne 'azdo') {
+                throw "Azure DevOps RELEASE can only promote an Azure DevOps BUILD; metadata provider was '$($metadata.provider)'."
+              }
+              $buildId = '$(resources.pipeline.build.runID)'
+              if ($metadata.runId -cne $buildId) {
+                throw "BUILD metadata run ID '$($metadata.runId)' does not match selected run '$buildId'."
+              }
+              $sourceCommit = '$(resources.pipeline.build.sourceCommit)'
+              if ($metadata.sourceCommit -ine $sourceCommit) {
+                throw "BUILD metadata commit '$($metadata.sourceCommit)' does not match selected source commit '$sourceCommit'."
+              }
+              if ($metadata.version -notmatch '^(?<stable>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))-azdo\.branch-[a-z0-9-]+$' -or $Matches.stable -cne $metadata.stableVersion) {
+                throw "BUILD version '$($metadata.version)' is not a valid Azure SemVer prerelease or does not match stable version '$($metadata.stableVersion)'."
+              }
+              if ($metadata.tag -cne "v$($metadata.version)" -or $metadata.stableTag -cne "v$($metadata.stableVersion)") {
+                throw 'BUILD metadata contains inconsistent source or stable tags.'
+              }
+
+              $collectionUri = '$(System.CollectionUri)'
+              $project = [uri]::EscapeDataString('$(System.TeamProject)')
+              $headers = @{ Authorization = "Bearer $env:SYSTEM_ACCESSTOKEN" }
+              $buildUri = "${collectionUri}${project}/_apis/build/builds/${buildId}?api-version=7.1"
+              $sourceBuild = Invoke-RestMethod -Method Get -Uri $buildUri -Headers $headers
+              if ($sourceBuild.status -cne 'completed' -or $sourceBuild.result -cne 'succeeded') {
+                throw "Selected BUILD run '$buildId' is not successful (status '$($sourceBuild.status)', result '$($sourceBuild.result)')."
+              }
+
+              $tagName = [string]$metadata.stableTag
+              $tagRef = "refs/tags/$tagName"
+              $existingRefs = @(git ls-remote --tags origin $tagRef "$tagRef^{}" 2>&1)
+              if ($LASTEXITCODE -ne 0) { throw "Could not query stable tag '$tagName'." }
+              if ($existingRefs.Count -gt 0) {
+                git fetch --force origin "$($tagRef):$tagRef"
+                if ($LASTEXITCODE -ne 0) { throw "Could not fetch existing stable tag '$tagName'." }
+                $existingCommit = (git rev-list -n 1 "$tagName^{commit}").Trim()
+                if ($LASTEXITCODE -ne 0 -or $existingCommit -ine $sourceCommit) {
+                  throw "Stable tag '$tagName' already exists and does not point to selected BUILD commit '$sourceCommit'."
+                }
+                $existingTagMessage = (git for-each-ref --format='%(contents)' "refs/tags/$tagName") -join "`n"
+                if ($existingTagMessage -notmatch "(?m)^BUILD run: $([regex]::Escape($buildId))$") {
+                  throw "Stable tag '$tagName' already identifies a different BUILD run."
+                }
+              }
+              else {
+                git fetch origin "refs/tags/$($metadata.tag):refs/tags/$($metadata.tag)"
+                if ($LASTEXITCODE -ne 0) { throw "Could not fetch selected BUILD source tag '$($metadata.tag)'." }
+                $tagCommit = (git rev-list -n 1 "$($metadata.tag)^{commit}").Trim()
+                if ($LASTEXITCODE -ne 0 -or $tagCommit -ine $sourceCommit) {
+                  throw "Selected BUILD source tag '$($metadata.tag)' does not point to '$sourceCommit'."
+                }
+                $message = @(
+                  'ALM4Dataverse stable BUILD promotion'
+                  "Version: $($metadata.stableVersion)"
+                  "BUILD version: $($metadata.version)"
+                  "Branch: $($metadata.branch)"
+                  "BUILD run: $buildId"
+                  "Source commit: $sourceCommit"
+                ) -join "`n"
+                git tag -a $tagName -m $message $sourceCommit
+                if ($LASTEXITCODE -ne 0) { throw "Could not create stable tag '$tagName'." }
+                git push origin $tagName
+                if ($LASTEXITCODE -ne 0) { throw "Could not push stable tag '$tagName'." }
+              }
+
+              $encodedTag = [uri]::EscapeDataString($metadata.stableVersion)
+              $buildTagUri = "${collectionUri}${project}/_apis/build/builds/${buildId}/tags/${encodedTag}?api-version=7.1"
+              $null = Invoke-RestMethod -Method Put -Uri $buildTagUri -Headers $headers
+              Write-Host "Promoted BUILD run $buildId as $($metadata.stableVersion); the original artifacts were not rebuilt."
+            displayName: 'Validate and tag exact successful BUILD'
+            workingDirectory: '$(Build.SourcesDirectory)'
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)

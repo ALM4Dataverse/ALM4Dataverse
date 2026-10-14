@@ -22,6 +22,53 @@ Describe 'ALM configuration loading' {
     }
 }
 
+Describe 'BUILD SemVer resolution' {
+    BeforeEach {
+        $script:buildVersionConfig = @{
+            buildVersion = @{
+                default = '1.0'
+                branches = @{
+                    main = '2.1'
+                    'release/1.x' = '1.4'
+                }
+            }
+        }
+    }
+
+    It 'uses branch MAJOR.MINOR and emits a valid provider-specific prerelease version' {
+        $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'refs/heads/main' -RunNumber 42 -Provider github
+        $version.Version | Should -Be '2.1.42-github.branch-main'
+        $version.TagName | Should -Be 'v2.1.42-github.branch-main'
+        $version.StableVersion | Should -Be '2.1.42'
+        $version.StableTagName | Should -Be 'v2.1.42'
+    }
+
+    It 'uses the configured default for an unlisted branch and normalizes branch separators' {
+        $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'feature/new-ui' -RunNumber 7 -Provider azdo
+        $version.Version | Should -Be '1.0.7-azdo.branch-feature-new-ui'
+        $version.BranchName | Should -Be 'feature/new-ui'
+    }
+
+    It 'rejects missing, malformed, and invalid version inputs' {
+        { Resolve-AlmBuildVersion -Config @{} -BranchName main -RunNumber 1 -Provider github } | Should -Throw '*buildVersion.default*'
+        { Resolve-AlmBuildVersion -Config @{ buildVersion = @{ default = '01.2' } } -BranchName main -RunNumber 1 -Provider github } | Should -Throw '*Invalid MAJOR.MINOR*'
+        { Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName main -RunNumber '01' -Provider github } | Should -Throw '*SemVer PATCH*'
+        { Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'refs/tags/v1.2.3' -RunNumber 1 -Provider github } | Should -Throw '*requires a branch ref*'
+    }
+
+    It 'writes build-version metadata that retains the exact source BUILD identity' {
+        $metadataPath = Write-AlmBuildVersionInfo `
+            -ArtifactsPath $TestDrive `
+            -BuildVersion (Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName main -RunNumber 42 -Provider github) `
+            -RunId 123456 `
+            -SourceCommit ('a' * 40)
+        $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+        $metadata.version | Should -Be '2.1.42-github.branch-main'
+        $metadata.runId | Should -Be '123456'
+        $metadata.sourceCommit | Should -Be ('a' * 40)
+    }
+}
+
 Describe 'Pipeline hooks' {
     It 'accepts missing, null, and empty hook configuration under strict mode' -ForEach @(
         @{ Config = @{} }

@@ -1,0 +1,16 @@
+trigger: none
+
+resources:
+  pipelines:
+    - pipeline: build
+      source: 'BUILD'
+      trigger: none
+  repositories:
+    - repository: ALM4Dataverse
+      type: git
+      name: ALM4Dataverse
+
+name: '$(Build.Repository.Name)-release-$(Build.BuildId)'
+
+stages:
+- template: pipelines/templates/release.yml@ALM4Dataverse

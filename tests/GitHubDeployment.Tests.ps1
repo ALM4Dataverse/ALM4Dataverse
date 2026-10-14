@@ -69,6 +69,40 @@ Describe 'GitHub deployment selection and gates' {
         Get-Content $env:GITHUB_OUTPUT -Raw | Should -Match 'release_tag=release-1'
     }
 
+    It 'selects the stable promoted Release for a numeric BUILD selector' {
+        $metadataBody = "<!-- alm4dataverse-build-branch:main -->`nBuild: example-main-1`nBranch: main`nSource commit: $('a' * 40)`nBUILD run: [123](https://example/run/123)"
+        $buildRelease = [pscustomobject]@{
+            tag_name = 'v1.2.123-github.branch-main'
+            prerelease = $true
+            body = "Version: 1.2.123-github.branch-main`n$metadataBody"
+            assets = @([pscustomobject]@{ name = 'artifacts.zip' })
+        }
+        $stableRelease = [pscustomobject]@{
+            tag_name = 'v1.2.123'
+            prerelease = $false
+            body = "Version: 1.2.123`n$metadataBody`nPromoted from: $($buildRelease.tag_name)"
+            assets = @([pscustomobject]@{ name = 'artifacts.zip' })
+        }
+        $run = [pscustomobject]@{
+            id = 123; path = '.github/workflows/BUILD.yml'; name = 'BUILD'
+            display_title = 'example-main-1'; run_name = 'example-main-1'
+            head_sha = ('a' * 40); head_branch = 'main'; conclusion = 'success'
+        }
+        Mock Invoke-RestMethod {
+            if ($Uri -match '/releases\?' -and $Uri -match 'page=1$') { return @($buildRelease, $stableRelease) }
+            if ($Uri -match '/releases\?' -and $Uri -match 'page=2$') { return @() }
+            if ($Uri -match '/actions/runs/') { return $run }
+            if ($Uri -match '/git/ref/tags/') { return @{ object = @{ type = 'tag'; sha = 'tag-sha' } } }
+            if ($Uri -match '/git/tags/') { return @{ message = 'stable tag'; object = @{ type = 'commit'; sha = ('a' * 40) } } }
+            @()
+        }
+        Set-DeploymentDispatchFixture -Selector '123'
+
+        & $script:deploymentResolver
+        Get-Content $env:GITHUB_OUTPUT -Raw | Should -Match 'release_tag=v1\.2\.123'
+        Get-Content $env:GITHUB_OUTPUT -Raw | Should -Match 'artifact_source=release'
+    }
+
     It 'uses the latest successful branch build when no managed releases exist' {
         Set-DeploymentDispatchFixture -Selector ''
         $env:INPUT_PROMOTION_MODE = 'environment-approval'
