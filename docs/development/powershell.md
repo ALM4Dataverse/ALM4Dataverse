@@ -219,17 +219,20 @@ helpers use tested `ShouldProcess` guards.
 
 ## CI Checks
 
-The PowerShell Checks workflow runs on pull requests, pushes to `main`, version
+The Repository Validation workflow runs on pull requests, pushes to `main`, version
 tags, and manual dispatch. It runs the local validator on Windows and Linux using
-PowerShell 7. Windows additionally parses the generated installers with Windows
-PowerShell 5.1. This is a syntax check, not a full setup runtime compatibility test.
+PowerShell 7, checks checked-in and setup-generated GitHub workflows with
+`actionlint`, and validates checked-in and setup-generated Azure DevOps pipelines
+against Microsoft's Azure Pipelines schema. Windows additionally parses the
+generated installers with Windows PowerShell 5.1. This is a syntax check, not a
+full setup runtime compatibility test.
 
 Test and coverage reports are retained as workflow artifacts for 14 days,
 including when validation fails. The per-file coverage table also appears in the
 GitHub Actions job summary. A file below 65% fails the matrix job and the
-**PowerShell Required** check.
+**Validation Required** check.
 
-Repository maintainers should require **PowerShell Required** in the branch
+Repository maintainers should require **Validation Required** in the branch
 ruleset. The workflow alone does not configure branch protection or make the
 existing release workflow wait for validation.
 

@@ -424,6 +424,20 @@ Describe 'Generated GitHub workflow files' {
     BeforeAll {
         $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
         Import-Module powershell-yaml -RequiredVersion $policy.Tools['powershell-yaml']
+        $actionlintCommand = Get-Command actionlint -ErrorAction SilentlyContinue
+        $script:actionlintPath = if ($null -ne $actionlintCommand) { $actionlintCommand.Source } else { $null }
+        if ($env:ACTIONLINT_REQUIRED -eq 'true' -and -not $script:actionlintPath) {
+            throw 'ACTIONLINT_REQUIRED is true, but actionlint was not found on PATH.'
+        }
+        function Assert-GeneratedWorkflowActionlint {
+            param([Parameter(Mandatory)][string]$Content)
+            if (-not $script:actionlintPath) { return }
+            $output = @($Content | & $script:actionlintPath - 2>&1)
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+                throw "actionlint rejected a generated workflow: $($output -join [Environment]::NewLine)"
+            }
+        }
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
@@ -447,6 +461,8 @@ Describe 'Generated GitHub workflow files' {
     ) {
         Update-BuildWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowReference stable -BuildEnvironmentName "Build's" -BuildValidationEnabled $Enabled
         $content = Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw
+        $null = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
+        Assert-GeneratedWorkflowActionlint -Content $content
         $content | Should -Match 'uses: owner/shared/.github/actions/build@stable'
         $content | Should -Match 'alm4dataverse-export-build'
         if ($Enabled) {
@@ -468,6 +484,8 @@ Describe 'Generated GitHub workflow files' {
         $environments = @('QA', 'qa!', '!!!', "Prod's") | ForEach-Object { [pscustomobject]@{ ShortName = $_ } }
         Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments @($environments) -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable -PromotionMode $Mode
         $content = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw
+        $null = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
+        Assert-GeneratedWorkflowActionlint -Content $content
         $content | Should -Match 'deploy-qa:'
         $content | Should -Match 'deploy-qa-2:'
         $content | Should -Match 'deploy-stage-3:'
@@ -494,7 +512,9 @@ Describe 'Generated GitHub workflow files' {
     ) {
         $environments = @([pscustomobject]@{ ShortName = 'TEST-main' }, [pscustomobject]@{ ShortName = 'PROD' })
         Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments $environments -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable -PromotionMode $Mode
-        $workflow = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw | ConvertFrom-Yaml
+        $content = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw
+        Assert-GeneratedWorkflowActionlint -Content $content
+        $workflow = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
         $condition = [string]$workflow.jobs['deploy-prod']['if']
         $condition | Should -Match '!cancelled\(\)'
         $workflow.jobs['deploy-prod'].needs | Should -Be 'deploy-test-main'
@@ -527,6 +547,29 @@ Describe 'Generated GitHub workflow files' {
 
 Describe 'Generated Azure DevOps pipeline files' {
     BeforeAll {
+        $script:azurePipelineSchemaPath = $env:AZURE_PIPELINES_SCHEMA
+        $script:azurePipelineLanguageServicePath = $env:AZURE_PIPELINES_LANGUAGE_SERVICE
+        $script:nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
+        $script:azurePipelineValidatorPath = Join-Path $repoRoot 'scripts/validate-azure-pipelines.js'
+        if ($env:AZURE_PIPELINES_SCHEMA_REQUIRED -eq 'true' -and
+            (-not $script:azurePipelineSchemaPath -or
+                -not (Test-Path -LiteralPath $script:azurePipelineSchemaPath) -or
+                -not $script:azurePipelineLanguageServicePath -or
+                -not $script:nodePath)) {
+            throw 'Azure Pipelines schema validation is required, but the schema, language service, or Node.js was not found.'
+        }
+        function Assert-GeneratedAzurePipelineSchema {
+            param([Parameter(Mandatory)][string]$Path)
+            if (-not $script:azurePipelineSchemaPath) { return }
+            $output = @(
+                & $script:nodePath $script:azurePipelineValidatorPath `
+                    --schema $script:azurePipelineSchemaPath $Path 2>&1
+            )
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+                throw "Microsoft's Azure Pipelines language service rejected '$Path': $($output -join [Environment]::NewLine)"
+            }
+        }
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
@@ -551,15 +594,32 @@ Describe 'Generated Azure DevOps pipeline files' {
     ) {
         Update-AzDoBuildPipelineInWorkingTree -RepoRoot $workingRoot -SharedRepositoryName shared -BuildEnvironmentName "Build's" -UseAlm4DataverseExtension $Enabled
         $content = Get-Content (Join-Path $workingRoot 'pipelines/BUILD.yml') -Raw
+        $null = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
+        Assert-GeneratedAzurePipelineSchema -Path (Join-Path $workingRoot 'pipelines/BUILD.yml')
         $content | Should -Match "buildEnvironmentName: 'Build''s'"
         $content | Should -Match ('useAlm4DataverseExtension: ' + $Enabled.ToString().ToLowerInvariant())
         $environments = @([pscustomobject]@{ ShortName = 'QA' }, [pscustomobject]@{ ShortName = 'PROD' })
         Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeTrue
         $deployContent = Get-Content (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml') -Raw
+        $null = ConvertFrom-Yaml -Yaml $deployContent -ErrorAction Stop
+        Assert-GeneratedAzurePipelineSchema -Path (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml')
         $deployContent | Should -Match 'environmentName: QA'
         $deployContent | Should -Match 'environmentName: PROD'
         @([regex]::Matches($deployContent, '(?m)^\s+environmentName:')).Count | Should -Be 2
         Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeFalse
+    }
+
+    It 'rejects syntactically valid pipeline YAML that violates the Microsoft schema' {
+        if (-not $script:azurePipelineSchemaPath) {
+            Set-ItResult -Skipped -Because 'The Azure Pipelines schema validator is installed in CI.'
+            return
+        }
+
+        $invalidPath = Join-Path $TestDrive 'invalid-pipeline.yml'
+        Set-Content -LiteralPath $invalidPath -Value 'stages: not-a-list'
+        $null = & $script:nodePath $script:azurePipelineValidatorPath `
+            --schema $script:azurePipelineSchemaPath $invalidPath 2>&1
+        $LASTEXITCODE | Should -Not -Be 0
     }
 
     It 'fails rather than silently fabricating missing templates' {

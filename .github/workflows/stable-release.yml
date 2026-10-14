@@ -173,8 +173,8 @@ jobs:
           # Use the prepare-release.ps1 script (produces release/setup-azdo.ps1 and release/setup-github.ps1)
           pwsh -File prepare-release.ps1 -TagName "$TAG_NAME" -OutputDir release -UpstreamRepo "$UPSTREAM_REPO"
           
-          echo "SETUP_AZDO_FILE=release/setup-azdo.ps1" >> $GITHUB_OUTPUT
-          echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> $GITHUB_OUTPUT
+          echo "SETUP_AZDO_FILE=release/setup-azdo.ps1" >> "$GITHUB_OUTPUT"
+          echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes body
         id: release_notes
@@ -208,7 +208,7 @@ jobs:
           - [Getting Started](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/README.md#getting-started) - Overview and documentation
           EOF
           
-          echo "RELEASE_NOTES_FILE=release_notes.md" >> $GITHUB_OUTPUT
+          echo "RELEASE_NOTES_FILE=release_notes.md" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: actions/github-script@v7
@@ -343,7 +343,6 @@ jobs:
               });
               console.log(`Uploaded ${assetName} as release asset`);
             }
-
       - name: Update stable tag
         env:
           TAG_NAME: ${{ steps.source_build.outputs.tag_name }}
