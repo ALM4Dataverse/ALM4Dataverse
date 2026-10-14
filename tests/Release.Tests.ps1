@@ -17,4 +17,16 @@ Describe 'Release packaging' {
             @($parseErrors).Count | Should -Be 0
         }
     }
+
+    It 'publishes shared setup assets and updates stable only for version-tag releases' {
+        $workflowPath = Join-Path $repoRoot '.github/workflows/stable-release.yml'
+        $workflow = Get-Content -LiteralPath $workflowPath -Raw
+
+        $workflow.Contains("- 'v[0-9]+.[0-9]+.[0-9]+'") | Should -BeTrue
+        $workflow.Contains("- 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'") | Should -BeTrue
+        $workflow | Should -Match 'prepare-release\.ps1'
+        $workflow | Should -Match 'git tag -f stable'
+        $workflow.Contains("name: 'setup-azdo.ps1'") | Should -BeTrue
+        $workflow.Contains("name: 'setup-github.ps1'") | Should -BeTrue
+    }
 }

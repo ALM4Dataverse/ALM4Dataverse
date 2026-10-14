@@ -119,6 +119,30 @@ $outputDirectory = Join-Path ([IO.Path]::GetTempPath()) ('alm-release-' + [guid]
 > or run setup. Parse and review the generated scripts without executing them merely
 > to check syntax: setup provisions real resources.
 
+## Publish A Shared Release
+
+The [stable-release workflow](../.github/workflows/stable-release.yml) responds to pushed
+version tags in the configured three/four-part `v` formats, such as `v1.2.3` or `v1.2.3.4`.
+This publishes the shared ALM4Dataverse code and standalone setup scripts; it is separate
+from branch-suffixed BUILD prereleases and does not promote a BUILD artifact.
+Releasing is a deliberate remote operation:
+
+1. Review the intended source commit, docs, compatibility changes, local checks, and non-production hosted/Dataverse test results.
+2. Create and push the intended version tag through the maintainer's authorized release process.
+3. The workflow prepares standalone setup scripts and force-moves `stable` to that version commit.
+4. It creates/updates a non-draft, non-prerelease GitHub Release, generates setup links/notes, and uploads/replaces both setup-script assets.
+5. Verify the version Release, assets, `stable` ref, and onboarding links. Communicate required caller/configuration changes.
+
+The workflow requires `contents: write` and permission to move `stable`.
+
+> [!CAUTION]
+> Release publication moves `stable`, so consumers following it can pick up changed
+> automation. Commit-pinned consumers need an explicit update. Do not move an existing
+> immutable version tag as a routine correction.
+
+The default download links use GitHub's latest Release selection; check that they expose
+the intended assets after publication.
+
 ## Live Verification Boundaries
 
 Before release, test relevant changes using intended non-production credentials on both
