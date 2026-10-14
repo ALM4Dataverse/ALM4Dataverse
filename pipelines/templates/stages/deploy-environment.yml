@@ -143,6 +143,7 @@ stages:
                     $rawBuildRunName = '$(resources.pipeline.build.runName)'
                     $buildRunId = '$(resources.pipeline.build.runID)'
                     $metadataPath = Join-Path '$(Pipeline.Workspace)/build/artifacts' 'build-version.json'
+                    $metadata = $null
                     if (Test-Path -LiteralPath $metadataPath -PathType Leaf) {
                       $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
                       if ($metadata.provider -cne 'azdo' -or
@@ -171,6 +172,9 @@ stages:
                     $targetCommit = (git rev-list -n 1 "$versionTag").Trim()
                     if ([string]::IsNullOrWhiteSpace($targetCommit)) {
                       throw "Could not resolve a commit SHA from build version tag '$versionTag'"
+                    }
+                    if ($null -ne $metadata -and $targetCommit -ine [string]$metadata.sourceCommit) {
+                      throw "BUILD version tag '$versionTag' resolves to '$targetCommit', not the source commit recorded in build metadata '$($metadata.sourceCommit)'."
                     }
 
                     Write-Host "Updating environment pointer tag '$environmentTag' to BUILD run $buildRunId ($targetCommit)"

@@ -32,4 +32,14 @@ Describe 'Workflow and pipeline YAML validation' {
 
         $failures | Should -BeNullOrEmpty
     }
+
+    It 'delimits BUILD tag refspecs and verifies Azure deployment tag commits before moving pointers' {
+        $buildTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/build.yml') -Raw
+        $deploymentTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/stages/deploy-environment.yml') -Raw
+
+        $buildTemplate | Should -Match 'refs/tags/\$\{tagName\}:refs/tags/\$\{tagName\}'
+        $deploymentTemplate | Should -Match '\$targetCommit -ine \[string\]\$metadata\.sourceCommit'
+        $deploymentTemplate.IndexOf('$targetCommit -ine [string]$metadata.sourceCommit') |
+            Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
+    }
 }

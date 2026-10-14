@@ -303,7 +303,7 @@ stages:
             $existingRefs = @(git ls-remote --tags origin "refs/tags/$tagName" "refs/tags/$tagName^{}" 2>&1)
             if ($LASTEXITCODE -ne 0) { throw "Could not query existing BUILD tag '$tagName'." }
             if ($existingRefs.Count -gt 0) {
-              git fetch --force origin "refs/tags/$tagName:refs/tags/$tagName"
+              git fetch --force origin "refs/tags/${tagName}:refs/tags/${tagName}"
               if ($LASTEXITCODE -ne 0) { throw "Could not fetch existing BUILD tag '$tagName'." }
               $existingCommit = (git rev-list -n 1 "$tagName^{commit}").Trim()
               if ($LASTEXITCODE -ne 0 -or $existingCommit -ine $sourceCommit) {
