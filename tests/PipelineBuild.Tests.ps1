@@ -59,6 +59,7 @@ Describe 'Build artifacts and solution-check helpers' {
     It 'packs solutions, copies assets/configuration, and locks actual installed versions' {
         & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
         Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { $PackageType -eq 'Both' }
+        Should -Invoke ForEach-Object -Times 1 -Exactly -ParameterFilter { $null -ne $Parallel -and $ThrottleLimit -eq 2 }
         Test-Path (Join-Path $script:artifactDirectory 'data/example.txt') | Should -BeTrue
         Test-Path (Join-Path $script:artifactDirectory 'alm-config.psd1') | Should -BeTrue
         $lock = Get-Content (Join-Path $script:artifactDirectory 'scriptDependencies.lock.json') -Raw | ConvertFrom-Json -AsHashtable
@@ -95,6 +96,33 @@ Describe 'Build artifacts and solution-check helpers' {
         }
         Convert-SolutionCheckRankToSeverity -Rank 0 | Should -Be None
         { Convert-SolutionCheckSeverityToRank -Severity Unknown } | Should -Throw '*Unknown solution check severity*'
+    }
+
+    It 'uses defaults for missing build settings and validates explicit parallel limits' {
+        . $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+        $settings = Get-AlmBuildSetting -Config @{}
+        $settings.parallel | Should -BeTrue
+        $settings.maxParallel | Should -Be 2
+        $settings = Get-AlmBuildSetting -Config @{ build = @{ parallel = $false; maxParallel = 4 } }
+        $settings.parallel | Should -BeFalse
+        $settings.maxParallel | Should -Be 4
+        { Get-AlmBuildSetting -Config @{ build = 'invalid' } } | Should -Throw '*build must be a hashtable*'
+        { Get-AlmBuildSetting -Config @{ build = @{ parallel = 'false' } } } | Should -Throw '*build.parallel*'
+        { Get-AlmBuildSetting -Config @{ build = @{ maxParallel = 9 } } } | Should -Throw '*build.maxParallel*'
+    }
+
+    It 'packs sequentially when build parallelization is disabled' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example' })
+    build = @{ parallel = $false; maxParallel = 4 }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+Should -Invoke ForEach-Object -Times 0 -Exactly -ParameterFilter { $null -ne $Parallel }
+        Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly
     }
 
     It 'resolves unique exclusions and skips null, empty, and unmatched patterns' {

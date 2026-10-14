@@ -54,6 +54,27 @@ function Get-PacCliInstalledPackageVersion {
     return ''
 }
 
+function Get-AlmBuildSetting {
+    [OutputType([hashtable])]
+    param([Parameter(Mandatory)][hashtable]$Config)
+
+    $settings = @{ parallel = $true; maxParallel = 2 }
+    if ($Config.ContainsKey('build') -and $null -ne $Config.build) {
+        if ($Config.build -isnot [hashtable]) { throw 'build must be a hashtable.' }
+        foreach ($name in @('parallel', 'maxParallel')) {
+            if ($Config.build.ContainsKey($name)) {
+                $value = $Config.build[$name]
+                if ($null -ne $value -and -not ($value -is [string] -and $value -eq '')) { $settings[$name] = $value }
+            }
+        }
+    }
+    if ($settings.parallel -isnot [bool]) { throw 'build.parallel must be $true or $false.' }
+    if ($settings.maxParallel -isnot [int] -or $settings.maxParallel -lt 1 -or $settings.maxParallel -gt 8) {
+        throw 'build.maxParallel must be an integer between 1 and 8.'
+    }
+    return $settings
+}
+
 function New-SolutionCheckSeverityCount {
     return [ordered]@{
         Critical      = 0
@@ -540,6 +561,7 @@ function Invoke-SolutionCheck {
 
 # Read solutions configuration
 $config = Get-AlmConfig -BaseDirectory $SourceDirectory
+$buildSettings = Get-AlmBuildSetting -Config $config
 Write-Host "##[debug]Loaded configuration from alm-config.psd1"
 
 Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
@@ -547,19 +569,85 @@ Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }
 
-foreach ($solution in $config.solutions) {
-    $solutionName = $solution.name
+$packPlans = @(
+    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
+        $solutionName = [string]$config.solutions[$index].name
+        [pscustomobject]@{
+            Index        = $index
+            SolutionName = $solutionName
+            Path         = Join-Path $SourceDirectory "solutions/$solutionName"
+            OutputPath   = Join-Path $ArtifactStagingDirectory "solutions/$solutionName.zip"
+        }
+    }
+)
+$packModule = Get-Module -Name 'Rnwood.Dataverse.Data.PowerShell' | Select-Object -First 1
+if ($null -eq $packModule) {
+    Write-Host "##[error]Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
+    throw "Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
+}
 
-    Write-Host "##[group]Building solution: $solutionName"
+if ($buildSettings.parallel) {
+    $buildModulePath = if ($packModule.PSObject.Properties['Path']) { [string]$packModule.Path } else { '' }
+    foreach ($plan in $packPlans) {
+        $plan | Add-Member -NotePropertyName ModulePath -NotePropertyValue $buildModulePath
+    }
+    Write-Host "##[section]Packing $($packPlans.Count) solution(s) with max parallelism $($buildSettings.maxParallel)"
+    $packResults = @($packPlans | ForEach-Object -ThrottleLimit $buildSettings.maxParallel -Parallel {
+        $plan = $_
+        $ErrorActionPreference = 'Stop'
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($plan.ModulePath)) {
+                Import-Module -Name $plan.ModulePath -ErrorAction Stop
+            }
+            $output = @(
+                & {
+                    Compress-DataverseSolutionFile -Verbose `
+                        -Path $plan.Path `
+                        -OutputPath $plan.OutputPath `
+                        -PackageType Both
+                } *>&1 | ForEach-Object { [string]$_ }
+            )
+            [pscustomobject]@{
+                Index        = $plan.Index
+                SolutionName = $plan.SolutionName
+                Output       = $output
+                ErrorMessage = ''
+            }
+        }
+        catch {
+            [pscustomobject]@{
+                Index        = $plan.Index
+                SolutionName = $plan.SolutionName
+                Output       = @()
+                ErrorMessage = ($_ | Out-String).TrimEnd()
+            }
+        }
+    } | Sort-Object Index)
 
-    Write-Host "Packing solution: $solutionName (Managed)"
-
-    Compress-DataverseSolutionFile -Verbose `
-        -Path "$SourceDirectory/solutions/$solutionName" `
-        -OutputPath "$ArtifactStagingDirectory/solutions/${solutionName}.zip" `
-        -PackageType Both
-
-    Write-Host "##[endgroup]"
+    foreach ($result in $packResults) {
+        Write-Host "##[group]Building solution: $($result.SolutionName)"
+        foreach ($line in $result.Output) {
+            Write-Host "[$($result.SolutionName)][Pack] $line"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($result.ErrorMessage)) {
+            Write-Host "##[error][$($result.SolutionName)][Pack] $($result.ErrorMessage)"
+            Write-Host "##[endgroup]"
+            throw "Failed to pack solution '$($result.SolutionName)': $($result.ErrorMessage)"
+        }
+        Write-Host "##[endgroup]"
+    }
+}
+else {
+    Write-Host "##[section]Packing $($packPlans.Count) solution(s) sequentially"
+    foreach ($plan in $packPlans) {
+        Write-Host "##[group]Building solution: $($plan.SolutionName)"
+        Write-Host "Packing solution: $($plan.SolutionName) (Managed)"
+        Compress-DataverseSolutionFile -Verbose `
+            -Path $plan.Path `
+            -OutputPath $plan.OutputPath `
+            -PackageType Both
+        Write-Host "##[endgroup]"
+    }
 }
 
 Invoke-SolutionCheck -Config $config -SourceDirectory $SourceDirectory -ArtifactStagingDirectory $ArtifactStagingDirectory

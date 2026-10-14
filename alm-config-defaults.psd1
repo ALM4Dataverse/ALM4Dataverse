@@ -17,6 +17,12 @@
         maxConcurrentOperations = 4
     }
 
+    # Maximum number of solutions to pack concurrently during BUILD.
+    build = @{
+        parallel = $true
+        maxParallel = 2
+    }
+
     # PAC solution check configuration used during BUILD.
     # Set enabled = $true globally or per-solution to activate checks.
     solutionCheck = @{

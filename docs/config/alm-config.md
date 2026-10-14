@@ -110,6 +110,23 @@ Pre-export and post-export hooks keep their existing order and context.
 See [Export Logs](../usage/exporting-changes.md#export-logs) for progress messages,
 per-solution summaries and retained diagnostics.
 
+### Build Processing
+
+```powershell
+build = @{
+    parallel = $true
+    maxParallel = 2
+}
+```
+
+| Setting | Type | Default | Behavior |
+| --- | --- | --- | --- |
+| `build.parallel` | Boolean | `$true` | Pack solutions concurrently; `$false` packs them sequentially. |
+| `build.maxParallel` | Integer, `1` to `8` | `2` | Maximum number of solutions packed at the same time. |
+
+Missing, null, or empty optional settings use the defaults; an explicit `$false`
+is preserved. Invalid types or out-of-range limits fail with a configuration error.
+
 ### Assets
 
 Extra folders or files to include in build artifacts, copied verbatim to the artifacts directory.
