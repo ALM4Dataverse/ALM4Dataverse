@@ -424,7 +424,8 @@ Describe 'Generated GitHub workflow files' {
     BeforeAll {
         $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
         Import-Module powershell-yaml -RequiredVersion $policy.Tools['powershell-yaml']
-        $script:actionlintPath = (Get-Command actionlint -ErrorAction SilentlyContinue).Source
+        $actionlintCommand = Get-Command actionlint -ErrorAction SilentlyContinue
+        $script:actionlintPath = if ($null -ne $actionlintCommand) { $actionlintCommand.Source } else { $null }
         if ($env:ACTIONLINT_REQUIRED -eq 'true' -and -not $script:actionlintPath) {
             throw 'ACTIONLINT_REQUIRED is true, but actionlint was not found on PATH.'
         }
