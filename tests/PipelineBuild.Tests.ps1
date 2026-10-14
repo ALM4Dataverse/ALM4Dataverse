@@ -18,7 +18,14 @@ BeforeAll {
 
 Describe 'Build artifacts and solution-check helpers' {
     BeforeEach {
-        $script:savedEnvironment = @{ GITHUB_STEP_SUMMARY = $env:GITHUB_STEP_SUMMARY; TF_BUILD = $env:TF_BUILD }
+        $script:savedEnvironment = @{
+            GITHUB_STEP_SUMMARY             = $env:GITHUB_STEP_SUMMARY
+            TF_BUILD                        = $env:TF_BUILD
+            ALM_BUILD_TEST_REAL_PARALLEL    = $env:ALM_BUILD_TEST_REAL_PARALLEL
+            ALM_BUILD_TEST_MODULE_PATH      = $env:ALM_BUILD_TEST_MODULE_PATH
+        }
+        $env:ALM_BUILD_TEST_REAL_PARALLEL = $null
+        $env:ALM_BUILD_TEST_MODULE_PATH = $null
         $script:savedExitCode = $global:LASTEXITCODE
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:sourceDirectory = Join-Path $fixtureRoot 'source'
@@ -37,7 +44,11 @@ Describe 'Build artifacts and solution-check helpers' {
         Mock Compress-DataverseSolutionFile { Set-Content -LiteralPath $OutputPath -Value 'packed solution' }
         Mock Copy-Item { New-Item -ItemType Directory -Path $Destination -Force | Out-Null } -ParameterFilter { $Destination -match '[\\/]alm$' }
         Mock Get-Module {
-            [pscustomobject]@{ Version = [version]'3.0.4'; PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } } }
+            [pscustomobject]@{
+                Path        = $env:ALM_BUILD_TEST_MODULE_PATH
+                Version     = [version]'3.0.4'
+                PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } }
+            }
         } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
@@ -45,8 +56,13 @@ Describe 'Build artifacts and solution-check helpers' {
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestPac' } } -ParameterFilter { $Name -eq 'pac' }
         Mock Invoke-TestPac { $global:LASTEXITCODE = 0; 'Critical: 0'; 'High: 1'; 'Low: 2' }
         Mock ForEach-Object {
-            $InputObject | Microsoft.PowerShell.Core\ForEach-Object -Process $Parallel
-        } -ParameterFilter { $null -ne $Parallel }
+            if ($env:ALM_BUILD_TEST_REAL_PARALLEL -eq 'true') {
+                $InputObject | Microsoft.PowerShell.Core\ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel $Parallel
+            }
+            else {
+                $InputObject | Microsoft.PowerShell.Core\ForEach-Object -Process $Parallel
+            }
+        } -ParameterFilter { $null -ne $Parallel -and $env:ALM_BUILD_TEST_REAL_PARALLEL -ne 'true' }
     }
 
     AfterEach {
@@ -121,8 +137,69 @@ Describe 'Build artifacts and solution-check helpers' {
 }
 '@
         & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
-Should -Invoke ForEach-Object -Times 0 -Exactly -ParameterFilter { $null -ne $Parallel }
+        Should -Invoke ForEach-Object -Times 0 -Exactly -ParameterFilter { $null -ne $Parallel }
         Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly
+    }
+
+    It 'rejects duplicate solution names without starting pack work' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example' }, @{ name = 'example' })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*Duplicate solution in build configuration: example*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+        Should -Invoke ForEach-Object -Times 0 -Exactly -ParameterFilter { $null -ne $Parallel }
+    }
+
+    It 'packs multiple solutions concurrently through real parallel runspaces' {
+        $solutionRoot = Join-Path $script:sourceDirectory 'solutions'
+        New-Item -ItemType Directory -Path (Join-Path $solutionRoot 'First'), (Join-Path $solutionRoot 'Second') -Force | Out-Null
+        $barrierDirectory = Join-Path $TestDrive 'pack-worker-barrier'
+        New-Item -ItemType Directory -Path $barrierDirectory -Force | Out-Null
+        $script:packWorkerModulePath = Join-Path $TestDrive 'Rnwood.Dataverse.Data.PowerShell.psm1'
+        Set-Content -LiteralPath $script:packWorkerModulePath -Value @"
+function Compress-DataverseSolutionFile {
+    param([string]`$Path, [string]`$OutputPath, [string]`$PackageType)
+    `$solutionName = Split-Path -Path `$Path -Leaf
+    Set-Content -LiteralPath (Join-Path '$barrierDirectory' "`$solutionName.started") -Value started
+    `$deadline = [datetime]::UtcNow.AddSeconds(15)
+    while ([datetime]::UtcNow -lt `$deadline) {
+        if ((Test-Path (Join-Path '$barrierDirectory' 'First.started')) -and (Test-Path (Join-Path '$barrierDirectory' 'Second.started'))) {
+            Set-Content -LiteralPath `$OutputPath -Value "packed `$solutionName"
+            return
+        }
+        Start-Sleep -Milliseconds 25
+    }
+    throw "Pack worker for '`$solutionName' did not overlap with the other solution."
+}
+Export-ModuleMember -Function Compress-DataverseSolutionFile
+"@
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'First' }, @{ name = 'Second' })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+
+        $previousRealParallelSetting = $env:ALM_BUILD_TEST_REAL_PARALLEL
+        $previousModulePath = $env:ALM_BUILD_TEST_MODULE_PATH
+        try {
+            $env:ALM_BUILD_TEST_MODULE_PATH = $script:packWorkerModulePath
+            $env:ALM_BUILD_TEST_REAL_PARALLEL = 'true'
+            & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+        }
+        finally {
+            $env:ALM_BUILD_TEST_REAL_PARALLEL = $previousRealParallelSetting
+            $env:ALM_BUILD_TEST_MODULE_PATH = $previousModulePath
+        }
+
+        (Get-Content -LiteralPath (Join-Path $script:artifactDirectory 'solutions/First.zip') -Raw).Trim() | Should -Be 'packed First'
+        (Get-Content -LiteralPath (Join-Path $script:artifactDirectory 'solutions/Second.zip') -Raw).Trim() | Should -Be 'packed Second'
     }
 
     It 'resolves unique exclusions and skips null, empty, and unmatched patterns' {

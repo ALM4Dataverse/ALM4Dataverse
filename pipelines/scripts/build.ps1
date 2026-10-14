@@ -562,6 +562,12 @@ function Invoke-SolutionCheck {
 # Read solutions configuration
 $config = Get-AlmConfig -BaseDirectory $SourceDirectory
 $buildSettings = Get-AlmBuildSetting -Config $config
+$solutionNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($solution in $config.solutions) {
+    if (-not $solutionNames.Add([string]$solution.name)) {
+        throw "Duplicate solution in build configuration: $($solution.name)"
+    }
+}
 Write-Host "##[debug]Loaded configuration from alm-config.psd1"
 
 Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
