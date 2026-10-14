@@ -17,8 +17,6 @@ The `EXPORT` pipeline for each repo takes the state of the solution(s) (and othe
 - Save and publish the intended maker changes, and confirm the configured solutions contain all required components.
 - Check the selected branch and its development Dataverse URL. EXPORT writes to that branch directly; it does not open a pull request.
 - Coordinate with other makers using the same development environment. All configured solution changes are exported, not just the caller's changes.
-- Ensure the automation identity can export solutions, update solution versions, and push to the branch. Branch protection may require an integration branch instead of exporting directly to `main`.
-- Review data hooks before running them: exported records become repository contents and must not contain secrets or inappropriate personal data.
 
 > [!TIP]
 > Export frequently; there is no need to wait until you are ready to deploy. Each export
@@ -66,7 +64,7 @@ with other makers sharing that environment.
 1. Dependencies are installed and the application identity connects to the development environment.
 2. `preExport` hooks run.
 3. Each configured solution is exported to `solutions/<unique-name>`, including unpacked canvas-app content. Existing source is replaced by the export.
-4. Solution changes are compared with the prior source; changed solutions have their versions updated in both source and Dataverse.
+4. Solution changes are compared with the prior source; changed solutions reserve a unique version tag, then have their versions updated in both source and Dataverse.
 5. `postExport` hooks run, including configured data exports.
 6. All working-tree changes are committed with the supplied message and pushed. Azure DevOps uses the requesting user's name/email; GitHub uses the triggering actor and a GitHub noreply address.
 
@@ -93,6 +91,24 @@ and revision counters before applying the current change's increment.
 | Additive change with mismatched `Major.Build` | Reset minor/revision, then increment revision | With base `2.3`, `1.9.8.9` becomes `2.0.3.1` |
 | Non-additive change with mismatched `Major.Build` | Reset minor/revision, then increment minor | With base `2.3`, `1.9.8.9` becomes `2.1.3.0` |
 | No source changes | No increment | Version remains unchanged |
+
+Changed solutions reserve their four-part version using a lightweight Git tag named
+`alm4dv/solution-version/<solution-unique-name>/<version>` (for example,
+`alm4dv/solution-version/Example/2.4.3.8`). The reservation tag is pushed to
+`origin` before the version is written to the exported solution. If another branch
+already reserved that version, EXPORT applies the same change-type increment again
+and retries. The push is the atomic claim, so simultaneous exports cannot both
+reserve the same version.
+
+Reservation tags are not release tags and do not trigger BUILD workflows. They are
+not removed when a later export step fails; this leaves a gap rather than allowing
+another branch to reuse the version. Do not delete or force-update these tags.
+GitHub EXPORT needs `contents: write`; the Azure DevOps build identity needs
+permission to create repository tags.
+
+When EXPORT runs on a non-default branch without a matching
+`buildVersion.branches` entry, it warns that `buildVersion.default` is being used.
+Configure an explicit branch base when that branch needs a different MAJOR.MINOR.
 
 During deployment, matching solution Major.Minor versions permit updates; a different Major.Minor can require an upgrade that removes obsolete components. Detection is based on solution component comparison, not a guarantee that a business change is backward-compatible. The CI build/release identity is separate from each solution's version.
 

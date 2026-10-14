@@ -29,6 +29,8 @@ param(
     [Parameter(Mandatory=$true)]
     [string]$BranchName,
 
+    [string]$DefaultBranchName,
+
     [switch]$PassThru
 )
 
@@ -44,6 +46,12 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSetting -Config $solutionsConfig
 $branchBaseVersion = Resolve-AlmBranchBaseVersion -Config $solutionsConfig -BranchName $BranchName
+if (-not $branchBaseVersion.HasBranchOverride) {
+    $defaultBranch = Resolve-AlmDefaultBranchName -RepositoryPath $SourceDirectory -DefaultBranchName $DefaultBranchName
+    if ($branchBaseVersion.BranchName -cne $defaultBranch) {
+        Write-Warning "EXPORT is using buildVersion.default '$($branchBaseVersion.MajorMinor)' on non-default branch '$($branchBaseVersion.BranchName)' (default branch '$defaultBranch'). Configure buildVersion.branches for this branch to select an explicit base version."
+    }
+}
 
 Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
@@ -140,11 +148,16 @@ foreach ($solution in $solutionsConfig.solutions) {
             $revisionVersion = 0
         }
         $newversion = [version] "$($branchBaseVersion.Major).$minorVersion.$($branchBaseVersion.Build).$revisionVersion"
+        $newversion = Register-AlmSolutionVersion `
+            -RepositoryPath $SourceDirectory `
+            -SolutionName $solutionName `
+            -Version $newversion `
+            -IsAdditive $changesareadditive
 
         $solutionXml.ImportExportXml.SolutionManifest.Version = $newversion.ToString()
         $solutionXml.Save($solutionXmlPath)
 
-        Write-Host "##[debug][$solutionName][Version] Updated solution folder to $newversion"
+        Write-Host "##[debug][$solutionName][Version] Reserved and updated solution folder to $newversion"
 
         if ($null -ne $exportPipeline) {
             $exportPipeline.OperationBudget.Wait($exportPipeline.Cancellation.Token)

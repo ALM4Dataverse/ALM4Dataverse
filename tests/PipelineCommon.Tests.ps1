@@ -52,12 +52,14 @@ Describe 'BUILD SemVer resolution' {
         $baseVersion.Major | Should -Be 2
         $baseVersion.Build | Should -Be 1
         $baseVersion.MajorMinor | Should -Be '2.1'
+        $baseVersion.HasBranchOverride | Should -BeTrue
     }
 
     It 'uses the configured default for an unlisted branch and normalizes branch separators' {
         $version = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'feature/new-ui' -RunNumber 7 -Provider azdo
         $version.Version | Should -Be '1.0.7-feature-new-ui'
         $version.BranchName | Should -Be 'feature/new-ui'
+        (Resolve-AlmBranchBaseVersion -Config $script:buildVersionConfig -BranchName 'feature/new-ui').HasBranchOverride | Should -BeFalse
         $featureVersion = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName 'feat/abc' -RunNumber 8 -Provider github
         $featureVersion.Version | Should -Be '1.0.8-feat-abc'
         $numericVersion = Resolve-AlmBuildVersion -Config $script:buildVersionConfig -BranchName '01' -RunNumber 9 -Provider github

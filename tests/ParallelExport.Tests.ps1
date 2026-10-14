@@ -239,7 +239,7 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         Invoke-CheckedNativeCommand -Command git -Arguments @('-C', $source, '-c', 'user.name=ExportTest', '-c', 'user.email=export-test@example.invalid', 'commit', '--quiet', '-m', 'Test baseline')
         Push-Location $source
         try {
-            $result = & (Join-Path $repoRoot 'pipelines/scripts/export.ps1') -SourceDirectory $source -ArtifactStagingDirectory $staging -TempDirectory $temp -BranchName main -PassThru
+            $result = & (Join-Path $repoRoot 'pipelines/scripts/export.ps1') -SourceDirectory $source -ArtifactStagingDirectory $staging -TempDirectory $temp -BranchName main -DefaultBranchName main -PassThru
         }
         finally { Pop-Location }
         $result.Parallel | Should -Be $Parallel

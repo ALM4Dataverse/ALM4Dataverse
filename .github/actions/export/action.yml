@@ -95,6 +95,7 @@ runs:
       working-directory: ${{ github.workspace }}/self
       env:
         DEV_ENVIRONMENT_LABEL: ${{ inputs.dev-environment-label }}
+        DEFAULT_BRANCH_NAME: ${{ github.event.repository.default_branch }}
       run: |
         & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
         $devEnvLabel = $env:DEV_ENVIRONMENT_LABEL
@@ -107,7 +108,8 @@ runs:
           -ArtifactStagingDirectory "${{ runner.temp }}/export-staging" `
           -TempDirectory "${{ runner.temp }}/export-temp" `
           -EnvironmentName $devEnvLabel `
-          -BranchName $env:GITHUB_REF_NAME
+          -BranchName $env:GITHUB_REF_NAME `
+          -DefaultBranchName $env:DEFAULT_BRANCH_NAME
 
     - name: Upload export diagnostics
       if: always()
