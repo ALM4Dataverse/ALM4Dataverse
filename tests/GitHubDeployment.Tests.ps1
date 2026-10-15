@@ -1,6 +1,22 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:deploymentResolver = Join-Path $repoRoot '.github/actions/common/resolve-deployment.ps1'
+    $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
+    Import-Module powershell-yaml -RequiredVersion $policy.Tools['powershell-yaml']
+    $deployAction = Get-Content (Join-Path $repoRoot '.github/actions/deploy/action.yml') -Raw | ConvertFrom-Yaml
+    $script:deploymentTagStep = $deployAction.runs.steps | Where-Object { $_.name -eq 'Push deployment tags' }
+    function gh {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Arguments', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+    }
+    function Invoke-DeploymentTagStep {
+        $run = $script:deploymentTagStep.run
+        foreach ($line in Get-Content $env:GITHUB_OUTPUT) {
+            $name, $value = $line -split '=', 2
+            $run = $run.Replace(('${{ steps.resolve.outputs.' + $name + ' }}'), $value)
+        }
+        & ([scriptblock]::Create($run))
+    }
     function Set-DeploymentDispatchFixture {
         param([string]$Selector = 'release-1', [string]$EventName = 'workflow_dispatch')
         $payload = @{ build_run_id = ''; branch = ''; sha = ''; release_tag = '' }
@@ -54,8 +70,118 @@ Describe 'GitHub deployment selection and gates' {
         $output = Get-Content $env:GITHUB_OUTPUT -Raw
         $output | Should -Match 'build_run_id=123'
         $output | Should -Match 'artifact_source=release'
-        $output | Should -Match 'required_gate_tag=release-1/deployed/DEV'
+        $output | Should -Match 'required_gate_tag=deployed/release-1/DEV'
+        $output | Should -Match 'success_gate_tag=deployed/release-1/TEST'
         $output | Should -Match 'environment_pointer_tag=deployed/TEST'
+    }
+
+    It 'emits gates only for manual promotion while preserving pointers: <Mode>, predecessor <Previous>' -ForEach @(
+        @{ Mode = 'manual-gate-tag'; Previous = ''; Required = ''; Success = 'deployed/release-1/TEST' }
+        @{ Mode = 'manual-gate-tag'; Previous = 'DEV'; Required = 'deployed/release-1/DEV'; Success = 'deployed/release-1/TEST' }
+        @{ Mode = 'environment-approval'; Previous = ''; Required = ''; Success = '' }
+        @{ Mode = 'environment-approval'; Previous = 'DEV'; Required = ''; Success = '' }
+    ) {
+        $env:INPUT_PROMOTION_MODE = $Mode
+        $env:INPUT_PREVIOUS_ENVIRONMENT_NAME = $Previous
+        & $script:deploymentResolver
+        $output = Get-Content $env:GITHUB_OUTPUT
+        $output | Should -Contain "required_gate_tag=$Required"
+        $output | Should -Contain "success_gate_tag=$Success"
+        $output | Should -Contain 'environment_pointer_tag=deployed/TEST'
+    }
+
+    It 'allows the source build tag, success gate, and environment pointer to coexist in Git' {
+        & $script:deploymentResolver
+        $output = Get-Content $env:GITHUB_OUTPUT
+        $gateTag = ($output | Where-Object { $_ -like 'success_gate_tag=*' }) -replace '^success_gate_tag=', ''
+        $pointerTag = ($output | Where-Object { $_ -like 'environment_pointer_tag=*' }) -replace '^environment_pointer_tag=', ''
+        $gitDirectory = Join-Path $TestDrive 'tag-namespace'
+        git init --quiet $gitDirectory
+        $LASTEXITCODE | Should -Be 0
+        git -C $gitDirectory -c user.name=Test -c user.email=test@example.com -c commit.gpgsign=false commit --quiet --allow-empty -m fixture
+        $LASTEXITCODE | Should -Be 0
+        foreach ($tag in @('release-1', $gateTag, $pointerTag)) {
+            git -C $gitDirectory -c tag.gpgsign=false tag $tag
+            $LASTEXITCODE | Should -Be 0
+        }
+        @(git -C $gitDirectory tag --list) | Should -Be @('deployed/TEST', 'deployed/release-1/TEST', 'release-1')
+    }
+
+    Context 'Publishing deployment tags' {
+        BeforeEach {
+            $script:savedTagExitCode = $global:LASTEXITCODE
+            Mock gh {
+                $global:LASTEXITCODE = 0
+                if ($Arguments -contains '/repos/example/repository/git/tags') {
+                    return (@{ sha = ('b' * 40) } | ConvertTo-Json)
+                }
+                '{}'
+            }
+        }
+
+        AfterEach {
+            $global:LASTEXITCODE = $script:savedTagExitCode
+        }
+
+        It 'runs publishing when either a gate or environment pointer is requested' {
+            $script:deploymentTagStep.if | Should -Be "steps.resolve.outputs.success_gate_tag != '' || steps.resolve.outputs.environment_pointer_tag != ''"
+        }
+
+        It 'publishes the annotated pointer and only the requested gate: <Mode>, <EventName>' -ForEach @(
+            @{ Mode = 'manual-gate-tag'; EventName = 'workflow_dispatch'; GateCalls = 1; TotalCalls = 4 }
+            @{ Mode = 'environment-approval'; EventName = 'workflow_dispatch'; GateCalls = 0; TotalCalls = 3 }
+            @{ Mode = 'environment-approval'; EventName = 'repository_dispatch'; GateCalls = 0; TotalCalls = 3 }
+        ) {
+            $env:INPUT_PROMOTION_MODE = $Mode
+            Set-DeploymentDispatchFixture -EventName $EventName
+            & $script:deploymentResolver
+            Invoke-DeploymentTagStep
+            Should -Invoke gh -Times $TotalCalls -Exactly
+            Should -Invoke gh -Times $GateCalls -Exactly -ParameterFilter {
+                $Arguments -contains 'ref=refs/tags/deployed/release-1/TEST' -and
+                $Arguments -contains "sha=$('a' * 40)"
+            }
+            Should -Invoke gh -Times 1 -Exactly -ParameterFilter {
+                $Arguments -contains 'POST' -and $Arguments -contains '/repos/example/repository/git/tags' -and
+                $Arguments -contains 'tag=deployed/TEST' -and $Arguments -contains "object=$('a' * 40)" -and
+                $Arguments -contains 'type=commit' -and
+                ($Arguments -like 'message=*') -match 'BUILD run: 123\nRelease tag: release-1'
+            }
+            Should -Invoke gh -Times 1 -Exactly -ParameterFilter {
+                $Arguments -contains 'DELETE' -and $Arguments -contains '/repos/example/repository/git/refs/tags/deployed/TEST'
+            }
+            Should -Invoke gh -Times 1 -Exactly -ParameterFilter {
+                $Arguments -contains 'POST' -and $Arguments -contains 'ref=refs/tags/deployed/TEST' -and
+                $Arguments -contains "sha=$('b' * 40)"
+            }
+        }
+
+        It 'continues updating the pointer when the success gate already exists' {
+            Mock gh { $global:LASTEXITCODE = 1; '{"message":"Reference already exists"}' } -ParameterFilter {
+                $Arguments -contains 'ref=refs/tags/deployed/release-1/TEST'
+            }
+            & $script:deploymentResolver
+            Invoke-DeploymentTagStep
+            Should -Invoke gh -Times 1 -Exactly -ParameterFilter { $Arguments -contains 'ref=refs/tags/deployed/TEST' }
+        }
+
+        It 'surfaces gate creation failures without moving the pointer' {
+            Mock gh { $global:LASTEXITCODE = 1; '{"message":"Reference update failed"}' } -ParameterFilter {
+                $Arguments -contains 'ref=refs/tags/deployed/release-1/TEST'
+            }
+            & $script:deploymentResolver
+            { Invoke-DeploymentTagStep } | Should -Throw '*Failed to push gate tag*Reference update failed*'
+            Should -Invoke gh -Times 1 -Exactly
+        }
+
+        It 'surfaces pointer creation failures in approval mode' {
+            $env:INPUT_PROMOTION_MODE = 'environment-approval'
+            Mock gh { $global:LASTEXITCODE = 1; '{"message":"Reference update failed"}' } -ParameterFilter {
+                $Arguments -contains 'ref=refs/tags/deployed/TEST'
+            }
+            & $script:deploymentResolver
+            { Invoke-DeploymentTagStep } | Should -Throw '*Failed to create environment pointer tag*Reference update failed*'
+        }
     }
 
     It 'resolves numeric selectors, latest managed releases, and repository dispatches' -ForEach @(
