@@ -45,9 +45,9 @@ $aliasTargets = @{
 }
 
 $derivedPrefix = Get-PrefixFromEnvironment $env:RESOLVED_ENVIRONMENT_NAME
-$prefixCandidates = @('PREFIX_')
-if (-not [string]::IsNullOrWhiteSpace($derivedPrefix) -and $derivedPrefix -ne 'PREFIX_') {
-    $prefixCandidates = @($derivedPrefix) + $prefixCandidates
+$prefixCandidates = @()
+if (-not [string]::IsNullOrWhiteSpace($derivedPrefix)) {
+    $prefixCandidates = @($derivedPrefix)
 }
 
 $variableData = ConvertTo-HashtableSafe $env:VARS_JSON
@@ -83,7 +83,7 @@ $directMappings = @(
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('AZURE_CLIENT_ID'); TargetName = 'AZURE_CLIENT_ID'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('AZURE_TENANT_ID'); TargetName = 'AZURE_TENANT_ID'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_URL'); TargetName = 'DATAVERSE_URL'; IsSensitive = $false },
-    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSESERVICEACCOUNTUPN'); TargetName = 'DATAVERSESERVICEACCOUNTUPN'; IsSensitive = $false },
+    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN'); TargetName = 'DATAVERSESERVICEACCOUNTUPN'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS'); TargetName = 'DATAVERSE_CONNECTION_REFS'; IsSensitive = $false }
 )
 
@@ -121,8 +121,15 @@ foreach ($entry in $selectedSecrets.GetEnumerator()) {
 foreach ($mapping in $directMappings) {
     $sourceName = $null
     $valueText = $null
+    $candidateNames = @(
+        foreach ($prefix in $prefixCandidates) {
+            foreach ($name in $mapping.Names) {
+                "$prefix$name"
+            }
+        }
+    ) + $mapping.Names
 
-    foreach ($candidateName in $mapping.Names) {
+    foreach ($candidateName in $candidateNames) {
         if (-not $mapping.Source.ContainsKey($candidateName)) {
             continue
         }
@@ -206,6 +213,48 @@ foreach ($source in $sources) {
 
             $setCount++
             Write-Host "Mapped prefixed $($source.Name) '$fullName' -> '$name'"
+        }
+    }
+}
+
+foreach ($source in $sources) {
+    foreach ($entry in $source.Data.GetEnumerator()) {
+        $targetName = [string]$entry.Key
+        $isEnvironmentPrefixed = $false
+        foreach ($candidate in $prefixCandidates) {
+            if ($targetName.StartsWith($candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $isEnvironmentPrefixed = $true
+                break
+            }
+        }
+
+        if ($isEnvironmentPrefixed -or [string]::IsNullOrWhiteSpace($targetName) -or $null -eq $entry.Value) {
+            continue
+        }
+
+        $valueText = ConvertTo-ValueText $entry.Value
+        if ([string]::IsNullOrWhiteSpace($valueText)) {
+            continue
+        }
+
+        $targetNames = @($targetName)
+        if ($aliasTargets.ContainsKey($targetName)) {
+            $targetNames += $aliasTargets[$targetName]
+        }
+
+        foreach ($name in ($targetNames | Select-Object -Unique)) {
+            if (-not [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($name))) {
+                continue
+            }
+
+            [System.Environment]::SetEnvironmentVariable($name, $valueText)
+            Write-GitHubEnv -name $name -value $valueText
+            if ($source.IsSensitive) {
+                Write-Output "::add-mask::$valueText"
+            }
+
+            $setCount++
+            Write-Host "Mapped unprefixed $($source.Name) '$targetName' -> '$name'"
         }
     }
 }

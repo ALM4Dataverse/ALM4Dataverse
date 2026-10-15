@@ -52,7 +52,8 @@ workflows, and offers shared BUILD deployment validation with an optional baseli
 
 > [!IMPORTANT]
 > Verify plan compatibility and the generated protection rules. Setup selects
-> `environment-approval` when it detects support, or prefixed repository variables plus
+> `environment-approval` when it detects support, or repository variables (optionally
+> environment-prefixed) plus
 > `manual-gate-tag` otherwise. The fallback still stores client secrets in the matching
 > GitHub environment; it does not make private GitHub Free repositories a fully supported
 > out-of-the-box configuration.
@@ -131,7 +132,7 @@ The complete settings are maintained in one [credential reference](../config/git
 | --- | --- |
 | Environment values with WIF | [WIF settings and subjects](../config/github-secrets.md#approach-1-workload-identity-federation-oidc) |
 | Environment values with a client secret | [Client-secret settings](../config/github-secrets.md#approach-2-github-environments-with-client-secret) |
-| Prefixed repository values | [Prefixes, aliases, and secrets](../config/github-secrets.md#approach-3-prefixed-repository-variables-and-secrets) |
+| Repository values | [Repository variables and secrets](../config/github-secrets.md#approach-3-repository-variables-and-secrets) |
 | Connection references and Dataverse variables | [Per-solution settings](../config/github-secrets.md#per-solution-connection-references) |
 | Custom secrets and process-owner keys | [Explicit mapping](../config/github-secrets.md#per-solution-environment-variable-values) |
 

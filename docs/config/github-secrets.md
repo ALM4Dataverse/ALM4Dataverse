@@ -5,7 +5,7 @@ the GitHub Actions integration. Follow the [configuration checklist](../setup/gi
 when adding an environment, and the [setup guide](../setup/github-setup.md) for initial setup.
 
 Make three separate choices: how the app authenticates (WIF or client secret), where
-values are stored (environment or prefixed repository values), and how promotion is
+values are stored (environment or repository values), and how promotion is
 controlled (environment approval or manual gate tags). Storage location does not determine
 authentication or grant approval capabilities.
 
@@ -21,7 +21,7 @@ authentication or grant approval capabilities.
 | Choice | Recommended starting point | Alternative |
 | --- | --- | --- |
 | Authentication | WIF/OIDC, with no client secret | Client secret when federation is unavailable |
-| Settings storage | GitHub environment variables and explicitly selected secrets | Prefixed repository variables and explicitly mapped repository secrets |
+| Settings storage | GitHub environment variables and explicitly selected secrets | Repository variables (optional environment prefix) and explicitly mapped repository secrets |
 | Promotion | Environment approvals where the repository supports required reviewers | Manual dispatch with same-build predecessor gate tags |
 
 > [!IMPORTANT]
@@ -31,7 +31,7 @@ authentication or grant approval capabilities.
 > the appropriate Enterprise capability. Check [environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments#prerequisites)
 > and [protection-rule availability](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments).
 >
-> Prefixed values do not remove the shipped jobs' environment dependency; setup also
+> Repository values do not remove the shipped jobs' environment dependency; setup also
 > stores client secrets there. Use a supported plan, or explicitly adapt jobs, secret
 > storage, and OIDC subjects together for an environment-free workflow.
 
@@ -51,9 +51,10 @@ GitHub environment approvals and configures credentials accordingly:
   - Generates deploy stages with `promotion-mode: environment-approval`
 
 - **Fallback mode** (approvals unavailable)
-  - Stores non-sensitive settings as prefixed repository variables
+  - Stores non-sensitive settings as repository variables, optionally prefixed by environment
   - Stores any client secret in its matching GitHub environment
-  - Uses derived variable prefixes such as `DEV_MAIN_`, `TEST_`, `PROD_` (or `PREFIX_`)
+  - Supports derived variable prefixes such as `DEV_MAIN_`, `TEST_`, and `PROD_`; prefixes are optional
+  - Detects existing unprefixed repository credentials and keeps them unprefixed when setup is rerun
   - Generates deploy stages with `promotion-mode: manual-gate-tag` and manual dispatch from stage 1 onward
 
 You can still change either mode manually after setup by editing your workflow YAML
@@ -155,10 +156,10 @@ first because other repository consumers that trust legacy subjects may need upd
 > remove `environment` from a custom job, configure the corresponding branch or PR
 > subject instead. Changing only secret locations does not change the OIDC subject.
 
-**Approach 3 (prefixed repository variables) — WIF subject:**
+**Approach 3 (repository variables with optional prefixes) — WIF subject:**
 
 The copied caller jobs still run in a GitHub environment context when using
-prefixed repository variables:
+repository variables:
 
 - `EXPORT.yml` / `IMPORT.yml`: default environment is `Dev-{branch}`
 - `DEPLOY-main.yml`: uses the target environment name (for example `TEST-main`, `PROD`)
@@ -227,9 +228,9 @@ general way to clear an existing Dataverse value with an empty string.
 
 > [!NOTE]
 > **Advanced: custom process owners.** For `serviceAccountUpnConfigKey = 'ContosoFlowOwner'`,
-> supply `CONTOSOFLOWOWNER` in the caller's `env` mapping or as a prefixed variable such
-> as `TEST_MAIN_CONTOSOFLOWOWNER`. Arbitrary unprefixed custom variables are not
-> automatically mapped by `vars-json`.
+> supply `CONTOSOFLOWOWNER` in the caller's `env` mapping or as a repository variable.
+> Prefix the variable with the active environment name (for example,
+> `TEST_MAIN_CONTOSOFLOWOWNER`) to override an unprefixed repository value.
 
 ### Example: complete Dev-main environment (WIF)
 
@@ -287,24 +288,26 @@ individual secrets and explicitly map them in `secrets-json`.
 
 ---
 
-## Approach 3: Prefixed repository variables and secrets
+## Approach 3: Repository variables and secrets
 
-Store non-sensitive configuration as prefixed repository variables and genuine secrets
-as prefixed repository secrets (Settings > Secrets and variables > Actions). This manual
-approach does not require storing values in GitHub environments.
+Store non-sensitive configuration as repository variables and genuine secrets as
+repository secrets (Settings > Secrets and variables > Actions). This manual approach
+does not require storing values in GitHub environments. Variable names may be unprefixed
+or use an environment-specific prefix; when both are defined, the active environment's
+prefixed value takes precedence.
 
-The composite actions automatically map prefixed variable names to the unprefixed runtime
-variables expected by the PowerShell scripts. Prefixed repository secrets are not
-auto-discovered; explicitly map each one to its runtime name in each workflow's
+The composite actions automatically map repository variables to runtime variables
+expected by the PowerShell scripts. Environment-specific prefixes are optional and are
+removed during mapping; when both prefixed and unprefixed values exist, the prefixed value
+wins. Repository secrets are not auto-discovered; explicitly map each one to its runtime name in each workflow's
 `secrets-json` input using `toJSON(secrets.PREFIXED_SECRET_NAME)`.
 
-Use an environment-specific prefix in each name.  The recommended prefix format is
+When using an environment-specific prefix, the recommended format is
 `{ENV}_{BRANCH}_` for branch-scoped environments or `{ENV}_` for shared environments.
 
-Mapping uses either:
-
-- A derived prefix from the effective environment name (for example `Dev-main` → `DEV_MAIN_`)
-- Or the literal fallback prefix `PREFIX_`
+Environment-prefixed variables use the effective environment name (for example
+`Dev-main` → `DEV_MAIN_`). The prefix is optional; unprefixed variables fill values not
+provided for the active environment.
 
 Examples in the tables below use `TEST_MAIN_` (for `TEST-main` environment) and
 `PROD_` (for `PROD` environment).  Adjust to match your environment names.
@@ -335,8 +338,8 @@ object that maps each connection reference schema name to its connection ID:
 
 ### Individual Dataverse environment-variable values
 
-Store non-sensitive values in individual prefixed repository variables, such as
-`TEST_MAIN_DataverseEnvVar_contoso_APIEndpoint`. Store sensitive values in individual
+Store non-sensitive values in individual repository variables, optionally using an
+environment prefix such as `TEST_MAIN_DataverseEnvVar_contoso_APIEndpoint`. Store sensitive values in individual
 prefixed repository secrets and map each one to its `DataverseEnvVar_<schema_name>`
 runtime name in `secrets-json`.
 
@@ -381,13 +384,13 @@ The ALM4Dataverse PowerShell scripts use the following OS environment variables:
 
 | OS env var | Source |
 | --- | --- |
-| `AZURE_CLIENT_ID` | GitHub environment variable, or auto-mapped from prefixed repo variable |
-| `AZURE_TENANT_ID` | GitHub environment variable, or auto-mapped from prefixed repo variable |
+| `AZURE_CLIENT_ID` | GitHub environment variable, or auto-mapped from an unprefixed or environment-prefixed repository variable |
+| `AZURE_TENANT_ID` | GitHub environment variable, or auto-mapped from an unprefixed or environment-prefixed repository variable |
 | `AZURE_CLIENT_SECRET` | Explicitly passed in `secrets-json` from the selected repository or GitHub environment secret |
-| `DATAVERSE_URL` | GitHub environment variable, or auto-mapped from prefixed repo variable |
-| `DATAVERSESERVICEACCOUNTUPN` | GitHub environment variable, or auto-mapped from prefixed repo variable |
-| `DataverseConnRef_<name>` | GitHub environment variable (direct), prefixed repo variable auto-mapped, **or** expanded from prefixed JSON |
-| `DataverseEnvVar_<name>` | Direct variable, prefixed repository variable, or explicitly selected secret |
+| `DATAVERSE_URL` | GitHub environment variable, or auto-mapped from an unprefixed or environment-prefixed repository variable |
+| `DATAVERSESERVICEACCOUNTUPN` | GitHub environment variable, or auto-mapped from an unprefixed or environment-prefixed repository variable |
+| `DataverseConnRef_<name>` | GitHub environment variable (direct), repository variable auto-mapped, **or** expanded from connection-reference JSON |
+| `DataverseEnvVar_<name>` | Direct or repository variable (unprefixed or environment-prefixed), or explicitly selected secret |
 
 The composite actions use one `azure/login@v3` step for both credential flows. When
 `AZURE_CLIENT_SECRET` is absent, Azure Login uses `AZURE_CLIENT_ID` and
@@ -400,13 +403,13 @@ Login's `creds` JSON input, and `DefaultAzureCredential` also uses
 
 1. Explicit nonempty `secrets-json` entries set their exact runtime names, overriding existing values.
 2. Existing nonempty runtime values are preserved when variables are mapped.
-3. Direct standard variables, `DataverseConnRef_*`, and `DataverseEnvVar_*` are mapped.
-4. Prefixed variables fill remaining unset values.
+3. Environment-specific prefixed variables fill unset values.
+4. Unprefixed variables fill remaining unset values.
 
 The prefix is the effective environment name, uppercased, with runs of non-alphanumeric
 characters replaced by `_`, plus a trailing `_`: `TEST-main` becomes `TEST_MAIN_`.
-The literal `PREFIX_` prefix is also accepted. Avoid defining the same target under both
-prefixes: iteration order is not a precedence guarantee.
+When both prefixed and unprefixed values target the same runtime variable, the
+environment-specific value takes precedence.
 
 For prefixed variables, `DATAVERSE_SERVICE_ACCOUNT_UPN` also populates
 `DATAVERSESERVICEACCOUNTUPN`, and `DATAVERSE_CONN_REFS` also populates

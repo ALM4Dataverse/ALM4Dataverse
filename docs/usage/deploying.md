@@ -113,7 +113,7 @@ separately with the same build identity.
   artifact if the Release asset is unavailable. Azure DevOps downloads the
   selected pipeline artifact.
 - **The name of the deployment job matches the release number.**
-- **Environment settings are read from the configuration associated with the environment** (Azure DevOps: variable group; GitHub Actions: GitHub environment values or prefixed repository variables; secrets are selected explicitly in `secrets-json`), matching with those required by each solution.
+- **Environment settings are read from the configuration associated with the environment** (Azure DevOps: variable group; GitHub Actions: GitHub environment values or repository variables, with optional environment prefixes; secrets are selected explicitly in `secrets-json`), matching with those required by each solution.
 - **Solutions are deployed if needed in the configured dependency order**:
   - If the solution is already present with the same version, the import is skipped.
   - If the solution is not currently present in the environment, the 'Import' method is used

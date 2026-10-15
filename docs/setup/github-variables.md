@@ -33,7 +33,7 @@ Alternatively, create an expiring client secret and record a rotation owner/date
 Both methods can use environment values or explicitly mapped repository values.
 
 Check [plan restrictions](github-setup.md#github-licence-limitations) first.
-Prefixed repository values do not remove the shipped jobs' dependency on GitHub environments.
+Repository values do not remove the shipped jobs' dependency on GitHub environments.
 
 ### Environment Values
 
@@ -47,11 +47,12 @@ Dataverse values as individual secrets. Every secret must be named explicitly in
 the action's `secrets-json` mapping; use the
 [mapping example](../config/github-secrets.md#per-solution-environment-variable-values).
 
-### Prefixed Repository Values
+### Repository Values (Optional Environment Prefix)
 
-In **Settings > Secrets and variables > Actions**, use the environment-derived prefix,
-for example `TEST_MAIN_` for `TEST-main`. Store non-sensitive settings as variables.
-Use the [prefixed reference](../config/github-secrets.md#approach-3-prefixed-repository-variables-and-secrets)
+In **Settings > Secrets and variables > Actions**, non-sensitive settings can be named
+with or without the environment-derived prefix, for example `TEST_MAIN_` for `TEST-main`.
+When both are defined, the environment-prefixed value takes precedence.
+Use the [repository variable reference](../config/github-secrets.md#approach-3-repository-variables-and-secrets)
 for exact names and supported aliases. Store secrets either in the selected GitHub
 environment or as prefixed repository secrets explicitly mapped to unprefixed runtime names.
 
