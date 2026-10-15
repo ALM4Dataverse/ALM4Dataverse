@@ -4,7 +4,7 @@ BeforeAll {
     function Compress-DataverseSolutionFile {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
-        param($Path, $OutputPath, $PackageType)
+        param($Path, $OutputPath, $PackageType, $MappingFile)
     }
     function Invoke-TestDotnet {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
@@ -12,7 +12,7 @@ BeforeAll {
     }
     function Invoke-TestPac {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
-        param($Verb, $Operation)
+        param($Verb, $Operation, [Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
     }
 }
 
@@ -25,11 +25,13 @@ Describe 'Build artifacts and solution-check helpers' {
             ALM_BUILD_TEST_MODULE_PATH      = $env:ALM_BUILD_TEST_MODULE_PATH
             ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND
             ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED
+            ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE = $env:ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE
         }
         $env:ALM_BUILD_TEST_REAL_PARALLEL = $null
         $env:ALM_BUILD_TEST_MODULE_PATH = $null
         $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = $null
         $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = $null
+        $env:ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE = $null
         $script:savedExitCode = $global:LASTEXITCODE
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:sourceDirectory = Join-Path $fixtureRoot 'source'
@@ -71,6 +73,9 @@ Describe 'Build artifacts and solution-check helpers' {
                 $InputObject | Microsoft.PowerShell.Core\ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel $Parallel
             }
             else {
+                if ($null -ne $Parallel -and $null -ne $InputObject -and $InputObject.PSObject.Properties['CommandName']) {
+                    $env:ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE = 'true'
+                }
                 $InputObject | Microsoft.PowerShell.Core\ForEach-Object -Process $Parallel
             }
         } -ParameterFilter { $null -ne $Parallel -and $env:ALM_BUILD_TEST_REAL_PARALLEL -ne 'true' }
@@ -81,6 +86,7 @@ Describe 'Build artifacts and solution-check helpers' {
             [Environment]::SetEnvironmentVariable($name, $script:savedEnvironment[$name])
         }
         $global:LASTEXITCODE = $script:savedExitCode
+        Remove-Variable -Name ALM_BUILD_TEST_PAC_PACK_ARGUMENTS -Scope Global -ErrorAction SilentlyContinue
     }
 
     It 'packs solutions, copies assets/configuration, and locks actual installed versions' {
@@ -151,6 +157,193 @@ Describe 'Build artifacts and solution-check helpers' {
         { Get-AlmBuildSetting -Config @{ build = 'invalid' } } | Should -Throw '*build must be a hashtable*'
         { Get-AlmBuildSetting -Config @{ build = @{ parallel = 'false' } } } | Should -Throw '*build.parallel*'
         { Get-AlmBuildSetting -Config @{ build = @{ maxParallel = 9 } } } | Should -Throw '*build.maxParallel*'
+    }
+
+    It 'runs build commands in parallel by default before packing' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        buildCommands = @(
+            @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first') }
+            @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'second') }
+        )
+    })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+        $env:ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE | Should -Be 'true'
+        Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly
+    }
+
+    It 'runs an individually sequential build command without a nested parallel stage' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        buildCommands = @(
+            @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first'); parallel = $false }
+        )
+    })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+        Should -Invoke ForEach-Object -Times 1 -Exactly -ParameterFilter { $null -ne $Parallel -and $ThrottleLimit -eq 2 }
+        Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly
+    }
+
+    It 'fails the build when a configured build command exits unsuccessfully' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        buildCommands = @(
+            @{ executable = 'cmd.exe'; arguments = @('/c', 'exit', '7'); parallel = $false }
+        )
+    })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw "*Build command 'command 1' failed for solution 'Example'*"
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+    }
+
+    It 'rejects malformed build command arguments before running commands' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        buildCommands = @(@{ executable = 'cmd.exe'; arguments = 'build' })
+    })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*arguments for solution ''Example'' must be an array of strings*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+    }
+
+    It 'runs configured parallel build commands concurrently within the build limit' {
+        $barrierDirectory = Join-Path $TestDrive 'build-command-barrier'
+        New-Item -ItemType Directory -Path $barrierDirectory -Force | Out-Null
+        $commandWorkerScript = Join-Path $TestDrive 'build-command-worker.ps1'
+        Set-Content -LiteralPath $commandWorkerScript -Value @'
+param([string]$BarrierDirectory, [string]$Name)
+$marker = Join-Path $BarrierDirectory "$Name.started"
+Set-Content -LiteralPath $marker -Value started
+$deadline = [datetime]::UtcNow.AddSeconds(10)
+while ([datetime]::UtcNow -lt $deadline) {
+    if ((Test-Path (Join-Path $BarrierDirectory 'First.started')) -and (Test-Path (Join-Path $BarrierDirectory 'Second.started'))) {
+        exit 0
+    }
+    Start-Sleep -Milliseconds 25
+}
+throw "Build command '$Name' did not overlap with the other command."
+'@
+        $packModulePath = Join-Path $TestDrive 'Rnwood.Dataverse.Data.PowerShell.psm1'
+        Set-Content -LiteralPath $packModulePath -Value @'
+function Compress-DataverseSolutionFile {
+    param($Path, $OutputPath, $PackageType)
+    Set-Content -LiteralPath $OutputPath -Value packed
+}
+Export-ModuleMember -Function Compress-DataverseSolutionFile
+'@
+        $commandExecutable = Join-Path $PSHOME 'pwsh.exe'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @"
+@{
+    solutions = @(@{
+        name = 'Example'
+        buildCommands = @(
+            @{ executable = '$commandExecutable'; arguments = @('-NoProfile', '-File', '$commandWorkerScript', '$barrierDirectory', 'First') }
+            @{ executable = '$commandExecutable'; arguments = @('-NoProfile', '-File', '$commandWorkerScript', '$barrierDirectory', 'Second') }
+        )
+    })
+    assets = @('data')
+    hooks = @{}
+}
+"@
+        $previousRealParallelSetting = $env:ALM_BUILD_TEST_REAL_PARALLEL
+        $previousModulePath = $env:ALM_BUILD_TEST_MODULE_PATH
+        try {
+            $env:ALM_BUILD_TEST_MODULE_PATH = $packModulePath
+            $env:ALM_BUILD_TEST_REAL_PARALLEL = 'true'
+            & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+        }
+        finally {
+            $env:ALM_BUILD_TEST_REAL_PARALLEL = $previousRealParallelSetting
+            $env:ALM_BUILD_TEST_MODULE_PATH = $previousModulePath
+        }
+
+        Test-Path (Join-Path $script:artifactDirectory 'solutions/Example.zip') | Should -BeTrue
+    }
+
+    It 'fails before packing when the installed module lacks mapping support' {
+        $mappingPath = Join-Path $script:sourceDirectory 'solutions/Example/Mapping.xml'
+        Set-Content -LiteralPath $mappingPath -Value '<Mapping />'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; mappingFile = 'solutions/Example/Mapping.xml' })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*requires a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+        Should -Invoke Invoke-TestPac -Times 0 -Exactly
+    }
+
+    It 'uses the pack cmdlet mapping parameter when the installed module supports it' {
+        $mappingPath = Join-Path $script:sourceDirectory 'solutions/Example/Mapping.xml'
+        Set-Content -LiteralPath $mappingPath -Value '<Mapping />'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; mappingFile = 'solutions/Example/Mapping.xml' })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        Mock Get-Command {
+            [pscustomobject]@{
+                Name = 'Compress-DataverseSolutionFile'
+                Parameters = @{ MappingFile = [pscustomobject]@{ Name = 'MappingFile' } }
+            }
+        } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
+
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+        Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { $MappingFile -eq $mappingPath }
+        Should -Invoke Invoke-TestPac -Times 0 -Exactly
+    }
+
+    It 'rejects a missing solution mapping file before packing' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; mappingFile = 'solutions/Example/Missing.xml' })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        Mock Get-Command {
+            [pscustomobject]@{
+                Name = 'Compress-DataverseSolutionFile'
+                Parameters = @{ MappingFile = [pscustomobject]@{ Name = 'MappingFile' } }
+            }
+        } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*Mapping file not found for solution*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
     }
 
     It 'packs sequentially when build parallelization is disabled' {

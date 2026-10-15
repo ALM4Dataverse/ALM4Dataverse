@@ -75,6 +75,121 @@ function Get-AlmBuildSetting {
     return $settings
 }
 
+function Get-SolutionBuildCommandPlan {
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][array]$Solutions,
+        [Parameter(Mandatory)][string]$SourceDirectory
+    )
+
+    $plans = [System.Collections.Generic.List[object]]::new()
+    for ($solutionIndex = 0; $solutionIndex -lt $Solutions.Count; $solutionIndex++) {
+        $solution = $Solutions[$solutionIndex]
+        if (-not $solution.ContainsKey('buildCommands') -or $null -eq $solution.buildCommands) {
+            continue
+        }
+        if ($solution.buildCommands -isnot [array]) {
+            throw "buildCommands for solution '$($solution.name)' must be an array."
+        }
+
+        $groupIndex = -1
+        $previousParallel = $null
+        for ($commandIndex = 0; $commandIndex -lt $solution.buildCommands.Count; $commandIndex++) {
+            $command = $solution.buildCommands[$commandIndex]
+            if ($command -isnot [hashtable]) {
+                throw "Each buildCommands entry for solution '$($solution.name)' must be a hashtable."
+            }
+            if (-not $command.ContainsKey('executable') -or $command.executable -isnot [string] -or [string]::IsNullOrWhiteSpace($command.executable)) {
+                throw "Each buildCommands entry for solution '$($solution.name)' must have a non-empty executable string."
+            }
+
+            $arguments = @()
+            if ($command.ContainsKey('arguments') -and $null -ne $command.arguments) {
+                if ($command.arguments -isnot [array] -or @($command.arguments | Where-Object { $_ -isnot [string] }).Count -gt 0) {
+                    throw "buildCommands arguments for solution '$($solution.name)' must be an array of strings."
+                }
+                $arguments = @($command.arguments)
+            }
+
+            $parallel = $true
+            if ($command.ContainsKey('parallel') -and $null -ne $command.parallel) {
+                $parallel = $command.parallel
+            }
+            if ($parallel -isnot [bool]) {
+                throw "buildCommands parallel for solution '$($solution.name)' must be `$true or `$false."
+            }
+            if ($null -eq $previousParallel -or $previousParallel -ne $parallel) {
+                $groupIndex++
+                $previousParallel = $parallel
+            }
+
+            $workingDirectory = $SourceDirectory
+            if ($command.ContainsKey('workingDirectory') -and $null -ne $command.workingDirectory) {
+                if ($command.workingDirectory -isnot [string]) {
+                    throw "buildCommands workingDirectory for solution '$($solution.name)' must be a relative path string."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($command.workingDirectory)) {
+                    if ([System.IO.Path]::IsPathRooted($command.workingDirectory)) {
+                        throw "buildCommands workingDirectory for solution '$($solution.name)' must be relative to the repository root."
+                    }
+                    $workingDirectory = [System.IO.Path]::GetFullPath((Join-Path $SourceDirectory $command.workingDirectory))
+                }
+            }
+            if (-not (Test-Path -LiteralPath $workingDirectory -PathType Container)) {
+                throw "buildCommands workingDirectory for solution '$($solution.name)' was not found: $workingDirectory"
+            }
+
+            $commandName = "command $($commandIndex + 1)"
+            if ($command.ContainsKey('name') -and $command.name -is [string] -and -not [string]::IsNullOrWhiteSpace($command.name)) {
+                $commandName = $command.name
+            }
+            $plans.Add([pscustomobject]@{
+                SolutionIndex    = $solutionIndex
+                SolutionName     = [string]$solution.name
+                CommandIndex     = $commandIndex
+                CommandName      = $commandName
+                Executable       = $command.executable
+                Arguments        = [string[]]$arguments
+                WorkingDirectory = $workingDirectory
+                Parallel         = $parallel
+                GroupIndex       = $groupIndex
+            })
+        }
+    }
+    return $plans.ToArray()
+}
+
+function Invoke-SolutionBuildCommand {
+    param([Parameter(Mandatory)][pscustomobject]$Plan)
+
+    $output = @()
+    $errorMessage = ''
+    $exitCode = 0
+    Push-Location -LiteralPath $Plan.WorkingDirectory
+    try {
+        $arguments = [string[]]$Plan.Arguments
+        $output = @(& $Plan.Executable @arguments 2>&1 | ForEach-Object { [string]$_ })
+        $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode) { $exitCode = 0 }
+        if ($exitCode -ne 0) {
+            $errorMessage = "Command exited with code $exitCode."
+        }
+    }
+    catch {
+        $errorMessage = ($_ | Out-String).TrimEnd()
+    }
+    finally {
+        Pop-Location
+    }
+
+    return [pscustomobject]@{
+        SolutionName = $Plan.SolutionName
+        CommandName  = $Plan.CommandName
+        Output       = $output
+        ErrorMessage = $errorMessage
+    }
+}
+
 function New-SolutionCheckSeverityCount {
     return [ordered]@{
         Critical      = 0
@@ -575,23 +690,122 @@ Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }
 
-$packPlans = @(
-    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
-        $solutionName = [string]$config.solutions[$index].name
-        [pscustomobject]@{
-            Index        = $index
-            SolutionName = $solutionName
-            Path         = Join-Path $SourceDirectory "solutions/$solutionName"
-            OutputPath   = Join-Path $ArtifactStagingDirectory "solutions/$solutionName.zip"
-        }
-    }
-)
-$null = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
+$packCommand = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
 $packModule = Get-Module -Name 'Rnwood.Dataverse.Data.PowerShell' | Select-Object -First 1
 if ($null -eq $packModule) {
     Write-Host "##[error]Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
     throw "Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
 }
+$packSupportsMappingFile = $null -ne $packCommand.PSObject.Properties['Parameters'] -and $packCommand.Parameters.ContainsKey('MappingFile')
+$mappedSolutions = @($config.solutions | Where-Object {
+    $_ -is [hashtable] -and $_.ContainsKey('mappingFile') -and
+        $null -ne $_.mappingFile -and -not [string]::IsNullOrWhiteSpace([string]$_.mappingFile)
+})
+if ($mappedSolutions.Count -gt 0 -and -not $packSupportsMappingFile) {
+    throw "Solution mappingFile requires a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile. Update scriptDependencies in alm-config.psd1 to the compatible module version."
+}
+
+$buildCommandPlans = @(Get-SolutionBuildCommandPlan -Solutions $config.solutions -SourceDirectory $SourceDirectory)
+if ($buildCommandPlans.Count -gt 0) {
+    $lastGroupIndex = ($buildCommandPlans | Measure-Object -Property GroupIndex -Maximum).Maximum
+    for ($groupIndex = 0; $groupIndex -le $lastGroupIndex; $groupIndex++) {
+        $groupPlans = @($buildCommandPlans | Where-Object { $_.GroupIndex -eq $groupIndex } | Sort-Object SolutionIndex, CommandIndex)
+        $parallelPlans = @($groupPlans | Where-Object { $_.Parallel })
+        $sequentialPlans = @($groupPlans | Where-Object { -not $_.Parallel })
+        $groupResults = @()
+
+        if (-not $buildSettings.parallel) {
+            $parallelPlans = @()
+            $sequentialPlans = $groupPlans
+        }
+
+        if ($parallelPlans.Count -gt 0) {
+            Write-Host "##[section]Running $($parallelPlans.Count) parallel build command(s) with max parallelism $($buildSettings.maxParallel)"
+            if ($parallelPlans.Count -eq 1) {
+                $groupResults += Invoke-SolutionBuildCommand -Plan $parallelPlans[0]
+            }
+            else {
+                $groupResults += @($parallelPlans | ForEach-Object -ThrottleLimit $buildSettings.maxParallel -Parallel {
+                    $plan = $_
+                    $ErrorActionPreference = 'Stop'
+                    $output = @()
+                    $errorMessage = ''
+                    $exitCode = 0
+                    Push-Location -LiteralPath $plan.WorkingDirectory
+                    try {
+                        $arguments = [string[]]$plan.Arguments
+                        $output = @(& $plan.Executable @arguments 2>&1 | ForEach-Object { [string]$_ })
+                        $exitCode = $LASTEXITCODE
+                        if ($null -eq $exitCode) { $exitCode = 0 }
+                        if ($exitCode -ne 0) {
+                            $errorMessage = "Command exited with code $exitCode."
+                        }
+                    }
+                    catch {
+                        $errorMessage = ($_ | Out-String).TrimEnd()
+                    }
+                    finally {
+                        Pop-Location
+                    }
+                    [pscustomobject]@{
+                        SolutionIndex = $plan.SolutionIndex
+                        CommandIndex  = $plan.CommandIndex
+                        SolutionName  = $plan.SolutionName
+                        CommandName   = $plan.CommandName
+                        Output        = $output
+                        ErrorMessage  = $errorMessage
+                    }
+                } | Sort-Object SolutionIndex, CommandIndex)
+            }
+        }
+
+        foreach ($plan in $sequentialPlans) {
+            $groupResults += Invoke-SolutionBuildCommand -Plan $plan
+        }
+
+        foreach ($result in $groupResults) {
+            Write-Host "##[group]Build command: $($result.SolutionName) / $($result.CommandName)"
+            foreach ($line in $result.Output) {
+                Write-Host "[$($result.SolutionName)][Build:$($result.CommandName)] $line"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($result.ErrorMessage)) {
+                Write-Host "##[error][$($result.SolutionName)][Build:$($result.CommandName)] $($result.ErrorMessage)"
+                Write-Host "##[endgroup]"
+                throw "Build command '$($result.CommandName)' failed for solution '$($result.SolutionName)': $($result.ErrorMessage)"
+            }
+            Write-Host "##[endgroup]"
+        }
+    }
+}
+
+$packPlans = @(
+    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
+        $solutionName = [string]$config.solutions[$index].name
+        $solutionPath = Join-Path $SourceDirectory "solutions/$solutionName"
+        $mappingFile = ''
+        if ($config.solutions[$index].ContainsKey('mappingFile') -and $null -ne $config.solutions[$index].mappingFile) {
+            if ($config.solutions[$index].mappingFile -isnot [string]) {
+                throw "mappingFile for solution '$solutionName' must be a relative path string."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($config.solutions[$index].mappingFile)) {
+                if ([System.IO.Path]::IsPathRooted($config.solutions[$index].mappingFile)) {
+                    throw "mappingFile for solution '$solutionName' must be relative to the repository root."
+                }
+                $mappingFile = [System.IO.Path]::GetFullPath((Join-Path $SourceDirectory $config.solutions[$index].mappingFile))
+                if (-not (Test-Path -LiteralPath $mappingFile -PathType Leaf)) {
+                    throw "Mapping file not found for solution '$solutionName': $mappingFile"
+                }
+            }
+        }
+        [pscustomobject]@{
+            Index        = $index
+            SolutionName = $solutionName
+            Path         = $solutionPath
+            OutputPath   = Join-Path $ArtifactStagingDirectory "solutions/$solutionName.zip"
+            MappingFile  = $mappingFile
+        }
+    }
+)
 
 if ($buildSettings.parallel) {
     $buildModulePath = if ($packModule.PSObject.Properties['Path']) { [string]$packModule.Path } else { '' }
@@ -608,10 +822,19 @@ if ($buildSettings.parallel) {
             }
             $output = @(
                 & {
-                    Compress-DataverseSolutionFile -Verbose `
-                        -Path $plan.Path `
-                        -OutputPath $plan.OutputPath `
-                        -PackageType Both
+                    if ([string]::IsNullOrWhiteSpace($plan.MappingFile)) {
+                        Compress-DataverseSolutionFile -Verbose `
+                            -Path $plan.Path `
+                            -OutputPath $plan.OutputPath `
+                            -PackageType Both
+                    }
+                    else {
+                        Compress-DataverseSolutionFile -Verbose `
+                            -Path $plan.Path `
+                            -OutputPath $plan.OutputPath `
+                            -PackageType Both `
+                            -MappingFile $plan.MappingFile
+                    }
                 } *>&1 | ForEach-Object { [string]$_ }
             )
             [pscustomobject]@{
@@ -649,10 +872,19 @@ else {
     foreach ($plan in $packPlans) {
         Write-Host "##[group]Building solution: $($plan.SolutionName)"
         Write-Host "Packing solution: $($plan.SolutionName) (Managed)"
-        Compress-DataverseSolutionFile -Verbose `
-            -Path $plan.Path `
-            -OutputPath $plan.OutputPath `
-            -PackageType Both
+        if ([string]::IsNullOrWhiteSpace($plan.MappingFile)) {
+            Compress-DataverseSolutionFile -Verbose `
+                -Path $plan.Path `
+                -OutputPath $plan.OutputPath `
+                -PackageType Both
+        }
+        else {
+            Compress-DataverseSolutionFile -Verbose `
+                -Path $plan.Path `
+                -OutputPath $plan.OutputPath `
+                -PackageType Both `
+                -MappingFile $plan.MappingFile
+        }
         Write-Host "##[endgroup]"
     }
 }

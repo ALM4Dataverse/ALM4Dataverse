@@ -116,6 +116,8 @@ solutions = @(
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
+- `mappingFile` (optional): SolutionPackager mapping XML path, relative to the repository root.
+- `buildCommands` (optional): Commands to run before packing this solution; see [Build Processing](#build-processing).
 
 `BUILD` packs both managed and unmanaged packages. `DEPLOY` selects the package using `deployUnmanaged`; `IMPORT` always selects unmanaged packages for every solution. Use managed deployment for controlled downstream environments unless you have a specific reason to retain unmanaged customizations.
 
@@ -165,11 +167,50 @@ build = @{
 
 | Setting | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `build.parallel` | Boolean | `$true` | Pack solutions concurrently; `$false` packs them sequentially. |
-| `build.maxParallel` | Integer, `1` to `8` | `2` | Maximum number of solutions packed at the same time. |
+| `build.parallel` | Boolean | `$true` | Run build commands and pack solutions concurrently; `$false` runs build commands and packing sequentially. |
+| `build.maxParallel` | Integer, `1` to `8` | `2` | Maximum concurrent build commands or solution packs within each stage. |
 
 Missing, null, or empty optional settings use the defaults; an explicit `$false`
 is preserved. Invalid types or out-of-range limits fail with a configuration error.
+
+Each solution can run one or more build commands before packaging and can specify a
+SolutionPackager mapping XML file. For example, compile a plugin project and map
+its output DLL into the solution:
+
+```powershell
+solutions = @(
+    @{
+        name = 'ContosoCore'
+        mappingFile = 'solutions/ContosoCore/Mapping.xml'
+        buildCommands = @(
+            @{
+                name = 'Build plugin'
+                executable = 'dotnet'
+                arguments = @('build', 'plugins/Contoso.Plugin/Contoso.Plugin.csproj', '--configuration', 'Release')
+                workingDirectory = '.'
+                parallel = $true
+            }
+        )
+    }
+)
+```
+
+`mappingFile` is passed to `pac solution pack --map` and must exist when packing
+starts. Its path is relative to the repository root. Build commands use an
+executable and an argument array (not a shell command string); each argument is
+passed as a distinct process argument. `workingDirectory` is optional and
+defaults to the repository root; relative working directories are resolved from
+that root. Mapping requires a version of `Rnwood.Dataverse.Data.PowerShell`
+that supports `Compress-DataverseSolutionFile -MappingFile`; BUILD fails early
+with an instruction to update the module dependency if that parameter is not
+available. This preserves the cmdlet's automatic `.msapp` folder preprocessing.
+
+Build commands are grouped by consecutive `parallel` values in their configured
+order. Commands in a parallel group run concurrently, limited by
+`build.maxParallel`; set an individual command's `parallel = $false` to run it
+sequentially with commands in its group. Groups execute in order, and all
+commands finish before solution packing begins. When `build.parallel = $false`,
+all commands run sequentially in solution and command order.
 
 ### Assets
 
