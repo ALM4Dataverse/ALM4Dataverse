@@ -549,7 +549,8 @@ Describe 'Generated Azure DevOps pipeline files' {
     BeforeAll {
         $script:azurePipelineSchemaPath = $env:AZURE_PIPELINES_SCHEMA
         $script:azurePipelineLanguageServicePath = $env:AZURE_PIPELINES_LANGUAGE_SERVICE
-        $script:nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
+        $nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+        $script:nodePath = if ($null -ne $nodeCommand) { $nodeCommand.Source } else { $null }
         $script:azurePipelineValidatorPath = Join-Path $repoRoot 'scripts/validate-azure-pipelines.js'
         if ($env:AZURE_PIPELINES_SCHEMA_REQUIRED -eq 'true' -and
             (-not $script:azurePipelineSchemaPath -or

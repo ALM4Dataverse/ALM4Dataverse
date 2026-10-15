@@ -41,8 +41,8 @@ and environment-specific values are supplied at runtime.
 - PowerShell hooks for configuration data, schema migrations, organization settings, and other build/export/deployment tasks.
 - Pinned module/PAC dependencies, cache-aware installation, and a per-build dependency lock.
 - Optional PAC Solution Checker and deployment validation, including a retained release or last-deployed environment baseline.
-- Branch-specific development and promotion workflows, with platform-specific approval, permission, and concurrency controls.
-- GitHub Release assets, ordered manual promotion or environment protection, deployment pointers, and branch-aware Release cleanup.
+- Branch-specific development and deployment workflows, with platform-specific approval, permission, and concurrency controls.
+- Branch-suffixed GitHub BUILD releases, deployment pointers, and branch-aware Release cleanup.
 
 > [!IMPORTANT]
 > ALM4Dataverse does not provision Dataverse environments, replace functional testing,

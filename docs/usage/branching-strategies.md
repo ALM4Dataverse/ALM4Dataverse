@@ -28,6 +28,17 @@ subject before using EXPORT/IMPORT. Feature environments are not created automat
 when you create a branch. A deployment caller is only needed if that branch must also
 promote numbered builds to downstream targets.
 
+BUILD versions use the configured `buildVersion.branches` MAJOR.MINOR value for the
+full branch name, or `buildVersion.default` when the branch has no entry. Add an
+entry when a branch begins a distinct release line; see the
+[SemVer settings](../config/alm-config.md#build-semver).
+
+> [!NOTE]
+> **Advanced: solution version mapping.** The branch MAJOR.MINOR also defines
+> the Dataverse solution `Major.Build` base. The solution `Minor` component
+> remains the non-additive upgrade counter, so a branch base change does not
+> change DEPLOY's update-versus-upgrade behavior.
+
 > [!NOTE]
 > **Advanced: branch-specific triggers.** GitHub dispatch-driven BUILD/DEPLOY definitions
 > must be present on the default branch. For a new deployment branch, update its dispatch

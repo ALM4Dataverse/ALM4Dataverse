@@ -16,29 +16,49 @@ flowchart LR
 
 The `BUILD` pipeline collates a numbered release by extracting and building the assets required to deploy from source control. This can then be used later to deploy to any number of environments using the exact same, unchanged assets. When configured, BUILD also deploys its generated artifacts to a Dataverse validation environment, exercising the deployment process before promotion. BUILD can additionally run PAC Solution Checker against packed solutions.
 
+## SemVer BUILD versions
+
+The shared configuration defaults `buildVersion.default` to `1.0`. Override
+that default or add full branch-name overrides in `alm-config.psd1` when
+branches need distinct version lines. See
+[BUILD SemVer configuration](../config/alm-config.md#build-semver) for details.
+
+> [!NOTE]
+> **Advanced: version and artifact identity.** BUILD uses the CI run number as
+> PATCH and the normalized branch name as the prerelease identifier; for example,
+> `2.1.42-main` or `1.0.43-feat-abc` for `feat/abc`. Slashes and other branch
+> punctuation become hyphens. The repository name remains in the displayed run
+> name, not in the SemVer version. All BUILD versions and source tags retain
+> this branch suffix; there is no stable build promotion workflow or pipeline.
+>
+> Every successful BUILD artifact includes `build-version.json`, which records
+> the version, source branch and commit, provider, and exact run ID. DEPLOY and
+> baseline validation consume the selected successful BUILD and its exact
+> provider-specific artifacts; they do not change or rebuild the package.
+
 ## Prerequisites And Outputs
 
 Run [EXPORT](exporting-changes.md) first if configured solution folders are not yet in source control. The `solutions` order must satisfy dependencies; configured asset paths must exist. Package-only BUILD does not require a Dataverse target, but Solution Checker and connected hooks need a suitable authenticated identity.
 
 | Platform | Build output | How DEPLOY selects it |
 | --- | --- | --- |
-| Azure DevOps | Pipeline artifact `artifacts`, optional `solution-check-report`, and a source version tag | The `build` pipeline resource, selected automatically or through **Run pipeline > Resources** |
-| GitHub Actions | Actions artifacts plus a successful build's GitHub Release assets and source tag | Exact Release tag, BUILD name, or numeric BUILD run ID; latest-successful selection is also available |
+| Azure DevOps | Pipeline artifact `artifacts`, optional `solution-check-report`, SemVer prerelease source tag, and `build-version.json` | The `build` pipeline resource, selected automatically or through **Run pipeline > Resources** |
+| GitHub Actions | Actions artifacts, successful BUILD prerelease assets, SemVer source tag, and `build-version.json` | Exact Release tag, BUILD name, or numeric BUILD run ID; latest-successful selection is also available |
 
 > [!NOTE]
 > The build/run identity is not the same as a solution version. Multiple solutions in one
 > build can have different versions, and several builds may reference one source commit.
-> Use the exact build identity when promoting or selecting a baseline.
+> Use the exact build identity when deploying or selecting a baseline.
 
 On GitHub Actions, each successful branch BUILD publishes the same separate
-deployment archives as both Actions artifacts and GitHub Release assets:
+deployment archives as both Actions artifacts and GitHub prerelease assets:
 
 - `artifacts.zip` — the deployment artifacts, including solutions, configured
   assets, scripts, configuration, and dependency locks.
 - `solution-check-report.zip` — published when a solution-check report exists.
 
-The Release is not a different deployment package. Existing Actions artifacts
-remain available for compatibility and fallback deployments.
+The prerelease assets and Actions artifacts contain the same deployment package.
+Both retain the branch-suffixed BUILD tag and version.
 
 The `BUILD` job triggers automatically when any changes are made in the associated repo, including when `EXPORT` completes (unless no changes were found). The copied GitHub workflow and Azure Pipeline trigger on pushes to branches; setting a repository's PR or branch policy to require successful validation is a separate configuration step.
 
@@ -49,6 +69,7 @@ GitHub EXPORT explicitly dispatches BUILD with the exported branch and SHA. Repo
 ```text
 artifacts/
   alm-config.psd1
+  build-version.json
   scriptDependencies.lock.json
   solutions/
     ContosoCore.zip
@@ -226,9 +247,9 @@ manually. Keep it on the default branch for scheduled runs. It operates only on 
 recognized by ALM4Dataverse build metadata, not arbitrary Releases.
 
 For existing branches it retains the newest `max-releases-per-branch` builds (default
-`10`), **plus Releases referenced by active annotated `deployed/<environment>` pointers**.
-For deleted branches it removes managed Releases except those protected by those pointers.
-The count can therefore exceed the configured cap.
+`10`), plus Releases referenced by active annotated `deployed/<environment>` pointers.
+For deleted branches it removes managed Releases except those protected by active
+pointers. The count can therefore exceed the configured cap.
 
 Before deleting a Release, cleanup creates an annotated
 `alm4dataverse/metadata/<release-tag>` tag containing branch, build name, source commit,

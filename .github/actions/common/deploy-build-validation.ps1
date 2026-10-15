@@ -74,6 +74,16 @@ function Resolve-CommitFromTagReference {
     return [string]$tagObject.sha
 }
 
+function Test-GitHubReleasePrerelease {
+    param([Parameter(Mandatory)][object]$Release)
+
+    if ($Release -is [System.Collections.IDictionary]) {
+        return $Release.Contains('prerelease') -and [bool]$Release['prerelease']
+    }
+    $property = $Release.PSObject.Properties['prerelease']
+    return $null -ne $property -and [bool]$property.Value
+}
+
 function Find-UniqueReleaseForCommit {
     param([Parameter(Mandatory)][string]$CommitSha)
 
@@ -84,6 +94,9 @@ function Find-UniqueReleaseForCommit {
             break
         }
         foreach ($release in $releases) {
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) {
+                continue
+            }
             try {
                 $metadata = Get-ReleaseInformation -Release $release
             }
@@ -96,6 +109,7 @@ function Find-UniqueReleaseForCommit {
             $matchingReleases += [pscustomobject]@{
                 RunId = $metadata.RunId
                 TagName = $metadata.TagName
+                Release = $release
             }
         }
     }
@@ -118,6 +132,9 @@ function Find-ReleaseForRunId {
             break
         }
         foreach ($release in $releases) {
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) {
+                continue
+            }
             try {
                 $metadata = Get-ReleaseInformation -Release $release
             }
@@ -128,6 +145,7 @@ function Find-ReleaseForRunId {
                 $matchingReleases += [pscustomobject]@{
                     RunId = $metadata.RunId
                     TagName = $metadata.TagName
+                    Release = $release
                 }
             }
         }

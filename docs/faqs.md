@@ -174,8 +174,14 @@ a clean environment reset, or a guarantee that obsolete unmanaged components dis
 ## Why Did EXPORT Produce No Commit Or No New Solution Version?
 
 An unchanged export produces no commit. Data/hook-only changes can produce a commit
-without changing a solution version. Additive solution changes increment the revision;
-non-additive changes increment minor and reset build/revision. See [versioning](usage/exporting-changes.md#version-increments).
+without changing a solution version. See
+[versioning](usage/exporting-changes.md#version-increments) for the solution version
+details.
+
+> [!NOTE]
+> The configured branch MAJOR.MINOR maps to the solution Major.Build base. A
+> mismatch resets the solution's Minor and Revision before the current export
+> increments Revision (additive) or Minor (non-additive).
 
 ## Why Was A Solution Skipped During Deployment?
 

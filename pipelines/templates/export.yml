@@ -102,7 +102,9 @@ stages:
                 -SourceDirectory "$(Pipeline.Workspace)/self" `
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)" `
                 -TempDirectory "$(Agent.TempDirectory)" `
-                -EnvironmentName "Dev-${{ variables['Build.SourceBranchName'] }}"
+                -EnvironmentName "Dev-${{ variables['Build.SourceBranchName'] }}" `
+                -BranchName "$(Build.SourceBranch)" `
+                -DefaultBranchName "$(Build.Repository.DefaultBranch)"
           displayName: 'Connect and Export Solutions'
           workingDirectory: '$(Pipeline.Workspace)/self'
           env:

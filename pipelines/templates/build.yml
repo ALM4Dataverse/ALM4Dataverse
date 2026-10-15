@@ -31,8 +31,19 @@ stages:
 
 
         - pwsh: |
-            write-host "##vso[build.updatebuildnumber]$(Build.Repository.Name)-$(Build.SourceBranchName)-$(Get-Date -format 'yyyy-MM-dd-HHmmss')"
-          displayName: 'Set Build Number'
+            $ErrorActionPreference = 'Stop'
+            . "$(Pipeline.Workspace)/alm/pipelines/scripts/common.ps1"
+            $config = Get-AlmConfig -BaseDirectory "$(Pipeline.Workspace)/self" -LogConfig $false
+            $version = Resolve-AlmBuildVersion `
+              -Config $config `
+              -BranchName "$(Build.SourceBranch)" `
+              -RunNumber "$(Build.BuildId)" `
+              -Provider azdo
+            Write-Host "##vso[build.updatebuildnumber]$(Build.Repository.Name)-$($version.Version)"
+            Write-Host "##vso[task.setvariable variable=BuildSemVer]$($version.Version)"
+            Write-Host "##vso[task.setvariable variable=BuildSemVerTag]$($version.TagName)"
+            Write-Host "Resolved BUILD version $($version.Version)"
+          displayName: 'Resolve BUILD SemVer and set run name'
 
         - task: PowerPlatformToolInstaller@2
           displayName: 'Install Power Platform Tools'
@@ -130,6 +141,22 @@ stages:
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)"
             displayName: 'Install Dependencies and Build artifacts'
             workingDirectory: '$(Pipeline.Workspace)/self'
+
+        - pwsh: |
+            $ErrorActionPreference = 'Stop'
+            . "$(Pipeline.Workspace)/alm/pipelines/scripts/common.ps1"
+            $config = Get-AlmConfig -BaseDirectory "$(Pipeline.Workspace)/self" -LogConfig $false
+            $version = Resolve-AlmBuildVersion `
+              -Config $config `
+              -BranchName "$(Build.SourceBranch)" `
+              -RunNumber "$(Build.BuildId)" `
+              -Provider azdo
+            Write-AlmBuildVersionInfo `
+              -ArtifactsPath "$(Build.ArtifactStagingDirectory)" `
+              -BuildVersion $version `
+              -RunId "$(Build.BuildId)" `
+              -SourceCommit "$(Build.SourceVersion)"
+          displayName: 'Record BUILD version metadata'
 
         - ${{ if ne(parameters.buildEnvironmentName, '') }}:
           - pwsh: |
@@ -260,27 +287,35 @@ stages:
 
         - pwsh: |
             $ErrorActionPreference = 'Stop'
-            $rawBuildNumber = '$(Build.BuildNumber)'
-            $sanitizedBuildNumber = $rawBuildNumber `
-              -replace '[^a-zA-Z0-9._/-]', '-' `
-              -replace '\.{2,}', '-' `
-              -replace '/{2,}', '/'
-            $sanitizedBuildNumber = $sanitizedBuildNumber.Trim('/', '.')
-            if ($sanitizedBuildNumber.EndsWith('.lock')) {
-              $sanitizedBuildNumber = $sanitizedBuildNumber -replace '\.lock$', '-lock'
+            $tagName = '$(BuildSemVerTag)'
+            if ($tagName -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[a-z0-9.-]+$') {
+              throw "Resolved BUILD tag '$tagName' is not a valid SemVer prerelease tag."
             }
-            if ([string]::IsNullOrWhiteSpace($sanitizedBuildNumber)) {
-              throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
-            }
-            $tagName = $sanitizedBuildNumber
-            Write-Host "Tagging source repository with build version $tagName"
+            Write-Host "Tagging source repository with build version $(BuildSemVer)"
             git config user.email "$(Build.RequestedForEmail)"
             if ($LASTEXITCODE -ne 0) { throw "git config user.email failed with exit code $LASTEXITCODE" }
             git config user.name "$(Build.RequestedFor)"
             if ($LASTEXITCODE -ne 0) { throw "git config user.name failed with exit code $LASTEXITCODE" }
-            git tag -a "$tagName" -m "Build version $sanitizedBuildNumber"
-            if ($LASTEXITCODE -ne 0) { throw "git tag failed with exit code $LASTEXITCODE" }
-            git push origin "$tagName"
-            if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+            $sourceCommit = (git rev-parse HEAD).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
+              throw "Could not resolve source commit for BUILD tag '$tagName'."
+            }
+            $existingRefs = @(git ls-remote --tags origin "refs/tags/$tagName" "refs/tags/$tagName^{}" 2>&1)
+            if ($LASTEXITCODE -ne 0) { throw "Could not query existing BUILD tag '$tagName'." }
+            if ($existingRefs.Count -gt 0) {
+              git fetch --force origin "refs/tags/${tagName}:refs/tags/${tagName}"
+              if ($LASTEXITCODE -ne 0) { throw "Could not fetch existing BUILD tag '$tagName'." }
+              $existingCommit = (git rev-list -n 1 "$tagName^{commit}").Trim()
+              if ($LASTEXITCODE -ne 0 -or $existingCommit -ine $sourceCommit) {
+                throw "BUILD tag '$tagName' already points to a different source commit."
+              }
+              Write-Host "BUILD tag '$tagName' already points to this source commit; continuing as an idempotent rerun."
+            }
+            else {
+              git tag -a "$tagName" -m "Build version $(BuildSemVer)"
+              if ($LASTEXITCODE -ne 0) { throw "git tag failed with exit code $LASTEXITCODE" }
+              git push origin "$tagName"
+              if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
+            }
           displayName: 'Tag Source with Build Version'
           workingDirectory: '$(Pipeline.Workspace)/self'

@@ -35,6 +35,9 @@ outputs:
   run-name:
     description: Exact build name used for deployment selection.
     value: ${{ inputs.build-name }}
+  build-version:
+    description: SemVer prerelease version assigned to this BUILD.
+    value: ${{ steps.resolve-version.outputs.version }}
   release-tag:
     description: Git tag used by the GitHub Release for this build.
     value: ${{ steps.tag-source.outputs.tag_name }}
@@ -51,6 +54,29 @@ runs:
         ref: ${{ inputs.source-ref != '' && inputs.source-ref || github.sha }}
         path: self
         fetch-depth: 1
+
+    - name: Resolve SemVer build version
+      id: resolve-version
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/self
+      env:
+        BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
+        BUILD_BRANCH_OVERRIDE: ${{ inputs.source-branch }}
+        GITHUB_REF_TYPE: ${{ github.ref_type }}
+        BUILD_RUN_NUMBER: ${{ github.run_number }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ([string]::IsNullOrWhiteSpace($env:BUILD_BRANCH_OVERRIDE) -and $env:GITHUB_REF_TYPE -ne 'branch') {
+          throw "BUILD SemVer requires a branch source; selected ref type is '$($env:GITHUB_REF_TYPE)'."
+        }
+        . "${{ github.action_path }}/../../../pipelines/scripts/common.ps1"
+        $config = Get-AlmConfig -BaseDirectory "${{ github.workspace }}/self" -LogConfig $false
+        $version = Resolve-AlmBuildVersion -Config $config -BranchName $env:BUILD_BRANCH -RunNumber $env:BUILD_RUN_NUMBER -Provider github
+        "version=$($version.Version)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "tag_name=$($version.TagName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+        "BUILD_VERSION=$($version.Version)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        "BUILD_TAG=$($version.TagName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        Write-Host "Resolved BUILD version $($version.Version)"
 
     - name: Resolve dependency cache keys
       id: dependency-cache
@@ -81,9 +107,11 @@ runs:
       shell: pwsh
       env:
         BUILD_NAME: ${{ inputs.build-name }}
+        BUILD_VERSION: ${{ steps.resolve-version.outputs.version }}
       run: |
         echo "BUILD_NUMBER=$env:BUILD_NAME" >> $env:GITHUB_ENV
         "run_name=$env:BUILD_NAME" >> $env:GITHUB_OUTPUT
+        "build_version=$env:BUILD_VERSION" >> $env:GITHUB_OUTPUT
         Write-Host "Exact build name: $env:BUILD_NAME"
 
     - name: Resolve prefixed repo variables and explicit secrets
@@ -119,6 +147,8 @@ runs:
       env:
         BUILD_ENVIRONMENT_NAME: ${{ inputs.environment-name }}
         GITHUB_TOKEN: ${{ github.token }}
+        BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
+        BUILD_RUN_NUMBER: ${{ github.run_number }}
       run: |
         $ErrorActionPreference = 'Stop'
         & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
@@ -128,6 +158,14 @@ runs:
         & "${{ github.action_path }}/../../../pipelines/scripts/build.ps1" `
           -SourceDirectory "${{ github.workspace }}/self" `
           -ArtifactStagingDirectory "${{ github.workspace }}/artifacts"
+        . "${{ github.action_path }}/../../../pipelines/scripts/common.ps1"
+        $config = Get-AlmConfig -BaseDirectory "${{ github.workspace }}/self" -LogConfig $false
+        $version = Resolve-AlmBuildVersion -Config $config -BranchName $env:BUILD_BRANCH -RunNumber '${{ github.run_number }}' -Provider github
+        Write-AlmBuildVersionInfo `
+          -ArtifactsPath (Join-Path $env:GITHUB_WORKSPACE 'artifacts') `
+          -BuildVersion $version `
+          -RunId '${{ github.run_id }}' `
+          -SourceCommit (git rev-parse HEAD).Trim()
 
         if (-not [string]::IsNullOrWhiteSpace($env:BUILD_ENVIRONMENT_NAME)) {
           if (-not [string]::IsNullOrWhiteSpace($env:DATAVERSE_CONNECTION_REFS)) {
@@ -173,19 +211,10 @@ runs:
       working-directory: ${{ github.workspace }}/self
       run: |
         $ErrorActionPreference = 'Stop'
-        $rawBuildNumber = $env:BUILD_NUMBER
-        $sanitizedBuildNumber = $rawBuildNumber `
-          -replace '[^a-zA-Z0-9._/-]', '-' `
-          -replace '\.{2,}', '-' `
-          -replace '/{2,}', '/'
-        $sanitizedBuildNumber = $sanitizedBuildNumber.Trim('/', '.')
-        if ($sanitizedBuildNumber.EndsWith('.lock')) {
-          $sanitizedBuildNumber = $sanitizedBuildNumber -replace '\.lock$', '-lock'
+        $tagName = $env:BUILD_TAG
+        if ($tagName -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)-[a-z0-9.-]+$') {
+          throw "Resolved BUILD tag '$tagName' is not a valid SemVer prerelease tag."
         }
-        if ([string]::IsNullOrWhiteSpace($sanitizedBuildNumber)) {
-          throw "Build number '$rawBuildNumber' cannot be converted to a valid git tag value"
-        }
-        $tagName = $sanitizedBuildNumber
         $tagRef = "refs/tags/$tagName"
         $sourceCommit = (git rev-parse HEAD).Trim()
         if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sourceCommit)) {
@@ -215,7 +244,7 @@ runs:
           Write-Host "Build tag '$tagName' already points to this source commit; continuing as an idempotent rerun."
         }
         else {
-          git tag -a "$tagName" -m "Build version $sanitizedBuildNumber"
+          git tag -a "$tagName" -m "Build version $env:BUILD_VERSION"
           if ($LASTEXITCODE -ne 0) { throw 'git tag failed' }
           git push origin "$tagName"
           if ($LASTEXITCODE -ne 0) { throw 'git push tag failed' }
@@ -273,7 +302,9 @@ runs:
       uses: actions/github-script@v7
       env:
         RELEASE_TAG: ${{ steps.tag-source.outputs.tag_name }}
-        RELEASE_NAME: ${{ steps.build-number.outputs.run_name }}
+        RELEASE_NAME: ${{ steps.resolve-version.outputs.version }}
+        BUILD_NAME: ${{ steps.build-number.outputs.run_name }}
+        BUILD_VERSION: ${{ steps.resolve-version.outputs.version }}
         BUILD_BRANCH: ${{ inputs.source-branch != '' && inputs.source-branch || github.ref_name }}
         BUILD_SOURCE_SHA: ${{ steps.tag-source.outputs.source_sha }}
         BUILD_RUN_ID: ${{ github.run_id }}
@@ -288,7 +319,8 @@ runs:
           const branchMarker = `<!-- alm4dataverse-build-branch:${encodeURIComponent(branchName)} -->`;
           const body = [
             branchMarker,
-            `Build: ${process.env.RELEASE_NAME}`,
+            `Build: ${process.env.BUILD_NAME}`,
+            `Version: ${process.env.BUILD_VERSION}`,
             `Branch: ${branchName}`,
             `Source commit: ${process.env.BUILD_SOURCE_SHA}`,
             `BUILD run: [${process.env.BUILD_RUN_ID}](${process.env.BUILD_RUN_URL})`
@@ -308,11 +340,11 @@ runs:
             if (!existingBody.includes(branchMarker) || !runMatch || runMatch[1] !== process.env.BUILD_RUN_ID || (commitMatch && commitMatch[1].toLowerCase() !== process.env.BUILD_SOURCE_SHA.toLowerCase())) {
               throw new Error(`Existing GitHub Release for tag ${tagName} is not owned by this BUILD run.`);
             }
-            release = (await github.rest.repos.updateRelease({ owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, name: process.env.RELEASE_NAME, body, draft: false, prerelease: false })).data;
+            release = (await github.rest.repos.updateRelease({ owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, name: process.env.RELEASE_NAME, body, draft: false, prerelease: true })).data;
           }
           catch (error) {
             if (error.status !== 404) throw error;
-            release = (await github.rest.repos.createRelease({ owner: context.repo.owner, repo: context.repo.repo, tag_name: tagName, target_commitish: process.env.BUILD_SOURCE_SHA, name: process.env.RELEASE_NAME, body, draft: false, prerelease: false })).data;
+            release = (await github.rest.repos.createRelease({ owner: context.repo.owner, repo: context.repo.repo, tag_name: tagName, target_commitish: process.env.BUILD_SOURCE_SHA, name: process.env.RELEASE_NAME, body, draft: false, prerelease: true })).data;
           }
 
           const existingAssets = await github.paginate(github.rest.repos.listReleaseAssets, { owner: context.repo.owner, repo: context.repo.repo, release_id: release.id, per_page: 100 });

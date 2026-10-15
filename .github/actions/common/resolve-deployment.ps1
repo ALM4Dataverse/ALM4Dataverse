@@ -254,6 +254,7 @@ function Find-LatestManagedReleaseForBranch {
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
             try { $metadata = Get-ReleaseInformation -Release $release } catch { continue }
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) { continue }
             if ($metadata.Branch -cne $BranchName) { continue }
 
             $match = [pscustomobject]@{
@@ -271,6 +272,16 @@ function Find-LatestManagedReleaseForBranch {
     return $latestMatch
 }
 
+function Test-GitHubReleasePrerelease {
+    param([Parameter(Mandatory)][object]$Release)
+
+    if ($Release -is [System.Collections.IDictionary]) {
+        return $Release.Contains('prerelease') -and [bool]$Release['prerelease']
+    }
+    $property = $Release.PSObject.Properties['prerelease']
+    return $null -ne $property -and [bool]$property.Value
+}
+
 function Find-ReleaseForBuildRun {
     param([Parameter(Mandatory)][string]$RunId)
 
@@ -279,6 +290,7 @@ function Find-ReleaseForBuildRun {
         $releases = @(Invoke-GitHubApi -RelativePath "releases?per_page=100&page=$page")
         if ($releases.Count -eq 0) { break }
         foreach ($release in $releases) {
+            if (-not (Test-GitHubReleasePrerelease -Release $release)) { continue }
             try { $releaseMetadata = Get-ReleaseInformation -Release $release } catch { continue }
             if ($releaseMetadata.RunId -ceq $RunId) {
                 $matchingReleases += [pscustomobject]@{
@@ -362,24 +374,13 @@ if ($eventName -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($m
             break
         }
     }
-    if ([string]::IsNullOrWhiteSpace($requestedReleaseTag)) { $requestedReleaseTag = $normalizedTag }
 }
 if ([string]::IsNullOrWhiteSpace($requestedReleaseTag) -and [string]::IsNullOrWhiteSpace($manualSelector)) {
     $latest = Find-LatestManagedReleaseForBranch $callerBranch
     if ($null -ne $latest) {
         $metadata = $latest.Metadata
-        $normalizedTag = ConvertTo-BuildReleaseTag $metadata.BuildName
-        $tagCandidates = @($normalizedTag, "v$normalizedTag")
-        foreach ($tagCandidate in $tagCandidates) {
-            $release = Get-GitHubReleaseByTag $tagCandidate
-            if ($null -ne $release) {
-                $requestedReleaseTag = [string]$release.tag_name
-                break
-            }
-        }
-        if ([string]::IsNullOrWhiteSpace($requestedReleaseTag)) {
-            $requestedReleaseTag = $normalizedTag
-        }
+        $release = $latest.Release
+        $requestedReleaseTag = [string]$release.tag_name
     }
 }
 if (-not [string]::IsNullOrWhiteSpace($requestedReleaseTag) -and $null -eq $release) {

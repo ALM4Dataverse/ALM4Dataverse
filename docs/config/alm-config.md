@@ -41,6 +41,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | Setting | Type | Default or template value |
 | --- | --- | --- |
 | `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. |
+| `buildVersion` | Hashtable | Shared default is `'1.0'`; optional MAJOR.MINOR override and full-branch overrides. |
 | `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
@@ -51,6 +52,49 @@ The supplied template additionally includes the `data` asset and example data ho
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
+
+### BUILD SemVer
+
+`buildVersion` assigns a MAJOR.MINOR version line to each branch. Set a shared
+default and, when needed, full branch-name overrides:
+
+```powershell
+buildVersion = @{
+    default = '1.0'
+    branches = @{
+        main          = '2.0'
+        develop       = '1.5'
+        'release/1.x' = '1.4'
+    }
+}
+```
+
+The shared configuration defaults `buildVersion.default` to `'1.0'`. Set
+`default` to override the base for unlisted branches, and add entries under
+`branches` for branch-specific release lines.
+
+> [!NOTE]
+> **Advanced: version derivation.** Branch keys are full branch names, including
+> any slash-separated prefix. Values must be two non-negative SemVer integers
+> without leading zeroes, such as `'2.1'`; BUILD and EXPORT fail early if the
+> selected value is invalid.
+>
+> The CI run number supplies PATCH, and the normalized branch name is the
+> SemVer prerelease identifier. For example, `main` might produce
+> `2.1.42-main`, while `feat/abc` with the default `1.0` base might produce
+> `1.0.43-feat-abc`. Slashes and other branch punctuation become hyphens.
+> Numeric-only branch slugs with leading zeroes get a `b` prefix to remain
+> valid SemVer identifiers (for example, branch `01` becomes `b01`). Every
+> build retains this branch suffix in its version and source tag; no stable
+> build promotion is provided.
+>
+> For solution versions, the configured MAJOR.MINOR maps to the Dataverse
+> solution's `Major.Build` components. The solution's `Minor` component remains
+> the non-additive upgrade counter used by DEPLOY.
+>
+> `build-version.json` in each artifact records its version, branch, provider,
+> source commit, and exact CI run ID. Azure DevOps and GitHub keep the original
+> branch-suffixed build identity for deployment and baseline selection.
 
 ### Solutions
 

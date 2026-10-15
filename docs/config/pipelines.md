@@ -32,14 +32,14 @@ Source: [build action](../../.github/actions/build/action.yml).
 
 | Input | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `build-name` | Yes | None | Exact build identity, used to derive a valid Git source/Release tag. |
+| `build-name` | Yes | None | Repository-prefixed display name retained for run selection; SemVer tags are resolved separately from `alm-config.psd1`. |
 | `source-ref` | No | `''` | Checkout ref or commit; empty uses `github.sha`. Dispatch callers pass the exported commit SHA. |
 | `source-branch` | No | `''` | Source branch recorded for Release metadata and deployment dispatch. Custom callers should supply it explicitly. |
 | `environment-name` | No | `''` | Nonempty enables authentication and baseline/candidate deployment validation. |
 
-Outputs: `run-id` (numeric Actions run ID), `run-name` (the supplied build name), `release-tag` (sanitized source tag), and `release-url`.
+Outputs: `run-id` (numeric Actions run ID), `run-name` (the supplied display name), `build-version` (branch-suffixed SemVer), `release-tag` (the same suffixed version as a source tag), and `release-url`.
 
-Build artifacts are uploaded as `artifacts` and, when present, `solution-check-report`, with a requested 90-day retention. Upload steps run even after failure to aid diagnosis; partial artifacts from a failed run are not a deployable release. Successful builds publish `artifacts.zip` and optionally `solution-check-report.zip` as Release assets, then send a branch-scoped deployment dispatch. See [building releases](../usage/building-releases.md).
+Build artifacts are uploaded as `artifacts` and, when present, `solution-check-report`, with a requested 90-day retention. Upload steps run even after failure to aid diagnosis; partial artifacts from a failed run are not a deployable release. Successful builds publish `artifacts.zip` and optionally `solution-check-report.zip` as prerelease assets, then send a branch-scoped deployment dispatch. See [building releases](../usage/building-releases.md).
 
 ### Export
 
@@ -53,7 +53,15 @@ Source: [export action](../../.github/actions/export/action.yml).
 
 Outputs: `pushed` (`true` or `false`) and `pushed-sha` (the new commit SHA, empty when nothing was committed).
 
-The action commits all working-tree changes, pushes to the selected branch, and sends `alm4dataverse-export-build` through `repository_dispatch` only when it created a commit. The target BUILD workflow must be present on the repository's default branch. Configure an optional `WORKFLOW_DISPATCH_TOKEN` through `secrets-json` only when repository policy requires a separate token.
+The action commits all working-tree changes, pushes to the selected branch, and sends `alm4dataverse-export-build` through `repository_dispatch` only when it created a commit.
+
+> [!NOTE]
+> **Advanced: solution version reservations.** Changed solutions reserve their
+> versions with non-force-pushed tags under `alm4dv/solution-version/`. The
+> GitHub token therefore needs `contents: write`. The target BUILD workflow
+> must be present on the repository's default branch. Configure an optional
+> `WORKFLOW_DISPATCH_TOKEN` through `secrets-json` only when repository policy
+> requires a separate token.
 
 ### Import
 
@@ -157,7 +165,7 @@ Use PowerShell 7 with Git and a .NET SDK compatible with the selected PAC tool, 
 | [installdependencies.ps1](../../pipelines/scripts/installdependencies.ps1) | None | Application or artifact root; installs/imports configured modules and PAC, honoring `scriptDependencies.lock.json` when present. |
 | [connect.ps1](../../pipelines/scripts/connect.ps1) | `Url` (required string) | Authenticates to the supplied Dataverse URL using the process's Azure identity. |
 | [build.ps1](../../pipelines/scripts/build.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required strings) | Application root; packs both solution types, runs checker/build hooks, copies assets, snapshots scripts, writes dependency lock. No validation-environment deployment on its own. |
-| [export.ps1](../../pipelines/scripts/export.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required); `TempDirectory`; `EnvironmentName` (default `Unknown`); `PassThru` (switch, off) | Application root; exports and updates source and Dataverse versions. Always pass a real writable temporary directory. `EnvironmentName` is a label, not authentication. `PassThru` additionally returns elapsed seconds and package timings; it does not disable source or version updates. |
+| [export.ps1](../../pipelines/scripts/export.ps1) | `SourceDirectory`, `ArtifactStagingDirectory`, `BranchName` (required); `TempDirectory`; `EnvironmentName` (default `Unknown`); `DefaultBranchName` (optional); `PassThru` (switch, off) | Application root; exports and updates source and Dataverse versions. `BranchName` is the exact source branch; `DefaultBranchName` identifies the repository default branch for the default-version warning and otherwise resolves from `origin/HEAD`. Always pass a real writable temporary directory. `EnvironmentName` is a label, not authentication. `PassThru` additionally returns elapsed seconds and package timings; it does not disable source or version updates. |
 | [deploy.ps1](../../pipelines/scripts/deploy.ps1) | `ArtifactsPath` (required); `UseUnmanagedSolutions` (switch, off by default) | Artifact root; imports, upgrades, activates processes, publishes, and runs deployment hooks. |
 | [import.ps1](../../pipelines/scripts/import.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required strings) | Application root; builds and deploys unmanaged. Already requires a connection. |
 | [resolvedependencycache.ps1](../../pipelines/scripts/resolvedependencycache.ps1) | `BaseDirectory` (default `.`); `AlmScriptsRoot` (default script directory) | Emits `module_cache_enabled`, `module_cache_key`, `pac_cache_enabled`, `pac_cache_key` for GitHub caching. |
@@ -172,6 +180,24 @@ New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 
 & "$almRoot/pipelines/scripts/installdependencies.ps1"
 & "$almRoot/pipelines/scripts/build.ps1" -SourceDirectory $sourceRoot -ArtifactStagingDirectory $artifactRoot
+```
+
+For direct EXPORT calls, connect to the development environment first and pass
+the exact branch name. Supply the repository default branch when known; otherwise
+EXPORT resolves it from `origin/HEAD` for the default-version warning.
+
+```powershell
+$exportArtifacts = Join-Path ([IO.Path]::GetTempPath()) 'contoso-export-artifacts'
+$exportTemp = Join-Path ([IO.Path]::GetTempPath()) 'contoso-export-temp'
+New-Item -ItemType Directory -Path $exportArtifacts, $exportTemp -Force | Out-Null
+
+& "$almRoot/pipelines/scripts/export.ps1" `
+    -SourceDirectory $sourceRoot `
+    -ArtifactStagingDirectory $exportArtifacts `
+    -TempDirectory $exportTemp `
+    -BranchName 'feature/customer-import' `
+    -DefaultBranchName 'main' `
+    -EnvironmentName 'Development'
 ```
 
 Use a fresh artifact directory for each build. If checker rules or custom hooks require

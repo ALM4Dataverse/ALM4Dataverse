@@ -26,6 +26,11 @@ param(
     [Parameter(Mandatory=$false)]
     [string]$EnvironmentName = "Unknown",
 
+    [Parameter(Mandatory=$true)]
+    [string]$BranchName,
+
+    [string]$DefaultBranchName,
+
     [switch]$PassThru
 )
 
@@ -40,6 +45,13 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSetting -Config $solutionsConfig
+$branchBaseVersion = Resolve-AlmBranchBaseVersion -Config $solutionsConfig -BranchName $BranchName
+if (-not $branchBaseVersion.HasBranchOverride) {
+    $defaultBranch = Resolve-AlmDefaultBranchName -RepositoryPath $SourceDirectory -DefaultBranchName $DefaultBranchName
+    if ($branchBaseVersion.BranchName -cne $defaultBranch) {
+        Write-Warning "EXPORT is using buildVersion.default '$($branchBaseVersion.MajorMinor)' on non-default branch '$($branchBaseVersion.BranchName)' (default branch '$defaultBranch'). Configure buildVersion.branches for this branch to select an explicit base version."
+    }
+}
 
 Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
     SourceDirectory = $SourceDirectory
@@ -117,16 +129,37 @@ foreach ($solution in $solutionsConfig.solutions) {
         [xml]$solutionXml = Get-Content -Path $solutionXmlPath
         $currentVersion = [version] $solutionXml.ImportExportXml.SolutionManifest.Version
 
-        if ($changesareadditive) {
-            $newversion = [version] "$($currentVersion.Major).$($currentVersion.Minor).$([Math]::Max(0, $currentVersion.Build)).$([Math]::Max(0, $currentVersion.Revision) + 1)"
-        } else {
-            $newversion = [version] "$($currentVersion.Major).$([Math]::Max(0, $currentVersion.Minor)+1).0.0"
-
+        $baseMatches = $currentVersion.Major -eq $branchBaseVersion.Major -and
+            [Math]::Max(0, $currentVersion.Build) -eq $branchBaseVersion.Build
+        if ($baseMatches) {
+            $versionBeforeIncrement = [version]::new(
+                $branchBaseVersion.Major,
+                [Math]::Max(0, $currentVersion.Minor),
+                $branchBaseVersion.Build,
+                [Math]::Max(0, $currentVersion.Revision)
+            )
         }
+        else {
+            Write-Host "##[debug][$solutionName][Version] Resetting solution version to branch base $($branchBaseVersion.Major).$($branchBaseVersion.Build)"
+            $versionBeforeIncrement = [version]::new(
+                $branchBaseVersion.Major,
+                0,
+                $branchBaseVersion.Build,
+                0
+            )
+        }
+
+        $newversion = Get-NextAlmSolutionVersion -Version $versionBeforeIncrement -IsAdditive $changesareadditive
+        $newversion = Register-AlmSolutionVersion `
+            -RepositoryPath $SourceDirectory `
+            -SolutionName $solutionName `
+            -Version $newversion `
+            -IsAdditive $changesareadditive
+
         $solutionXml.ImportExportXml.SolutionManifest.Version = $newversion.ToString()
         $solutionXml.Save($solutionXmlPath)
 
-        Write-Host "##[debug][$solutionName][Version] Updated solution folder to $newversion"
+        Write-Host "##[debug][$solutionName][Version] Reserved and updated solution folder to $newversion"
 
         if ($null -ne $exportPipeline) {
             $exportPipeline.OperationBudget.Wait($exportPipeline.Cancellation.Token)

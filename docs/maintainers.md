@@ -123,6 +123,8 @@ $outputDirectory = Join-Path ([IO.Path]::GetTempPath()) ('alm-release-' + [guid]
 
 The [stable-release workflow](../.github/workflows/stable-release.yml) responds to pushed
 version tags in the configured three/four-part `v` formats, such as `v1.2.3` or `v1.2.3.4`.
+This publishes the shared ALM4Dataverse code and standalone setup scripts; it is separate
+from branch-suffixed BUILD prereleases and does not promote a BUILD artifact.
 Releasing is a deliberate remote operation:
 
 1. Review the intended source commit, docs, compatibility changes, local checks, and non-production hosted/Dataverse test results.
@@ -145,7 +147,7 @@ the intended assets after publication.
 
 Before release, test relevant changes using intended non-production credentials on both
 platforms where they affect shared behavior. Include authentication modes, source export,
-managed/unmanaged imports, upgrade paths, hooks, workflow promotion, retention/baselines,
+managed/unmanaged imports, upgrade paths, hooks, deployment gates, retention/baselines,
 and retries proportionately to the change. Validate generated caller behavior in hosted
 runs as well as offline YAML checks.
 
