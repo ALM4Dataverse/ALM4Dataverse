@@ -45,9 +45,9 @@ $aliasTargets = @{
 }
 
 $derivedPrefix = Get-PrefixFromEnvironment $env:RESOLVED_ENVIRONMENT_NAME
-$prefixCandidates = @('PREFIX_')
-if (-not [string]::IsNullOrWhiteSpace($derivedPrefix) -and $derivedPrefix -ne 'PREFIX_') {
-    $prefixCandidates = @($derivedPrefix) + $prefixCandidates
+$prefixCandidates = @()
+if (-not [string]::IsNullOrWhiteSpace($derivedPrefix)) {
+    $prefixCandidates = @($derivedPrefix)
 }
 
 $variableData = ConvertTo-HashtableSafe $env:VARS_JSON
@@ -121,8 +121,15 @@ foreach ($entry in $selectedSecrets.GetEnumerator()) {
 foreach ($mapping in $directMappings) {
     $sourceName = $null
     $valueText = $null
+    $candidateNames = @(
+        foreach ($prefix in $prefixCandidates) {
+            foreach ($name in $mapping.Names) {
+                "$prefix$name"
+            }
+        }
+    ) + $mapping.Names
 
-    foreach ($candidateName in $mapping.Names) {
+    foreach ($candidateName in $candidateNames) {
         if (-not $mapping.Source.ContainsKey($candidateName)) {
             continue
         }
@@ -207,6 +214,37 @@ foreach ($source in $sources) {
             $setCount++
             Write-Host "Mapped prefixed $($source.Name) '$fullName' -> '$name'"
         }
+    }
+}
+
+foreach ($source in $sources) {
+    foreach ($entry in $source.Data.GetEnumerator()) {
+        $targetName = [string]$entry.Key
+        $isEnvironmentPrefixed = $false
+        foreach ($candidate in $prefixCandidates) {
+            if ($targetName.StartsWith($candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $isEnvironmentPrefixed = $true
+                break
+            }
+        }
+
+        if ($isEnvironmentPrefixed -or [string]::IsNullOrWhiteSpace($targetName) -or $null -eq $entry.Value) {
+            continue
+        }
+
+        $valueText = ConvertTo-ValueText $entry.Value
+        if ([string]::IsNullOrWhiteSpace($valueText) -or -not [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($targetName))) {
+            continue
+        }
+
+        [System.Environment]::SetEnvironmentVariable($targetName, $valueText)
+        Write-GitHubEnv -name $targetName -value $valueText
+        if ($source.IsSensitive) {
+            Write-Output "::add-mask::$valueText"
+        }
+
+        $setCount++
+        Write-Host "Mapped unprefixed $($source.Name) '$targetName' -> '$targetName'"
     }
 }
 

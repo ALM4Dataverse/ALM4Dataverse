@@ -7,7 +7,7 @@ BeforeAll {
 Describe 'GitHub environment mapping and authentication validation' {
     BeforeEach {
         $script:savedActionEnvironment = @{}
-        foreach ($name in @('GITHUB_ENV', 'VARS_JSON', 'SELECTED_SECRETS_JSON', 'RESOLVED_ENVIRONMENT_NAME', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'DATAVERSE_URL', 'DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN', 'DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS', 'ALM_TEST_BOOLEAN', 'ALM_TEST_NUMBER', 'ALM_TEST_ARRAY', 'DATAVERSECONNREF_ALM_MAPPING_TEST', 'DATAVERSEENVVAR_ALM_MAPPING_TEST')) {
+        foreach ($name in @('GITHUB_ENV', 'VARS_JSON', 'SELECTED_SECRETS_JSON', 'RESOLVED_ENVIRONMENT_NAME', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'DATAVERSE_URL', 'DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN', 'DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS', 'ALM_TEST_BOOLEAN', 'ALM_TEST_NUMBER', 'ALM_TEST_ARRAY', 'DATAVERSECONNREF_ALM_MAPPING_TEST', 'DATAVERSEENVVAR_ALM_MAPPING_TEST', 'CONFIG_ALM_MAPPING_TEST')) {
             $script:savedActionEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, $null)
         }
@@ -33,7 +33,7 @@ Describe 'GitHub environment mapping and authentication validation' {
     }
 
     It 'maps normalized environment prefixes, aliases, and explicit false or zero values' {
-        $env:VARS_JSON = '{"UNIT_TEST_AZURE_CLIENT_ID":"client","UNIT_TEST_DATAVERSE_SERVICE_ACCOUNT_UPN":"service@example.com","UNIT_TEST_DATAVERSE_CONN_REFS":"refs","PREFIX_ALM_TEST_BOOLEAN":false,"PREFIX_ALM_TEST_NUMBER":0,"PREFIX_ALM_TEST_ARRAY":[1,2],"UNIT_TEST_":"ignored","UNIT_TEST_DATAVERSE_URL":null,"UNRELATED_VALUE":"ignored"}'
+        $env:VARS_JSON = '{"UNIT_TEST_AZURE_CLIENT_ID":"client","UNIT_TEST_DATAVERSE_SERVICE_ACCOUNT_UPN":"service@example.com","UNIT_TEST_DATAVERSE_CONN_REFS":"refs","ALM_TEST_BOOLEAN":false,"ALM_TEST_NUMBER":0,"ALM_TEST_ARRAY":[1,2],"UNIT_TEST_":"ignored","UNIT_TEST_DATAVERSE_URL":null,"UNRELATED_VALUE":"ignored"}'
         & $script:environmentResolver
         $env:AZURE_CLIENT_ID | Should -Be client
         $env:DATAVERSESERVICEACCOUNTUPN | Should -Be service@example.com
@@ -96,11 +96,10 @@ Describe 'GitHub environment mapping and authentication validation' {
     }
 
     It 'honors Dataverse mapping precedence for <Label>' -ForEach @(
-        @{ Label = 'direct over environment-specific values'; Variables = '{"DATAVERSECONNREF_ALM_MAPPING_TEST":"connection-test","DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test","TEST_MAIN_DATAVERSEENVVAR_ALM_MAPPING_TEST":"prefixed-test"}'; Selected = '{}'; Existing = ''; Expected = 'direct-test'; Connection = 'connection-test' }
+        @{ Label = 'environment-specific over unprefixed values'; Variables = '{"DATAVERSECONNREF_ALM_MAPPING_TEST":"connection-test","DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test","TEST_MAIN_DATAVERSEENVVAR_ALM_MAPPING_TEST":"prefixed-test"}'; Selected = '{}'; Existing = ''; Expected = 'prefixed-test'; Connection = 'connection-test' }
         @{ Label = 'selected values over runtime and variables'; Variables = '{"DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test"}'; Selected = '{"DATAVERSEENVVAR_ALM_MAPPING_TEST":"selected-test"}'; Existing = 'existing-test'; Expected = 'selected-test'; Connection = '' }
         @{ Label = 'existing runtime values'; Variables = '{"DATAVERSEENVVAR_ALM_MAPPING_TEST":"direct-test"}'; Selected = '{}'; Existing = 'existing-test'; Expected = 'existing-test'; Connection = '' }
         @{ Label = 'environment-specific fallback'; Variables = '{"TEST_MAIN_DATAVERSEENVVAR_ALM_MAPPING_TEST":"prefixed-test"}'; Selected = '{}'; Existing = ''; Expected = 'prefixed-test'; Connection = '' }
-        @{ Label = 'literal PREFIX fallback'; Variables = '{"PREFIX_DATAVERSEENVVAR_ALM_MAPPING_TEST":"fallback-test"}'; Selected = '{}'; Existing = ''; Expected = 'fallback-test'; Connection = '' }
     ) {
         Set-StrictMode -Version Latest
         $env:RESOLVED_ENVIRONMENT_NAME = 'TEST-main'
@@ -110,5 +109,17 @@ Describe 'GitHub environment mapping and authentication validation' {
         & $script:environmentResolver
         $env:DATAVERSEENVVAR_ALM_MAPPING_TEST | Should -Be $Expected
         $env:DATAVERSECONNREF_ALM_MAPPING_TEST | Should -Be $Connection
+    }
+
+    It 'maps unprefixed values and prefers environment-specific values' {
+        $env:RESOLVED_ENVIRONMENT_NAME = 'TEST-main'
+        $env:VARS_JSON = '{"CONFIG_ALM_MAPPING_TEST":"unprefixed","TEST_MAIN_CONFIG_ALM_MAPPING_TEST":"environment-specific"}'
+        & $script:environmentResolver
+        $env:CONFIG_ALM_MAPPING_TEST | Should -Be 'environment-specific'
+
+        [Environment]::SetEnvironmentVariable('CONFIG_ALM_MAPPING_TEST', $null)
+        $env:VARS_JSON = '{"CONFIG_ALM_MAPPING_TEST":"unprefixed"}'
+        & $script:environmentResolver
+        $env:CONFIG_ALM_MAPPING_TEST | Should -Be 'unprefixed'
     }
 }

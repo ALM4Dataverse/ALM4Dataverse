@@ -53,7 +53,7 @@ GitHub environment approvals and configures credentials accordingly:
 - **Fallback mode** (approvals unavailable)
   - Stores non-sensitive settings as prefixed repository variables
   - Stores any client secret in its matching GitHub environment
-  - Uses derived variable prefixes such as `DEV_MAIN_`, `TEST_`, `PROD_` (or `PREFIX_`)
+  - Uses derived variable prefixes such as `DEV_MAIN_`, `TEST_`, and `PROD_`
   - Generates deploy stages with `promotion-mode: manual-gate-tag` and manual dispatch from stage 1 onward
 
 You can still change either mode manually after setup by editing your workflow YAML
@@ -287,24 +287,26 @@ individual secrets and explicitly map them in `secrets-json`.
 
 ---
 
-## Approach 3: Prefixed repository variables and secrets
+## Approach 3: Repository variables and secrets
 
-Store non-sensitive configuration as prefixed repository variables and genuine secrets
-as prefixed repository secrets (Settings > Secrets and variables > Actions). This manual
-approach does not require storing values in GitHub environments.
+Store non-sensitive configuration as repository variables and genuine secrets as
+repository secrets (Settings > Secrets and variables > Actions). This manual approach
+does not require storing values in GitHub environments. Variable names may be unprefixed
+or use an environment-specific prefix; when both are defined, the active environment's
+prefixed value takes precedence.
 
-The composite actions automatically map prefixed variable names to the unprefixed runtime
-variables expected by the PowerShell scripts. Prefixed repository secrets are not
-auto-discovered; explicitly map each one to its runtime name in each workflow's
+The composite actions automatically map repository variables to runtime variables
+expected by the PowerShell scripts. Environment-specific prefixes are optional and are
+removed during mapping; when both prefixed and unprefixed values exist, the prefixed value
+wins. Repository secrets are not auto-discovered; explicitly map each one to its runtime name in each workflow's
 `secrets-json` input using `toJSON(secrets.PREFIXED_SECRET_NAME)`.
 
-Use an environment-specific prefix in each name.  The recommended prefix format is
+When using an environment-specific prefix, the recommended format is
 `{ENV}_{BRANCH}_` for branch-scoped environments or `{ENV}_` for shared environments.
 
-Mapping uses either:
-
-- A derived prefix from the effective environment name (for example `Dev-main` → `DEV_MAIN_`)
-- Or the literal fallback prefix `PREFIX_`
+Environment-prefixed variables use the effective environment name (for example
+`Dev-main` → `DEV_MAIN_`). The prefix is optional; unprefixed variables fill values not
+provided for the active environment.
 
 Examples in the tables below use `TEST_MAIN_` (for `TEST-main` environment) and
 `PROD_` (for `PROD` environment).  Adjust to match your environment names.
@@ -400,13 +402,13 @@ Login's `creds` JSON input, and `DefaultAzureCredential` also uses
 
 1. Explicit nonempty `secrets-json` entries set their exact runtime names, overriding existing values.
 2. Existing nonempty runtime values are preserved when variables are mapped.
-3. Direct standard variables, `DataverseConnRef_*`, and `DataverseEnvVar_*` are mapped.
-4. Prefixed variables fill remaining unset values.
+3. Environment-specific prefixed variables fill unset values.
+4. Unprefixed variables fill remaining unset values.
 
 The prefix is the effective environment name, uppercased, with runs of non-alphanumeric
 characters replaced by `_`, plus a trailing `_`: `TEST-main` becomes `TEST_MAIN_`.
-The literal `PREFIX_` prefix is also accepted. Avoid defining the same target under both
-prefixes: iteration order is not a precedence guarantee.
+When both prefixed and unprefixed values target the same runtime variable, the
+environment-specific value takes precedence.
 
 For prefixed variables, `DATAVERSE_SERVICE_ACCOUNT_UPN` also populates
 `DATAVERSESERVICEACCOUNTUPN`, and `DATAVERSE_CONN_REFS` also populates

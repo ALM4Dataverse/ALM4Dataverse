@@ -51,7 +51,7 @@ the action's `secrets-json` mapping; use the
 
 In **Settings > Secrets and variables > Actions**, use the environment-derived prefix,
 for example `TEST_MAIN_` for `TEST-main`. Store non-sensitive settings as variables.
-Use the [prefixed reference](../config/github-secrets.md#approach-3-prefixed-repository-variables-and-secrets)
+Use the [repository variable reference](../config/github-secrets.md#approach-3-repository-variables-and-secrets)
 for exact names and supported aliases. Store secrets either in the selected GitHub
 environment or as prefixed repository secrets explicitly mapped to unprefixed runtime names.
 
