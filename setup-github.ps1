@@ -552,7 +552,7 @@ function Get-GitHubEnvironmentPrefix {
 function Set-GitHubPrefixedEnvironmentCredential {
     <#
     .SYNOPSIS
-        Stores non-sensitive values as prefixed repository variables and secrets in the matching environment.
+        Stores non-sensitive values as repository variables and secrets in the matching environment.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -561,13 +561,15 @@ function Set-GitHubPrefixedEnvironmentCredential {
         [Parameter(Mandatory)][string]$EnvironmentName,
         [Parameter(Mandatory)][object]$Credentials,
         [Parameter(Mandatory)][string]$DataverseUrl,
-        [Parameter(Mandatory)][string]$ServiceAccountUPN
+        [Parameter(Mandatory)][string]$ServiceAccountUPN,
+        [Parameter()][bool]$UseEnvironmentPrefix = $true
     )
 
     if (-not $PSCmdlet.ShouldProcess("$Owner/$Repo/$EnvironmentName", 'Configure GitHub environment credentials')) { return }
 
-    $prefix = Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName
-    Write-Host "Setting prefixed repo-level credentials for '$EnvironmentName' using prefix '$prefix'..." -ForegroundColor DarkGray
+    $prefix = if ($UseEnvironmentPrefix) { Get-GitHubEnvironmentPrefix -EnvironmentName $EnvironmentName } else { '' }
+    $storageDescription = if ($UseEnvironmentPrefix) { "using prefix '$prefix'" } else { 'without an environment prefix' }
+    Write-Host "Setting repo-level credentials for '$EnvironmentName' $storageDescription..." -ForegroundColor DarkGray
 
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_CLIENT_ID" -VariableValue $Credentials.ApplicationId
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID" -VariableValue $Credentials.TenantId
@@ -1097,24 +1099,40 @@ function Get-GitHubExistingEnvironmentState {
     $prefixedServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_SERVICE_ACCOUNT_UPN"
     $prefixedSecretExists = Test-GitHubActionSecretExistence -Owner $Owner -Repo $Repo -SecretName "${prefix}AZURE_CLIENT_SECRET"
 
-    $applicationId = if (-not [string]::IsNullOrWhiteSpace($environmentClientId)) { $environmentClientId } else { $prefixedClientId }
-    $resolvedTenantId = if (-not [string]::IsNullOrWhiteSpace($environmentTenantId)) { $environmentTenantId } else { $prefixedTenantId }
-    $environmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $(if (-not [string]::IsNullOrWhiteSpace($environmentUrl)) { $environmentUrl } else { $prefixedUrl })
-    $serviceAccountUPN = if (-not [string]::IsNullOrWhiteSpace($environmentServiceAccount)) { $environmentServiceAccount } else { $prefixedServiceAccount }
-    $hasExistingSecret = $environmentSecretExists -or $prefixedSecretExists
+    $repositoryClientId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName 'AZURE_CLIENT_ID'
+    $repositoryTenantId = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName 'AZURE_TENANT_ID'
+    $repositoryUrl = ConvertTo-NormalizedEnvironmentUrl -Url (Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName 'DATAVERSE_URL')
+    $repositoryServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName 'DATAVERSESERVICEACCOUNTUPN'
+    if ([string]::IsNullOrWhiteSpace($repositoryServiceAccount)) {
+        $repositoryServiceAccount = Get-GitHubActionsVariableValue -Owner $Owner -Repo $Repo -VariableName 'DATAVERSE_SERVICE_ACCOUNT_UPN'
+    }
+    $repositorySecretExists = Test-GitHubActionSecretExistence -Owner $Owner -Repo $Repo -SecretName 'AZURE_CLIENT_SECRET'
 
     $hasEnvironmentValues = -not [string]::IsNullOrWhiteSpace($environmentClientId) -or
         -not [string]::IsNullOrWhiteSpace($environmentUrl) -or
         -not [string]::IsNullOrWhiteSpace($environmentServiceAccount)
-    $hasRepositoryValues = -not [string]::IsNullOrWhiteSpace($prefixedClientId) -or
+
+    $applicationId = if (-not [string]::IsNullOrWhiteSpace($environmentClientId)) { $environmentClientId } elseif (-not [string]::IsNullOrWhiteSpace($prefixedClientId)) { $prefixedClientId } else { $repositoryClientId }
+    $resolvedTenantId = if (-not [string]::IsNullOrWhiteSpace($environmentTenantId)) { $environmentTenantId } elseif (-not [string]::IsNullOrWhiteSpace($prefixedTenantId)) { $prefixedTenantId } else { $repositoryTenantId }
+    $environmentUrl = ConvertTo-NormalizedEnvironmentUrl -Url $(if (-not [string]::IsNullOrWhiteSpace($environmentUrl)) { $environmentUrl } elseif (-not [string]::IsNullOrWhiteSpace($prefixedUrl)) { $prefixedUrl } else { $repositoryUrl })
+    $serviceAccountUPN = if (-not [string]::IsNullOrWhiteSpace($environmentServiceAccount)) { $environmentServiceAccount } elseif (-not [string]::IsNullOrWhiteSpace($prefixedServiceAccount)) { $prefixedServiceAccount } else { $repositoryServiceAccount }
+    $hasExistingSecret = $environmentSecretExists -or $prefixedSecretExists -or $repositorySecretExists
+
+    $hasPrefixedRepositoryValues = -not [string]::IsNullOrWhiteSpace($prefixedClientId) -or
         -not [string]::IsNullOrWhiteSpace($prefixedUrl) -or
         -not [string]::IsNullOrWhiteSpace($prefixedServiceAccount)
+    $hasUnprefixedRepositoryValues = -not [string]::IsNullOrWhiteSpace($repositoryClientId) -or
+        -not [string]::IsNullOrWhiteSpace($repositoryUrl) -or
+        -not [string]::IsNullOrWhiteSpace($repositoryServiceAccount)
 
     $storageScope = if ($hasEnvironmentValues) {
         'Environment'
     }
-    elseif ($hasRepositoryValues -or $prefixedSecretExists) {
+    elseif ($hasPrefixedRepositoryValues -or $prefixedSecretExists) {
         'RepositoryPrefix'
+    }
+    elseif ($hasUnprefixedRepositoryValues -or $repositorySecretExists) {
+        'RepositoryUnprefixed'
     }
     elseif ($environmentSecretExists) {
         'Environment'
@@ -3046,6 +3064,7 @@ function Set-GitHubEnvironmentConfiguration {
         [Parameter(Mandatory)][long]$RepoId,
         [Parameter(Mandatory)][bool]$UseImmutableWifSubject,
         [Parameter()][bool]$UseGitHubEnvironments = $true,
+        [Parameter()][bool]$UseRepositoryVariablePrefix = $true,
         [Parameter()][bool]$EnableApprovals = $false,
         [Parameter()][array]$RequiredReviewerIds = @()
     )
@@ -3103,7 +3122,8 @@ function Set-GitHubEnvironmentConfiguration {
             -EnvironmentName $EnvironmentConfiguration.ShortName `
             -Credentials $creds `
             -DataverseUrl $EnvironmentConfiguration.Url `
-            -ServiceAccountUPN $serviceAccountUPN
+            -ServiceAccountUPN $serviceAccountUPN `
+            -UseEnvironmentPrefix $UseRepositoryVariablePrefix
     }
 
     Initialize-DataverseApplicationUser -EnvironmentUrl $EnvironmentConfiguration.Url -ApplicationId $creds.ApplicationId -TenantId $TenantId
@@ -4157,7 +4177,7 @@ function Invoke-GitHubBranchAwareSetup {
                                     Write-Host "Preparing GitHub environment 'Dev-$branchName' for the DEV Dataverse environment." -ForegroundColor Green
                                 }
                                 else {
-                                    Write-Host "Preparing prefixed repo-level credentials for DEV environment 'Dev-$branchName'." -ForegroundColor Green
+                                    Write-Host "Preparing repo-level credentials for DEV environment 'Dev-$branchName'." -ForegroundColor Green
                                 }
                                 Write-Host ''
 
@@ -4479,7 +4499,7 @@ function Invoke-GitHubBranchAwareSetup {
                             Write-Host "Preparing GitHub environment 'Dev-$branchName' for the DEV Dataverse environment." -ForegroundColor Green
                         }
                         else {
-                            Write-Host "Preparing prefixed repo-level credentials for DEV environment 'Dev-$branchName'." -ForegroundColor Green
+                            Write-Host "Preparing repo-level credentials for DEV environment 'Dev-$branchName'." -ForegroundColor Green
                         }
                         Write-Host ''
 
@@ -4977,7 +4997,7 @@ function Invoke-GitHubBranchAwareSetup {
                         'Repository'               = $RepoFullName
                         'Shared workflow source'   = $SharedWorkflowRepository
                         'Shared workflow ref'      = $SharedWorkflowReference
-                        'Credential storage'       = $(if ($UseGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables + environment secrets' })
+                        'Credential storage'       = $(if ($UseGitHubEnvironments) { 'GitHub environments' } else { 'Repository variables + environment secrets' })
                         'Promotion mode'           = $DeploymentPromotionMode
                         'Configured branches'      = [string]$wizardState.BranchStates.Count
                         'BUILD validation'         = $(if ($wizardState.BuildValidationEnabled) { 'Enabled' } else { 'Disabled' })
@@ -5524,6 +5544,7 @@ Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workf
 } | Out-Null
 
 $useGitHubEnvironments = $false
+$useRepositoryVariablePrefix = $existingSetupState.CredentialStorageScope -ne 'RepositoryUnprefixed'
 $enableEnvironmentApprovals = $false
 $environmentApprovalReviewerIds = @()
 $deploymentPromotionMode = 'manual-gate-tag'
@@ -5544,11 +5565,16 @@ if ($existingSetupState.CredentialStorageScope -eq 'Environment' -and $environme
 
     Write-Host 'Existing repository configuration already uses GitHub environments, so setup will preserve that as the baseline.' -ForegroundColor Green
 }
-elseif ($existingSetupState.CredentialStorageScope -eq 'RepositoryPrefix') {
+elseif ($existingSetupState.CredentialStorageScope -in @('RepositoryPrefix', 'RepositoryUnprefixed')) {
     $useGitHubEnvironments = $false
     $enableEnvironmentApprovals = $false
     $deploymentPromotionMode = 'manual-gate-tag'
-    Write-Host 'Existing repository configuration uses prefixed repo-level credentials, so setup will preserve that as the baseline.' -ForegroundColor Green
+    if ($useRepositoryVariablePrefix) {
+        Write-Host 'Existing repository configuration uses environment-prefixed repo-level credentials, so setup will preserve that as the baseline.' -ForegroundColor Green
+    }
+    else {
+        Write-Host 'Existing repository configuration uses unprefixed repo-level credentials, so setup will preserve that as the baseline.' -ForegroundColor Green
+    }
 }
 elseif ($environmentCapabilities.EnvironmentsAvailable) {
     $useGitHubEnvironments = $true
@@ -5566,7 +5592,7 @@ elseif ($environmentCapabilities.EnvironmentsAvailable) {
     }
 }
 else {
-    Write-Host "GitHub environments are unavailable for this repository. Setup will use prefixed repo-level credentials and tag-based promotion." -ForegroundColor Yellow
+    Write-Host "GitHub environments are unavailable for this repository. Setup will use repo-level credentials and tag-based promotion." -ForegroundColor Yellow
 }
 
 if (-not [string]::IsNullOrWhiteSpace($environmentCapabilities.Message)) {
@@ -5678,7 +5704,7 @@ else {
             Write-Host "Setting up GitHub environment '$($devEnvironmentConfiguration.ShortName)' for branch '$($branchState.BranchName)'." -ForegroundColor Green
         }
         else {
-            Write-Host "Setting up prefixed repo-level credentials for DEV environment '$($devEnvironmentConfiguration.ShortName)'." -ForegroundColor Green
+            Write-Host "Setting up repo-level credentials for DEV environment '$($devEnvironmentConfiguration.ShortName)'." -ForegroundColor Green
         }
         Write-Host ""
 
@@ -5693,6 +5719,7 @@ else {
                 -RepoId $repoId `
                 -UseImmutableWifSubject $useImmutableWifSubject `
                 -UseGitHubEnvironments $useGitHubEnvironments `
+                -UseRepositoryVariablePrefix $useRepositoryVariablePrefix `
                 -EnableApprovals:$false
         } | Out-Null
     }
@@ -5720,6 +5747,7 @@ else {
             -RepoId $repoId `
             -UseImmutableWifSubject $useImmutableWifSubject `
             -UseGitHubEnvironments $useGitHubEnvironments `
+            -UseRepositoryVariablePrefix $useRepositoryVariablePrefix `
             -EnableApprovals:$false
     } -StatusMessage 'Applying global BUILD validation environment configuration...' -CaptureOutputInPanel | Out-Null
 }
@@ -5732,7 +5760,7 @@ if ($useGitHubEnvironments) {
     Write-Host "Configuring GitHub environment credentials for deployment stages." -ForegroundColor Green
 }
 else {
-    Write-Host "Configuring prefixed repo-level credentials for deployment stages." -ForegroundColor Green
+    Write-Host "Configuring repo-level credentials for deployment stages." -ForegroundColor Green
 }
 Write-Host ""
 
@@ -5758,6 +5786,7 @@ else {
                     -RepoId $repoId `
                     -UseImmutableWifSubject $useImmutableWifSubject `
                     -UseGitHubEnvironments $useGitHubEnvironments `
+                    -UseRepositoryVariablePrefix $useRepositoryVariablePrefix `
                     -EnableApprovals:$enableEnvironmentApprovals `
                     -RequiredReviewerIds $environmentApprovalReviewerIds
             } -StatusMessage "Applying configuration for environment '$($env.ShortName)'..." -CaptureOutputInPanel | Out-Null
@@ -5777,7 +5806,7 @@ Show-SetupCompletionScreen `
         'Solution source branch'  = $(if ([string]::IsNullOrWhiteSpace($solutionSourceBranch)) { '<none>' } else { $solutionSourceBranch })
         'Repository publish'      = (Get-GitHubPublishSummaryText -PublishResults $repoPublishResults)
         'Promotion mode'          = $deploymentPromotionMode
-        'Credential storage'      = $(if ($useGitHubEnvironments) { 'GitHub environments' } else { 'Prefixed repository variables + environment secrets' })
+        'Credential storage'      = $(if ($useGitHubEnvironments) { 'GitHub environments' } elseif ($useRepositoryVariablePrefix) { 'Environment-prefixed repository variables + environment secrets' } else { 'Unprefixed repository variables + environment secrets' })
         'BUILD validation'        = $(if ($buildValidationEnabled) { 'Enabled' } else { 'Disabled' })
         'BUILD validation environment' = $(if ($buildValidationEnvironmentConfiguration) { $buildValidationEnvironmentConfiguration.ShortName } else { '<none>' })
         'Configured environments' = [string]$allConfiguredEnvironments.Count

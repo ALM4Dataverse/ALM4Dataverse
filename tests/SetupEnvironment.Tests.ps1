@@ -166,8 +166,8 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
             Mock Set-GitHubPrefixedEnvironmentCredential {}
             Set-GitHubEnvironmentConfiguration -EnvironmentConfiguration $environment -TenantId example.com -RepoOwner owner -RepoName repo -RepoFullName owner/repo -RepoOwnerId 1 -RepoId 2 -UseImmutableWifSubject $true
             Should -Invoke Set-GitHubEnvironmentVariable -Times 4 -Exactly
-            Set-GitHubEnvironmentConfiguration -EnvironmentConfiguration $environment -TenantId example.com -RepoOwner owner -RepoName repo -RepoFullName owner/repo -RepoOwnerId 1 -RepoId 2 -UseImmutableWifSubject $false -UseGitHubEnvironments $false
-            Should -Invoke Set-GitHubPrefixedEnvironmentCredential -Times 1 -Exactly
+            Set-GitHubEnvironmentConfiguration -EnvironmentConfiguration $environment -TenantId example.com -RepoOwner owner -RepoName repo -RepoFullName owner/repo -RepoOwnerId 1 -RepoId 2 -UseImmutableWifSubject $false -UseGitHubEnvironments $false -UseRepositoryVariablePrefix $false
+            Should -Invoke Set-GitHubPrefixedEnvironmentCredential -Times 1 -Exactly -ParameterFilter { -not $UseEnvironmentPrefix }
         }
         else {
             Mock Initialize-AzDoServiceEndpoint { [pscustomobject]@{ id = 3; authorization = [pscustomobject]@{ parameters = [pscustomobject]@{ workloadIdentityFederationIssuer = 'issuer'; workloadIdentityFederationSubject = 'subject' } } } }
@@ -492,6 +492,56 @@ Describe 'Identity and environment discovery in <Provider>' -ForEach @(
         Get-DataverseServiceAccountUPN -EnvironmentName TEST | Should -Be manual@example.com
         Mock Select-FromMenu { $null }
         { Get-DataverseServiceAccountUPN -EnvironmentName TEST } | Should -Throw '*No service account selected*'
+    }
+
+    It 'recognizes unprefixed repository variables and prefers active-environment values' -Skip:($Provider -ne 'GitHub') {
+        Mock Resolve-EntraIdApplicationByAppId { $script:identityApp }
+        Mock Resolve-DataverseEnvironmentFriendlyName { 'Test' }
+        $script:repositoryVariables = @{
+            AZURE_CLIENT_ID = 'unprefixed-app'
+            AZURE_TENANT_ID = 'example.com'
+            DATAVERSE_URL = 'https://unprefixed.example.com'
+            DATAVERSE_SERVICE_ACCOUNT_UPN = 'unprefixed@example.com'
+            TEST_MAIN_AZURE_CLIENT_ID = 'prefixed-app'
+            TEST_MAIN_DATAVERSE_URL = 'https://prefixed.example.com'
+            TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN = 'prefixed@example.com'
+        }
+        Mock Get-GitHubActionsVariableValue {
+            if ([string]::IsNullOrWhiteSpace($EnvironmentName) -and $script:repositoryVariables.ContainsKey($VariableName)) {
+                return $script:repositoryVariables[$VariableName]
+            }
+            return $null
+        }
+        Mock Test-GitHubActionSecretExistence { $false }
+
+        $result = Get-GitHubExistingEnvironmentState -Owner owner -Repo repo -EnvironmentName 'TEST-main' -TenantId example.com
+        $result.StorageScope | Should -Be RepositoryPrefix
+        $result.Credentials.ApplicationId | Should -Be prefixed-app
+        $result.Url | Should -Be 'https://prefixed.example.com'
+        $result.ServiceAccountUPN | Should -Be 'prefixed@example.com'
+
+        $script:repositoryVariables.Remove('TEST_MAIN_AZURE_CLIENT_ID')
+        $script:repositoryVariables.Remove('TEST_MAIN_DATAVERSE_URL')
+        $script:repositoryVariables.Remove('TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN')
+        $result = Get-GitHubExistingEnvironmentState -Owner owner -Repo repo -EnvironmentName 'TEST-main' -TenantId example.com
+        $result.StorageScope | Should -Be RepositoryUnprefixed
+        $result.Credentials.ApplicationId | Should -Be unprefixed-app
+        $result.Url | Should -Be 'https://unprefixed.example.com'
+        $result.ServiceAccountUPN | Should -Be 'unprefixed@example.com'
+    }
+
+    It 'writes bare repository variable names when preserving unprefixed storage' -Skip:($Provider -ne 'GitHub') {
+        $script:writtenGitHubVariableNames = @()
+        Mock Set-GitHubRepoVariable { $script:writtenGitHubVariableNames += $VariableName }
+        $credentials = [pscustomobject]@{ ApplicationId = 'app-id'; TenantId = 'example.com'; AuthType = 'WIF'; ClientSecret = $null }
+
+        Set-GitHubPrefixedEnvironmentCredential -Owner owner -Repo repo -EnvironmentName 'TEST-main' -Credentials $credentials -DataverseUrl 'https://test.example.com' -ServiceAccountUPN 'service@example.com' -UseEnvironmentPrefix $false
+
+        $script:writtenGitHubVariableNames | Should -Contain AZURE_CLIENT_ID
+        $script:writtenGitHubVariableNames | Should -Contain AZURE_TENANT_ID
+        $script:writtenGitHubVariableNames | Should -Contain DATAVERSE_URL
+        $script:writtenGitHubVariableNames | Should -Contain DATAVERSE_SERVICE_ACCOUNT_UPN
+        $script:writtenGitHubVariableNames | Should -Not -Contain TEST_MAIN_AZURE_CLIENT_ID
     }
 
     It 'discovers existing environment identity and authentication mode' -ForEach @(

@@ -54,6 +54,7 @@ GitHub environment approvals and configures credentials accordingly:
   - Stores non-sensitive settings as repository variables, optionally prefixed by environment
   - Stores any client secret in its matching GitHub environment
   - Supports derived variable prefixes such as `DEV_MAIN_`, `TEST_`, and `PROD_`; prefixes are optional
+  - Detects existing unprefixed repository credentials and keeps them unprefixed when setup is rerun
   - Generates deploy stages with `promotion-mode: manual-gate-tag` and manual dispatch from stage 1 onward
 
 You can still change either mode manually after setup by editing your workflow YAML
