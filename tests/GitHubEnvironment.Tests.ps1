@@ -33,7 +33,7 @@ Describe 'GitHub environment mapping and authentication validation' {
     }
 
     It 'maps normalized environment prefixes, aliases, and explicit false or zero values' {
-        $env:VARS_JSON = '{"UNIT_TEST_AZURE_CLIENT_ID":"client","UNIT_TEST_DATAVERSE_SERVICE_ACCOUNT_UPN":"service@example.com","UNIT_TEST_DATAVERSE_CONN_REFS":"refs","ALM_TEST_BOOLEAN":false,"ALM_TEST_NUMBER":0,"ALM_TEST_ARRAY":[1,2],"UNIT_TEST_":"ignored","UNIT_TEST_DATAVERSE_URL":null,"UNRELATED_VALUE":"ignored"}'
+        $env:VARS_JSON = '{"UNIT_TEST_AZURE_CLIENT_ID":"client","UNIT_TEST_DATAVERSE_SERVICE_ACCOUNT_UPN":"service@example.com","UNIT_TEST_DATAVERSE_CONN_REFS":"refs","ALM_TEST_BOOLEAN":false,"ALM_TEST_NUMBER":0,"ALM_TEST_ARRAY":[1,2],"UNIT_TEST_":"ignored","UNIT_TEST_DATAVERSE_URL":null}'
         & $script:environmentResolver
         $env:AZURE_CLIENT_ID | Should -Be client
         $env:DATAVERSESERVICEACCOUNTUPN | Should -Be service@example.com
@@ -121,5 +121,17 @@ Describe 'GitHub environment mapping and authentication validation' {
         $env:VARS_JSON = '{"CONFIG_ALM_MAPPING_TEST":"unprefixed"}'
         & $script:environmentResolver
         $env:CONFIG_ALM_MAPPING_TEST | Should -Be 'unprefixed'
+    }
+
+    It 'maps service-account aliases and prefers the environment-specific alias' {
+        $env:RESOLVED_ENVIRONMENT_NAME = 'TEST-main'
+        $env:VARS_JSON = '{"DATAVERSE_SERVICE_ACCOUNT_UPN":"unprefixed-alias"}'
+        & $script:environmentResolver
+        $env:DATAVERSESERVICEACCOUNTUPN | Should -Be 'unprefixed-alias'
+
+        [Environment]::SetEnvironmentVariable('DATAVERSESERVICEACCOUNTUPN', $null)
+        $env:VARS_JSON = '{"DATAVERSESERVICEACCOUNTUPN":"unprefixed-compact","TEST_MAIN_DATAVERSE_SERVICE_ACCOUNT_UPN":"prefixed-alias"}'
+        & $script:environmentResolver
+        $env:DATAVERSESERVICEACCOUNTUPN | Should -Be 'prefixed-alias'
     }
 }

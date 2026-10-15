@@ -83,7 +83,7 @@ $directMappings = @(
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('AZURE_CLIENT_ID'); TargetName = 'AZURE_CLIENT_ID'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('AZURE_TENANT_ID'); TargetName = 'AZURE_TENANT_ID'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_URL'); TargetName = 'DATAVERSE_URL'; IsSensitive = $false },
-    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSESERVICEACCOUNTUPN'); TargetName = 'DATAVERSESERVICEACCOUNTUPN'; IsSensitive = $false },
+    @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN'); TargetName = 'DATAVERSESERVICEACCOUNTUPN'; IsSensitive = $false },
     @{ SourceLabel = 'variables'; Source = $variableData; Names = @('DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS'); TargetName = 'DATAVERSE_CONNECTION_REFS'; IsSensitive = $false }
 )
 
@@ -233,18 +233,29 @@ foreach ($source in $sources) {
         }
 
         $valueText = ConvertTo-ValueText $entry.Value
-        if ([string]::IsNullOrWhiteSpace($valueText) -or -not [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($targetName))) {
+        if ([string]::IsNullOrWhiteSpace($valueText)) {
             continue
         }
 
-        [System.Environment]::SetEnvironmentVariable($targetName, $valueText)
-        Write-GitHubEnv -name $targetName -value $valueText
-        if ($source.IsSensitive) {
-            Write-Output "::add-mask::$valueText"
+        $targetNames = @($targetName)
+        if ($aliasTargets.ContainsKey($targetName)) {
+            $targetNames += $aliasTargets[$targetName]
         }
 
-        $setCount++
-        Write-Host "Mapped unprefixed $($source.Name) '$targetName' -> '$targetName'"
+        foreach ($name in ($targetNames | Select-Object -Unique)) {
+            if (-not [string]::IsNullOrWhiteSpace([System.Environment]::GetEnvironmentVariable($name))) {
+                continue
+            }
+
+            [System.Environment]::SetEnvironmentVariable($name, $valueText)
+            Write-GitHubEnv -name $name -value $valueText
+            if ($source.IsSensitive) {
+                Write-Output "::add-mask::$valueText"
+            }
+
+            $setCount++
+            Write-Host "Mapped unprefixed $($source.Name) '$targetName' -> '$name'"
+        }
     }
 }
 
