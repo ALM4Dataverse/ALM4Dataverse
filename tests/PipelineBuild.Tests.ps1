@@ -190,13 +190,13 @@ Describe 'Build artifacts and solution-check helpers' {
                 type = 'FileToFile'
                 source = 'plugins/Example.dll'
                 destination = 'PluginAssemblies/Example.dll'
-                buildCommand = @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first') }
+                buildCommand = @{ executable = 'pwsh'; arguments = @('-NoProfile', '-Command', 'Write-Output first') }
             }
             @{
                 type = 'FileToFile'
                 source = 'plugins/Second.dll'
                 destination = 'PluginAssemblies/Second.dll'
-                buildCommand = @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'second') }
+                buildCommand = @{ executable = 'pwsh'; arguments = @('-NoProfile', '-Command', 'Write-Output second') }
             }
         )
     })
@@ -219,7 +219,7 @@ Describe 'Build artifacts and solution-check helpers' {
                 type = 'FileToFile'
                 source = 'plugins/Example.dll'
                 destination = 'PluginAssemblies/Example.dll'
-                buildCommand = @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first'); parallel = $false }
+                buildCommand = @{ executable = 'pwsh'; arguments = @('-NoProfile', '-Command', 'Write-Output first'); parallel = $false }
             }
         )
     })
@@ -240,7 +240,7 @@ param([string]$OutputPath)
 New-Item -ItemType Directory -Path (Split-Path $OutputPath -Parent) -Force | Out-Null
 Set-Content -LiteralPath $OutputPath -Value built
 '@
-        $commandExecutable = Join-Path $PSHOME 'pwsh.exe'
+        $commandExecutable = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @"
 @{
     solutions = @(@{
@@ -280,7 +280,7 @@ Set-Content -LiteralPath $OutputPath -Value built
                 type = 'FileToFile'
                 source = 'plugins/Example.dll'
                 destination = 'PluginAssemblies/Example.dll'
-                buildCommand = @{ name = 'command 1'; executable = 'cmd.exe'; arguments = @('/c', 'exit', '7'); parallel = $false }
+                buildCommand = @{ name = 'command 1'; executable = 'pwsh'; arguments = @('-NoProfile', '-Command', 'exit 7'); parallel = $false }
             }
         )
     })
@@ -303,7 +303,7 @@ Set-Content -LiteralPath $OutputPath -Value built
                 type = 'FileToFile'
                 source = 'plugins/Example.dll'
                 destination = 'PluginAssemblies/Example.dll'
-                buildCommand = @{ executable = 'cmd.exe'; arguments = 'build' }
+                buildCommand = @{ executable = 'pwsh'; arguments = 'build' }
             }
         )
     })
@@ -341,7 +341,7 @@ function Compress-DataverseSolutionFile {
 }
 Export-ModuleMember -Function Compress-DataverseSolutionFile
 '@
-        $commandExecutable = Join-Path $PSHOME 'pwsh.exe'
+        $commandExecutable = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @"
 @{
     solutions = @(@{
