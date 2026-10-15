@@ -125,7 +125,7 @@ separately with the same build identity.
 - **Solutions that have a pending upgrade then have them applied in reverse dependency order**.
 - **Processes are assigned to the configured service-account user and activated.** Custom per-solution owner keys can select different users.
 - **Customizations are published, then `postDeploy` hooks run.** This commonly imports data captured by EXPORT.
-- **The caller records deployment success only after these steps complete.** Azure DevOps updates the environment pointer; GitHub writes the success gate and environment pointer.
+- **The caller records deployment success only after these steps complete.** Azure DevOps updates the environment pointer; GitHub updates the environment pointer in both promotion modes and writes a per-build success gate only in `manual-gate-tag` mode.
 
 `preDeploy` runs before staging. The default is managed deployment; `deployUnmanaged`
 selects a solution's unmanaged package. IMPORT uses the same deployment script with a
@@ -142,8 +142,8 @@ global unmanaged override and different import flags.
 | Tag | Meaning |
 | --- | --- |
 | Source build tag | Identifies the source commit used by a numbered build. Characters invalid in Git refs are sanitized. |
-| `<build-name>/deployed/<environment>` | GitHub success/gate tag for that build and target. |
-| `deployed/<environment>` | Movable annotated pointer to the last successfully deployed source commit and BUILD run; GitHub also records the Release tag. |
+| `deployed/<build-name>/<environment>` | GitHub success/gate tag for that build and target, created and checked only in `manual-gate-tag` mode. |
+| `deployed/<environment>` | Movable annotated pointer to the last successfully deployed source commit and BUILD run; GitHub also records the Release tag and updates this pointer in both promotion modes. |
 | `alm4dataverse/metadata/<release-tag>` | GitHub cleanup's durable identity record for a removed Release, not an asset backup. |
 
 > [!NOTE]
@@ -151,6 +151,16 @@ global unmanaged override and different import flags.
 > [BUILD baseline selection](building-releases.md#optional-baseline-release).
 > BUILD validation and IMPORT do not move them. Do not manually create gate tags to
 > bypass a failed deployment, or move environment pointers without reconciling actual state.
+
+`environment-approval` does not create or check per-build gate tags. Its environment
+pointers are still needed for `@environment` BUILD validation baselines and to protect
+currently deployed Releases from cleanup.
+
+When upgrading from the old `<build-name>/deployed/<environment>` gate naming,
+existing gates do not satisfy the new manual promotion checks. Rerun deployment of
+the same build through the predecessor stages to record the new gates before promoting
+it further, after checking that custom hooks are safe to repeat. Do not delete source
+build tags to work around the old naming collision.
 
 ## Retry, Redeploy, And Recovery
 

@@ -440,8 +440,8 @@ if ($requestedReleaseTag) { $tagSha = Resolve-GitTagCommitSha $requestedReleaseT
 $releaseHasArtifacts = $false
 if ($null -ne $release) { $releaseHasArtifacts = @($release.assets | Where-Object { $_.name -eq 'artifacts.zip' }).Count -gt 0 }
 
-$requiredGateTag = if ($promotionMode -eq 'manual-gate-tag' -and $previousName) { "$buildTagKey/deployed/$previousName" } else { '' }
-$successGateTag = "$buildTagKey/deployed/$environmentName"
+$requiredGateTag = if ($promotionMode -eq 'manual-gate-tag' -and $previousName) { "deployed/$buildTagKey/$previousName" } else { '' }
+$successGateTag = if ($promotionMode -eq 'manual-gate-tag') { "deployed/$buildTagKey/$environmentName" } else { '' }
 $environmentPointerTag = "deployed/$environmentName"
 $artifactSource = if ($releaseHasArtifacts) { 'release' } else { 'build' }
 

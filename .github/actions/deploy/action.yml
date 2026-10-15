@@ -195,7 +195,7 @@ runs:
         & "./alm/pipelines/scripts/deploy.ps1" -ArtifactsPath "."
 
     - name: Push deployment tags
-      if: steps.resolve.outputs.success_gate_tag != ''
+      if: steps.resolve.outputs.success_gate_tag != '' || steps.resolve.outputs.environment_pointer_tag != ''
       shell: pwsh
       env:
         GH_TOKEN: ${{ github.token }}
@@ -216,11 +216,13 @@ runs:
           throw "Could not resolve the selected BUILD run ID '$buildRunId'."
         }
 
-        $out = gh api --method POST "/repos/$repo/git/refs" `
-                      --field "ref=refs/tags/$successTag" `
-                      --field "sha=$sha" 2>&1
-        if ($LASTEXITCODE -ne 0 -and "$out" -notmatch '"already exists"|Reference already exists') {
-          throw "Failed to push gate tag '$successTag': $out"
+        if (-not [string]::IsNullOrWhiteSpace($successTag)) {
+          $out = gh api --method POST "/repos/$repo/git/refs" `
+                        --field "ref=refs/tags/$successTag" `
+                        --field "sha=$sha" 2>&1
+          if ($LASTEXITCODE -ne 0 -and "$out" -notmatch '"already exists"|Reference already exists') {
+            throw "Failed to push gate tag '$successTag': $out"
+          }
         }
 
         if (-not [string]::IsNullOrWhiteSpace($environmentPointerTag)) {
