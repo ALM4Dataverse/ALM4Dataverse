@@ -36,8 +36,10 @@ Describe 'Build artifacts and solution-check helpers' {
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:sourceDirectory = Join-Path $fixtureRoot 'source'
         $script:artifactDirectory = Join-Path $fixtureRoot 'artifacts'
-        New-Item -ItemType Directory -Path (Join-Path $script:sourceDirectory 'data'), (Join-Path $script:sourceDirectory 'solutions/Example'), (Join-Path $script:artifactDirectory 'solutions') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $script:sourceDirectory 'data'), (Join-Path $script:sourceDirectory 'solutions/Example'), (Join-Path $script:sourceDirectory 'plugins'), (Join-Path $script:artifactDirectory 'solutions') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'data/example.txt') -Value 'asset'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'plugins/Example.dll') -Value 'plugin'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'plugins/Second.dll') -Value 'plugin'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{ name = 'Example'; solutionCheck = @{} })
@@ -47,7 +49,13 @@ Describe 'Build artifacts and solution-check helpers' {
 '@
         $env:GITHUB_STEP_SUMMARY = Join-Path $fixtureRoot 'job-summary.md'
         $env:TF_BUILD = 'True'
-        Mock Compress-DataverseSolutionFile { Set-Content -LiteralPath $OutputPath -Value 'packed solution' }
+        Mock Compress-DataverseSolutionFile {
+            if (-not [string]::IsNullOrWhiteSpace($MappingFile)) {
+                $global:ALM_BUILD_TEST_CAPTURED_MAPPING_PATH = $MappingFile
+                $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML = Get-Content -LiteralPath $MappingFile -Raw
+            }
+            Set-Content -LiteralPath $OutputPath -Value 'packed solution'
+        }
         Mock Copy-Item { New-Item -ItemType Directory -Path $Destination -Force | Out-Null } -ParameterFilter { $Destination -match '[\\/]alm$' }
         Mock Get-Module {
             if ($env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND -eq 'true' -and $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED -ne 'true') {
@@ -61,7 +69,10 @@ Describe 'Build artifacts and solution-check helpers' {
         } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Mock Get-Command {
             $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = 'true'
-            [pscustomobject]@{ Name = 'Compress-DataverseSolutionFile' }
+            [pscustomobject]@{
+                Name = 'Compress-DataverseSolutionFile'
+                Parameters = @{ MappingFile = [pscustomobject]@{ Name = 'MappingFile' } }
+            }
         } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
@@ -87,6 +98,7 @@ Describe 'Build artifacts and solution-check helpers' {
         }
         $global:LASTEXITCODE = $script:savedExitCode
         Remove-Variable -Name ALM_BUILD_TEST_PAC_PACK_ARGUMENTS -Scope Global -ErrorAction SilentlyContinue
+        Remove-Variable -Name ALM_BUILD_TEST_CAPTURED_MAPPING_PATH, ALM_BUILD_TEST_CAPTURED_MAPPING_XML -Scope Global -ErrorAction SilentlyContinue
     }
 
     It 'packs solutions, copies assets/configuration, and locks actual installed versions' {
@@ -164,9 +176,19 @@ Describe 'Build artifacts and solution-check helpers' {
 @{
     solutions = @(@{
         name = 'Example'
-        buildCommands = @(
-            @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first') }
-            @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'second') }
+        mappings = @(
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Example.dll'
+                destination = 'PluginAssemblies/Example.dll'
+                buildCommand = @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first') }
+            }
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Second.dll'
+                destination = 'PluginAssemblies/Second.dll'
+                buildCommand = @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'second') }
+            }
         )
     })
     assets = @('data')
@@ -183,8 +205,13 @@ Describe 'Build artifacts and solution-check helpers' {
 @{
     solutions = @(@{
         name = 'Example'
-        buildCommands = @(
-            @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first'); parallel = $false }
+        mappings = @(
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Example.dll'
+                destination = 'PluginAssemblies/Example.dll'
+                buildCommand = @{ executable = 'cmd.exe'; arguments = @('/c', 'echo', 'first'); parallel = $false }
+            }
         )
     })
     assets = @('data')
@@ -196,13 +223,56 @@ Describe 'Build artifacts and solution-check helpers' {
         Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly
     }
 
+    It 'runs a mapping buildCommand before validating its generated source file' {
+        $generatedSource = Join-Path $script:sourceDirectory 'plugins/generated/Generated.dll'
+        $buildScript = Join-Path $TestDrive 'create-mapped-plugin.ps1'
+        Set-Content -LiteralPath $buildScript -Value @'
+param([string]$OutputPath)
+New-Item -ItemType Directory -Path (Split-Path $OutputPath -Parent) -Force | Out-Null
+Set-Content -LiteralPath $OutputPath -Value built
+'@
+        $commandExecutable = Join-Path $PSHOME 'pwsh.exe'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @"
+@{
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(
+            @{
+                type = 'FileToFile'
+                source = 'plugins/generated/Generated.dll'
+                destination = 'PluginAssemblies/Generated.dll'
+                buildCommand = @{
+                    executable = '$commandExecutable'
+                    arguments = @('-NoProfile', '-File', '$buildScript', '$generatedSource')
+                    parallel = `$false
+                }
+            }
+        )
+    })
+    build = @{ parallel = `$false }
+    assets = @('data')
+    hooks = @{}
+}
+"@
+
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+        Get-Content -LiteralPath $generatedSource -Raw | Should -Match 'built'
+        $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML | Should -Match 'Generated.dll'
+    }
+
     It 'fails the build when a configured build command exits unsuccessfully' {
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{
         name = 'Example'
-        buildCommands = @(
-            @{ executable = 'cmd.exe'; arguments = @('/c', 'exit', '7'); parallel = $false }
+        mappings = @(
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Example.dll'
+                destination = 'PluginAssemblies/Example.dll'
+                buildCommand = @{ name = 'command 1'; executable = 'cmd.exe'; arguments = @('/c', 'exit', '7'); parallel = $false }
+            }
         )
     })
     assets = @('data')
@@ -219,14 +289,21 @@ Describe 'Build artifacts and solution-check helpers' {
 @{
     solutions = @(@{
         name = 'Example'
-        buildCommands = @(@{ executable = 'cmd.exe'; arguments = 'build' })
+        mappings = @(
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Example.dll'
+                destination = 'PluginAssemblies/Example.dll'
+                buildCommand = @{ executable = 'cmd.exe'; arguments = 'build' }
+            }
+        )
     })
     assets = @('data')
     hooks = @{}
 }
 '@
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
-            Should -Throw '*arguments for solution ''Example'' must be an array of strings*'
+            Should -Throw '*buildCommand arguments for mapping 1 in solution ''Example'' must be an array of strings*'
         Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
     }
 
@@ -250,7 +327,7 @@ throw "Build command '$Name' did not overlap with the other command."
         $packModulePath = Join-Path $TestDrive 'Rnwood.Dataverse.Data.PowerShell.psm1'
         Set-Content -LiteralPath $packModulePath -Value @'
 function Compress-DataverseSolutionFile {
-    param($Path, $OutputPath, $PackageType)
+    param($Path, $OutputPath, $PackageType, $MappingFile)
     Set-Content -LiteralPath $OutputPath -Value packed
 }
 Export-ModuleMember -Function Compress-DataverseSolutionFile
@@ -260,9 +337,19 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
 @{
     solutions = @(@{
         name = 'Example'
-        buildCommands = @(
-            @{ executable = '$commandExecutable'; arguments = @('-NoProfile', '-File', '$commandWorkerScript', '$barrierDirectory', 'First') }
-            @{ executable = '$commandExecutable'; arguments = @('-NoProfile', '-File', '$commandWorkerScript', '$barrierDirectory', 'Second') }
+        mappings = @(
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Example.dll'
+                destination = 'PluginAssemblies/Example.dll'
+                buildCommand = @{ executable = '$commandExecutable'; arguments = @('-NoProfile', '-File', '$commandWorkerScript', '$barrierDirectory', 'First') }
+            }
+            @{
+                type = 'FileToFile'
+                source = 'plugins/Second.dll'
+                destination = 'PluginAssemblies/Second.dll'
+                buildCommand = @{ executable = '$commandExecutable'; arguments = @('-NoProfile', '-File', '$commandWorkerScript', '$barrierDirectory', 'Second') }
+            }
         )
     })
     assets = @('data')
@@ -285,29 +372,45 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
     }
 
     It 'fails before packing when the installed module lacks mapping support' {
-        $mappingPath = Join-Path $script:sourceDirectory 'solutions/Example/Mapping.xml'
-        Set-Content -LiteralPath $mappingPath -Value '<Mapping />'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
-    solutions = @(@{ name = 'Example'; mappingFile = 'solutions/Example/Mapping.xml' })
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(
+            @{ type = 'FileToFile'; source = 'plugins/Example.dll'; destination = 'PluginAssemblies\Example.dll' }
+        )
+    })
     build = @{ parallel = $false }
     assets = @('data')
     hooks = @{}
 }
 '@
+        Mock Get-Command {
+            [pscustomobject]@{ Name = 'Compress-DataverseSolutionFile' }
+        } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
 
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
-            Should -Throw '*requires a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile*'
+            Should -Throw '*Solution mappings require a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile*'
         Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
         Should -Invoke Invoke-TestPac -Times 0 -Exactly
     }
 
-    It 'uses the pack cmdlet mapping parameter when the installed module supports it' {
-        $mappingPath = Join-Path $script:sourceDirectory 'solutions/Example/Mapping.xml'
-        Set-Content -LiteralPath $mappingPath -Value '<Mapping />'
+    It 'generates mapping XML in entry order with all supported directive types' {
+        $pluginDirectory = Join-Path $script:sourceDirectory 'plugins/Source&Metadata'
+        $pluginFile = Join-Path $script:sourceDirectory 'plugins/bin&build/Example.dll'
+        $webResourceDirectory = Join-Path $script:sourceDirectory 'webresources'
+        New-Item -ItemType Directory -Path $pluginDirectory, (Split-Path $pluginFile -Parent), $webResourceDirectory -Force | Out-Null
+        Set-Content -LiteralPath $pluginFile -Value 'plugin'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
-    solutions = @(@{ name = 'Example'; mappingFile = 'solutions/Example/Mapping.xml' })
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(
+            @{ type = 'FileToFile'; source = 'plugins/bin&build/Example.dll'; destination = 'PluginAssemblies\Example.dll' }
+            @{ type = 'Folder'; source = 'plugins/Source&Metadata'; destination = 'PluginAssemblies\Metadata' }
+            @{ type = 'FileToPath'; source = 'webresources'; destination = 'WebResources\**\*.*' }
+        )
+    })
     build = @{ parallel = $false }
     assets = @('data')
     hooks = @{}
@@ -322,11 +425,20 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
 
         & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
 
-        Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { $MappingFile -eq $mappingPath }
+        Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { -not [string]::IsNullOrWhiteSpace($MappingFile) }
         Should -Invoke Invoke-TestPac -Times 0 -Exactly
+        $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML | Should -Match '<Mapping>'
+        $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML | Should -Match 'bin&amp;build'
+        $mappingXml = [xml]$global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML
+        $mappingTypes = @($mappingXml.Mapping.ChildNodes | ForEach-Object { $_.LocalName }) -join ','
+        $mappingTypes | Should -Be 'FileToFile,Folder,FileToPath'
+        $mappingXml.Mapping.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath($pluginFile))
+        $expectedPluginDestination = [System.IO.Path]::GetFullPath((Join-Path $script:sourceDirectory 'solutions/Example/PluginAssemblies/Example.dll'))
+        $mappingXml.Mapping.FileToFile.GetAttribute('map') | Should -Be $expectedPluginDestination
+        Test-Path -LiteralPath $global:ALM_BUILD_TEST_CAPTURED_MAPPING_PATH | Should -BeFalse
     }
 
-    It 'rejects a missing solution mapping file before packing' {
+    It 'rejects the removed mappingFile setting before packing' {
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{ name = 'Example'; mappingFile = 'solutions/Example/Missing.xml' })
@@ -335,14 +447,60 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
     hooks = @{}
 }
 '@
-        Mock Get-Command {
-            [pscustomobject]@{
-                Name = 'Compress-DataverseSolutionFile'
-                Parameters = @{ MappingFile = [pscustomobject]@{ Name = 'MappingFile' } }
-            }
-        } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
-            Should -Throw '*Mapping file not found for solution*'
+            Should -Throw '*mappingFile for solution ''Example'' is no longer supported*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+    }
+
+    It 'rejects separate solution-level build commands' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; buildCommands = @() })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*buildCommands for solution ''Example'' are no longer supported as a separate setting*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+    }
+
+    It 'rejects unsupported mapping directive types before packing' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(
+            @{ type = 'File'; source = 'plugins/Example.dll'; destination = 'PluginAssemblies/Example.dll' }
+        )
+    })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*Unsupported mappings type ''File'' for solution ''Example''*'
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+    }
+
+    It 'rejects mapping sources that do not exist before packing' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(
+            @{ type = 'FileToFile'; source = 'plugins/Missing.dll'; destination = 'PluginAssemblies\Missing.dll' }
+        )
+    })
+    build = @{ parallel = $false }
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*Mapping source file not found for solution ''Example''*'
         Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
     }
 

@@ -21,8 +21,8 @@
     # Each entry is a hashtable with keys
     # - name: unique solution name.
     # - deployUnmanaged: (optional) boolean indicating whether to deploy unmanaged version.
-    # - mappingFile: (optional) SolutionPackager mapping XML path, relative to the repository root.
-    # - buildCommands: (optional) commands to run before packing this solution.
+    # - mappings: (optional) ordered SolutionPackager directives. Each item can include
+    #   a buildCommand that runs before packing.
     # - serviceAccountUpnConfigKey: (optional) name of the environment configuration key containing
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'
@@ -32,14 +32,27 @@
         # Example:
         # @{
         #   name = 'ContosoCore'
-        #   mappingFile = 'solutions/ContosoCore/Mapping.xml'
-        #   buildCommands = @(
+        #   mappings = @(
         #     @{
-        #       name = 'Build plugin'
-        #       executable = 'dotnet'
-        #       arguments = @('build', 'plugins/Contoso.Plugin/Contoso.Plugin.csproj', '--configuration', 'Release')
-        #       workingDirectory = '.'
-        #       parallel = $true
+        #       type = 'FileToFile'
+        #       source = 'plugins/Contoso.Plugin/bin/Release/Contoso.Plugin.dll'
+        #       destination = 'PluginAssemblies\Contoso.Plugin.dll'
+        #       buildCommand = @{
+        #         name = 'Build plugin'
+        #         executable = 'dotnet'
+        #         arguments = @('build', 'plugins/Contoso.Plugin/Contoso.Plugin.csproj', '--configuration', 'Release')
+        #         workingDirectory = '.'
+        #       }
+        #     }
+        #     @{
+        #       type = 'Folder'
+        #       source = 'webresources'
+        #       destination = 'WebResources'
+        #     }
+        #     @{
+        #       type = 'FileToPath'
+        #       source = 'custom-resources'
+        #       destination = 'Other\*.json'
         #     }
         #   )
         #   solutionCheck = @{

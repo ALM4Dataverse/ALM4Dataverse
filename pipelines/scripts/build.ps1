@@ -75,38 +75,129 @@ function Get-AlmBuildSetting {
     return $settings
 }
 
+function Get-SolutionPackagerMappingEntry {
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)][hashtable]$Solution)
+
+    $solutionName = [string]$Solution.name
+    if ($Solution.ContainsKey('mappingFile')) {
+        throw "mappingFile for solution '$solutionName' is no longer supported. Define mappings directly in the solution configuration."
+    }
+    if ($Solution.ContainsKey('buildCommands')) {
+        throw "buildCommands for solution '$solutionName' are no longer supported as a separate setting. Put buildCommand on each mapping entry instead."
+    }
+    if (-not $Solution.ContainsKey('mappings') -or $null -eq $Solution.mappings) {
+        return @()
+    }
+    if ($Solution.mappings -isnot [array]) {
+        throw "mappings for solution '$solutionName' must be an array of mapping entries."
+    }
+
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($mapping in $Solution.mappings) {
+        if ($mapping -isnot [hashtable]) {
+            throw "Each mappings entry for solution '$solutionName' must be a hashtable."
+        }
+
+        $unknownProperties = @($mapping.Keys | Where-Object { $_ -notin @('type', 'source', 'destination', 'buildCommand') })
+        if ($unknownProperties.Count -gt 0) {
+            throw "Unknown property in mappings entry for solution '$solutionName': $($unknownProperties -join ', ')."
+        }
+        if ($mapping.type -isnot [string] -or [string]::IsNullOrWhiteSpace($mapping.type)) {
+            throw "Each mappings entry for solution '$solutionName' must have a type of Folder, FileToFile, or FileToPath."
+        }
+        $type = switch ($mapping.type.ToLowerInvariant()) {
+            'folder' { 'Folder' }
+            'filetofile' { 'FileToFile' }
+            'filetopath' { 'FileToPath' }
+            default { throw "Unsupported mappings type '$($mapping.type)' for solution '$solutionName'. Use Folder, FileToFile, or FileToPath." }
+        }
+        foreach ($propertyName in @('source', 'destination')) {
+            if (-not $mapping.ContainsKey($propertyName) -or $mapping[$propertyName] -isnot [string] -or [string]::IsNullOrWhiteSpace($mapping[$propertyName])) {
+                throw "Each mappings entry for solution '$solutionName' must have a non-empty $propertyName string."
+            }
+        }
+        if ($mapping.ContainsKey('buildCommand') -and $null -ne $mapping.buildCommand -and $mapping.buildCommand -isnot [hashtable]) {
+            throw "buildCommand for a mappings entry in solution '$solutionName' must be a hashtable."
+        }
+
+        $entries.Add([pscustomobject]@{
+            Type         = $type
+            Source       = $mapping.source
+            Destination  = $mapping.destination
+            BuildCommand = if ($mapping.ContainsKey('buildCommand')) { $mapping.buildCommand } else { $null }
+        })
+    }
+
+    return $entries.ToArray()
+}
+
+function ConvertTo-SolutionPackagerMappingXml {
+    param(
+        [Parameter(Mandatory)][object[]]$Entries,
+        [Parameter(Mandatory)][string]$SourceDirectory,
+        [Parameter(Mandatory)][string]$SolutionPath,
+        [Parameter(Mandatory)][string]$SolutionName
+    )
+
+    $document = [System.Xml.XmlDocument]::new()
+    $declaration = $document.CreateXmlDeclaration('1.0', 'utf-8', $null)
+    [void]$document.AppendChild($declaration)
+    $root = $document.CreateElement('Mapping')
+    [void]$document.AppendChild($root)
+
+    foreach ($entry in $Entries) {
+        $sourcePath = [string]$entry.Source
+        if ($sourcePath -notmatch '%[^%]+%') {
+            if (-not [System.IO.Path]::IsPathRooted($sourcePath)) {
+                $sourcePath = Join-Path $SourceDirectory $sourcePath
+            }
+            $sourcePath = [System.IO.Path]::GetFullPath($sourcePath)
+            $expectedPathType = if ($entry.Type -eq 'FileToFile') { 'Leaf' } else { 'Container' }
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType $expectedPathType)) {
+                $expectedDescription = if ($expectedPathType -eq 'Leaf') { 'file' } else { 'folder' }
+                throw "Mapping source $expectedDescription not found for solution '$SolutionName': $sourcePath"
+            }
+        }
+
+        $destination = [string]$entry.Destination
+        if (-not [System.IO.Path]::IsPathRooted($destination) -and $destination -notmatch '%[^%]+%') {
+            $destination = Join-Path $SolutionPath $destination
+        }
+
+        $element = $document.CreateElement([string]$entry.Type)
+        $element.SetAttribute('map', $destination)
+        $element.SetAttribute('to', $sourcePath)
+        [void]$root.AppendChild($element)
+    }
+
+    return $document.OuterXml
+}
+
 function Get-SolutionBuildCommandPlan {
     [OutputType([object[]])]
     param(
-        [Parameter(Mandatory)][array]$Solutions,
+        [Parameter(Mandatory)][array]$MappingPlans,
         [Parameter(Mandatory)][string]$SourceDirectory
     )
 
     $plans = [System.Collections.Generic.List[object]]::new()
-    for ($solutionIndex = 0; $solutionIndex -lt $Solutions.Count; $solutionIndex++) {
-        $solution = $Solutions[$solutionIndex]
-        if (-not $solution.ContainsKey('buildCommands') -or $null -eq $solution.buildCommands) {
-            continue
-        }
-        if ($solution.buildCommands -isnot [array]) {
-            throw "buildCommands for solution '$($solution.name)' must be an array."
-        }
-
+    foreach ($mappingPlan in $MappingPlans) {
         $groupIndex = -1
         $previousParallel = $null
-        for ($commandIndex = 0; $commandIndex -lt $solution.buildCommands.Count; $commandIndex++) {
-            $command = $solution.buildCommands[$commandIndex]
-            if ($command -isnot [hashtable]) {
-                throw "Each buildCommands entry for solution '$($solution.name)' must be a hashtable."
+        for ($mappingIndex = 0; $mappingIndex -lt $mappingPlan.Entries.Count; $mappingIndex++) {
+            $command = $mappingPlan.Entries[$mappingIndex].BuildCommand
+            if ($null -eq $command) {
+                continue
             }
             if (-not $command.ContainsKey('executable') -or $command.executable -isnot [string] -or [string]::IsNullOrWhiteSpace($command.executable)) {
-                throw "Each buildCommands entry for solution '$($solution.name)' must have a non-empty executable string."
+                throw "buildCommand for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must have a non-empty executable string."
             }
 
             $arguments = @()
             if ($command.ContainsKey('arguments') -and $null -ne $command.arguments) {
                 if ($command.arguments -isnot [array] -or @($command.arguments | Where-Object { $_ -isnot [string] }).Count -gt 0) {
-                    throw "buildCommands arguments for solution '$($solution.name)' must be an array of strings."
+                    throw "buildCommand arguments for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be an array of strings."
                 }
                 $arguments = @($command.arguments)
             }
@@ -116,7 +207,7 @@ function Get-SolutionBuildCommandPlan {
                 $parallel = $command.parallel
             }
             if ($parallel -isnot [bool]) {
-                throw "buildCommands parallel for solution '$($solution.name)' must be `$true or `$false."
+                throw "buildCommand parallel for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be `$true or `$false."
             }
             if ($null -eq $previousParallel -or $previousParallel -ne $parallel) {
                 $groupIndex++
@@ -126,27 +217,27 @@ function Get-SolutionBuildCommandPlan {
             $workingDirectory = $SourceDirectory
             if ($command.ContainsKey('workingDirectory') -and $null -ne $command.workingDirectory) {
                 if ($command.workingDirectory -isnot [string]) {
-                    throw "buildCommands workingDirectory for solution '$($solution.name)' must be a relative path string."
+                    throw "buildCommand workingDirectory for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be a relative path string."
                 }
                 if (-not [string]::IsNullOrWhiteSpace($command.workingDirectory)) {
                     if ([System.IO.Path]::IsPathRooted($command.workingDirectory)) {
-                        throw "buildCommands workingDirectory for solution '$($solution.name)' must be relative to the repository root."
+                        throw "buildCommand workingDirectory for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be relative to the repository root."
                     }
                     $workingDirectory = [System.IO.Path]::GetFullPath((Join-Path $SourceDirectory $command.workingDirectory))
                 }
             }
             if (-not (Test-Path -LiteralPath $workingDirectory -PathType Container)) {
-                throw "buildCommands workingDirectory for solution '$($solution.name)' was not found: $workingDirectory"
+                throw "buildCommand workingDirectory for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' was not found: $workingDirectory"
             }
 
-            $commandName = "command $($commandIndex + 1)"
+            $commandName = "mapping $($mappingIndex + 1)"
             if ($command.ContainsKey('name') -and $command.name -is [string] -and -not [string]::IsNullOrWhiteSpace($command.name)) {
                 $commandName = $command.name
             }
             $plans.Add([pscustomobject]@{
-                SolutionIndex    = $solutionIndex
-                SolutionName     = [string]$solution.name
-                CommandIndex     = $commandIndex
+                SolutionIndex    = $mappingPlan.SolutionIndex
+                SolutionName     = $mappingPlan.SolutionName
+                CommandIndex     = $mappingIndex
                 CommandName      = $commandName
                 Executable       = $command.executable
                 Arguments        = [string[]]$arguments
@@ -696,16 +787,22 @@ if ($null -eq $packModule) {
     Write-Host "##[error]Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
     throw "Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
 }
+$mappingPlans = @(
+    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
+        [pscustomobject]@{
+            SolutionIndex = $index
+            SolutionName = [string]$config.solutions[$index].name
+            Entries      = @(Get-SolutionPackagerMappingEntry -Solution $config.solutions[$index])
+        }
+    }
+)
 $packSupportsMappingFile = $null -ne $packCommand.PSObject.Properties['Parameters'] -and $packCommand.Parameters.ContainsKey('MappingFile')
-$mappedSolutions = @($config.solutions | Where-Object {
-    $_ -is [hashtable] -and $_.ContainsKey('mappingFile') -and
-        $null -ne $_.mappingFile -and -not [string]::IsNullOrWhiteSpace([string]$_.mappingFile)
-})
+$mappedSolutions = @($mappingPlans | Where-Object { $_.Entries.Count -gt 0 })
 if ($mappedSolutions.Count -gt 0 -and -not $packSupportsMappingFile) {
-    throw "Solution mappingFile requires a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile. Update scriptDependencies in alm-config.psd1 to the compatible module version."
+    throw "Solution mappings require a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile. Update scriptDependencies in alm-config.psd1 to the compatible module version."
 }
 
-$buildCommandPlans = @(Get-SolutionBuildCommandPlan -Solutions $config.solutions -SourceDirectory $SourceDirectory)
+$buildCommandPlans = @(Get-SolutionBuildCommandPlan -MappingPlans $mappingPlans -SourceDirectory $SourceDirectory)
 if ($buildCommandPlans.Count -gt 0) {
     $lastGroupIndex = ($buildCommandPlans | Measure-Object -Property GroupIndex -Maximum).Maximum
     for ($groupIndex = 0; $groupIndex -le $lastGroupIndex; $groupIndex++) {
@@ -778,24 +875,23 @@ if ($buildCommandPlans.Count -gt 0) {
     }
 }
 
-$packPlans = @(
+$generatedMappingFiles = [System.Collections.Generic.List[string]]::new()
+try {
+    $packPlans = @(
     for ($index = 0; $index -lt $config.solutions.Count; $index++) {
         $solutionName = [string]$config.solutions[$index].name
         $solutionPath = Join-Path $SourceDirectory "solutions/$solutionName"
         $mappingFile = ''
-        if ($config.solutions[$index].ContainsKey('mappingFile') -and $null -ne $config.solutions[$index].mappingFile) {
-            if ($config.solutions[$index].mappingFile -isnot [string]) {
-                throw "mappingFile for solution '$solutionName' must be a relative path string."
-            }
-            if (-not [string]::IsNullOrWhiteSpace($config.solutions[$index].mappingFile)) {
-                if ([System.IO.Path]::IsPathRooted($config.solutions[$index].mappingFile)) {
-                    throw "mappingFile for solution '$solutionName' must be relative to the repository root."
-                }
-                $mappingFile = [System.IO.Path]::GetFullPath((Join-Path $SourceDirectory $config.solutions[$index].mappingFile))
-                if (-not (Test-Path -LiteralPath $mappingFile -PathType Leaf)) {
-                    throw "Mapping file not found for solution '$solutionName': $mappingFile"
-                }
-            }
+        $mappingEntries = $mappingPlans[$index].Entries
+        if ($mappingEntries.Count -gt 0) {
+            $mappingXml = ConvertTo-SolutionPackagerMappingXml `
+                -Entries $mappingEntries `
+                -SourceDirectory $SourceDirectory `
+                -SolutionPath $solutionPath `
+                -SolutionName $solutionName
+            $mappingFile = Join-Path ([System.IO.Path]::GetTempPath()) "alm4dataverse-mapping-$([guid]::NewGuid().ToString('N')).xml"
+            $generatedMappingFiles.Add($mappingFile)
+            [System.IO.File]::WriteAllText($mappingFile, $mappingXml, [System.Text.UTF8Encoding]::new($false))
         }
         [pscustomobject]@{
             Index        = $index
@@ -886,6 +982,14 @@ else {
                 -MappingFile $plan.MappingFile
         }
         Write-Host "##[endgroup]"
+    }
+}
+}
+finally {
+    foreach ($mappingFile in $generatedMappingFiles) {
+        if (Test-Path -LiteralPath $mappingFile) {
+            Remove-Item -LiteralPath $mappingFile -Force
+        }
     }
 }
 

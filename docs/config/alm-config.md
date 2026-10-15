@@ -45,7 +45,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
-| `scriptDependencies` | Hashtable of module names and versions | `Rnwood.Dataverse.Data.PowerShell = '3.0.3'`. |
+| `scriptDependencies` | Hashtable of module names and versions | `Rnwood.Dataverse.Data.PowerShell = '3.1.0'`. |
 | `pacCliVersion` | String | `'2.7.4'`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
 | `buildValidation.baselineRelease` | String | `''`; no baseline. |
@@ -116,8 +116,7 @@ solutions = @(
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
-- `mappingFile` (optional): SolutionPackager mapping XML path, relative to the repository root.
-- `buildCommands` (optional): Commands to run before packing this solution; see [Build Processing](#build-processing).
+- `mappings` (optional): Ordered SolutionPackager mapping entries; each entry may include the build command that produces its source; see [Build Processing](#build-processing).
 
 `BUILD` packs both managed and unmanaged packages. `DEPLOY` selects the package using `deployUnmanaged`; `IMPORT` always selects unmanaged packages for every solution. Use managed deployment for controlled downstream environments unless you have a specific reason to retain unmanaged customizations.
 
@@ -167,50 +166,94 @@ build = @{
 
 | Setting | Type | Default | Behavior |
 | --- | --- | --- | --- |
-| `build.parallel` | Boolean | `$true` | Run build commands and pack solutions concurrently; `$false` runs build commands and packing sequentially. |
+| `build.parallel` | Boolean | `$true` | Run eligible build commands and solution packs in parallel within their respective stages; `$false` runs both stages sequentially. |
 | `build.maxParallel` | Integer, `1` to `8` | `2` | Maximum concurrent build commands or solution packs within each stage. |
 
 Missing, null, or empty optional settings use the defaults; an explicit `$false`
 is preserved. Invalid types or out-of-range limits fail with a configuration error.
 
-Each solution can run one or more build commands before packaging and can specify a
-SolutionPackager mapping XML file. For example, compile a plugin project and map
-its output DLL into the solution:
+`mappings` is an ordered array of entries. Each entry directly represents one
+SolutionPackager directive and may include a `buildCommand` to produce its
+source before packing. This example builds a plugin DLL, maps a web-resource
+folder, and maps matching files from another folder:
 
 ```powershell
 solutions = @(
     @{
         name = 'ContosoCore'
-        mappingFile = 'solutions/ContosoCore/Mapping.xml'
-        buildCommands = @(
+        mappings = @(
             @{
-                name = 'Build plugin'
-                executable = 'dotnet'
-                arguments = @('build', 'plugins/Contoso.Plugin/Contoso.Plugin.csproj', '--configuration', 'Release')
-                workingDirectory = '.'
-                parallel = $true
+                type = 'FileToFile'
+                source = 'plugins/Contoso.Plugin/bin/Release/Contoso.Plugin.dll'
+                destination = 'PluginAssemblies\Contoso.Plugin.dll'
+                buildCommand = @{
+                    name = 'Build plugin'
+                    executable = 'dotnet'
+                    arguments = @('build', 'plugins/Contoso.Plugin/Contoso.Plugin.csproj', '--configuration', 'Release')
+                    workingDirectory = '.'
+                }
+            }
+            @{
+                type = 'Folder'
+                source = 'webresources'
+                destination = 'WebResources'
+            }
+            @{
+                type = 'FileToPath'
+                source = 'other-resources'
+                destination = 'Other\*.json'
             }
         )
     }
 )
 ```
 
-`mappingFile` is passed to `pac solution pack --map` and must exist when packing
-starts. Its path is relative to the repository root. Build commands use an
-executable and an argument array (not a shell command string); each argument is
-passed as a distinct process argument. `workingDirectory` is optional and
-defaults to the repository root; relative working directories are resolved from
-that root. Mapping requires a version of `Rnwood.Dataverse.Data.PowerShell`
-that supports `Compress-DataverseSolutionFile -MappingFile`; BUILD fails early
-with an instruction to update the module dependency if that parameter is not
-available. This preserves the cmdlet's automatic `.msapp` folder preprocessing.
+Each entry has these properties:
 
-Build commands are grouped by consecutive `parallel` values in their configured
-order. Commands in a parallel group run concurrently, limited by
-`build.maxParallel`; set an individual command's `parallel = $false` to run it
-sequentially with commands in its group. Groups execute in order, and all
+- `type` (required): `Folder`, `FileToFile`, or `FileToPath`, matching the
+  SolutionPackager directive.
+- `source` (required): Path to the source file or folder. Relative paths are
+  resolved from the repository root; absolute paths and `%variable%`
+  environment-variable references are also supported.
+- `destination` (required): Path or pattern in the solution package. Relative
+  paths are resolved from that solution's folder; absolute paths and
+  `%variable%` references are also supported.
+- `buildCommand` (optional): Command to run before packing this mapping's
+  source. It uses `executable`, an `arguments` array, optional
+  `workingDirectory`, and optional `parallel` (default `$true`).
+
+Source paths are checked after build commands run. The mapping array's order is
+preserved in the generated mapping XML and therefore determines precedence
+when rules overlap.
+
+The directives follow the [official SolutionPackager mapping specification](https://learn.microsoft.com/en-us/power-platform/alm/solution-packager-tool):
+
+- `Folder` maps folder hierarchies and does not support wildcards or file names.
+- `FileToFile` requires a filename in both `map` and `to`; filename wildcards
+  are not supported, although the folder wildcard `\**` is.
+- `FileToPath` requires a filename or filename pattern in `map` (for example,
+  `*.ext` or `*.*`); `to` must be a folder path without a filename.
+- Earlier directives take precedence. A matched file must exist in at least
+  one alternative location or SolutionPackager reports an error.
+
+ALM4Dataverse generates the XML mapping file from `mappings` in a temporary
+location for packing and removes it afterward; users do not maintain a separate
+mapping file. The former `mappingFile` and solution-level `buildCommands`
+settings are not accepted. Mapping requires a version of
+`Rnwood.Dataverse.Data.PowerShell` that supports
+`Compress-DataverseSolutionFile -MappingFile`; BUILD fails early with an
+instruction to update the module dependency if that parameter is unavailable.
+This preserves the cmdlet's automatic `.msapp` folder preprocessing.
+
+Build commands use an executable and an argument array (not a shell command
+string); each argument is passed as a distinct process argument.
+`workingDirectory` is optional and defaults to the repository root; relative
+working directories are resolved from that root. Commands are grouped by
+consecutive `parallel` values in mapping order. Parallel commands run
+concurrently, limited by `build.maxParallel`; set an individual command's
+`parallel = $false` to run it sequentially. Groups execute in order, and all
 commands finish before solution packing begins. When `build.parallel = $false`,
-all commands run sequentially in solution and command order.
+all commands run sequentially in solution and mapping order.
 
 ### Assets
 
