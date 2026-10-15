@@ -21,8 +21,8 @@
     # Each entry is a hashtable with keys
     # - name: unique solution name.
     # - deployUnmanaged: (optional) boolean indicating whether to deploy unmanaged version.
-    # - mappings: (optional) ordered SolutionPackager directives. Each item can include
-    #   a buildCommand that runs before packing.
+    # - mappings: (optional) ordered SolutionPackager directives used by BUILD and EXPORT.
+    #   Each item can include a buildCommand that runs before packing during BUILD.
     # - serviceAccountUpnConfigKey: (optional) name of the environment configuration key containing
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'

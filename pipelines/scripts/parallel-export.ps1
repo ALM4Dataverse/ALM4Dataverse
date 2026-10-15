@@ -45,9 +45,17 @@ function Send-AlmExportEvent {
 }
 
 function Expand-AlmExportSolution {
-    param([Parameter(Mandatory)][string]$ZipPath, [Parameter(Mandatory)][string]$OutputPath)
+    param(
+        [Parameter(Mandatory)][string]$ZipPath,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [string]$MappingFile
+    )
 
-    Expand-DataverseSolutionFile -Path $ZipPath -OutputPath $OutputPath -PackageType Both -UnpackMsapp
+    if ([string]::IsNullOrWhiteSpace($MappingFile)) {
+        Expand-DataverseSolutionFile -Path $ZipPath -OutputPath $OutputPath -PackageType Both -UnpackMsapp
+    } else {
+        Expand-DataverseSolutionFile -Path $ZipPath -OutputPath $OutputPath -PackageType Both -UnpackMsapp -MappingFile $MappingFile
+    }
 }
 
 function Start-AlmExportPipeline {

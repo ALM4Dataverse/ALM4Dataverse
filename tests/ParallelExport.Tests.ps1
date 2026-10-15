@@ -1,6 +1,10 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'pipelines/scripts/parallel-export.ps1')
+    function Expand-DataverseSolutionFile {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        param($Path, $OutputPath, $PackageType, [switch]$UnpackMsapp, $MappingFile)
+    }
 }
 
 Describe 'Parallel export configuration' {
@@ -51,6 +55,16 @@ Describe 'Parallel export logging' {
         @{ Text = '::error::Detail'; Expected = '::error::[Example][Export] Detail' }
     ) {
         Format-AlmLogLine -SolutionName Example -Phase Export -Text $Text | Should -Be $Expected
+    }
+}
+
+Describe 'Parallel export mappings' {
+    It 'passes generated mapping files to the solution unpack cmdlet' {
+        Mock Expand-DataverseSolutionFile {}
+
+        Expand-AlmExportSolution -ZipPath 'solution.zip' -OutputPath 'solutions/Example' -MappingFile 'mapping.xml'
+
+        Should -Invoke Expand-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { $MappingFile -eq 'mapping.xml' }
     }
 }
 
@@ -137,7 +151,7 @@ function Export-DataverseSolution {
         else { Write-TestSolution $OutFolder }
     } finally { $Connection.EndExport() }
 }
-function Expand-DataverseSolutionFile { param($Path, $OutputPath, $PackageType, [switch]$UnpackMsapp); Write-TestSolution $OutputPath }
+function Expand-DataverseSolutionFile { param($Path, $OutputPath, $PackageType, [switch]$UnpackMsapp, $MappingFile); Write-TestSolution $OutputPath }
 function Compress-DataverseSolutionFile { param($PackageType, $OutputPath, $Path); Set-Content -LiteralPath $OutputPath -Value 'baseline' }
 function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestClient]::VersionUpdates++ }
 '@
@@ -157,6 +171,7 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         Set-Content -LiteralPath $modulePath -Value $script:exportModuleSource
         foreach ($module in $script:savedExportModules) { Remove-Module $module }
         Import-Module $modulePath -Global -Force
+        Mock Expand-DataverseSolutionFile { Write-TestSolution $OutputPath }
         [AlmExportTestClient]::Reset(1)
     }
 

@@ -1,6 +1,15 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:buildScript = Join-Path $repoRoot 'pipelines/scripts/build.ps1'
+    if (-not ('AlmBuildMappingTestCapture' -as [type])) {
+        Add-Type -TypeDefinition @'
+public static class AlmBuildMappingTestCapture
+{
+    public static string MappingPath { get; set; }
+    public static string MappingXml { get; set; }
+}
+'@
+    }
     function Compress-DataverseSolutionFile {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
@@ -51,8 +60,8 @@ Describe 'Build artifacts and solution-check helpers' {
         $env:TF_BUILD = 'True'
         Mock Compress-DataverseSolutionFile {
             if (-not [string]::IsNullOrWhiteSpace($MappingFile)) {
-                $global:ALM_BUILD_TEST_CAPTURED_MAPPING_PATH = $MappingFile
-                $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML = Get-Content -LiteralPath $MappingFile -Raw
+                [AlmBuildMappingTestCapture]::MappingPath = $MappingFile
+                [AlmBuildMappingTestCapture]::MappingXml = Get-Content -LiteralPath $MappingFile -Raw
             }
             Set-Content -LiteralPath $OutputPath -Value 'packed solution'
         }
@@ -258,7 +267,7 @@ Set-Content -LiteralPath $OutputPath -Value built
         & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
 
         Get-Content -LiteralPath $generatedSource -Raw | Should -Match 'built'
-        $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML | Should -Match 'Generated.dll'
+        [AlmBuildMappingTestCapture]::MappingXml | Should -Match 'Generated.dll'
     }
 
     It 'fails the build when a configured build command exits unsuccessfully' {
@@ -427,15 +436,15 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
 
         Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { -not [string]::IsNullOrWhiteSpace($MappingFile) }
         Should -Invoke Invoke-TestPac -Times 0 -Exactly
-        $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML | Should -Match '<Mapping>'
-        $global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML | Should -Match 'bin&amp;build'
-        $mappingXml = [xml]$global:ALM_BUILD_TEST_CAPTURED_MAPPING_XML
+        [AlmBuildMappingTestCapture]::MappingXml | Should -Match '<Mapping>'
+        [AlmBuildMappingTestCapture]::MappingXml | Should -Match 'bin&amp;build'
+        $mappingXml = [xml][AlmBuildMappingTestCapture]::MappingXml
         $mappingTypes = @($mappingXml.Mapping.ChildNodes | ForEach-Object { $_.LocalName }) -join ','
         $mappingTypes | Should -Be 'FileToFile,Folder,FileToPath'
         $mappingXml.Mapping.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath($pluginFile))
         $expectedPluginDestination = [System.IO.Path]::GetFullPath((Join-Path $script:sourceDirectory 'solutions/Example/PluginAssemblies/Example.dll'))
         $mappingXml.Mapping.FileToFile.GetAttribute('map') | Should -Be $expectedPluginDestination
-        Test-Path -LiteralPath $global:ALM_BUILD_TEST_CAPTURED_MAPPING_PATH | Should -BeFalse
+        Test-Path -LiteralPath ([AlmBuildMappingTestCapture]::MappingPath) | Should -BeFalse
     }
 
     It 'rejects the removed mappingFile setting before packing' {

@@ -116,7 +116,7 @@ solutions = @(
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
-- `mappings` (optional): Ordered SolutionPackager mapping entries; each entry may include the build command that produces its source; see [Build Processing](#build-processing).
+- `mappings` (optional): Ordered SolutionPackager mapping entries used during BUILD and EXPORT; each entry may include the build command that produces its source during BUILD; see [Build Processing](#build-processing).
 
 `BUILD` packs both managed and unmanaged packages. `DEPLOY` selects the package using `deployUnmanaged`; `IMPORT` always selects unmanaged packages for every solution. Use managed deployment for controlled downstream environments unless you have a specific reason to retain unmanaged customizations.
 
@@ -151,6 +151,12 @@ Missing, null, or empty optional settings use the defaults; an explicit `$false`
 is preserved. Invalid types or out-of-range limits fail with a configuration error.
 Unpacking, change detection, and version updates run in configured solution order.
 Pre-export and post-export hooks keep their existing order and context.
+When mappings are configured, EXPORT generates the mapping XML from the same
+entries and uses it to unpack both packages and compare managed solution
+packages. `buildCommand` is BUILD-only and is not run during EXPORT. If an
+existing solution is being compared, mapped source paths must already exist so
+the previous package can be reconstructed; the first export has no previous
+package to compare.
 
 See [Export Logs](../usage/exporting-changes.md#export-logs) for progress messages,
 per-solution summaries and retained diagnostics.
@@ -219,8 +225,9 @@ Each entry has these properties:
   paths are resolved from that solution's folder; absolute paths and
   `%variable%` references are also supported.
 - `buildCommand` (optional): Command to run before packing this mapping's
-  source. It uses `executable`, an `arguments` array, optional
-  `workingDirectory`, and optional `parallel` (default `$true`).
+  source during BUILD. EXPORT does not run build commands. It uses `executable`,
+  an `arguments` array, optional `workingDirectory`, and optional `parallel`
+  (default `$true`).
 
 Source paths are checked after build commands run. The mapping array's order is
 preserved in the generated mapping XML and therefore determines precedence
@@ -237,13 +244,16 @@ The directives follow the [official SolutionPackager mapping specification](http
   one alternative location or SolutionPackager reports an error.
 
 ALM4Dataverse generates the XML mapping file from `mappings` in a temporary
-location for packing and removes it afterward; users do not maintain a separate
-mapping file. The former `mappingFile` and solution-level `buildCommands`
-settings are not accepted. Mapping requires a version of
-`Rnwood.Dataverse.Data.PowerShell` that supports
-`Compress-DataverseSolutionFile -MappingFile`; BUILD fails early with an
-instruction to update the module dependency if that parameter is unavailable.
-This preserves the cmdlet's automatic `.msapp` folder preprocessing.
+location for packing and unpacking and removes it afterward; users do not
+maintain a separate mapping file. The former `mappingFile` and solution-level
+`buildCommands` settings are not accepted. BUILD and export package comparison
+require a version of `Rnwood.Dataverse.Data.PowerShell` that supports
+`Compress-DataverseSolutionFile -MappingFile`. EXPORT also requires
+`Expand-DataverseSolutionFile -MappingFile` when parallel export is enabled, or
+`Export-DataverseSolution -MappingFile` when it is disabled. The pipeline fails
+early with an instruction to update the module dependency if a required
+parameter is unavailable. The mapping-aware unpack cmdlets retain automatic
+`.msapp` folder preprocessing.
 
 Build commands use an executable and an argument array (not a shell command
 string); each argument is passed as a distinct process argument.
