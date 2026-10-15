@@ -42,6 +42,7 @@ BeforeAll {
         Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @"
 @{
     solutions = @(@{ name = 'Example'; $Settings })
+    build = @{ parallel = `$false }
     hooks = @{}
 }
 "@
