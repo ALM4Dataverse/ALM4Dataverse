@@ -83,9 +83,9 @@ function Get-SolutionBuildCommandPlan {
     )
 
     $plans = [System.Collections.Generic.List[object]]::new()
+    $groupIndex = -1
+    $previousParallel = $null
     foreach ($mappingPlan in $MappingPlans) {
-        $groupIndex = -1
-        $previousParallel = $null
         for ($mappingIndex = 0; $mappingIndex -lt $mappingPlan.Entries.Count; $mappingIndex++) {
             $command = $mappingPlan.Entries[$mappingIndex].BuildCommand
             if ($null -eq $command) {

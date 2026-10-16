@@ -48,8 +48,14 @@ function Get-SolutionPackagerMappingEntry {
                 throw "Each mappings entry for solution '$solutionName' must have a non-empty $propertyName string."
             }
         }
-        if ($mapping.ContainsKey('buildCommand') -and $null -ne $mapping.buildCommand -and $mapping.buildCommand -isnot [hashtable]) {
-            throw "buildCommand for a mappings entry in solution '$solutionName' must be a hashtable."
+        if ($mapping.ContainsKey('buildCommand') -and $null -ne $mapping.buildCommand) {
+            if ($mapping.buildCommand -isnot [hashtable]) {
+                throw "buildCommand for a mappings entry in solution '$solutionName' must be a hashtable."
+            }
+            $unknownBuildCommandProperties = @($mapping.buildCommand.Keys | Where-Object { $_ -notin @('name', 'executable', 'arguments', 'workingDirectory', 'parallel') })
+            if ($unknownBuildCommandProperties.Count -gt 0) {
+                throw "Unknown property in buildCommand for solution '$solutionName': $($unknownBuildCommandProperties -join ', ')."
+            }
         }
 
         $entries.Add([pscustomobject]@{
