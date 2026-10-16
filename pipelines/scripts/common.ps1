@@ -102,7 +102,7 @@ function ConvertTo-SolutionPackagerMappingXml {
 
         $destination = [string]$entry.Destination
         if (-not [System.IO.Path]::IsPathRooted($destination) -and $destination -notmatch '%[^%]+%') {
-            $destination = Join-Path $SolutionPath $destination
+        $destination = Join-Path $SolutionPath ($destination.Replace('\', [string][System.IO.Path]::DirectorySeparatorChar))
         }
 
         $element = $document.CreateElement([string]$entry.Type)
