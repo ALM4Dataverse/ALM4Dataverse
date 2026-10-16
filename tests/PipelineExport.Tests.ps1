@@ -38,6 +38,7 @@ public static class AlmExportMappingTestCapture
     }
     function git {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Command', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RemainingArguments', Justification = 'The mapping regression mock inspects git pathspec arguments.')]
         param($Command, [Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
     }
 }
