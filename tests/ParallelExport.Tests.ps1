@@ -158,6 +158,7 @@ function Export-DataverseSolution {
 function Expand-DataverseSolutionFile { param($Path, $OutputPath, $PackageType, [switch]$UnpackMsapp, $MappingFile); Write-TestSolution $OutputPath }
 function Compress-DataverseSolutionFile { param($PackageType, $OutputPath, $Path); Set-Content -LiteralPath $OutputPath -Value 'baseline' }
 function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestClient]::VersionUpdates++ }
+function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connection) { throw 'A connection is required.' }; [pscustomobject]@{ Connection = $Connection; Sql = $Sql } }
 '@
     }
 
@@ -246,7 +247,7 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
     It 'runs post-solution hooks while later exports are still running' {
         [AlmExportTestClient]::Reset(2)
         $hookPath = Join-Path $script:workerRoot 'post-solution.ps1'
-        Set-Content -LiteralPath $hookPath -Value 'param($Context); [pscustomobject]@{ SolutionName = $Context.SolutionName; ActiveExports = [AlmExportTestClient]::Peak; HasConnection = ($null -ne $Context.Connection) }'
+        Set-Content -LiteralPath $hookPath -Value 'param($Context); $query = Invoke-DataverseSQL -Connection $Context.Connection -Sql ''SELECT 1''; [pscustomobject]@{ SolutionName = $Context.SolutionName; ActiveExports = [AlmExportTestClient]::Peak; HasConnection = ($null -ne $Context.Connection); QueryUsedContextConnection = ($query.Connection -eq $Context.Connection) }'
         $config = @{
             solutions = @(@{ name = 'First' }, @{ name = 'Second' })
             hooks = @{ postExportSolution = $hookPath }
@@ -261,6 +262,7 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         $result = $script:workerState.SolutionHookResults.First[0]
         $result.ActiveExports | Should -Be 2
         $result.HasConnection | Should -BeTrue
+        $result.QueryUsedContextConnection | Should -BeTrue
         [AlmExportTestClient]::Release.Set()
         Wait-AlmSolutionExport -State $script:workerState -SolutionName First | Should -Exist
         Wait-AlmSolutionExport -State $script:workerState -SolutionName Second | Should -Exist

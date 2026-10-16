@@ -133,7 +133,7 @@
     # preExportSolution, postExportSolution:
     #   - SourceDirectory, ArtifactStagingDirectory, TempDirectory, EnvironmentName
     #   - SolutionName, SolutionConfig, SolutionIndex
-    #   - Connection: a Dataverse connection for this hook
+    #   - Connection: a Dataverse connection; pass it explicitly to Dataverse commands
     #   - OperationBudget and CancellationToken: available for parallel exports
     #
     # preDeploy, dataMigrations, postDeploy:

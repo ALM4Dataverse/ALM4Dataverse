@@ -349,9 +349,9 @@ function Invoke-AlmQueuedPostExportSolutionHook {
         $additionalContext.CancellationToken = $State.Cancellation.Token
         $task.AdditionalContext = $additionalContext
         $job = Start-ThreadJob -ThrottleLimit 32 -ArgumentList @(
-            $State.ModulePath, $State.HelpersPath, $State.CommonPath, $client, $task, $State.LogEvents
+            $State.ModulePath, $State.HelpersPath, $State.CommonPath, $task, $State.LogEvents
         ) -ScriptBlock {
-            param($ModulePath, $HelpersPath, $CommonPath, $Client, $Task, $Events)
+            param($ModulePath, $HelpersPath, $CommonPath, $Task, $Events)
             $ErrorActionPreference = 'Stop'
             $ProgressPreference = 'SilentlyContinue'
             $started = [datetime]::UtcNow
@@ -359,21 +359,7 @@ function Invoke-AlmQueuedPostExportSolutionHook {
             try {
                 Import-Module $ModulePath -ErrorAction Stop
                 . $HelpersPath
-                $sqlCommand = Get-Command Invoke-DataverseSQL -ErrorAction SilentlyContinue
-                $recordCommand = Get-Command Get-DataverseRecord -ErrorAction SilentlyContinue
-                $metadataCommand = Get-Command Get-DataverseEntityMetadata -ErrorAction SilentlyContinue
-                $requestCommand = Get-Command Invoke-DataverseRequest -ErrorAction SilentlyContinue
-                function Invoke-DataverseSQL { param($Sql, $Parameters); if ($null -eq $sqlCommand) { throw 'Invoke-DataverseSQL is unavailable in this hook worker.' }; & $sqlCommand -Connection $Client @PSBoundParameters }
-                function Get-DataverseRecord { param($TableName, $Id, $Columns, $Top); if ($null -eq $recordCommand) { throw 'Get-DataverseRecord is unavailable in this hook worker.' }; & $recordCommand -Connection $Client @PSBoundParameters }
-                Set-Item -Path Function:\Get-DataverseEntityMetadata -Value {
-                    param($EntityName, [switch]$UseMetadataCache, [switch]$ExcludeAttributes, [switch]$ExcludeRelationships, [switch]$ExcludePrivileges)
-                    if ($null -eq $metadataCommand) { throw 'Get-DataverseEntityMetadata is unavailable in this hook worker.' }
-                    & $metadataCommand -Connection $Client @PSBoundParameters
-                }
-                function Invoke-DataverseRequest { param($Method, $Path); if ($null -eq $requestCommand) { throw 'Invoke-DataverseRequest is unavailable in this hook worker.' }; & $requestCommand -Connection $Client @PSBoundParameters }
-                function Get-DataverseConnection { param([switch]$GetDefault); $null = $GetDefault; return $Client }
                 . $CommonPath
-                $null = $Client
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message 'Started'
                 $results = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $Task.BaseDirectory -Config $Task.Config -AdditionalContext $Task.AdditionalContext -LogContext:$false)
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Completed in $([math]::Round(([datetime]::UtcNow-$started).TotalSeconds,2))s"
