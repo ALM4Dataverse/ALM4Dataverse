@@ -310,14 +310,14 @@ function Wait-AlmSolutionExport {
 
     Start-AlmQueuedExport -State $State
     while ($State.CompletedExports[$SolutionName].Count -lt 2) {
-        Update-AlmPostExportSolutionHook -State $State
+        Invoke-AlmPostExportSolutionHookQueue -State $State
         Write-AlmExportEvent -State $State
         if ($State.ActiveExports.Count -eq 0) { throw "[$SolutionName][Export] No active export workers; queued exports were not started." }
         $handles = [System.Threading.WaitHandle[]]@($State.LogEvents.Signal) +
             [System.Threading.WaitHandle[]]@($State.ActiveExports | ForEach-Object { $_.Finished }) +
             [System.Threading.WaitHandle[]]@($State.ActiveSolutionHooks | ForEach-Object { $_.Finished })
         [System.Threading.WaitHandle]::WaitAny($handles) | Out-Null
-        Update-AlmPostExportSolutionHook -State $State
+        Invoke-AlmPostExportSolutionHookQueue -State $State
         Write-AlmExportEvent -State $State
         foreach ($job in @($State.ActiveExports.ToArray())) {
             if ($job.State -in @('Completed', 'Failed', 'Stopped')) {
@@ -333,7 +333,7 @@ function Wait-AlmSolutionExport {
     return $State.CompletedExports[$SolutionName].Unmanaged
 }
 
-function Start-AlmQueuedPostExportSolutionHook {
+function Invoke-AlmQueuedPostExportSolutionHook {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker receives the hook context and cloned Dataverse client explicitly through Start-ThreadJob ArgumentList.')]
     param([Parameter(Mandatory)][hashtable]$State)
 
@@ -415,10 +415,10 @@ function Add-AlmPostExportSolutionHook {
         BaseDirectory = $State.BaseDirectory
         AdditionalContext = $additionalContext
     })
-    Update-AlmPostExportSolutionHook -State $State
+    Invoke-AlmPostExportSolutionHookQueue -State $State
 }
 
-function Update-AlmPostExportSolutionHook {
+function Invoke-AlmPostExportSolutionHookQueue {
     param([Parameter(Mandatory)][hashtable]$State)
 
     foreach ($job in @($State.ActiveSolutionHooks.ToArray())) {
@@ -429,14 +429,14 @@ function Update-AlmPostExportSolutionHook {
             $State.ActiveSolutionHooks.Remove($job) | Out-Null
         }
     }
-    Start-AlmQueuedPostExportSolutionHook -State $State
+    Invoke-AlmQueuedPostExportSolutionHook -State $State
 }
 
 function Complete-AlmPostExportSolutionHook {
     param([Parameter(Mandatory)][hashtable]$State)
 
     while ($State.PendingSolutionHooks.Count -or $State.ActiveSolutionHooks.Count) {
-        Update-AlmPostExportSolutionHook -State $State
+        Invoke-AlmPostExportSolutionHookQueue -State $State
         if ($State.ActiveSolutionHooks.Count) {
             $handles = [System.Threading.WaitHandle[]]@($State.LogEvents.Signal) +
                 [System.Threading.WaitHandle[]]@($State.ActiveSolutionHooks | ForEach-Object { $_.Finished })

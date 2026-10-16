@@ -97,6 +97,14 @@ $exportHookContext = @{
     TempDirectory = $TempDirectory
     EnvironmentName = $EnvironmentName
 }
+$hasPreExportSolutionHooks = $solutionsConfig.ContainsKey('hooks') -and
+    $solutionsConfig['hooks'] -is [hashtable] -and
+    $solutionsConfig['hooks'].ContainsKey('preExportSolution') -and
+    $solutionsConfig['hooks']['preExportSolution']
+$hasPostExportSolutionHooks = $solutionsConfig.ContainsKey('hooks') -and
+    $solutionsConfig['hooks'] -is [hashtable] -and
+    $solutionsConfig['hooks'].ContainsKey('postExportSolution') -and
+    $solutionsConfig['hooks']['postExportSolution']
 Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext $exportHookContext
 
 $exportPipeline = $null
@@ -151,7 +159,7 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
     $solutionName = $solution.name
     $exportZipPath = $null
     if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExport -State $exportPipeline -SolutionName $solutionName }
-    else {
+    elseif ($hasPreExportSolutionHooks) {
         $preExportSolutionContext = $exportHookContext.Clone()
         $preExportSolutionContext.SolutionName = $solutionName
         $preExportSolutionContext.SolutionConfig = $solution
@@ -320,9 +328,11 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
     $postExportSolutionContext.SolutionIndex = $solutionIndex
     if ($null -ne $exportPipeline) {
         Add-AlmPostExportSolutionHook -State $exportPipeline -SolutionConfig $solution -SolutionIndex $solutionIndex
-    } else {
+    } elseif ($hasPostExportSolutionHooks) {
         $postExportSolutionContext.Connection = Get-DataverseConnection -GetDefault
         $solutionHookResults[$solutionName] = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $SourceDirectory -Config $solutionsConfig -AdditionalContext $postExportSolutionContext -LogContext:$false)
+    } else {
+        $solutionHookResults[$solutionName] = @()
     }
 }
 
