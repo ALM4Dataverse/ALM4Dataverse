@@ -115,7 +115,7 @@ Describe 'Export and version changes' {
     }
 
     It 'detects changes to mapped source files outside the solution directory' {
-        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins'), (Join-Path $script:exportSource 'solutions/Example') -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins'), (Join-Path $script:exportSource 'solutions/Example/Other') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'
         Set-Content -LiteralPath (Join-Path $script:exportSource 'solutions/Example/Other/Solution.xml') -Value '<ImportExportXml><SolutionManifest><Version>1.2.3.4</Version></SolutionManifest></ImportExportXml>'
         Set-Content -LiteralPath (Join-Path $script:exportSource 'alm-config.psd1') -Value @'
