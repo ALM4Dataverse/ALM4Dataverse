@@ -2,7 +2,7 @@
     # Consumer configuration overrides scalars, recursively merges hashtables and
     # appends arrays. Keep shared defaults here rather than in copied repositories.
     scriptDependencies = @{
-        "Rnwood.Dataverse.Data.PowerShell" = "3.0.3"
+        "Rnwood.Dataverse.Data.PowerShell" = "3.2.0"
     }
 
     # Power Apps CLI version used by pipeline scripts.
@@ -28,7 +28,8 @@
         maxConcurrentOperations = 4
     }
 
-    # Packing concurrency (not checker concurrency); maxParallel accepts 1..8.
+    # Build-command and packing stages each use this limit (1..8), independently
+    # of checker concurrency. All build commands finish before packing starts.
     build = @{
         parallel = $true
         maxParallel = 2

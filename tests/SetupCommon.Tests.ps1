@@ -375,6 +375,51 @@ Describe 'Setup configuration and validation helpers' {
         Set-AlmConfigSolutionsInFile -ConfigPath $configPath -Solutions $solutions | Should -BeFalse
     }
 
+    It 'preserves existing per-solution mappings and custom properties when replacing selections' {
+        $configPath = Join-Path $TestDrive 'mapped-solutions.psd1'
+        # Deliberately mix retired solution-level keys with supported inline entries:
+        # refreshing selection must drop the former without discarding mapping metadata.
+        Set-Content -LiteralPath $configPath -Value @'
+@{
+    solutions = @(
+        @{
+            name = 'PluginSolution'
+            mappingFile = 'legacy-mapping.xml'
+            buildCommands = @(@{ executable = 'dotnet'; arguments = @('build') })
+            mappings = @(
+                @{
+                    type = 'FileToFile'
+                    source = 'plugins/Example.dll'
+                    destination = 'PluginAssemblies/Example.dll'
+                    buildCommand = @{
+                        executable = 'dotnet'
+                        arguments = @('build', 'plugins/Example.csproj')
+                    }
+                }
+            )
+            customSetting = @{ keep = $true }
+        }
+        @{ name = 'UnselectedSolution'; mappings = @() }
+    )
+}
+'@
+
+        Set-AlmConfigSolutionsInFile -ConfigPath $configPath -Solutions @(
+            @{ name = 'PluginSolution'; deployUnmanaged = $true }
+        ) | Should -BeTrue
+
+        $solution = (Import-PowerShellDataFile -LiteralPath $configPath).solutions[0]
+        $solution.mappings[0].type | Should -Be 'FileToFile'
+        $solution.mappings[0].source | Should -Be 'plugins/Example.dll'
+        $solution.mappings[0].destination | Should -Be 'PluginAssemblies/Example.dll'
+        $solution.mappings[0].buildCommand.arguments | Should -Be @('build', 'plugins/Example.csproj')
+        $solution.customSetting.keep | Should -BeTrue
+        $solution.deployUnmanaged | Should -BeTrue
+        $solution.ContainsKey('mappingFile') | Should -BeFalse
+        $solution.ContainsKey('buildCommands') | Should -BeFalse
+        (Import-PowerShellDataFile -LiteralPath $configPath).solutions.Count | Should -Be 1
+    }
+
     It 'creates configuration from a template and toggles checker configuration idempotently' {
         $configPath = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.psd1')
         $templatePath = Join-Path $TestDrive 'template.psd1'

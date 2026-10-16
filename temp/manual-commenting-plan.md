@@ -2,7 +2,10 @@
 
 Status: implementation and validation completed on 16 October 2026; approved for
 PR publication. The review ledger contains final evidence and limitations.
-Baseline: commit `1b29582`, inspected 16 October 2026.
+Initial baseline: commit `1b29582`, inspected 16 October 2026.
+Publication baseline: `4aa15e7`, integrated after main advanced during this work.
+The added inline-mapping/build-command contracts were manually assessed too;
+the final source inventory remains 76 files, with 312 production functions.
 
 ## 1. Requirement and scope
 
@@ -32,7 +35,7 @@ coverage-policy changes are part of this work.
 - The tracked source/configuration inventory contains 76 files: 51 PowerShell
   scripts, three PowerShell data files, 21 YAML files and one JavaScript file.
   The full baseline inventory is in section 6.
-- A read-only PowerShell AST inventory found 308 production function definitions.
+- The initial read-only PowerShell AST inventory found 308 production function definitions.
   Of these, 225 are in the three setup scripts: 94 shared, 69 Azure DevOps and
   62 GitHub. These large files need multiple bounded review batches.
 - A textual inventory found 43 production `.SYNOPSIS` markers. This is not a

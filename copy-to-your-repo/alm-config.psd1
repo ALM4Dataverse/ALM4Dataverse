@@ -21,6 +21,8 @@
     # Each entry is a hashtable with keys
     # - name: unique solution name.
     # - deployUnmanaged: (optional) boolean indicating whether to deploy unmanaged version.
+    # - mappings: (optional) ordered SolutionPackager directives used by BUILD and EXPORT.
+    #   Each item can include a buildCommand that runs before packing during BUILD.
     # - serviceAccountUpnConfigKey: (optional) name of the environment configuration key containing
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'
@@ -30,6 +32,29 @@
         # Example:
         # @{
         #   name = 'ContosoCore'
+        #   mappings = @(
+        #     @{
+        #       type = 'FileToFile'
+        #       source = 'plugins/Contoso.Plugin/bin/Release/Contoso.Plugin.dll'
+        #       destination = 'PluginAssemblies\Contoso.Plugin.dll'
+        #       buildCommand = @{
+        #         name = 'Build plugin'
+        #         executable = 'dotnet'
+        #         arguments = @('build', 'plugins/Contoso.Plugin/Contoso.Plugin.csproj', '--configuration', 'Release')
+        #         workingDirectory = '.'
+        #       }
+        #     }
+        #     @{
+        #       type = 'Folder'
+        #       source = 'webresources'
+        #       destination = 'WebResources'
+        #     }
+        #     @{
+        #       type = 'FileToPath'
+        #       source = 'custom-resources'
+        #       destination = 'Other\*.json'
+        #     }
+        #   )
         #   solutionCheck = @{
         #     enabled = $true
         #     # Use 'none' to omit --ruleSet.
@@ -70,8 +95,8 @@
         maxConcurrentOperations = 4
     }
 
-    # Packing concurrency is independent of solutionCheck.maxParallel.
-    # maxParallel accepts 1..8; parallel = $false packs solutions sequentially.
+    # Build-command and packing stages each use maxParallel (1..8), independently
+    # of solutionCheck.maxParallel. parallel = $false makes both stages sequential.
     build = @{
         parallel = $true
         maxParallel = 2

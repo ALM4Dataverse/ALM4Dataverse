@@ -6,6 +6,144 @@
     such as build.ps1, deploy.ps1, and export.ps1.
 #>
 
+function Get-SolutionPackagerMappingEntry {
+    <#
+    .SYNOPSIS
+        Validates inline solution mappings and returns ordered normalized entries.
+    .DESCRIPTION
+        Missing/null mappings emits no entries. Otherwise requires an array of
+        hashtables with Folder, FileToFile or FileToPath type and nonblank source/
+        destination strings; unknown mapping/build-command keys throw. Rejects the
+        removed mappingFile and solution-level buildCommands keys even if empty.
+        Normalizes type casing and returns Type, Source, Destination and BuildCommand.
+        BuildCommand is the original optional hashtable, not a copy: its executable,
+        argument and working-directory values are validated later by the build planner.
+        This helper neither resolves paths nor executes commands.
+    #>
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)][hashtable]$Solution)
+
+    $solutionName = [string]$Solution.name
+    if ($Solution.ContainsKey('mappingFile')) {
+        throw "mappingFile for solution '$solutionName' is no longer supported. Define mappings directly in the solution configuration."
+    }
+    if ($Solution.ContainsKey('buildCommands')) {
+        throw "buildCommands for solution '$solutionName' are no longer supported as a separate setting. Put buildCommand on each mapping entry instead."
+    }
+    if (-not $Solution.ContainsKey('mappings') -or $null -eq $Solution.mappings) {
+        return @()
+    }
+    if ($Solution.mappings -isnot [array]) {
+        throw "mappings for solution '$solutionName' must be an array of mapping entries."
+    }
+
+    $entries = [System.Collections.Generic.List[object]]::new()
+    foreach ($mapping in $Solution.mappings) {
+        if ($mapping -isnot [hashtable]) {
+            throw "Each mappings entry for solution '$solutionName' must be a hashtable."
+        }
+
+        $unknownProperties = @($mapping.Keys | Where-Object { $_ -notin @('type', 'source', 'destination', 'buildCommand') })
+        if ($unknownProperties.Count -gt 0) {
+            throw "Unknown property in mappings entry for solution '$solutionName': $($unknownProperties -join ', ')."
+        }
+        if ($mapping.type -isnot [string] -or [string]::IsNullOrWhiteSpace($mapping.type)) {
+            throw "Each mappings entry for solution '$solutionName' must have a type of Folder, FileToFile, or FileToPath."
+        }
+        $type = switch ($mapping.type.ToLowerInvariant()) {
+            'folder' { 'Folder' }
+            'filetofile' { 'FileToFile' }
+            'filetopath' { 'FileToPath' }
+            default { throw "Unsupported mappings type '$($mapping.type)' for solution '$solutionName'. Use Folder, FileToFile, or FileToPath." }
+        }
+        foreach ($propertyName in @('source', 'destination')) {
+            if (-not $mapping.ContainsKey($propertyName) -or $mapping[$propertyName] -isnot [string] -or [string]::IsNullOrWhiteSpace($mapping[$propertyName])) {
+                throw "Each mappings entry for solution '$solutionName' must have a non-empty $propertyName string."
+            }
+        }
+        if ($mapping.ContainsKey('buildCommand') -and $null -ne $mapping.buildCommand) {
+            if ($mapping.buildCommand -isnot [hashtable]) {
+                throw "buildCommand for a mappings entry in solution '$solutionName' must be a hashtable."
+            }
+            $unknownBuildCommandProperties = @($mapping.buildCommand.Keys | Where-Object { $_ -notin @('name', 'executable', 'arguments', 'workingDirectory', 'parallel') })
+            if ($unknownBuildCommandProperties.Count -gt 0) {
+                throw "Unknown property in buildCommand for solution '$solutionName': $($unknownBuildCommandProperties -join ', ')."
+            }
+        }
+
+        $entries.Add([pscustomobject]@{
+            Type         = $type
+            Source       = $mapping.source
+            Destination  = $mapping.destination
+            BuildCommand = if ($mapping.ContainsKey('buildCommand')) { $mapping.buildCommand } else { $null }
+        })
+    }
+
+    return $entries.ToArray()
+}
+
+function ConvertTo-SolutionPackagerMappingXml {
+    <#
+    .SYNOPSIS
+        Serializes normalized entries to SolutionPackager mapping XML without writing a file.
+    .DESCRIPTION
+        Expects Get-SolutionPackagerMappingEntry output. Source is the external path
+        written as 'to'; Destination is the solution-tree path written as 'map'.
+        Relative sources resolve under SourceDirectory and ordinary relative
+        destinations under SolutionPath, preserving entry order and XML escaping.
+        Paths containing %NAME% are left for the packager to expand, without source
+        existence checks. Rooted destinations are preserved.
+    .PARAMETER AllowMissingSource
+        Skips ordinary source existence checks for export, where unpacking can create
+        them. Otherwise FileToFile needs a file and Folder/FileToPath need a directory.
+        Validation throws before returning XML; no buildCommand is run here.
+    #>
+    param(
+        [Parameter(Mandatory)][object[]]$Entries,
+        [Parameter(Mandatory)][string]$SourceDirectory,
+        [Parameter(Mandatory)][string]$SolutionPath,
+        [Parameter(Mandatory)][string]$SolutionName,
+        [switch]$AllowMissingSource
+    )
+
+    $document = [System.Xml.XmlDocument]::new()
+    $declaration = $document.CreateXmlDeclaration('1.0', 'utf-8', $null)
+    [void]$document.AppendChild($declaration)
+    $root = $document.CreateElement('Mappings')
+    [void]$document.AppendChild($root)
+
+    foreach ($entry in $Entries) {
+        # Packager environment placeholders must survive serialization; resolving them
+        # here would change the mapping contract and prematurely require export targets.
+        $sourcePath = [string]$entry.Source
+        if ($sourcePath -notmatch '%[^%]+%') {
+            if (-not [System.IO.Path]::IsPathRooted($sourcePath)) {
+                $sourcePath = Join-Path $SourceDirectory $sourcePath
+            }
+            $sourcePath = [System.IO.Path]::GetFullPath($sourcePath)
+            if (-not $AllowMissingSource) {
+                $expectedPathType = if ($entry.Type -eq 'FileToFile') { 'Leaf' } else { 'Container' }
+                if (-not (Test-Path -LiteralPath $sourcePath -PathType $expectedPathType)) {
+                    $expectedDescription = if ($expectedPathType -eq 'Leaf') { 'file' } else { 'folder' }
+                    throw "Mapping source $expectedDescription not found for solution '$SolutionName': $sourcePath"
+                }
+            }
+        }
+
+        $destination = [string]$entry.Destination
+        if (-not [System.IO.Path]::IsPathRooted($destination) -and $destination -notmatch '%[^%]+%') {
+        $destination = Join-Path $SolutionPath ($destination.Replace('\', [string][System.IO.Path]::DirectorySeparatorChar))
+        }
+
+        $element = $document.CreateElement([string]$entry.Type)
+        $element.SetAttribute('map', $destination)
+        $element.SetAttribute('to', $sourcePath)
+        [void]$root.AppendChild($element)
+    }
+
+    return $document.OuterXml
+}
+
 function Invoke-CheckedNativeCommand {
     <#
     .SYNOPSIS

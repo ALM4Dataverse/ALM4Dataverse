@@ -2501,12 +2501,15 @@ function Set-AlmConfigSolutionsInFile {
         Replaces or inserts the solutions value in a PowerShell data file.
     .PARAMETER Solutions
         Objects or hashtables with name and optional truthy deployUnmanaged. Other
-        fields are not serialized; names are single-quote escaped.
+        incoming fields are ignored; names are single-quote escaped. For each name,
+        the first case-insensitive existing match contributes its other properties,
+        except legacy mappingFile/buildCommands, when its source hashtable is found.
     .DESCRIPTION
         ShouldProcess precedes reads and writes; rejection returns false. A missing
         file requires CreateIfMissing and uses an existing TemplatePath or a minimal
-        root hashtable. Parses without executing configuration, then replaces only
-        the solutions value, preserving unrelated source. Parse/root errors throw.
+        root hashtable. Parses source and, when solutions already exists, imports
+        restricted PowerShell data to match names to source entries. Replaces only
+        the solutions value, preserving unrelated source. Parse/root/import errors throw.
         Returns whether the resulting text differs from the text read after creation,
         not whether a file was created. Writes are not transactional.
     #>
@@ -2535,25 +2538,6 @@ function Set-AlmConfigSolutionsInFile {
     }
 
     $configContent = Get-Content -LiteralPath $ConfigPath -Raw
-
-    $solutionsArray = "@("
-    if ($Solutions.Count -gt 0) {
-        $solutionsArray += "`n"
-        foreach ($solution in $Solutions) {
-            $escapedSolutionName = ([string]$solution.name).Replace("'", "''")
-            $solutionsArray += "        @{`n"
-            $solutionsArray += "            name = '$escapedSolutionName'`n"
-            if (Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'deployUnmanaged') {
-                $solutionsArray += "            deployUnmanaged = `$true`n"
-            }
-            $solutionsArray += "        }`n"
-        }
-        $solutionsArray += "    )"
-    }
-    else {
-        $solutionsArray += "`n    )"
-    }
-
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($configContent, [ref]$tokens, [ref]$parseErrors)
@@ -2576,6 +2560,73 @@ function Set-AlmConfigSolutionsInFile {
         $keyText = $_.Item1.Extent.Text.Trim()
         $keyText -in @('solutions', "'solutions'", '"solutions"')
     } | Select-Object -First 1
+
+    $existingSolutions = @()
+    $existingSolutionAsts = @()
+    if ($solutionsEntry) {
+        # Imported names identify selections; source extents preserve retained values
+        # without reserializing nested mapping/buildCommand objects or custom settings.
+        $existingConfig = Import-PowerShellDataFile -LiteralPath $ConfigPath
+        $existingSolutions = @($existingConfig.solutions)
+        $solutionArrayAst = $solutionsEntry.Item2.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ArrayExpressionAst] -and
+                $node.Parent -is [System.Management.Automation.Language.CommandExpressionAst] -and
+                $node.Parent.Parent -eq $solutionsEntry.Item2
+        }, $true)
+        if ($solutionArrayAst) {
+            # Only direct solution records belong in this positional lookup. Nested
+            # hashtables/arrays are property data, not additional selected solutions.
+            $existingSolutionAsts = @($solutionArrayAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.HashtableAst]
+            }, $true) | Where-Object {
+                $ancestor = $_.Parent
+                while ($ancestor -and $ancestor -ne $solutionArrayAst -and
+                    $ancestor -isnot [System.Management.Automation.Language.HashtableAst] -and
+                    $ancestor -isnot [System.Management.Automation.Language.ArrayExpressionAst]) {
+                    $ancestor = $ancestor.Parent
+                }
+                $ancestor -eq $solutionArrayAst
+            })
+        }
+    }
+
+    $solutionsArray = "@("
+    if ($Solutions.Count -gt 0) {
+        $solutionsArray += "`n"
+        foreach ($solution in $Solutions) {
+            $solutionName = [string]$solution.name
+            $escapedSolutionName = $solutionName.Replace("'", "''")
+            $solutionsArray += "        @{`n"
+            $solutionsArray += "            name = '$escapedSolutionName'`n"
+            if (Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'deployUnmanaged') {
+                $solutionsArray += "            deployUnmanaged = `$true`n"
+            }
+
+            $existingSolutionIndex = -1
+            for ($index = 0; $index -lt $existingSolutions.Count; $index++) {
+                if ([string]$existingSolutions[$index].name -ieq $solutionName) {
+                    $existingSolutionIndex = $index
+                    break
+                }
+            }
+            if ($existingSolutionIndex -ge 0 -and $existingSolutionIndex -lt $existingSolutionAsts.Count) {
+                # Setup owns name/deployUnmanaged and retires the old external-mapping
+                # and solution-wide command keys; inline mappings/custom keys survive.
+                foreach ($property in $existingSolutionAsts[$existingSolutionIndex].KeyValuePairs) {
+                    $propertyName = [string]$property.Item1.SafeGetValue()
+                    if ($propertyName -in @('name', 'deployUnmanaged', 'mappingFile', 'buildCommands')) { continue }
+                    $solutionsArray += "            $($property.Item1.Extent.Text) = $($property.Item2.Extent.Text)`n"
+                }
+            }
+            $solutionsArray += "        }`n"
+        }
+        $solutionsArray += "    )"
+    }
+    else {
+        $solutionsArray += "`n    )"
+    }
 
     if ($solutionsEntry) {
         $valueExtent = $solutionsEntry.Item2.Extent

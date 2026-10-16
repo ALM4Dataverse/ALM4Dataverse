@@ -4,6 +4,13 @@ Baseline: `1b29582`, 16 October 2026. Scope and acceptance criteria are in the
 [approved plan](../../temp/manual-commenting-plan.md); ongoing guidance is the
 [commenting standard](powershell.md#commenting-standard).
 
+Before publication, main advanced to `4aa15e7` (inline mappings and build commands).
+The branch integrates that commit without replacing its executable behavior.
+The affected runtime, shared-setup, test and configuration contracts were manually
+reassessed; the final inventory is 76 files and 312 production functions. Initial
+validation below is retained as history and is superseded by final integration
+evidence where indicated.
+
 The user approved full implementation, including publication of a PR, after
 reviewing the plan. The proposed calibration-only stop was superseded by that
 instruction. This record describes assistant-authored, individually composed
@@ -30,8 +37,8 @@ assertions are preserved.
 
 | File | Decision and assessed contracts |
 | --- | --- |
-| [defaults](../../alm-config-defaults.psd1) | Documented merge ownership, export operation budget and independent packing/checker concurrency; verified version/import/checker comments. |
-| [consumer configuration](../../copy-to-your-repo/alm-config.psd1) | Documented package counts, accepted export/packing limits, missing/false behavior and independent checker limit; verified solution order, hook contexts, paths, dependency versions and baseline examples against references. |
+| [defaults](../../alm-config-defaults.psd1) | Documented merge ownership, export operation budget and independent build-stage/checker concurrency; reconciled the 3.2.0 upstream dependency default and build-command stage. |
+| [consumer configuration](../../copy-to-your-repo/alm-config.psd1) | Documented package counts, export/build-stage limits, missing/false behavior and independent checker limit; verified solution order, hook contexts, paths, dependency versions and baseline examples. Reassessed upstream inline mapping/build-command examples and their ordered, stage-specific execution contract. |
 | [export hook](../../copy-to-your-repo/data/system/export.ps1) | Documented disabled example, supplied context/connection and packaged data ownership; sample remains inactive. |
 | [import hook](../../copy-to-your-repo/data/system/import.ps1) | Documented disabled example, upsert-before-delete order and caller connection; sample remains inactive. |
 | [build template](../../pipelines/templates/build.yml) | Documented optional validation connection, fixed checkout paths, compile-time provider selection/runtime macro distinction, baseline download condition, failure diagnostics and immutable version tags. Assessed both embedded `Resolve-ConnectionVariable` helpers: first expanded candidate or null, then caller validation. |
@@ -69,7 +76,39 @@ README contracts remain applicable: this work changes no user behavior or option
 The documentation checker validates their examples, local links and reference
 coverage; it is not a semantic proof of live integration behavior.
 
-## Combined validation evidence
+## Final integration validation evidence
+
+Publication baseline: `4aa15e7161b1e8ac9884e3b3c4ce621debe5f5fd`.
+
+- Re-ran `scripts\Test-PowerShell.ps1 -BaseRef origin/main` with that exact
+  upstream base: **544 passed, 0 failed**, eight existing non-applicable
+  provider-matrix instances skipped. All 54 PowerShell files parsed/analyzed;
+  the same 27 exact analyzer exceptions remain.
+- All 26 changed source-script entries passed the existing coverage gate,
+  including the two no-command hooks. Minimum executable-file coverage remained
+  **65.4197601370645%**; the threshold is unchanged at 65%.
+- Final inventory reconciliation passed for **76 code/configuration files,
+  312 production functions and 63 outer test helper definitions**. Embedded
+  definitions and complex blocks have explicit decisions in the relevant sections.
+- All **73 modified code/configuration files** preserve the current upstream's
+  executable PowerShell token streams, literal/here-string payloads, parsed YAML
+  values except embedded comment-only lines, and non-comment JavaScript lines.
+  PowerShell BOM presence and valid help attachment were checked again.
+- Pinned actionlint and Azure schema checks passed again; all seven non-scaffold
+  Azure pipeline files validated. Both newly generated standalone installers,
+  now embedding the upstream 3.2.0 dependency version, parsed in PowerShell 5.1.
+- Final Markdown check: **27 files, 390 local links, 50 parsed examples**, plus
+  configuration/action/template reference coverage. JavaScript syntax and
+  staged/unstaged whitespace checks passed.
+- Focused upstream-integration checks: **99 runtime tests** and **six shared
+  setup preservation/WhatIf tests** passed, with no failures.
+
+The three upstream merge conflicts were resolved manually, preserving the new
+inline-mapping/build-command behavior rather than reverting it to the initial
+baseline. No validation gates, assertions or skip conditions were changed.
+The following initial-baseline evidence is historical, not the final test count.
+
+## Initial combined validation evidence
 
 - Full `scripts\Test-PowerShell.ps1`: 54 PowerShell files parsed/analyzed with the
   existing 27 exact analyzer exceptions; 525 tests passed, no failures, eight
@@ -108,7 +147,9 @@ Dataverse provisioning, deployment, or release publication was performed.
 
 ### Runtime/action manual commenting ledger (groups A and B)
 
-Baseline: `1b29582` (`HEAD` when assessed), 16 October 2026.
+Initial baseline: `1b29582` (`HEAD` when assessed), 16 October 2026.
+The later upstream integration assessment below uses `4aa15e7` (`origin/main`),
+including #97's inline mappings and mapping build commands, as its executable baseline.
 Scope: exactly ten `pipelines\scripts\*.ps1`, four
 `.github\actions\common\*.ps1` and four composite `action.yml` files.
 Author/assessment: Copilot; no human or independent review is claimed.
@@ -141,8 +182,8 @@ Paths in evidence shorthand are relative to the repository root.
   action calls, selected-input environment expressions and permission declarations.
 
 All entries also use the complete enclosing production implementation as evidence.
-Validation shared across entries: 14 PowerShell files parse and their 17,101
-non-comment/non-newline tokens match HEAD after CRLF normalization; all four action
+Initial validation shared across entries: 14 PowerShell files parse and their 17,101
+non-comment/non-newline tokens match `1b29582` after CRLF normalization; all four action
 YAML documents parse with byte-equivalent JSON representations of their parsed
 values, including every embedded script/default scalar. `git diff --check` passes
 for the assigned paths. PSScriptAnalyzer 1.24.0 with repository settings has unchanged
@@ -155,6 +196,11 @@ Focused Pester execution and final limitations are recorded at the end.
 | Symbol/block | Decision | Concrete reason / evidence |
 |---|---|---|
 | Script/library help and dot-source entry | existing comments verified | Correctly identifies shared pipeline function definitions; loading does not itself connect or run a pipeline. C. |
+| `Get-SolutionPackagerMappingEntry` | documented | Normalized ordered output, rejected obsolete keys, strict mapping/command key schema and original BuildCommand reference are distinct from later command-value validation. Read build/export mapping consumers and B's removed-key, invalid-type and malformed-command fixtures added by #97. |
+| Mapping type switch / key validation / entry construction | no comment needed | Explicit cases, allowed-key lists and returned property names completely expose the schema; enclosing helper help explains normalization and deferred validation. B, X upstream mapping callers. |
+| `ConvertTo-SolutionPackagerMappingXml` | documented | Destination becomes map and Source becomes to; relative roots, ordered XML escaping, optional source-existence checks and no command execution are caller contracts. B covers all mapping types, ordering, ampersands and missing sources; X's first-export caller uses AllowMissingSource. |
+| Mapping XML placeholder branch | documented | Percent placeholders must reach SolutionPackager unchanged rather than being prematurely resolved or checked; build/export consume the returned XML with different existence-check policies. B, X. |
+| Mapping XML DOM construction / ordinary destination join | no comment needed | Explicit attribute assignments and DOM operations implement the documented direction/escaping without hidden writes; rooted and placeholder exclusions are visible conditions. B's XML assertions. |
 | `Invoke-CheckedNativeCommand` | documented | Captured stderr, string outputs, nonzero-exit policy, AllowFailure and preference restoration are material to native callers. C. |
 | `Merge-AlmConfigValue` | documented | Null fallback, recursive table merge, array concatenation and explicit false/zero differ from truthy defaulting. C. |
 | `Get-AlmConfig` | documented | Required config path, retained `_main`/`_defaults`, full-config logging and lack of path rebasing matter to installer/hooks. C, I. |
@@ -180,6 +226,10 @@ Focused Pester execution and final limitations are recorded at the end.
 | Script entry/help, parameters, prerequisites and artifact contract | documented | Existing packing/assets/hooks description retained; added process dependencies, failure/report behavior, non-publication boundary and invocation. B, Y. |
 | `Get-PacCliInstalledPackageVersion` | documented | Empty sentinel, tool-list source and removal of NuGet build metadata matter to exact dependency locking. B, I. |
 | `Get-AlmBuildSetting` | documented | Boolean-only opt-out, null/empty defaults, integer 1-8 validation even when sequential are significant. B. |
+| `Get-SolutionBuildCommandPlan` | documented | Required plan fields, argument/Boolean validation, default working directory, relative-path resolution without containment enforcement, output fields and contiguous parallel-flag groups require explicit contracts. B's default/opt-out, malformed arguments and real overlap-barrier tests; build orchestration consumer establishes cross-group ordering. |
+| Command planner name fallback / plan property construction | no comment needed | Visible mapping-index fallback and named output fields implement the enclosing contract directly; omitted commands do not alter the flag grouping. B's command ordering fixtures. |
+| `Invoke-SolutionBuildCommand` | documented | Captures output and invocation errors into result data, reads LASTEXITCODE with null treated as zero and restores location; entering the location can still throw and no rollback is promised. B's nonzero-exit-before-pack test and sequential command caller. |
+| Build-command invocation result object | no comment needed | Four literal fields match the caller's log/error replay, and the function help already describes capture and failure boundaries. B. |
 | `New-SolutionCheckSeverityCount` | no comment needed | A literal ordered zero-count dictionary exposes its full shape; adding help would restate five assignments. B. |
 | `Convert-SolutionCheckSeverityToRank` | no comment needed | Explicit five-way mapping and unsupported-value exception are unambiguous; caller threshold use is documented. B. |
 | `Convert-SolutionCheckRankToSeverity` | documented | Unknown rank returns None rather than matching the reverse conversion's throwing policy. B. |
@@ -196,8 +246,13 @@ Focused Pester execution and final limitations are recorded at the end.
 | `Invoke-SolutionCheck` worker `Get-Highest` | documented | Enclosing worker equivalence comment and outer highest helper establish None semantics without duplicated help. B. |
 | Worker PAC capture/log/result/catch | documented | Aggregate-failure rationale explains converting errors to data so all solution reports survive. B. |
 | Threshold evaluation, final report and thrown aggregate | documented | Report-before-failure policy added at function and result aggregation boundaries; actual inclusive comparison verified. B. |
-| Duplicate solution names / preBuild / pack plans | no comment needed | Case-insensitive duplicate error and indexed plan construction are explicit; hook behavior is defined in common.ps1. B, C. |
+| Duplicate solution names / preBuild / pack plans | no comment needed | Case-insensitive duplicate error and indexed plan construction are explicit; hook behavior is defined in common.ps1. Rechecked after #97 moved pack-plan construction after command execution; mapping-specific lifetimes are assessed separately below. B, C. |
 | Pack command lookup before module selection | documented | Required autoload ordering before recording module path is tested explicitly. B. |
+| Mapping validation / MappingFile capability guard | documented | Schema and cmdlet capability are checked before commands run, while source-existence checking waits for generated outputs. B's command-created source and unsupported-cmdlet tests. |
+| Build-command group scheduler | documented | Consecutive flag groups preserve sequential barriers across solutions; global sequential mode overrides command opt-in. Read grouped scheduler and planner together; B's real overlap-barrier fixture proves within-group concurrency, and command opt-out fixtures cover sequential execution. |
+| Parallel build-command worker body | documented | Isolated runspaces require a duplicate of Invoke-SolutionBuildCommand's capture, exit-code and location-restoration logic; maintainers must keep those paths aligned. B's parallel command failure and ordering coverage. |
+| Build-command deterministic log replay / failure stop | no comment needed | Explicit indexed sort, grouped output and ErrorMessage throw show that the current group finishes before later groups can start; scheduler rationale states the ordering boundary. B. |
+| Mapping XML generation / pack-plan MappingFile / finally cleanup | documented | XML is generated after build commands and source checks, retained until all pack workers finish, then deleted even on failure; it is scratch rather than a deployment asset. B's generated-source, mapped-pack and XML cleanup assertions. |
 | Parallel packing import/capture/sort/replay | documented | Explains isolated module import and deterministic config-order grouped log replay despite worker completion order. B. |
 | Sequential packing branch | no comment needed | Direct calls duplicate the same PackageType Both contract and visibly avoid parallel runspaces; no hidden fallback. B. |
 | Asset and script/config copies | existing comments verified | Existing section comments match copied content and missing-asset failure; script help identifies artifact contents. B. |
@@ -225,14 +280,17 @@ Reviewed files: [connect.ps1](../../pipelines/scripts/connect.ps1),
 | `deploy.ps1` final publish / postDeploy | existing comments verified | Existing publish comment and hook phase match calls; no rollback implied. D, C. |
 | `import.ps1` script help | documented | Normal build/checker policy precedes forced unmanaged deployment, which still performs process/publish side effects. D, B. |
 | `import.ps1` build step / deploy step and status checks | existing comments verified | Existing step comments match build then unmanaged deploy; false status and throws prevent reporting success. D. |
-| `export.ps1` script help/parameters/output | documented | Corrected diagnostic versus package artifact destination; described supplied scratch path, branch policy, reservation side effects and PassThru shape. X, V. |
+| `export.ps1` script help/parameters/output | documented | Corrected diagnostic versus package artifact destination; described supplied scratch path, branch policy, reservation side effects and PassThru shape. Updated for inline mapping direction, no build-command execution and expanded change detection in #97. X, V. |
 | `export.ps1` default-branch warning / preExport | no comment needed | Explicit HasBranchOverride check and warning state policy clearly; hook contract is authoritative. X, C. |
+| `export.ps1` mapping schema / AllowMissingSource / capability guards | documented | First export may create mapped sources; attached build commands are never run. Parallel workers only download, so mapped expansion stays on the main thread, while both export modes need mapped baseline compression. X's sequential mapping/no-command fixture and parallel expansion caller. |
 | `export.ps1` queue startup / configured-order processing | documented | Scheduler contract explains overlap while main loop waits per solution; no claim of config-order worker completion. X. |
-| `export.ps1` old package/remove/unpack and XML normalization | existing comments verified | Existing XML comment correctly explains matching serialization before Git status; old package is preserved for component comparison. X. |
+| `export.ps1` old package/remove/unpack and XML normalization | existing comments verified | Existing XML comment correctly explains matching serialization before Git status; old package is preserved for component comparison. Rechecked #97's common MappingFile for old/new compression and unpacking; new source-validation rationale is recorded separately. X. |
+| `export.ps1` mapped old-baseline source validation | documented | Existing mapped sources are checked before removing the old solution directory, preventing destructive deletion on an invalid baseline. X's mapping-aware baseline fixtures; common XML helper contract. |
 | `export.ps1` Git status / additive comparison | existing comments verified | Existing version-on-change comment agrees with no-update tests; new solution is explicitly additive without comparison baseline. X. |
+| `export.ps1` mapped-source Git pathspec construction | documented | Changes outside the solution but inside the repository must trigger versioning; unresolved placeholders, outside-root paths and repository root itself are excluded to avoid unrelated bumps. X's external-to-solution source-change fixture and explicit path exclusion branches. |
 | `export.ps1` Major.Build base reset/increment/reservation | documented | Branch base occupies nonadjacent version components; change counters reset before checked increment and reservation. X, V. |
 | `export.ps1` environment version write semaphore | documented | Shares operation budget with background package exports, not merely other main-thread writes. X. |
-| `export.ps1` postExport / cleanup / diagnostics finally | documented | Stop-before-summary permits teardown timings and prevents scratch writes after deletion; summary labels are whole-run status. X. |
+| `export.ps1` postExport / cleanup / diagnostics finally | documented | Mapping XML is consumed only on the main thread and can be removed before stopping download workers; stop-before-summary permits teardown timings and prevents scratch writes after directory deletion. Summary labels are whole-run status. X's generated-mapping cleanup and resource teardown fixtures. |
 | `export.ps1` final PassThru object | documented | Script help distinguishes optional successful return object and timings from host diagnostics. X. |
 
 #### A7. `pipelines\scripts\installdependencies.ps1`
@@ -258,7 +316,7 @@ Reviewed files: [connect.ps1](../../pipelines/scripts/connect.ps1),
 | `Get-AlmExportSetting` | documented | Separate package-worker and Dataverse-operation limits, validated integers 1-8, null/empty defaults, explicit false. X. |
 | `Format-AlmLogLine` | documented | CI command must remain first on the line; context prefix placement is behavior-critical. X. |
 | `Send-AlmExportEvent` | documented | Live shared queue/signal ordering permits progress without draining terminal output early. X. |
-| `Expand-AlmExportSolution` | documented | Both-package unpack depends on managed companion adjacent to returned unmanaged path. X. |
+| `Expand-AlmExportSolution` | documented | Both-package unpack depends on managed companion adjacent to returned unmanaged path. Reconciled #97's optional MappingFile forwarding contract; blank values retain ordinary layout. X's optional-mapping forwarding assertion and export main-thread caller. |
 | `Start-AlmExportPipeline` | documented | Mutable state ownership, borrowed connection, prerequisites, initialization-only behavior, duplicate failures and declined ShouldProcess return. X. |
 | Original OrganizationDetail initialization before Clone | documented | Avoid independent refresh of incomplete metadata on worker clones; barrier fixture exercises warm details. X. |
 | State allocation / per-solution package enqueue | no comment needed | Literal state members and managed/unmanaged loop expose ownership and paths, explained by function contract. X. |
@@ -448,7 +506,55 @@ strings, is unchanged.
 | Log in to Azure | documented | Secret-present credential object versus OIDC expression selection. A. |
 | Install dependencies, connect, and import / embedded PowerShell | documented | Reference JSON mapping and same-process build/checker then unmanaged deploy contract, not direct zip import. D, B. |
 
-#### Verification results and limitations
+#### Upstream integration assessment: `4aa15e7`
+
+The merge of `origin/main` (#97, inline mappings/build commands) was assessed after
+the initial validation below. Manually resolved conflict blocks in
+[build.ps1](../../pipelines/scripts/build.ps1),
+[export.ps1](../../pipelines/scripts/export.ps1) and
+[parallel-export.ps1](../../pipelines/scripts/parallel-export.ps1), and reviewed the
+automatic merge of [common.ps1](../../pipelines/scripts/common.ps1).
+Read `git diff 1b29582..origin/main` for all four files, their merged bodies and
+the new B/X fixture bodies before adapting comments. Kept upstream executable
+content, rather than retaining the obsolete pre-mapping pack-plan construction.
+Hook execution and Major.Build version reservation remain upstream behavior;
+their existing decisions still apply. No files were staged by this task.
+
+The four new functions have explicit rows above, bringing the assigned runtime
+inventory from **79 to 83 function definitions**, including nested checker helpers.
+Mapping and build-command scriptblocks are separately assessed in those rows.
+No new here-string or embedded-language body was introduced in these four runtime
+files. Existing generated/embedded decisions elsewhere in this section are unchanged.
+
+##### Integration validation
+
+- Focused Pester 5.7.1 through `New-PesterConfiguration` with
+  `Run.PassThru=true` and `Output.Verbosity=None`: **99 passed, 0 failed, 0 skipped,
+  0 failed containers** across PipelineCommon, PipelineBuild, PipelineExport and
+  ParallelExport. These include #97's mapping direction/order/escaping, removed
+  configuration keys, generated build source, command failure, real command
+  overlap, mapped export change detection and optional MappingFile forwarding.
+- TEMP/TMP were redirected to workspace-owned `temp\runtime-upstream-tests`,
+  restored in finally, and the scratch directory deleted; absence was verified.
+- All four merged files parse. Ordered case-sensitive token Kind/Text comparison,
+  excluding comments/newlines/end-of-input and normalizing CRLF, matches
+  `origin/main` exactly: common **2,831**, build **4,306**, export **1,707** and
+  parallel-export **1,900** executable tokens. Literal strings and embedded payloads
+  participate in this comparison.
+- PSScriptAnalyzer 1.24.0 with `scripts\powershell-validation.psd1` settings
+  matches `origin/main` by rule/severity/source extent: build retains its two
+  existing ShouldProcess findings; the other three files have zero findings.
+  No new suppression or analyzer exception was added.
+- `git diff --check` passes for the four owned runtime paths; no conflict markers
+  remain in those sources. Git's unmerged status remains until the parent stages
+  the resolutions. Parent owns final merge staging, full-suite/coverage validation
+  and PR update; this task did not run the full runner concurrently.
+- Validation uses mocks and local concurrency probes, not a live Dataverse service.
+  In particular, cross-group ordering and placeholder/path exclusions were assessed
+  from the implementation; the overlap fixture is not claimed as an exhaustive
+  concurrency or path-validation test matrix.
+
+#### Initial verification results and limitations
 
 - Completed source/symbol/block assessment for all 18 assigned files and all 79
   PowerShell function definitions, including the three checker worker helpers.
@@ -456,7 +562,7 @@ strings, is unchanged.
   have separate decisions above.
 - Executable token identity and parsed YAML-value identity pass; this verifies
   unchanged embedded code/string/configuration content, not live service behavior.
-- Configured analyzer findings are unchanged from HEAD. No new analyzer exceptions
+- Configured analyzer findings are unchanged from `1b29582`. No new analyzer exceptions
   were introduced. The first raw token comparison reported mismatches caused by
   Git stdout LF versus worktree CRLF within multiline tokens; the corrected
   comparison normalizes CRLF and all tokens match.
@@ -490,7 +596,7 @@ strings, is unchanged.
 
 ### Scope and evidence
 
-- File: [setup-common.ps1](../../setup-common.ps1); baseline: `HEAD` (`1b29582` baseline named in the approved plan; executable comparison used the checked-out HEAD).
+- File: [setup-common.ps1](../../setup-common.ps1); initial baseline: `1b29582`. Integration follow-up reviewed `git diff 1b29582..origin/main -- setup-common.ps1` after main advanced to `4aa15e7161b1e8ac9884e3b3c4ce621debe5f5fd` (#97); final executable comparison uses that upstream baseline.
 - Author/assessment: Copilot, 16 October 2026. Every function body was read individually, including all branches of the large selectors. No human-review claim is made; independent human review remains a separate gate.
 - Only comments were edited. No generated prose, comment-insertion scripts, executable changes, suppression changes, commits or pushes.
 - `C`: `tests\SetupCommon.Tests.ps1`, read in full: status callback execution count, selectors, prompt/rendering contracts, normalization, optional values, config source preservation, mutation guards and publication decisions.
@@ -498,6 +604,7 @@ strings, is unchanged.
 - `P`: targeted `setup-github.ps1` and `setup-azdo.ps1` callers: exact-version import/PSModulePath, authentication result consumption, status operations, provider callbacks and config writers.
 - `R`: implementation read; no dedicated focused test located for this helper. Its documentation is limited to directly observable implementation behavior.
 - `V`: `scripts\Test-PowerShell.ps1` validation runner and `scripts\powershell-validation.psd1` policy.
+- `M`: #97 integration follow-up: re-read the complete updated `Set-AlmConfigSolutionsInFile` body, both provider configuration-writer call sites and the new `SetupCommon.Tests.ps1` test `preserves existing per-solution mappings and custom properties when replacing selections`. Its nested mappings/buildCommand/custom-setting fixture verifies retained source properties and removal of legacy `mappingFile`/`buildCommands`. No new named functions were introduced; the file still has 94.
 
 All entries below refer to `setup-common.ps1`; reasons describe the resolved gap or why no additional prose is useful. “Documented” means individually authored contract/rationale was added, not that behavior was changed. “Existing comments verified” means retained commentary was checked against the body.
 
@@ -575,7 +682,7 @@ All entries below refer to `setup-common.ps1`; reasons describe the resolved gap
 | Get-CredentialSummaryText | documented | Records identity precedence, existing-connection labeling and deliberate avoidance of secret fields. | C credential summary tests |
 | Show-EnvironmentConfigurationTable | documented | Required row fields differ from optional UPN; credential rendering is summary-only. | C environment selector tests |
 | Select-OrderedSolution | documented | Describes object identity, required names, add deduplication, manual ordering and null/Done returns. | C add/reorder/remove/clear tests |
-| Set-AlmConfigSolutionsInFile | documented | Documents input projection, optional unmanaged flag, AST extent preservation, creation fallback, errors, guard and post-creation change flag. | C source preservation/idempotency/WhatIf; P |
+| Set-AlmConfigSolutionsInFile | documented | Documents input name/unmanaged projection, first case-insensitive existing-name match, source-backed retention of other properties, legacy mappingFile/buildCommands removal, restricted data import, AST extent preservation, creation/errors/guard and post-creation change flag. Adapted to #97 rather than retaining the old claim that all other properties are discarded. | C source preservation/idempotency/WhatIf; P; M |
 | Set-AlmConfigSolutionCheckEnabledInFile | documented | Explicitly warns whole solutionCheck replacement discards subsettings; preserves unrelated root values and documents I/O/error/change semantics. | C template/toggle/idempotency/WhatIf |
 | Set-AlmConfigBuildValidationBaselineReleaseInFile | documented | Baseline-only updates preserve siblings, empty selectors allowed without resolution, malformed shape throws, creation/guard semantics explicit. | C baseline preservation/invalid config/WhatIf |
 | Select-BuildValidationBaselineEnvironment | documented | Describes short-name deduplication, name/URL exclusions, @selector versus empty sentinel, and cancellation error. | C distinct-baseline test; W |
@@ -618,6 +725,9 @@ All entries below refer to `setup-common.ps1`; reasons describe the resolved gap
 | Single-item menu workaround | existing comments verified | Retained host-workaround explanation; added cancel only when exactly one effective/original item and no generic back. C tests cancellation. |
 | Menu label/index/back protocol | documented | Escaped display labels map back with case-sensitive comparison, first duplicate wins; navigation marker is separate from null cancellation. |
 | AST source-preserving config edits | documented | Extents replace only intended values; root assumption explained. Whole checker replacement is explicitly distinguished from nested baseline preservation. C tests source/idempotency/shape/WhatIf paths. |
+| `Set-AlmConfigSolutionsInFile` imported-name/source pairing | documented | #97 uses restricted data import for existing names and AST extents for retained values. First case-insensitive name match selects the source entry; copying requires the corresponding source index to exist. Inline mappings/buildCommand/custom values are preserved from source, not incoming selection fields. Evidence: M complete body/callers and nested-property regression. |
+| `Set-AlmConfigSolutionsInFile` direct-solution AST filtering | documented | Anonymous Find/FindAll/Where-Object callbacks were read individually. Parent/ancestor checks keep direct solution hashtables in positional order and exclude nested mapping hashtables/arrays, preventing property data from shifting the solution lookup. Evidence: M nested mappings/buildCommand/custom-setting fixture. No new named helper exists. |
+| `Set-AlmConfigSolutionsInFile` property-retention filter | documented | Existing name/deployUnmanaged keys are replaced by setup's selected values; legacy mappingFile/buildCommands keys are intentionally omitted while other keys retain original key/value source text. Evidence: M checks mappings, nested buildCommand arguments, customSetting, deployUnmanaged, legacy-key removal and selected-solution count. |
 | Empty-main branch bootstrap | documented | Exact initial signal documented; configured repositories bypass strategy inference. C bootstrap tests both strategies. |
 | Branch environment assignment identity | documented | URL/name identity, exclusion across branches and ShortName sort described at owning helper. Callback/Done/null validation limits are explicit. |
 | Status capture/replay boundary | documented | Captured operations track Started/Completed; panel failure returns stored result. Uncaptured path does not have this guarantee. C execution-count regression. |
@@ -627,10 +737,13 @@ All entries below refer to `setup-common.ps1`; reasons describe the resolved gap
 ### Validation
 
 - PowerShell parser: **pass**, zero parse errors.
-- Read-only ordered token comparison with checked-out HEAD, excluding comment/newline/end tokens: **pass**, all **17,068 executable tokens unchanged** (including strings and embedded C# source).
+- Initial read-only ordered token comparison with `1b29582`, excluding comment/newline/end tokens: **pass**, all **17,068 executable tokens unchanged** (including strings and embedded C# source).
 - PSScriptAnalyzer **1.24.0**, repository `AnalyzerSettings`: **pass for regression comparison**, **11 unchanged baseline findings**. No new exceptions or suppressions. Baseline findings are not claimed absent.
 - `git diff --check -- setup-common.ps1`: **pass**.
 - Pester **5.7.1**, focused `tests\SetupCommon.Tests.ps1` and `tests\SetupWizard.Tests.ps1`: **65 passed, 0 failed, 1 skipped**, zero failed containers. The skipped case is provider-specific existing test selection; no skip was added.
+- Post-#97 integration parser/token check against `origin/main` at `4aa15e7`: **pass**, zero parse errors, all **17,301 executable tokens unchanged**, including literal/embedded payloads; **94 functions** remain. Only comments differ from upstream in this file.
+- Post-integration PSScriptAnalyzer **1.24.0**, repository settings: **11 unchanged findings** compared with `4aa15e7`; `git diff --check -- setup-common.ps1` passed.
+- Post-integration focused Pester **5.7.1**, only solution-selection preservation (existing and new inline-mapping/custom-setting regression) and configuration WhatIf cases: **6 passed, 0 failed**, zero failed containers; 39 unrelated tests not selected. No full suite was run concurrently with parent validation.
 - No full suite or coverage gate run here; parent coordinates repository-wide validation.
 - No live NuGet downloads, module installation, real authentication or service provisioning were performed to validate comments. Remaining risk is those existing integration paths, not a claimed tested guarantee.
 
@@ -1003,16 +1116,16 @@ Straightforward assertions and test names were intentionally not narrated.
 | GitHubBuildBaseline.Tests.ps1 | Documented recording-only deploy entry points in both archive and candidate; real extraction/order/cleanup is tested without live deployment. Metadata and selector cases are explicit. |
 | GitHubDeployment.Tests.ps1 | Documented execution of the actual YAML publishing body, dispatch fixture shape, and real-Git namespace regression. Gate/pointer/metadata/fallback cases need no repeated descriptions. |
 | GitHubEnvironment.Tests.ps1 | Documented clearing inherited process values and restoring tracked mappings. Alias, precedence, false/zero, masking and authentication cases already explain their differences. |
-| ParallelExport.Tests.ps1 | Documented shared C# coordination and metadata warm-up trap, real importable worker module, release-before-stop cleanup, and barrier-based occupancy measurement. WhatIf, hooks, failure details and ownership assertions are explicit. |
-| PipelineBuild.Tests.ps1 | Documented default in-runspace parallel shim versus real-runspace opt-out, and mutual marker barrier in embedded pack module. Pack-command resolution mock already explicitly throws on wrong ordering. Other configuration/checker cases need no narration. |
+| ParallelExport.Tests.ps1 | Documented shared C# coordination and metadata warm-up trap, real importable worker module, release-before-stop cleanup, barrier-based occupancy measurement and distinct parent/worker unpack seams. Upstream mapping-forwarding stub and assertion reviewed; WhatIf, hooks, failure details and ownership assertions are explicit. |
+| PipelineBuild.Tests.ps1 | Documented default in-runspace parallel shim versus two real-runspace opt-outs, separate build-command/pack-worker barriers, mapping XML snapshot lifetime and XML-escaping fixture. Pack-command resolution mock already explicitly throws on wrong ordering. Upstream command ordering/validation, mapping capability/directives and removed-setting cases reviewed; straightforward failures need no narration. |
 | PipelineCommon.Tests.ps1 | Documented native output/exit-state simulator. Merge, SemVer, hook and PAC cases expose their contracts directly; cleanup of LASTEXITCODE is explicit. |
 | PipelineConnection.Tests.ps1 | Documented fake process identities and restoration on failure. PAC and identity probe mocks isolate external operations. |
-| PipelineDependencies.Tests.ps1 | Documented PATH/action-path isolation and fixture ownership while mocking installation. Version selector and minimum-version cases are explicit. |
+| PipelineDependencies.Tests.ps1 | Documented PATH/action-path isolation and fixture ownership while mocking installation. Upstream resolved/pinned module fixtures now use 3.2.1-preview.1; version selector and minimum-version cases are explicit and need no additional comments. |
 | PipelineDeployment.Tests.ps1 | Documented literal solution-entry settings and sequential packing for the IMPORT fixture. Package/upgrade/service-account matrices need no redundant commentary. |
-| PipelineExport.Tests.ps1 | Documented sequential mock visibility and nonobvious Major.Build mapping of 1.3 to 1.2.3.4. Additive/removal/reset/overflow/warning cases otherwise explain their intent. |
+| PipelineExport.Tests.ps1 | Documented sequential mock visibility, nonobvious Major.Build mapping of 1.3 to 1.2.3.4, mapping capture/reset lifetime, unavailable BUILD-command sentinel and pathspec-sensitive status mock. Upstream old/new mapping reuse and duplicate-name-before-generation cases reviewed; additive/removal/reset/overflow/warning cases otherwise explain their intent. |
 | PipelineYaml.Tests.ps1 | No comment needed: roots enumerate workflow/action/pipeline surfaces, aggregate parse failures retain paths, and tag verification ordering is explicit in the test name and IndexOf comparison. No named helpers. |
 | Release.Tests.ps1 | No comment needed: TestDrive owns generated installers, unresolved-placeholder and parse assertions describe the generated-artifact contract, and workflow checks state stable-tag release policy. No named helpers. |
-| SetupCommon.Tests.ps1 | Documented fake Spectre responsibilities/type lifetime, mutable callback state detecting repeated side effects, answer-by-label prompt queues and wrapper/console reset. Reviewed all selector, rendering, configuration, mutation-guard and publication blocks. |
+| SetupCommon.Tests.ps1 | Documented fake Spectre responsibilities/type lifetime, mutable callback state detecting repeated side effects, answer-by-label prompt queues and wrapper/console reset. Upstream selection-preservation fixture deliberately mixes retained inline mappings/custom values with removed solution-level mappingFile/buildCommands keys. Reviewed all selector, rendering, configuration, mutation-guard and publication blocks. |
 | SetupEnvironment.Tests.ps1 | Documented fail-closed Dataverse fallbacks, provider AST loading without bootstrap, deferred token callback invocation and script-scoped discovery cache reset. Reviewed credential mode/reuse, users/roles, catalogs, editors and existing-state/storage blocks. |
 | SetupProviders.Tests.ps1 | Documented fail-closed mutation stubs, function-only AST import, binding-only WhatIf samples, cleanup folder ownership and optional/required validator helper contracts. Reviewed authentication callbacks, lookup classification, guards, credential writes, owner filters, cleanup, generated workflows/pipelines and endpoint reconciliation. |
 | SetupRepository.Tests.ps1 | Documented external-boundary fail-closed fixtures, TEMP/LASTEXITCODE lifetime and Git diff's distinct exit-1 semantics. Reviewed selection, working-tree failures, upstream sync/divergence, publication/PR updates and repository discovery. |
@@ -1054,20 +1167,28 @@ for empty signatures whose only purpose is Pester parameter inspection.
 
 #### ParallelExport.Tests.ps1
 
+The outer `Expand-DataverseSolutionFile` is an existing-verified empty Pester
+signature, including `MappingFile`, added upstream for `passes generated mapping
+files to the solution unpack cmdlet`. No separate function comment is needed:
+that test directly asserts the MappingFile binding. The runtime BeforeEach
+replacement is documented because parent-runspace unpacking uses this seam
+while thread workers import the implementation below.
+
 All six following functions are embedded in the importable fixture module and
 were reviewed without editing their source strings.
 
 - `Get-DataverseConnection` — documented at containing fixture: returns shared default test client for worker connection ownership/warm-up tests.
 - `Write-TestSolution` — documented at containing fixture: minimum unpacked Solution.xml for comparison and unchanged-version paths.
 - `Export-DataverseSolution` — documented at containing fixture: Begin/End occupancy, shared release wait, controlled failure and file/folder output.
-- `Expand-DataverseSolutionFile` — documented at containing fixture: delegates minimum unpacked solution creation.
+- `Expand-DataverseSolutionFile` — documented at containing fixture: delegates minimum unpacked solution creation; upstream added the MappingFile binding without changing this fake unpack behavior.
 - `Compress-DataverseSolutionFile` — documented at containing fixture: writes comparison baseline marker, not a real solution archive.
 - `Set-DataverseSolution` — documented at containing fixture: counts version updates across worker/runspace boundaries.
 
 #### PipelineBuild.Tests.ps1
 
 - `Compress-DataverseSolutionFile`, `Invoke-TestDotnet`, `Invoke-TestPac` (outer empty stubs) — existing verified: explicit Pester argument-inspection signatures.
-- Embedded `Compress-DataverseSolutionFile` — documented outside fixture string: mutual started-file barrier forces actual runspace overlap; deadline bounds failure.
+- Embedded `Compress-DataverseSolutionFile` in `packs multiple solutions concurrently through real parallel runspaces` — documented outside fixture string: mutual started-file barrier forces actual runspace overlap; deadline bounds failure.
+- Upstream embedded `Compress-DataverseSolutionFile` in `runs configured parallel build commands concurrently within the build limit` — documented outside fixture string: a deliberately simple pack-output writer with MappingFile binding, not the command-overlap probe. Its separate unnamed child script owns the two-marker barrier.
 - Embedded `Export-ModuleMember` and module body — no additional comment needed beyond barrier/importable-module explanation.
 
 #### PipelineCommon.Tests.ps1
@@ -1139,6 +1260,19 @@ No C# string was modified; relevant fixture intent is documented outside strings
   `Default`, `Peak`, `VersionUpdates`, `Started`, `Release`, `DetailsRead`,
   `Disposed` need no separate commentary: their use in the barrier and assertions
   is direct.
+- `PipelineBuild.Tests.ps1`, upstream `AlmBuildMappingTestCapture.MappingPath`
+  and `AlmBuildMappingTestCapture.MappingXml` — documented outside their C#
+  string: pack mocks snapshot generated mapping contents before production
+  cleanup. The two static auto-property accessors need no individual comments;
+  they store the exact values asserted after packing, not simulated SDK behavior.
+- `PipelineExport.Tests.ps1`, upstream `AlmExportMappingTestCapture.MappingPath`,
+  `AlmExportMappingTestCapture.MappingXml`,
+  `AlmExportMappingTestCapture.CompressionMappingPaths` and
+  `AlmExportMappingTestCapture.GitStatusArguments` — documented outside their C#
+  string: snapshot mapping XML and record comparison/pathspec arguments before
+  cleanup; BeforeEach clears both properties and both lists. Auto-property
+  accessors and readonly list initialization need no separate commentary because
+  the capture/reset/assertion sequence states the contract directly.
 - `SetupCommon.Tests.ps1`: `Markup` constructor/`ToString`, `PanelHeader`
   constructor, `Panel` constructor/`ToString`, `TableColumn` constructor,
   `Table.AddColumn`, `Grid.AddRow`, `Columns` constructor,
@@ -1203,7 +1337,7 @@ listed above, including the two inline analyzer probes in Validation.
 | Validation / embedded `New-UnreviewedResource`, `Parse-Things`, unnamed child entry | Exception-policy case analyzes the unreviewed mutating function and requires one ShouldProcess finding. Rule-policy case analyzes Parse-Things and requires verb/unused/empty-catch findings but no host-output finding. Enforcement cases copy source and launch the child entry to ensure analyzer or stale-exception failure occurs before nested Pester. |
 | helpers\Invoke-SetupTests.ps1 / script entry | `docs\development\powershell.md` invokes it for all setup suites or a selected repository-relative TestPath. Its body resolves against repoRoot, reports all three setup files and fails on empty runs, failed tests or failed containers. Focused execution against SetupWizard completed successfully. |
 
-### Validation
+### Initial validation before upstream integration
 
 - PowerShell parser: all 25 assigned files passed.
 - Read-only outer/embedded AST inventory and ledger-name check: all 72
@@ -1224,9 +1358,10 @@ listed above, including the two inline analyzer probes in Validation.
   pushes or delegation. Full suite and repository-wide gates remain owned by
   the parent task.
 
-#### Parent full-suite result and provider-specific skip limitation
+#### Parent pre-integration full-suite result and provider-specific skip limitation
 
-The parent subsequently reported 525 passed, 8 skipped, no failures, with all
+Before integrating upstream `4aa15e7`, the parent reported 525 passed, 8 skipped,
+no failures, with all
 coverage gates passing. These eight skips are pre-existing conditional
 `-Skip` expressions in suites expanded for both GitHub and Azure DevOps. They
 select the applicable provider, not the operating system or runner platform;
@@ -1248,3 +1383,44 @@ the other provider's expanded instance is skipped.
 These results do not establish equivalent behavior for the skipped provider
 instances, live services, or other operating systems. The separate
 missing-Azure-schema local skip path is not one of these eight reported skips.
+
+### Upstream integration assessment: 4aa15e7
+
+The merge brought #97's inline mapping/build-command tests from
+`1b29582..origin/main` into five already-reviewed suites. Those upstream diffs
+and their embedded fixtures were read individually; selected comments were
+updated or added without changing upstream executable tokens. The original
+33,308-token and 72-definition inventory and focused/full-suite results above
+describe the pre-integration review, not the expanded merged suite. Final
+full validation is rerun by the parent.
+
+#### Added and changed fixture/caller evidence
+
+| File / exact fixture or symbol | Decision and evidence |
+| --- | --- |
+| ParallelExport.Tests.ps1 / outer `Expand-DataverseSolutionFile` | Existing verified: empty signature with MappingFile and unused-parameter justification supports `passes generated mapping files to the solution unpack cmdlet`. The assertion checks forwarding by `Expand-AlmExportSolution`; no extra function comment is needed. Runtime mock replacement is documented to distinguish parent-runspace unpacking from embedded worker-module unpacking. |
+| ParallelExport.Tests.ps1 / embedded `Expand-DataverseSolutionFile` | Existing fixture explanation verified with upstream MappingFile parameter: still delegates to `Write-TestSolution`; it accepts mapping calls without simulating packager directive processing. No added comment inside the immutable string. |
+| PipelineBuild.Tests.ps1 / `AlmBuildMappingTestCapture.MappingPath`, `MappingXml`, outer `Compress-DataverseSolutionFile` | Documented snapshot lifetime: the mock reads MappingFile while it exists, and `generates mapping XML in entry order with all supported directive types` inspects captured XML plus the subsequently deleted path. MappingFile in Get-Command's Parameters represents installed-command capability, independently of the synthetic installed-version string used for lock-file assertions. |
+| PipelineBuild.Tests.ps1 / `Invoke-TestPac` | Existing verified: added remaining-arguments binding remains an empty Pester signature. Mapping tests assert zero PAC calls; solution-check tests still route area/operation output through this seam. No new PAC fallback behavior is claimed. |
+| PipelineBuild.Tests.ps1 / parallel-stage fixture | Documented revised flow: both `runs configured parallel build commands concurrently within the build limit` and the existing pack-overlap case opt out of the in-runspace shim. `ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE` records entry into command-plan parallel processing in the default-path test and is restored from the saved environment; this marker alone does not prove overlap. |
+| PipelineBuild.Tests.ps1 / unnamed `build-command-worker.ps1` fixture | Documented: each child writes its own marker and must see both markers within ten seconds. It proves native build-command overlap separately from the later pack-worker barrier; this script uses the current process executable rather than relying on PATH for its child PowerShell. The finally block restores module-path/real-parallel environment overrides. |
+| PipelineBuild.Tests.ps1 / embedded `Compress-DataverseSolutionFile` under command-overlap test | Documented: writes a pack marker only, accepts MappingFile, and is exported by the real fixture module so packing can complete in its own worker. This is a separate occurrence from the older identically named embedded pack-overlap function. No per-statement narration needed. |
+| PipelineBuild.Tests.ps1 / unnamed `create-mapped-plugin.ps1` fixture | No extra comment needed: its three statements create the output directory and file. `runs a mapping buildCommand before validating its generated source file` configures the initially absent generated source and asserts both created content and captured mapping XML; the regression ordering is already explicit in the test name and assertions. |
+| PipelineBuild.Tests.ps1 / command settings fixtures | No additional comments needed for `runs build commands in parallel by default before packing`, `runs an individually sequential build command without a nested parallel stage`, `fails the build when a configured build command exits unsuccessfully` and `rejects malformed build command arguments before running commands`: per-mapping parallel flags, explicit exit 7, malformed scalar arguments and zero-pack assertions state their differences directly. None of these fixtures were altered. |
+| PipelineBuild.Tests.ps1 / directive and capability fixtures | Documented ampersand paths because they test XML attribute escaping in addition to ordered FileToFile/Folder/FileToPath elements. No additional comments needed for missing MappingFile capability, retired mappingFile/buildCommands settings, unsupported directive type or missing source: test names and pre-pack/zero-PAC assertions state those boundaries directly. Production build runs command plans before mapping-source existence validation and packing. |
+| PipelineDependencies.Tests.ps1 / version fixtures | No comment needed: Install-Module/Get-Module results, exact-selector cases and locked RequiredVersion assertions were coherently advanced upstream from 3.0.4-preview.1 to 3.2.1-preview.1. This is the dependency-minimum fixture; the build suite's independent synthetic 3.0.4 lock-file snapshot was preserved exactly, not incorrectly rewritten as the new minimum. |
+| PipelineExport.Tests.ps1 / `AlmExportMappingTestCapture` members and outer export/pack/git signatures | Documented generated-file snapshot/reset and call recording. `Export-DataverseSolution` and `Compress-DataverseSolutionFile` now accept MappingFile; `git` adds RemainingArguments with a specific suppression justification. Both lists and both properties are reset per case, preventing earlier mapping records from satisfying later assertions. |
+| PipelineExport.Tests.ps1 / `uses inline mappings during sequential export without running build commands` | Documented deliberately unavailable `missing-build-tool`: EXPORT must use the mapping while leaving per-mapping BUILD work unexecuted. The source already exists, and captured XML plus post-return deletion verify real generated-file lifetime. No comment was inserted into the configuration string. |
+| PipelineExport.Tests.ps1 / `detects changes to mapped source files outside the solution directory` | Documented pathspec-sensitive Git mock: it returns a change only when RemainingArguments includes plugins/Example.dll; unconditional status output would miss a regression in source-path selection. Assertions verify that argument, old/new compression, comparison and revised solution version. |
+| PipelineExport.Tests.ps1 / duplicate-name and comparison fixtures | No extra comments needed: duplicate exact/case-varied names must fail before export/pack or mapping-path capture. `uses inline mappings for old and new packages when comparing export changes` explicitly checks both pack invocations receive mappings, records both paths and requires generated-file deletion. |
+| SetupCommon.Tests.ps1 / `preserves existing per-solution mappings and custom properties when replacing selections` | Documented intentionally mixed legacy/current config. Fixture includes removed solution-level mappingFile/buildCommands, supported inline mapping/buildCommand, customSetting and an unselected solution. Setter assertions require preservation of inline/custom values, updated deployUnmanaged, deletion of legacy keys and removal of unselected records. Production `Set-AlmConfigSolutionsInFile` preserves retained source extents but excludes name/deployUnmanaged/mappingFile/buildCommands from copied properties. No string payload changed. |
+
+#### Integration validation
+
+- All five auto-merged test files parse successfully.
+- Ordered executable-token comparison against `origin/main`: all five identical,
+  9,157 tokens, including literal strings and here-string bodies (Git/file line
+  endings normalized for comparison).
+- `git diff --check -- tests` passed.
+- No staging, commits, pushes or full-suite execution by this review task.
+- Parent owns the final merged-suite validation and updated coverage results.

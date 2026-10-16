@@ -68,9 +68,18 @@ function Send-AlmExportEvent {
 function Expand-AlmExportSolution {
     # The SDK locates the managed companion beside the unmanaged ZIP returned by
     # Wait-AlmSolutionExport; both exports must finish before unpacking Both.
-    param([Parameter(Mandatory)][string]$ZipPath, [Parameter(Mandatory)][string]$OutputPath)
+    # MappingFile redirects unpacked components; blank preserves the ordinary layout.
+    param(
+        [Parameter(Mandatory)][string]$ZipPath,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [string]$MappingFile
+    )
 
-    Expand-DataverseSolutionFile -Path $ZipPath -OutputPath $OutputPath -PackageType Both -UnpackMsapp
+    if ([string]::IsNullOrWhiteSpace($MappingFile)) {
+        Expand-DataverseSolutionFile -Path $ZipPath -OutputPath $OutputPath -PackageType Both -UnpackMsapp
+    } else {
+        Expand-DataverseSolutionFile -Path $ZipPath -OutputPath $OutputPath -PackageType Both -UnpackMsapp -MappingFile $MappingFile
+    }
 }
 
 function Start-AlmExportPipeline {

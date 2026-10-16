@@ -9,6 +9,11 @@
 
     Hooks defined in alm-config.psd1 are invoked at various stages of the build process
     to allow for custom pre- and post-build actions.
+
+    Inline mapping buildCommand entries run after preBuild and before packing,
+    allowing commands to produce mapped source files before their existence is
+    checked. Mapping XML is generated for the pack cmdlet and removed in finally;
+    mapped solutions require a cmdlet version supporting MappingFile.
 .PARAMETER SourceDirectory
     The root directory containing the solution folders and alm-config.psd1 file.
 .PARAMETER ArtifactStagingDirectory
@@ -91,6 +96,138 @@ function Get-AlmBuildSetting {
         throw 'build.maxParallel must be an integer between 1 and 8.'
     }
     return $settings
+}
+
+function Get-SolutionBuildCommandPlan {
+    <#
+    .SYNOPSIS
+        Validates mapping build commands and emits their ordered execution plans.
+    .DESCRIPTION
+        MappingPlans supplies SolutionIndex, SolutionName and normalized Entries.
+        Entries without BuildCommand are skipped. Commands require a nonblank
+        executable; arguments must be a string array and parallel a Boolean
+        (default true). WorkingDirectory defaults to SourceDirectory or resolves
+        a relative override to an existing directory; this is not a containment
+        check against '..'. Invalid command configuration throws before execution.
+        Plans retain solution/mapping indexes, display name, executable, arguments,
+        working directory and Parallel. GroupIndex changes when the next actual
+        command's parallel flag changes, so sequential runs form ordering barriers.
+    #>
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][array]$MappingPlans,
+        [Parameter(Mandatory)][string]$SourceDirectory
+    )
+
+    $plans = [System.Collections.Generic.List[object]]::new()
+    $groupIndex = -1
+    $previousParallel = $null
+    foreach ($mappingPlan in $MappingPlans) {
+        for ($mappingIndex = 0; $mappingIndex -lt $mappingPlan.Entries.Count; $mappingIndex++) {
+            $command = $mappingPlan.Entries[$mappingIndex].BuildCommand
+            if ($null -eq $command) {
+                continue
+            }
+            if (-not $command.ContainsKey('executable') -or $command.executable -isnot [string] -or [string]::IsNullOrWhiteSpace($command.executable)) {
+                throw "buildCommand for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must have a non-empty executable string."
+            }
+
+            $arguments = @()
+            if ($command.ContainsKey('arguments') -and $null -ne $command.arguments) {
+                if ($command.arguments -isnot [array] -or @($command.arguments | Where-Object { $_ -isnot [string] }).Count -gt 0) {
+                    throw "buildCommand arguments for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be an array of strings."
+                }
+                $arguments = @($command.arguments)
+            }
+
+            $parallel = $true
+            if ($command.ContainsKey('parallel') -and $null -ne $command.parallel) {
+                $parallel = $command.parallel
+            }
+            if ($parallel -isnot [bool]) {
+                throw "buildCommand parallel for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be `$true or `$false."
+            }
+            if ($null -eq $previousParallel -or $previousParallel -ne $parallel) {
+                $groupIndex++
+                $previousParallel = $parallel
+            }
+
+            $workingDirectory = $SourceDirectory
+            if ($command.ContainsKey('workingDirectory') -and $null -ne $command.workingDirectory) {
+                if ($command.workingDirectory -isnot [string]) {
+                    throw "buildCommand workingDirectory for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be a relative path string."
+                }
+                if (-not [string]::IsNullOrWhiteSpace($command.workingDirectory)) {
+                    if ([System.IO.Path]::IsPathRooted($command.workingDirectory)) {
+                        throw "buildCommand workingDirectory for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' must be relative to the repository root."
+                    }
+                    $workingDirectory = [System.IO.Path]::GetFullPath((Join-Path $SourceDirectory $command.workingDirectory))
+                }
+            }
+            if (-not (Test-Path -LiteralPath $workingDirectory -PathType Container)) {
+                throw "buildCommand workingDirectory for mapping $($mappingIndex + 1) in solution '$($mappingPlan.SolutionName)' was not found: $workingDirectory"
+            }
+
+            $commandName = "mapping $($mappingIndex + 1)"
+            if ($command.ContainsKey('name') -and $command.name -is [string] -and -not [string]::IsNullOrWhiteSpace($command.name)) {
+                $commandName = $command.name
+            }
+            $plans.Add([pscustomobject]@{
+                SolutionIndex    = $mappingPlan.SolutionIndex
+                SolutionName     = $mappingPlan.SolutionName
+                CommandIndex     = $mappingIndex
+                CommandName      = $commandName
+                Executable       = $command.executable
+                Arguments        = [string[]]$arguments
+                WorkingDirectory = $workingDirectory
+                Parallel         = $parallel
+                GroupIndex       = $groupIndex
+            })
+        }
+    }
+    return $plans.ToArray()
+}
+
+function Invoke-SolutionBuildCommand {
+    <#
+    .SYNOPSIS
+        Runs one planned build command and returns captured output and error text.
+    .DESCRIPTION
+        Uses the plan's working directory, restoring the prior location in finally.
+        Captures stdout/stderr as strings and reports invocation exceptions or a
+        nonzero LASTEXITCODE through ErrorMessage rather than throwing from the
+        command body; null LASTEXITCODE is treated as zero. Location-entry failures
+        can still throw. Returns SolutionName, CommandName, Output and ErrorMessage
+        for the caller's grouped logging/failure gate; no command effects roll back.
+    #>
+    param([Parameter(Mandatory)][pscustomobject]$Plan)
+
+    $output = @()
+    $errorMessage = ''
+    $exitCode = 0
+    Push-Location -LiteralPath $Plan.WorkingDirectory
+    try {
+        $arguments = [string[]]$Plan.Arguments
+        $output = @(& $Plan.Executable @arguments 2>&1 | ForEach-Object { [string]$_ })
+        $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode) { $exitCode = 0 }
+        if ($exitCode -ne 0) {
+            $errorMessage = "Command exited with code $exitCode."
+        }
+    }
+    catch {
+        $errorMessage = ($_ | Out-String).TrimEnd()
+    }
+    finally {
+        Pop-Location
+    }
+
+    return [pscustomobject]@{
+        SolutionName = $Plan.SolutionName
+        CommandName  = $Plan.CommandName
+        Output       = $output
+        ErrorMessage = $errorMessage
+    }
 }
 
 function New-SolutionCheckSeverityCount {
@@ -636,25 +773,137 @@ Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }
 
-$packPlans = @(
-    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
-        $solutionName = [string]$config.solutions[$index].name
-        [pscustomobject]@{
-            Index        = $index
-            SolutionName = $solutionName
-            Path         = Join-Path $SourceDirectory "solutions/$solutionName"
-            OutputPath   = Join-Path $ArtifactStagingDirectory "solutions/$solutionName.zip"
-        }
-    }
-)
 # Resolve the command first to trigger module autoload before capturing its path
-# for isolated packing runspaces.
-$null = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
+# for isolated packing runspaces and checking optional MappingFile support.
+$packCommand = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
 $packModule = Get-Module -Name 'Rnwood.Dataverse.Data.PowerShell' | Select-Object -First 1
 if ($null -eq $packModule) {
     Write-Host "##[error]Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
     throw "Module Rnwood.Dataverse.Data.PowerShell not found in loaded modules."
 }
+$mappingPlans = @(
+    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
+        [pscustomobject]@{
+            SolutionIndex = $index
+            SolutionName = [string]$config.solutions[$index].name
+            Entries      = @(Get-SolutionPackagerMappingEntry -Solution $config.solutions[$index])
+        }
+    }
+)
+$packSupportsMappingFile = $null -ne $packCommand.PSObject.Properties['Parameters'] -and $packCommand.Parameters.ContainsKey('MappingFile')
+$mappedSolutions = @($mappingPlans | Where-Object { $_.Entries.Count -gt 0 })
+if ($mappedSolutions.Count -gt 0 -and -not $packSupportsMappingFile) {
+    throw "Solution mappings require a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile. Update scriptDependencies in alm-config.psd1 to the compatible module version."
+}
+
+$buildCommandPlans = @(Get-SolutionBuildCommandPlan -MappingPlans $mappingPlans -SourceDirectory $SourceDirectory)
+if ($buildCommandPlans.Count -gt 0) {
+    # Consecutive flag groups, rather than a global parallel/sequential partition,
+    # preserve barriers in mapping order across solutions. Global sequential mode
+    # overrides per-command parallel opt-in without moving commands between groups.
+    $lastGroupIndex = ($buildCommandPlans | Measure-Object -Property GroupIndex -Maximum).Maximum
+    for ($groupIndex = 0; $groupIndex -le $lastGroupIndex; $groupIndex++) {
+        $groupPlans = @($buildCommandPlans | Where-Object { $_.GroupIndex -eq $groupIndex } | Sort-Object SolutionIndex, CommandIndex)
+        $parallelPlans = @($groupPlans | Where-Object { $_.Parallel })
+        $sequentialPlans = @($groupPlans | Where-Object { -not $_.Parallel })
+        $groupResults = @()
+
+        if (-not $buildSettings.parallel) {
+            $parallelPlans = @()
+            $sequentialPlans = $groupPlans
+        }
+
+        if ($parallelPlans.Count -gt 0) {
+            Write-Host "##[section]Running $($parallelPlans.Count) parallel build command(s) with max parallelism $($buildSettings.maxParallel)"
+            if ($parallelPlans.Count -eq 1) {
+                $groupResults += Invoke-SolutionBuildCommand -Plan $parallelPlans[0]
+            }
+            else {
+                # Parallel runspaces cannot call the local helper directly. Keep this
+                # capture/exit-code/location-restoration path aligned with it; wait for
+                # the group before replaying ordered logs or aborting later groups.
+                $groupResults += @($parallelPlans | ForEach-Object -ThrottleLimit $buildSettings.maxParallel -Parallel {
+                    $plan = $_
+                    $ErrorActionPreference = 'Stop'
+                    $output = @()
+                    $errorMessage = ''
+                    $exitCode = 0
+                    Push-Location -LiteralPath $plan.WorkingDirectory
+                    try {
+                        $arguments = [string[]]$plan.Arguments
+                        $output = @(& $plan.Executable @arguments 2>&1 | ForEach-Object { [string]$_ })
+                        $exitCode = $LASTEXITCODE
+                        if ($null -eq $exitCode) { $exitCode = 0 }
+                        if ($exitCode -ne 0) {
+                            $errorMessage = "Command exited with code $exitCode."
+                        }
+                    }
+                    catch {
+                        $errorMessage = ($_ | Out-String).TrimEnd()
+                    }
+                    finally {
+                        Pop-Location
+                    }
+                    [pscustomobject]@{
+                        SolutionIndex = $plan.SolutionIndex
+                        CommandIndex  = $plan.CommandIndex
+                        SolutionName  = $plan.SolutionName
+                        CommandName   = $plan.CommandName
+                        Output        = $output
+                        ErrorMessage  = $errorMessage
+                    }
+                } | Sort-Object SolutionIndex, CommandIndex)
+            }
+        }
+
+        foreach ($plan in $sequentialPlans) {
+            $groupResults += Invoke-SolutionBuildCommand -Plan $plan
+        }
+
+        foreach ($result in $groupResults) {
+            Write-Host "##[group]Build command: $($result.SolutionName) / $($result.CommandName)"
+            foreach ($line in $result.Output) {
+                Write-Host "[$($result.SolutionName)][Build:$($result.CommandName)] $line"
+            }
+            if (-not [string]::IsNullOrWhiteSpace($result.ErrorMessage)) {
+                Write-Host "##[error][$($result.SolutionName)][Build:$($result.CommandName)] $($result.ErrorMessage)"
+                Write-Host "##[endgroup]"
+                throw "Build command '$($result.CommandName)' failed for solution '$($result.SolutionName)': $($result.ErrorMessage)"
+            }
+            Write-Host "##[endgroup]"
+        }
+    }
+}
+
+$generatedMappingFiles = [System.Collections.Generic.List[string]]::new()
+try {
+    # Commands have finished producing mapped sources before XML validation. Keep the
+    # generated files alive until all pack workers finish; they pass paths, not XML text.
+    $packPlans = @(
+    for ($index = 0; $index -lt $config.solutions.Count; $index++) {
+        $solutionName = [string]$config.solutions[$index].name
+        $solutionPath = Join-Path $SourceDirectory "solutions/$solutionName"
+        $mappingFile = ''
+        $mappingEntries = $mappingPlans[$index].Entries
+        if ($mappingEntries.Count -gt 0) {
+            $mappingXml = ConvertTo-SolutionPackagerMappingXml `
+                -Entries $mappingEntries `
+                -SourceDirectory $SourceDirectory `
+                -SolutionPath $solutionPath `
+                -SolutionName $solutionName
+            $mappingFile = Join-Path ([System.IO.Path]::GetTempPath()) "alm4dataverse-mapping-$([guid]::NewGuid().ToString('N')).xml"
+            $generatedMappingFiles.Add($mappingFile)
+            [System.IO.File]::WriteAllText($mappingFile, $mappingXml, [System.Text.UTF8Encoding]::new($false))
+        }
+        [pscustomobject]@{
+            Index        = $index
+            SolutionName = $solutionName
+            Path         = $solutionPath
+            OutputPath   = Join-Path $ArtifactStagingDirectory "solutions/$solutionName.zip"
+            MappingFile  = $mappingFile
+        }
+    }
+)
 
 if ($buildSettings.parallel) {
     $buildModulePath = if ($packModule.PSObject.Properties['Path']) { [string]$packModule.Path } else { '' }
@@ -673,10 +922,19 @@ if ($buildSettings.parallel) {
             }
             $output = @(
                 & {
-                    Compress-DataverseSolutionFile -Verbose `
-                        -Path $plan.Path `
-                        -OutputPath $plan.OutputPath `
-                        -PackageType Both
+                    if ([string]::IsNullOrWhiteSpace($plan.MappingFile)) {
+                        Compress-DataverseSolutionFile -Verbose `
+                            -Path $plan.Path `
+                            -OutputPath $plan.OutputPath `
+                            -PackageType Both
+                    }
+                    else {
+                        Compress-DataverseSolutionFile -Verbose `
+                            -Path $plan.Path `
+                            -OutputPath $plan.OutputPath `
+                            -PackageType Both `
+                            -MappingFile $plan.MappingFile
+                    }
                 } *>&1 | ForEach-Object { [string]$_ }
             )
             [pscustomobject]@{
@@ -714,11 +972,29 @@ else {
     foreach ($plan in $packPlans) {
         Write-Host "##[group]Building solution: $($plan.SolutionName)"
         Write-Host "Packing solution: $($plan.SolutionName) (Managed)"
-        Compress-DataverseSolutionFile -Verbose `
-            -Path $plan.Path `
-            -OutputPath $plan.OutputPath `
-            -PackageType Both
+        if ([string]::IsNullOrWhiteSpace($plan.MappingFile)) {
+            Compress-DataverseSolutionFile -Verbose `
+                -Path $plan.Path `
+                -OutputPath $plan.OutputPath `
+                -PackageType Both
+        }
+        else {
+            Compress-DataverseSolutionFile -Verbose `
+                -Path $plan.Path `
+                -OutputPath $plan.OutputPath `
+                -PackageType Both `
+                -MappingFile $plan.MappingFile
+        }
         Write-Host "##[endgroup]"
+    }
+}
+}
+finally {
+    # Mapping files are build scratch, not deployment assets, even on packing failure.
+    foreach ($mappingFile in $generatedMappingFiles) {
+        if (Test-Path -LiteralPath $mappingFile) {
+            Remove-Item -LiteralPath $mappingFile -Force
+        }
     }
 }
 

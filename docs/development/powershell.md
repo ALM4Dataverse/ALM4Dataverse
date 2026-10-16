@@ -76,6 +76,8 @@ Suites live under `tests/`, grouped by the behaviour they own:
 - Pipeline build, connection, deployment/import, export, and shared helpers:
     `PipelineBuild`, `PipelineConnection`, `PipelineDeployment`, `PipelineExport`,
     and `PipelineCommon`.
+    Build/export cases also cover ordered inline mappings, generated mapping-file
+    lifetime, build-command staging and preservation of mapped source changes.
 - Export configuration, logging, concurrency limits, worker failures and cleanup:
     `ParallelExport`. These tests run real thread jobs with an isolated fake
     Dataverse module and temporary Git repositories; they do not contact Dataverse.
