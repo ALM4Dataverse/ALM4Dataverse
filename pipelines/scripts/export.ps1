@@ -45,6 +45,14 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSetting -Config $solutionsConfig
+$solutionNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($solution in $solutionsConfig.solutions) {
+    $solutionName = [string]$solution.name
+    if (-not $solutionNames.Add($solutionName)) {
+        throw "Duplicate solution in export configuration: $solutionName"
+    }
+}
+
 $branchBaseVersion = Resolve-AlmBranchBaseVersion -Config $solutionsConfig -BranchName $BranchName
 if (-not $branchBaseVersion.HasBranchOverride) {
     $defaultBranch = Resolve-AlmDefaultBranchName -RepositoryPath $SourceDirectory -DefaultBranchName $DefaultBranchName
@@ -63,7 +71,40 @@ Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solut
 $exportPipeline = $null
 $exportStatus = 'Failed'
 $exportLogDirectory = Join-Path $ArtifactStagingDirectory 'export-logs'
+$generatedMappingFiles = [System.Collections.Generic.List[string]]::new()
 try {
+$mappingEntriesBySolution = @{}
+$mappingFilesBySolution = @{}
+foreach ($solution in $solutionsConfig.solutions) {
+    $solutionName = [string]$solution.name
+    $entries = @(Get-SolutionPackagerMappingEntry -Solution $solution)
+    $mappingEntriesBySolution[$solutionName] = $entries
+    if ($entries.Count -eq 0) { continue }
+
+    $mappingXml = ConvertTo-SolutionPackagerMappingXml `
+        -Entries $entries `
+        -SourceDirectory $SourceDirectory `
+        -SolutionPath (Join-Path $SourceDirectory "solutions/$solutionName") `
+        -SolutionName $solutionName `
+        -AllowMissingSource
+    $mappingFile = Join-Path ([System.IO.Path]::GetTempPath()) "alm4dataverse-mapping-$([guid]::NewGuid().ToString('N')).xml"
+    $generatedMappingFiles.Add($mappingFile)
+    [System.IO.File]::WriteAllText($mappingFile, $mappingXml, [System.Text.UTF8Encoding]::new($false))
+    $mappingFilesBySolution[$solutionName] = $mappingFile
+}
+
+$mappedSolutions = @($mappingEntriesBySolution.GetEnumerator() | Where-Object { $_.Value.Count -gt 0 })
+if ($mappedSolutions.Count -gt 0) {
+    $exportCommandName = if ($exportSettings.parallel) { 'Expand-DataverseSolutionFile' } else { 'Export-DataverseSolution' }
+    $exportCommand = Get-Command -Name $exportCommandName -ErrorAction Stop
+    $packCommand = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
+    foreach ($command in @($exportCommand, $packCommand)) {
+        if ($null -eq $command.Parameters -or -not $command.Parameters.ContainsKey('MappingFile')) {
+            throw "Solution mappings in EXPORT require '$($command.Name)' to support -MappingFile. Update scriptDependencies in alm-config.psd1 to a compatible module version."
+        }
+    }
+}
+
 if ($exportSettings.parallel) {
     $exportPipeline = Start-AlmExportPipeline -Config $solutionsConfig -TempDirectory $TempDirectory -MaxParallel $exportSettings.maxParallel
     $exportPipeline.LogDirectory = $exportLogDirectory
@@ -81,16 +122,38 @@ foreach ($solution in $solutionsConfig.solutions) {
     }
 
     if ((Test-Path $SourceDirectory/solutions/$solutionName)) {
-        Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.old.zip" -Path "$SourceDirectory/solutions/$solutionName"
+        $mappingFile = $mappingFilesBySolution[$solutionName]
+        if (-not [string]::IsNullOrWhiteSpace($mappingFile)) {
+            $null = ConvertTo-SolutionPackagerMappingXml `
+                -Entries $mappingEntriesBySolution[$solutionName] `
+                -SourceDirectory $SourceDirectory `
+                -SolutionPath "$SourceDirectory/solutions/$solutionName" `
+                -SolutionName $solutionName
+            Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.old.zip" -Path "$SourceDirectory/solutions/$solutionName" -MappingFile $mappingFile
+        } else {
+            Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.old.zip" -Path "$SourceDirectory/solutions/$solutionName"
+        }
         Remove-Item -Recurse -Force "$SourceDirectory/solutions/$solutionName"
     }
 
     if ($null -ne $exportPipeline) {
-        & { $ProgressPreference = 'SilentlyContinue'; Expand-AlmExportSolution -ZipPath $exportZipPath -OutputPath "$SourceDirectory/solutions/$solutionName" } *>&1 |
-            ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase Unpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
+        $mappingFile = $mappingFilesBySolution[$solutionName]
+        if ([string]::IsNullOrWhiteSpace($mappingFile)) {
+            & { $ProgressPreference = 'SilentlyContinue'; Expand-AlmExportSolution -ZipPath $exportZipPath -OutputPath "$SourceDirectory/solutions/$solutionName" } *>&1 |
+                ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase Unpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
+        } else {
+            & { $ProgressPreference = 'SilentlyContinue'; Expand-AlmExportSolution -ZipPath $exportZipPath -OutputPath "$SourceDirectory/solutions/$solutionName" -MappingFile $mappingFile } *>&1 |
+                ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase Unpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
+        }
     } else {
-        & { $ProgressPreference = 'SilentlyContinue'; Export-DataverseSolution -Verbose -SolutionName $solutionName -OutFolder "$SourceDirectory/solutions/$solutionName" -UnpackMsApp } *>&1 |
-            ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase ExportUnpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
+        $mappingFile = $mappingFilesBySolution[$solutionName]
+        if ([string]::IsNullOrWhiteSpace($mappingFile)) {
+            & { $ProgressPreference = 'SilentlyContinue'; Export-DataverseSolution -Verbose -SolutionName $solutionName -OutFolder "$SourceDirectory/solutions/$solutionName" -UnpackMsApp } *>&1 |
+                ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase ExportUnpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
+        } else {
+            & { $ProgressPreference = 'SilentlyContinue'; Export-DataverseSolution -Verbose -SolutionName $solutionName -OutFolder "$SourceDirectory/solutions/$solutionName" -UnpackMsApp -MappingFile $mappingFile } *>&1 |
+                ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { throw $_ }; Format-AlmLogLine -SolutionName $solutionName -Phase ExportUnpack -Text ([string]$_) | ForEach-Object { Write-Host $_ } }
+        }
     }
 
     Write-Host "[$solutionName][Unpack] Completed"
@@ -104,14 +167,41 @@ foreach ($solution in $solutionsConfig.solutions) {
     $solutionXml.Save($solutionXmlPath)
 
     # Test if anything changed and increment version if so
-    $gitStatus = git -C "$SourceDirectory" status --porcelain solutions/$solutionName
+    $gitStatusPathspecs = [System.Collections.Generic.List[string]]::new()
+    $gitStatusPathspecs.Add("solutions/$solutionName")
+    $repositoryRoot = [System.IO.Path]::GetFullPath($SourceDirectory)
+    foreach ($mappingEntry in $mappingEntriesBySolution[$solutionName]) {
+        $sourcePath = [string]$mappingEntry.Source
+        if ($sourcePath -match '%[^%]+%') {
+            $sourcePath = [System.Environment]::ExpandEnvironmentVariables($sourcePath)
+            if ($sourcePath -match '%[^%]+%') { continue }
+        }
+        if (-not [System.IO.Path]::IsPathRooted($sourcePath)) {
+            $sourcePath = Join-Path $SourceDirectory $sourcePath
+        }
+        $fullSourcePath = [System.IO.Path]::GetFullPath($sourcePath)
+        $repositoryRelativePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $fullSourcePath)
+        $outsideRepository = [System.IO.Path]::IsPathRooted($repositoryRelativePath) -or
+            $repositoryRelativePath -eq '..' -or
+            $repositoryRelativePath.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::Ordinal)
+        if (-not $outsideRepository -and $repositoryRelativePath -ne '.') {
+            $gitStatusPathspecs.Add($repositoryRelativePath.Replace('\', '/'))
+        }
+    }
+    $gitStatusArguments = @('-C', $SourceDirectory, 'status', '--porcelain', '--') + $gitStatusPathspecs.ToArray()
+    $gitStatus = & git @gitStatusArguments
     if ([string]::IsNullOrEmpty($gitStatus)) {
         Write-Host "##[debug][$solutionName][Compare] No changes"
     } else {
         Format-AlmLogLine -SolutionName $solutionName -Phase Compare -Text "##[debug]Changes detected`n$gitStatus" | ForEach-Object { Write-Host $_ }
 
         if ((Test-Path "$TempDirectory/$solutionName-managed.old.zip")) {
-            Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.new.zip" -Path "$SourceDirectory/solutions/$solutionName"
+            $mappingFile = $mappingFilesBySolution[$solutionName]
+            if ([string]::IsNullOrWhiteSpace($mappingFile)) {
+                Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.new.zip" -Path "$SourceDirectory/solutions/$solutionName"
+            } else {
+                Compress-DataverseSolutionFile -PackageType Managed -OutputPath "$TempDirectory/$solutionName-managed.new.zip" -Path "$SourceDirectory/solutions/$solutionName" -MappingFile $mappingFile
+            }
 
             $changesareadditive = (Compare-DataverseSolutionComponents -FileToFile -SolutionFile "$TempDirectory/$solutionName-managed.new.zip" -TargetSolutionFile "$TempDirectory/$solutionName-managed.old.zip" -TestIfAdditive -Verbose)
             if ($changesareadditive) {
@@ -180,6 +270,9 @@ Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solu
 }
 $exportStatus = 'Succeeded'
 } finally {
+    foreach ($mappingFile in $generatedMappingFiles) {
+        if (Test-Path -LiteralPath $mappingFile) { Remove-Item -LiteralPath $mappingFile -Force }
+    }
     if ($null -ne $exportPipeline) { Stop-AlmExportPipeline -State $exportPipeline }
     New-Item -ItemType Directory -Path $exportLogDirectory -Force | Out-Null
     $summary = @(foreach ($solution in $solutionsConfig.solutions) {

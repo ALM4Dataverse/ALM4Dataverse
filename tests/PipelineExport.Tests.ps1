@@ -1,15 +1,26 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:exportScript = Join-Path $repoRoot 'pipelines/scripts/export.ps1'
+    if (-not ('AlmExportMappingTestCapture' -as [type])) {
+        Add-Type -TypeDefinition @'
+public static class AlmExportMappingTestCapture
+{
+    public static string MappingPath { get; set; }
+    public static string MappingXml { get; set; }
+    public static readonly System.Collections.Generic.List<string> CompressionMappingPaths = new System.Collections.Generic.List<string>();
+    public static readonly System.Collections.Generic.List<string> GitStatusArguments = new System.Collections.Generic.List<string>();
+}
+'@
+    }
     function Export-DataverseSolution {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
-        param($SolutionName, $OutFolder, [switch]$UnpackMsApp)
+        param($SolutionName, $OutFolder, [switch]$UnpackMsApp, $MappingFile)
     }
     function Compress-DataverseSolutionFile {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
-        param($PackageType, $OutputPath, $Path)
+        param($PackageType, $OutputPath, $Path, $MappingFile)
     }
     function Compare-DataverseSolutionComponents {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
@@ -27,7 +38,8 @@ BeforeAll {
     }
     function git {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Command', Justification = 'Mock command signature; Pester inspects these arguments.')]
-        param($Command)
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RemainingArguments', Justification = 'The mapping regression mock inspects git pathspec arguments.')]
+        param($Command, [Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
     }
 }
 
@@ -40,15 +52,26 @@ Describe 'Export and version changes' {
         New-Item -ItemType Directory -Path $script:exportSource, $script:exportArtifacts, $script:exportTemp -Force | Out-Null
         Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value "@{ solutions = @(@{ name = 'Example' }); hooks = @{}; export = @{ parallel = `$false }; buildVersion = @{ default = '1.3'; branches = @{} } }"
         Mock Export-DataverseSolution {
+            if (-not [string]::IsNullOrWhiteSpace($MappingFile)) {
+                [AlmExportMappingTestCapture]::MappingPath = $MappingFile
+                [AlmExportMappingTestCapture]::MappingXml = Get-Content -LiteralPath $MappingFile -Raw
+            }
             New-Item -ItemType Directory -Path (Join-Path $OutFolder 'Other') -Force | Out-Null
             Set-Content (Join-Path $OutFolder 'Other/Solution.xml') -Value '<ImportExportXml><SolutionManifest><Version>1.2.3.4</Version></SolutionManifest></ImportExportXml>'
         }
-        Mock Compress-DataverseSolutionFile { Set-Content -LiteralPath $OutputPath -Value 'packed' }
+        Mock Compress-DataverseSolutionFile {
+            if (-not [string]::IsNullOrWhiteSpace($MappingFile)) { [AlmExportMappingTestCapture]::CompressionMappingPaths.Add($MappingFile) }
+            Set-Content -LiteralPath $OutputPath -Value 'packed'
+        }
         Mock Compare-DataverseSolutionComponents { $true }
         Mock Set-DataverseSolution {}
         Mock Register-AlmSolutionVersion { $Version }
         Mock git { ' M solutions/Example/Other/Solution.xml' }
         $script:capturedWarnings = @()
+        [AlmExportMappingTestCapture]::MappingPath = $null
+        [AlmExportMappingTestCapture]::MappingXml = $null
+        [AlmExportMappingTestCapture]::CompressionMappingPaths.Clear()
+        [AlmExportMappingTestCapture]::GitStatusArguments.Clear()
     }
 
     It 'increments the revision for a first export' {
@@ -59,6 +82,122 @@ Describe 'Export and version changes' {
         Should -Invoke Compare-DataverseSolutionComponents -Times 0 -Exactly
         [xml]$xml = Get-Content (Join-Path $script:exportSource 'solutions/Example/Other/Solution.xml') -Raw
         $xml.ImportExportXml.SolutionManifest.Version | Should -Be '1.2.3.5'
+    }
+
+    It 'uses inline mappings during sequential export without running build commands' {
+        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins') -Force | Out-Null
+        Set-Content (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'
+        Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(@{
+            type = 'FileToFile'
+            source = 'plugins/Example.dll'
+            destination = 'PluginAssemblies/Example.dll'
+            buildCommand = @{ name = 'Not run by export'; executable = 'missing-build-tool'; arguments = @() }
+        })
+    })
+    hooks = @{}
+    export = @{ parallel = $false }
+    buildVersion = @{ default = '1.3'; branches = @{} }
+}
+'@
+
+        & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
+
+        Should -Invoke Export-DataverseSolution -Times 1 -Exactly -ParameterFilter { -not [string]::IsNullOrWhiteSpace($MappingFile) }
+        [AlmExportMappingTestCapture]::MappingXml | Should -Match '<Mappings>'
+        $mappingXml = [xml][AlmExportMappingTestCapture]::MappingXml
+        $mappingXml.Mappings.FileToFile.GetAttribute('map') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:exportSource 'solutions/Example/PluginAssemblies/Example.dll')))
+        $mappingXml.Mappings.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:exportSource 'plugins/Example.dll')))
+        Test-Path -LiteralPath ([AlmExportMappingTestCapture]::MappingPath) | Should -BeFalse
+    }
+
+    It 'detects changes to mapped source files outside the solution directory' {
+        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins'), (Join-Path $script:exportSource 'solutions/Example/Other') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'solutions/Example/Other/Solution.xml') -Value '<ImportExportXml><SolutionManifest><Version>1.2.3.4</Version></SolutionManifest></ImportExportXml>'
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(@{
+            type = 'FileToFile'
+            source = 'plugins/Example.dll'
+            destination = 'PluginAssemblies/Example.dll'
+        })
+    })
+    hooks = @{}
+    export = @{ parallel = $false }
+    buildVersion = @{ default = '1.3'; branches = @{} }
+}
+'@
+        Mock git {
+            if ($RemainingArguments -contains 'plugins/Example.dll') {
+                [AlmExportMappingTestCapture]::GitStatusArguments.AddRange($RemainingArguments)
+                ' M plugins/Example.dll'
+            }
+        }
+
+        & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
+
+        [AlmExportMappingTestCapture]::GitStatusArguments | Should -Contain 'plugins/Example.dll'
+        Should -Invoke Compress-DataverseSolutionFile -Times 2 -Exactly
+        Should -Invoke Compare-DataverseSolutionComponents -Times 1 -Exactly
+        Should -Invoke Set-DataverseSolution -Times 1 -Exactly -ParameterFilter { $Version -eq '1.2.3.5' }
+    }
+
+    It 'rejects duplicate solution names before generating sequential mapping files' -ForEach @(
+        @{ FirstName = 'Example'; SecondName = 'Example' }
+        @{ FirstName = 'Example'; SecondName = 'example' }
+    ) {
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'alm-config.psd1') -Value @"
+@{
+    solutions = @(
+        @{ name = '$FirstName'; mappings = @(@{ type = 'FileToFile'; source = 'plugins/First.dll'; destination = 'First.dll' }) }
+        @{ name = '$SecondName'; mappings = @(@{ type = 'FileToFile'; source = 'plugins/Second.dll'; destination = 'Second.dll' }) }
+    )
+    hooks = @{}
+    export = @{ parallel = `$false }
+    buildVersion = @{ default = '1.3'; branches = @{} }
+}
+"@
+
+        {
+            & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
+        } | Should -Throw '*Duplicate solution in export configuration*'
+
+        Should -Invoke Export-DataverseSolution -Times 0 -Exactly
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+        [AlmExportMappingTestCapture]::MappingPath | Should -BeNullOrEmpty
+    }
+
+    It 'uses inline mappings for old and new packages when comparing export changes' {
+        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins'), (Join-Path $script:exportSource 'solutions/Example') -Force | Out-Null
+        Set-Content (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'
+        Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{
+        name = 'Example'
+        mappings = @(@{
+            type = 'FileToFile'
+            source = 'plugins/Example.dll'
+            destination = 'PluginAssemblies/Example.dll'
+        })
+    })
+    hooks = @{}
+    export = @{ parallel = $false }
+    buildVersion = @{ default = '1.3'; branches = @{} }
+}
+'@
+
+        & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
+
+        Should -Invoke Compress-DataverseSolutionFile -Times 2 -Exactly -ParameterFilter { -not [string]::IsNullOrWhiteSpace($MappingFile) }
+        [AlmExportMappingTestCapture]::CompressionMappingPaths.Count | Should -Be 2
+        [AlmExportMappingTestCapture]::CompressionMappingPaths | Should -Contain ([AlmExportMappingTestCapture]::MappingPath)
+        Test-Path -LiteralPath ([AlmExportMappingTestCapture]::MappingPath) | Should -BeFalse
     }
 
     It 'increments revision for additive changes and minor version for removals' -ForEach @(
