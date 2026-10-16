@@ -91,15 +91,25 @@ if (-not $branchBaseVersion.HasBranchOverride) {
     }
 }
 
-Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
+$exportHookContext = @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
     TempDirectory = $TempDirectory
     EnvironmentName = $EnvironmentName
 }
+$hasPreExportSolutionHooks = $solutionsConfig.ContainsKey('hooks') -and
+    $solutionsConfig['hooks'] -is [hashtable] -and
+    $solutionsConfig['hooks'].ContainsKey('preExportSolution') -and
+    $solutionsConfig['hooks']['preExportSolution']
+$hasPostExportSolutionHooks = $solutionsConfig.ContainsKey('hooks') -and
+    $solutionsConfig['hooks'] -is [hashtable] -and
+    $solutionsConfig['hooks'].ContainsKey('postExportSolution') -and
+    $solutionsConfig['hooks']['postExportSolution']
+Invoke-Hook -HookType "preExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext $exportHookContext
 
 $exportPipeline = $null
 $exportStatus = 'Failed'
+$solutionHookResults = @{}
 $exportLogDirectory = Join-Path $ArtifactStagingDirectory 'export-logs'
 $generatedMappingFiles = [System.Collections.Generic.List[string]]::new()
 try {
@@ -140,14 +150,23 @@ if ($mappedSolutions.Count -gt 0) {
 }
 
 if ($exportSettings.parallel) {
-    $exportPipeline = Start-AlmExportPipeline -Config $solutionsConfig -TempDirectory $TempDirectory -MaxParallel $exportSettings.maxParallel
+    $exportPipeline = Start-AlmExportPipeline -Config $solutionsConfig -TempDirectory $TempDirectory -MaxParallel $exportSettings.maxParallel -BaseDirectory $SourceDirectory -AdditionalHookContext $exportHookContext
     $exportPipeline.LogDirectory = $exportLogDirectory
     Start-AlmQueuedExport -State $exportPipeline
 }
-foreach ($solution in $solutionsConfig.solutions) {
+for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $solutionIndex++) {
+    $solution = $solutionsConfig.solutions[$solutionIndex]
     $solutionName = $solution.name
     $exportZipPath = $null
     if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExport -State $exportPipeline -SolutionName $solutionName }
+    elseif ($hasPreExportSolutionHooks) {
+        $preExportSolutionContext = $exportHookContext.Clone()
+        $preExportSolutionContext.SolutionName = $solutionName
+        $preExportSolutionContext.SolutionConfig = $solution
+        $preExportSolutionContext.SolutionIndex = $solutionIndex
+        $preExportSolutionContext.Connection = Get-DataverseConnection -GetDefault
+        $null = Invoke-Hook -HookType preExportSolution -BaseDirectory $SourceDirectory -Config $solutionsConfig -AdditionalContext $preExportSolutionContext -LogContext:$false
+    }
 
     Write-Host "[$solutionName][Unpack] Started (managed and unmanaged)"
 
@@ -302,14 +321,26 @@ foreach ($solution in $solutionsConfig.solutions) {
     }
 
     Write-Host "[$solutionName][Compare] Completed"
+
+    $postExportSolutionContext = $exportHookContext.Clone()
+    $postExportSolutionContext.SolutionName = $solutionName
+    $postExportSolutionContext.SolutionConfig = $solution
+    $postExportSolutionContext.SolutionIndex = $solutionIndex
+    if ($null -ne $exportPipeline) {
+        Add-AlmPostExportSolutionHook -State $exportPipeline -SolutionConfig $solution -SolutionIndex $solutionIndex
+    } elseif ($hasPostExportSolutionHooks) {
+        $postExportSolutionContext.Connection = Get-DataverseConnection -GetDefault
+        $solutionHookResults[$solutionName] = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $SourceDirectory -Config $solutionsConfig -AdditionalContext $postExportSolutionContext -LogContext:$false)
+    } else {
+        $solutionHookResults[$solutionName] = @()
+    }
 }
 
-Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext @{
-    SourceDirectory = $SourceDirectory
-    ArtifactStagingDirectory = $ArtifactStagingDirectory
-    TempDirectory = $TempDirectory
-    EnvironmentName = $EnvironmentName
+if ($null -ne $exportPipeline) {
+    Complete-AlmPostExportSolutionHook -State $exportPipeline
+    $solutionHookResults = $exportPipeline.SolutionHookResults
 }
+Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext ($exportHookContext + @{ SolutionHookResults = $solutionHookResults })
 $exportStatus = 'Succeeded'
 } finally {
     foreach ($mappingFile in $generatedMappingFiles) {

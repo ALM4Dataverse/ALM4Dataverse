@@ -208,6 +208,12 @@ Describe 'Export and version changes' {
         Test-Path -LiteralPath ([AlmExportMappingTestCapture]::MappingPath) | Should -BeFalse
     }
 
+    It 'does not require a connection when per-solution hooks are not configured' {
+        $result = & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main -PassThru
+
+        $result.Parallel | Should -BeFalse
+    }
+
     It 'increments revision for additive changes and minor version for removals' -ForEach @(
         @{ Additive = $true; ExpectedVersion = '1.2.3.5' }
         @{ Additive = $false; ExpectedVersion = '1.3.3.0' }

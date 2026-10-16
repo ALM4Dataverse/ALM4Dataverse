@@ -557,3 +557,25 @@ Describe 'Setup publication decisions' {
         { Get-BranchTargetedRepoChangePublishPlan -ProviderName GitHub -RepositoryName Repo -TargetBranch main -DefaultCommitMessage 'Commit' -DefaultPullRequestTitle 'PR' } | Should -Throw '*No repository publish option selected*'
     }
 }
+
+Describe 'Development ALM4Dataverse reference resolution' {
+    It 'uses the commit for a detached linked worktree' {
+        $repositoryPath = Join-Path $TestDrive 'development-reference-repository'
+        $worktreePath = Join-Path $TestDrive 'development-reference-worktree'
+        New-Item -ItemType Directory -Path $repositoryPath -Force | Out-Null
+
+        & git -C $repositoryPath init --quiet
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to initialize the resolver test repository.' }
+        Set-Content -LiteralPath (Join-Path $repositoryPath 'test.txt') -Value 'test'
+        & git -C $repositoryPath add test.txt
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to stage the resolver test file.' }
+        & git -C $repositoryPath -c user.name=SetupTest -c user.email=setup-test@example.invalid commit --quiet -m 'Test resolver'
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to create the resolver test commit.' }
+        $expectedCommit = (& git -C $repositoryPath rev-parse HEAD).Trim()
+        & git -C $repositoryPath worktree add --quiet --detach $worktreePath HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to create the detached resolver test worktree.' }
+
+        Resolve-DevelopmentDefaultAlm4DataverseRef -PrimaryRepositoryPath $worktreePath -FallbackRef stable |
+            Should -Be $expectedCommit
+    }
+}

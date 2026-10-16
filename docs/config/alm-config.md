@@ -313,6 +313,8 @@ hooks = @{
 **Available Hooks:**
 
 - **preExport**: Called before exporting solutions from a Dataverse environment
+- **preExportSolution**: Called before each solution's exports begin
+- **postExportSolution**: Called after each solution is unpacked and compared. With parallel export enabled, hooks for different solutions can run concurrently with remaining exports.
 - **postExport**: Called after exporting and unpacking solutions
 - **preBuild**: Called before packing solutions during the build process
 - **postBuild**: Called after packing solutions and copying assets
@@ -339,9 +341,14 @@ Each hook script receives a `$Context` parameter containing:
 - Additional context specific to the hook type:
   - **preBuild, postBuild**: `SourceDirectory`, `ArtifactStagingDirectory`
   - **preExport, postExport**: `SourceDirectory`, `ArtifactStagingDirectory`, `TempDirectory`, `EnvironmentName`
+  - **preExportSolution, postExportSolution**: the export context above, plus `SolutionName`, `SolutionConfig`, and `SolutionIndex`
+  - Per-solution hooks also receive a cloned `Connection`. In parallel export mode, the hook worker sets that clone as its default connection for the duration of the hook, so existing Dataverse commands resolve to the right client. Hooks can also pass `$Context.Connection` explicitly. Parallel hooks receive the shared `OperationBudget` and `CancellationToken`.
+  - `postExportSolution` hook output is collected by solution in `SolutionHookResults` and passed to the `postExport` hook.
   - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`
 
 Start a hook with a parameter block. Resolve application-owned files from `$PSScriptRoot` or `$Context.BaseDirectory`, not from assumptions about the runner's working directory. Guard optional configuration keys when using strict mode:
+
+Per-solution hooks for different solutions may run concurrently when `export.parallel` is enabled. Keep their side effects solution-scoped and use the provided `OperationBudget` for Dataverse operations. Hooks listed for a single phase run in their configured order; solution-to-solution completion order is not guaranteed. With sequential exports, both per-solution hook types run synchronously.
 
 ```powershell
 param([hashtable]$Context)

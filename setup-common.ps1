@@ -3675,13 +3675,14 @@ function Resolve-DevelopmentDefaultAlm4DataverseRef {
             try {
                 $ErrorActionPreference = 'Continue'
 
-                $branch = (& git -C $repoPath branch --show-current 2>$null).Trim()
+                # Detached HEAD emits no output; join first so trimming is safe for an empty result.
+                $branch = (@(& git -C $repoPath branch --show-current 2>$null) -join [Environment]::NewLine).Trim()
                 if (-not [string]::IsNullOrWhiteSpace($branch)) {
                     Write-Host "Development mode: Using current local branch '$branch' as ALM4DataverseRef" -ForegroundColor Yellow
                     return $branch
                 }
 
-                $commit = (& git -C $repoPath rev-parse HEAD 2>$null).Trim()
+                $commit = (@(& git -C $repoPath rev-parse HEAD 2>$null) -join [Environment]::NewLine).Trim()
                 if ($commit -match '^[0-9a-f]{40}$') {
                     Write-Host "Development mode: Repository is in detached HEAD; using commit '$commit' as ALM4DataverseRef" -ForegroundColor Yellow
                     return $commit
