@@ -26,7 +26,9 @@ Describe 'Dependency installation' {
             [pscustomobject]@{ Version = [version]'3.0.4'; Prerelease = 'preview.1' }
         } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Mock Get-Command { [pscustomobject]@{ Source = 'dotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
-        Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools' }
+        Mock Test-Path {
+            $true
+        } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools' }
         Mock dotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4 pac' }
         Push-Location $script:dependencyDirectory
     }

@@ -37,7 +37,7 @@ Describe 'Validation orchestration and coverage enforcement' {
     }
 
     It 'configures executable coverage, writes reports, and passes covered changes' {
-        $output = & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1')
+        $output = & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') -SingleProcess
         $output | Should -Contain 'Passed 4 PowerShell tests.'
         Should -Invoke Invoke-Pester -Times 1 -Exactly -ParameterFilter {
             $Configuration.CodeCoverage.Enabled.Value -and $Configuration.CodeCoverage.CoveragePercentTarget.Value -eq 0 -and
@@ -56,7 +56,7 @@ Describe 'Validation orchestration and coverage enforcement' {
                 CodeCoverage = @{ CommandsExecuted = @(); CommandsMissed = @([pscustomobject]@{ File = (Join-Path $repoRoot 'pipelines/scripts/common.ps1') }) }
             }
         }
-        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') } | Should -Throw '*below 65%*common.ps1*'
+        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') -SingleProcess } | Should -Throw '*below 65%*common.ps1*'
         (Get-Content (Join-Path $TestDrive 'coverage-files.json') -Raw | ConvertFrom-Json).Passed | Should -BeFalse
         Test-Path (Join-Path $TestDrive 'coverage-summary.md') | Should -BeTrue
     }
@@ -72,13 +72,13 @@ Describe 'Validation orchestration and coverage enforcement' {
                 CodeCoverage = @{ CommandsExecuted = @(); CommandsMissed = @() }
             }
         }
-        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') } | Should -Throw '*Pester failed*'
+        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') -SingleProcess } | Should -Throw '*Pester failed*'
         Test-Path (Join-Path $TestDrive 'coverage-files.json') | Should -BeTrue
     }
 
     It 'fails immediately if Git cannot enumerate repository files' {
         Mock git { $global:LASTEXITCODE = 1 }
-        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') } | Should -Throw '*Could not enumerate repository files*'
+        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') -SingleProcess } | Should -Throw '*Could not enumerate repository files*'
         Should -Invoke Invoke-Pester -Times 0 -Exactly
     }
 
@@ -111,7 +111,7 @@ Describe 'Validation orchestration and coverage enforcement' {
             if ($args -contains 'diff') { return "pipelines/scripts/common.ps1`0" }
             if ($args -contains 'ls-files' -and $args -notcontains '-z') { 'pipelines/scripts/common.ps1'; 'pipelines/scripts/build.ps1' }
         }
-        & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') | Should -Contain 'Passed 4 PowerShell tests.'
+        & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') -SingleProcess | Should -Contain 'Passed 4 PowerShell tests.'
         Should -Invoke Invoke-Pester -Times 1 -Exactly
     }
 
@@ -119,7 +119,7 @@ Describe 'Validation orchestration and coverage enforcement' {
         Mock Invoke-ScriptAnalyzer {
             [pscustomobject]@{ Extent = $null; Line = $null; RuleName = 'PSUseBOMForUnicodeEncodedFile'; Message = 'Missing BOM encoding' }
         }
-        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') } | Should -Throw '*common.ps1:<file>: PSUseBOMForUnicodeEncodedFile: Missing BOM encoding*'
+        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') -SingleProcess } | Should -Throw '*common.ps1:<file>: PSUseBOMForUnicodeEncodedFile: Missing BOM encoding*'
         Should -Invoke Invoke-Pester -Times 0 -Exactly
     }
 }

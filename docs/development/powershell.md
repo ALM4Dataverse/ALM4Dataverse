@@ -23,12 +23,16 @@ executes Pester. It syntax-checks `.ps1`, `.psm1`, `.psd1`, `.psrc`, and `.pssc`
 runs the configured PSScriptAnalyzer rules on scripts, modules, and `.psd1` files,
 and parses `.ps1xml` and `.cdxml` as XML.
 
-Test results are written to `TestResults/powershell.xml`. Command coverage for
-executable scripts and modules is written to `TestResults/coverage.xml` in JaCoCo
-format, with per-file results in `TestResults/coverage-files.json` and
-`TestResults/coverage-summary.md`. `TestResults/coverage-all-files.json` also reports
-every executable source file, including unchanged files. The changed-file report
-controls the coverage gate; the all-file report identifies remaining coverage gaps.
+Test files run in parallel PowerShell processes, up to four workers (bounded by
+the available processor count). Process isolation allows suites to safely change
+environment variables and working directories. Each worker writes its NUnit test
+results and JaCoCo coverage to `TestResults/powershell-shard-*.xml` and
+`TestResults/coverage-shard-*.xml`. The runner combines command coverage across
+workers before enforcing the existing 65% changed-file gate. Per-file results are
+written to `TestResults/coverage-files.json` and `TestResults/coverage-summary.md`;
+`TestResults/coverage-all-files.json` also reports every executable source file,
+including unchanged files. Pass `-SingleProcess` to run the suite serially when
+debugging.
 
 Tests use temporary repositories and mocked Dataverse/package operations.
 They do not provision resources, contact Dataverse, or push Git changes.
@@ -64,6 +68,9 @@ Each suite is named `<Suite>.Tests.ps1`. Tests invoke the production scripts and
 helpers, assert resulting artifacts and decisions, and mock external service and
 command boundaries. Temporary configurations, archives, and Git repositories
 isolate test cases. Tests restore environment values and working directories.
+The full validation runner uses the configured Pester version in separate
+PowerShell processes, capped at four workers, so suites can safely change
+process-wide environment variables.
 
 Run a specific suite while iterating:
 

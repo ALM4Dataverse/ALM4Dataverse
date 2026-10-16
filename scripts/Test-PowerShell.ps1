@@ -3,7 +3,8 @@
 [CmdletBinding()]
 param(
     [string]$BaseRef = '',
-    [string]$HeadRef = ''
+    [string]$HeadRef = '',
+    [switch]$SingleProcess
 )
 
 Set-StrictMode -Version Latest
@@ -21,7 +22,10 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Could not enumerate repository files.'
 }
 $sourcePaths = @($trackedPaths | Where-Object { $_ -match '\.(ps1|psm1|psd1|psrc|pssc|ps1xml|cdxml)$' } | Sort-Object -Unique)
-$coveragePaths = @($sourcePaths | Where-Object { $_ -match '\.(ps1|psm1)$' -and $_ -notmatch '(^|/)tests/|\.Tests\.(ps1|psm1)$' })
+$coveragePaths = @($sourcePaths | Where-Object {
+    $_ -match '\.(ps1|psm1)$' -and
+        $_ -notmatch '(^|/)tests/|\.Tests\.(ps1|psm1)$|^scripts/Invoke-PowerShellTestShards\.ps1$'
+})
 $exceptions = @{}
 foreach ($exception in $policy.Exceptions) {
     if ([string]::IsNullOrWhiteSpace($exception.Reason)) {
@@ -102,20 +106,40 @@ if ($failures.Count -gt 0) {
 Write-Output "Parsed and analyzed $($sourcePaths.Count) PowerShell files; $($exceptions.Count) justified analyzer exceptions."
 
 $modifiedFiles = @(Get-ModifiedPowerShellFile -RepositoryRoot $repoRoot -BaseRef $BaseRef -HeadRef $HeadRef)
-$configuration = New-PesterConfiguration
-$configuration.Run.Path = Join-Path $repoRoot 'tests'
-$configuration.Run.PassThru = $true
-$configuration.Output.Verbosity = 'Normal'
-$configuration.TestResult.Enabled = $true
-$configuration.TestResult.OutputPath = Join-Path $repoRoot 'TestResults/powershell.xml'
-$configuration.TestResult.OutputFormat = 'NUnitXml'
-$configuration.CodeCoverage.Enabled = $true
-$configuration.CodeCoverage.UseBreakpoints = $false
-$configuration.CodeCoverage.Path = @($coveragePaths | ForEach-Object { Join-Path $repoRoot $_ })
-$configuration.CodeCoverage.OutputPath = Join-Path $repoRoot 'TestResults/coverage.xml'
-$configuration.CodeCoverage.OutputFormat = 'JaCoCo'
-$configuration.CodeCoverage.CoveragePercentTarget = 0
-$result = Invoke-Pester -Configuration $configuration
+$testResultsDirectory = Join-Path $repoRoot 'TestResults'
+New-Item -ItemType Directory -Path $testResultsDirectory -Force | Out-Null
+if ($SingleProcess) {
+    $configuration = New-PesterConfiguration
+    $configuration.Run.Path = Join-Path $repoRoot 'tests'
+    $configuration.Run.PassThru = $true
+    $configuration.Output.Verbosity = 'Normal'
+    $configuration.TestResult.Enabled = $true
+    $configuration.TestResult.OutputPath = Join-Path $testResultsDirectory 'powershell.xml'
+    $configuration.TestResult.OutputFormat = 'NUnitXml'
+    $configuration.CodeCoverage.Enabled = $true
+    $configuration.CodeCoverage.UseBreakpoints = $false
+    $configuration.CodeCoverage.Path = @($coveragePaths | ForEach-Object { Join-Path $repoRoot $_ })
+    $configuration.CodeCoverage.OutputPath = Join-Path $testResultsDirectory 'coverage.xml'
+    $configuration.CodeCoverage.OutputFormat = 'JaCoCo'
+    $configuration.CodeCoverage.CoveragePercentTarget = 0
+    $result = Invoke-Pester -Configuration $configuration
+}
+else {
+    $testPaths = @(Get-ChildItem -LiteralPath (Join-Path $repoRoot 'tests') -Filter '*.Tests.ps1' -File | Sort-Object Name | ForEach-Object FullName)
+    $result = & (Join-Path $PSScriptRoot 'Invoke-PowerShellTestShards.ps1') `
+        -TestPaths $testPaths `
+        -CoveragePaths @($coveragePaths | ForEach-Object { Join-Path $repoRoot $_ }) `
+        -OutputDirectory $testResultsDirectory `
+        -PesterVersion $policy.Tools.Pester
+    foreach ($failure in $result.FailedTests) {
+        Write-Output "FAILED $($failure.Name)"
+        foreach ($message in $failure.Messages) { Write-Output "  $message" }
+    }
+    foreach ($failure in $result.FailedContainers) {
+        Write-Output "FAILED CONTAINER $failure"
+    }
+    Write-Output "Ran $($result.TotalCount) PowerShell tests across $($result.WorkerCount) workers: $($result.PassedCount) passed, $($result.FailedCount) failed."
+}
 $coverageReport = @(Get-PowerShellFileCoverage -RepositoryRoot $repoRoot -ModifiedFiles $modifiedFiles -Coverage $result.CodeCoverage -MinimumPercent 65)
 $reportPath = Join-Path $repoRoot 'TestResults/coverage-files.json'
 ConvertTo-Json -InputObject $coverageReport -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding utf8
@@ -144,7 +168,9 @@ Write-Output $summaryText
 if ($result.TotalCount -eq 0 -or $result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {
     throw "Pester failed: $($result.FailedCount) tests and $($result.FailedContainersCount) containers failed."
 }
-Write-Output "Passed $($result.PassedCount) PowerShell tests."
+if ($SingleProcess) {
+    Write-Output "Passed $($result.PassedCount) PowerShell tests."
+}
 $underCoveredFiles = @($coverageReport | Where-Object { -not $_.Passed })
 if ($underCoveredFiles.Count -gt 0) {
     throw "Changed PowerShell files below 65% command coverage: $($underCoveredFiles.Path -join ', ')."

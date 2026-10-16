@@ -62,7 +62,9 @@ Describe 'Build artifacts and solution-check helpers' {
             [pscustomobject]@{ Name = 'Compress-DataverseSolutionFile' }
         } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
-        Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
+        Mock Test-Path {
+            $true
+        } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
         Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4+build pac' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestPac' } } -ParameterFilter { $Name -eq 'pac' }
         Mock Invoke-TestPac { $global:LASTEXITCODE = 0; 'Critical: 0'; 'High: 1'; 'Low: 2' }
