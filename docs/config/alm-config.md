@@ -145,7 +145,7 @@ export = @{
 | --- | --- | --- | --- |
 | `export.parallel` | Boolean | `$true` | Export managed and unmanaged packages concurrently; `$false` retains sequential export. |
 | `export.maxParallel` | Integer, `1` to `8` | `2` | Maximum simultaneous package exports, including both packages of the same solution. |
-| `export.maxConcurrentOperations` | Integer, `1` to `8` | `4` | Shared limit for package exports and environment version updates. Custom hooks are not limited by this setting. |
+| `export.maxConcurrentOperations` | Integer, `1` to `8` | `4` | Shared limit for package exports and environment version updates. Per-solution parallel hooks can use their provided `OperationBudget` to share this limit. |
 
 Missing, null, or empty optional settings use the defaults; an explicit `$false`
 is preserved. Invalid types or out-of-range limits fail with a configuration error.
@@ -300,13 +300,16 @@ Example hooks:
 
 ```powershell
 hooks = @{
-    preExport      = @()
-    postExport     = @('data/system/export.ps1')
-    preDeploy      = @()
-    dataMigrations = @()
-    postDeploy     = @('data/system/import.ps1')
-    preBuild       = @()
-    postBuild      = @()
+    preExport              = @()
+    preExportSolution      = @()
+    parallelExportSolution = @()
+    postExportSolution     = @()
+    postExport             = @('data/system/export.ps1')
+    preDeploy              = @()
+    dataMigrations         = @()
+    postDeploy             = @('data/system/import.ps1')
+    preBuild               = @()
+    postBuild              = @()
 }
 ```
 
@@ -314,6 +317,7 @@ hooks = @{
 
 - **preExport**: Called before exporting solutions from a Dataverse environment
 - **preExportSolution**: Called before each solution's exports begin
+- **parallelExportSolution**: Started alongside each solution's export workers. EXPORT waits for this hook to finish before unpacking and comparing that solution. With sequential export, the hook runs synchronously before the solution is exported.
 - **postExportSolution**: Called after each solution is unpacked and compared. With parallel export enabled, hooks for different solutions can run concurrently with remaining exports.
 - **postExport**: Called after exporting and unpacking solutions
 - **preBuild**: Called before packing solutions during the build process
@@ -341,14 +345,15 @@ Each hook script receives a `$Context` parameter containing:
 - Additional context specific to the hook type:
   - **preBuild, postBuild**: `SourceDirectory`, `ArtifactStagingDirectory`
   - **preExport, postExport**: `SourceDirectory`, `ArtifactStagingDirectory`, `TempDirectory`, `EnvironmentName`
-  - **preExportSolution, postExportSolution**: the export context above, plus `SolutionName`, `SolutionConfig`, and `SolutionIndex`
+  - **preExportSolution, parallelExportSolution, postExportSolution**: the export context above, plus `SolutionName`, `SolutionConfig`, and `SolutionIndex`
   - Per-solution hooks also receive a cloned `Connection`. In parallel export mode, the hook worker sets that clone as its default connection for the duration of the hook, so existing Dataverse commands resolve to the right client. Hooks can also pass `$Context.Connection` explicitly. Parallel hooks receive the shared `OperationBudget` and `CancellationToken`.
   - `postExportSolution` hook output is collected by solution in `SolutionHookResults` and passed to the `postExport` hook.
+  - `parallelExportSolution` hook output is collected by solution in `ParallelExportSolutionHookResults` and passed to the `postExport` hook.
   - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`
 
 Start a hook with a parameter block. Resolve application-owned files from `$PSScriptRoot` or `$Context.BaseDirectory`, not from assumptions about the runner's working directory. Guard optional configuration keys when using strict mode:
 
-Per-solution hooks for different solutions may run concurrently when `export.parallel` is enabled. Keep their side effects solution-scoped and use the provided `OperationBudget` for Dataverse operations. Hooks listed for a single phase run in their configured order; solution-to-solution completion order is not guaranteed. With sequential exports, both per-solution hook types run synchronously.
+Per-solution hooks for different solutions may run concurrently when `export.parallel` is enabled. `parallelExportSolution` also runs concurrently with package exports for the same solution; EXPORT waits for it before unpacking. Keep hook side effects solution-scoped and use the provided `OperationBudget` for Dataverse operations. Hooks listed for a single phase run in their configured order; solution-to-solution completion order is not guaranteed. With sequential exports, all per-solution hooks run synchronously.
 
 ```powershell
 param([hashtable]$Context)
