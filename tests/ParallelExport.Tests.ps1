@@ -85,6 +85,7 @@ public sealed class AlmExportTestClient : System.IDisposable
     public static AlmExportTestClient Default { get; set; }
     public static int Peak { get; private set; }
     public static int VersionUpdates { get; set; }
+    public static bool HookDefaultCleared { get; set; }
     public static System.Threading.CountdownEvent Started { get; private set; }
     public static System.Threading.ManualResetEventSlim Release { get; private set; }
     public bool DetailsRead { get; private set; }
@@ -111,7 +112,7 @@ public sealed class AlmExportTestClient : System.IDisposable
     {
         Started?.Dispose();
         Release?.Dispose();
-        started = 0; active = 0; Peak = 0; VersionUpdates = 0; expectedStarts = count;
+        started = 0; active = 0; Peak = 0; VersionUpdates = 0; HookDefaultCleared = false; expectedStarts = count;
         Started = new System.Threading.CountdownEvent(count);
         Release = new System.Threading.ManualResetEventSlim(false);
         Default = new AlmExportTestClient();
@@ -135,7 +136,9 @@ public sealed class AlmExportTestClient : System.IDisposable
         # Workers import this real fixture module because Pester mocks do not cross runspaces.
         # Its export waits on the shared client barrier; pack/unpack only create comparison inputs.
         $script:exportModuleSource = @'
-function Get-DataverseConnection { param([switch]$GetDefault); [AlmExportTestClient]::Default }
+$script:DefaultConnection = $null
+function Set-DataverseConnectionAsDefault { param($Connection, [switch]$Clear); if ($Clear) { [AlmExportTestClient]::HookDefaultCleared = ($null -ne $script:DefaultConnection); $script:DefaultConnection = $null } else { $script:DefaultConnection = $Connection } }
+function Get-DataverseConnection { param([switch]$GetDefault); if ($null -ne $script:DefaultConnection) { return $script:DefaultConnection }; [AlmExportTestClient]::Default }
 function Write-TestSolution {
     param($OutputPath)
     New-Item -ItemType Directory -Path "$OutputPath/Other" -Force | Out-Null
@@ -158,7 +161,7 @@ function Export-DataverseSolution {
 function Expand-DataverseSolutionFile { param($Path, $OutputPath, $PackageType, [switch]$UnpackMsapp, $MappingFile); Write-TestSolution $OutputPath }
 function Compress-DataverseSolutionFile { param($PackageType, $OutputPath, $Path); Set-Content -LiteralPath $OutputPath -Value 'baseline' }
 function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestClient]::VersionUpdates++ }
-function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connection) { throw 'A connection is required.' }; [pscustomobject]@{ Connection = $Connection; Sql = $Sql } }
+function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connection) { $Connection = $script:DefaultConnection }; if ($null -eq $Connection) { throw 'A connection is required.' }; [pscustomobject]@{ Connection = $Connection; Sql = $Sql } }
 '@
     }
 
@@ -244,10 +247,10 @@ function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connecti
         $failureText | Should -Match 'Second failure detail'
     }
 
-    It 'runs post-solution hooks while later exports are still running' {
+    It 'sets the cloned connection as the hook default while later exports are still running' {
         [AlmExportTestClient]::Reset(2)
         $hookPath = Join-Path $script:workerRoot 'post-solution.ps1'
-        Set-Content -LiteralPath $hookPath -Value 'param($Context); $query = Invoke-DataverseSQL -Connection $Context.Connection -Sql ''SELECT 1''; [pscustomobject]@{ SolutionName = $Context.SolutionName; ActiveExports = [AlmExportTestClient]::Peak; HasConnection = ($null -ne $Context.Connection); QueryUsedContextConnection = ($query.Connection -eq $Context.Connection) }'
+        Set-Content -LiteralPath $hookPath -Value 'param($Context); $query = Invoke-DataverseSQL -Sql ''SELECT 1''; $default = Get-DataverseConnection -GetDefault; [pscustomobject]@{ SolutionName = $Context.SolutionName; ActiveExports = [AlmExportTestClient]::Peak; HasConnection = ($null -ne $Context.Connection); QueryUsedContextConnection = ($query.Connection -eq $Context.Connection); DefaultMatchesContext = ($default -eq $Context.Connection) }'
         $config = @{
             solutions = @(@{ name = 'First' }, @{ name = 'Second' })
             hooks = @{ postExportSolution = $hookPath }
@@ -263,6 +266,8 @@ function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connecti
         $result.ActiveExports | Should -Be 2
         $result.HasConnection | Should -BeTrue
         $result.QueryUsedContextConnection | Should -BeTrue
+        $result.DefaultMatchesContext | Should -BeTrue
+        [AlmExportTestClient]::HookDefaultCleared | Should -BeTrue
         [AlmExportTestClient]::Release.Set()
         Wait-AlmSolutionExport -State $script:workerState -SolutionName First | Should -Exist
         Wait-AlmSolutionExport -State $script:workerState -SolutionName Second | Should -Exist

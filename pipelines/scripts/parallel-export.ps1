@@ -339,8 +339,8 @@ function Invoke-AlmQueuedPostExportSolutionHook {
         Starts queued post-export solution hooks in background workers.
     .DESCRIPTION
         Each hook runs in an isolated thread-job runspace and receives its cloned
-        Dataverse connection as Context.Connection. Hooks pass that connection
-        explicitly to Dataverse commands rather than relying on ambient state.
+        Dataverse connection as Context.Connection. The worker sets that client
+        as the runspace's default so existing Dataverse commands use the clone.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker receives the hook context and cloned Dataverse client explicitly through Start-ThreadJob ArgumentList.')]
     param([Parameter(Mandatory)][hashtable]$State)
@@ -368,9 +368,14 @@ function Invoke-AlmQueuedPostExportSolutionHook {
                 Import-Module $ModulePath -ErrorAction Stop
                 . $HelpersPath
                 . $CommonPath
-                Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message 'Started'
-                $results = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $Task.BaseDirectory -Config $Task.Config -AdditionalContext $Task.AdditionalContext -LogContext:$false)
-                Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Completed in $([math]::Round(([datetime]::UtcNow-$started).TotalSeconds,2))s"
+                Set-DataverseConnectionAsDefault -Connection $Task.AdditionalContext.Connection
+                try {
+                    Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message 'Started'
+                    $results = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $Task.BaseDirectory -Config $Task.Config -AdditionalContext $Task.AdditionalContext -LogContext:$false)
+                    Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Completed in $([math]::Round(([datetime]::UtcNow-$started).TotalSeconds,2))s"
+                } finally {
+                    Set-DataverseConnectionAsDefault -Clear
+                }
                 [pscustomobject]@{ Kind = 'SolutionHook'; SolutionName = $Task.SolutionName; Results = $results; Started = $started; Finished = [datetime]::UtcNow }
             } catch {
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Failed: $(($_ | Out-String).TrimEnd())"

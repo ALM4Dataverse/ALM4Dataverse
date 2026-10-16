@@ -342,7 +342,7 @@ Each hook script receives a `$Context` parameter containing:
   - **preBuild, postBuild**: `SourceDirectory`, `ArtifactStagingDirectory`
   - **preExport, postExport**: `SourceDirectory`, `ArtifactStagingDirectory`, `TempDirectory`, `EnvironmentName`
   - **preExportSolution, postExportSolution**: the export context above, plus `SolutionName`, `SolutionConfig`, and `SolutionIndex`
-  - Per-solution hooks also receive a cloned `Connection`. Pass it explicitly to Dataverse commands (for example, `Invoke-DataverseSQL -Connection $Context.Connection`); do not rely on an ambient default connection. In parallel export mode, they receive the shared `OperationBudget` and `CancellationToken`.
+  - Per-solution hooks also receive a cloned `Connection`. In parallel export mode, the hook worker sets that clone as its default connection for the duration of the hook, so existing Dataverse commands resolve to the right client. Hooks can also pass `$Context.Connection` explicitly. Parallel hooks receive the shared `OperationBudget` and `CancellationToken`.
   - `postExportSolution` hook output is collected by solution in `SolutionHookResults` and passed to the `postExport` hook.
   - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`
 
