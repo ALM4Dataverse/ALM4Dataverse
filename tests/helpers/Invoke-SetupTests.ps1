@@ -1,6 +1,7 @@
 #Requires -Version 7.2
 
 [CmdletBinding()]
+# Paths are repository-relative, independent of the caller's current directory.
 param(
     [string[]]$TestPath = @('tests/SetupCommon.Tests.ps1', 'tests/SetupEnvironment.Tests.ps1', 'tests/SetupProviders.Tests.ps1', 'tests/SetupRepository.Tests.ps1', 'tests/SetupWizard.Tests.ps1')
 )
@@ -18,6 +19,7 @@ $configuration.Output.Verbosity = 'None'
 $configuration.CodeCoverage.Enabled = $true
 $configuration.CodeCoverage.UseBreakpoints = $false
 $configuration.CodeCoverage.Path = @('setup-common.ps1', 'setup-azdo.ps1', 'setup-github.ps1') | ForEach-Object { Join-Path $repoRoot $_ }
+# This diagnostic runner reports per-installer hotspots, not the repository's coverage gate.
 $configuration.CodeCoverage.CoveragePercentTarget = 0
 $result = Invoke-Pester -Configuration $configuration
 foreach ($test in $result.Failed) {
@@ -35,4 +37,5 @@ foreach ($path in @('setup-common.ps1', 'setup-azdo.ps1', 'setup-github.ps1')) {
     if ($total) { Write-Output ('{0}: {1:F2}% ({2}/{3})' -f $path, (100 * $executed / $total), $executed, $total) }
     $missed | Group-Object Function | Sort-Object Count -Descending | Select-Object -First 8 Count, Name | Format-Table -AutoSize
 }
+# A discovery/container failure may produce no failed test cases; an empty run is not success.
 if ($result.TotalCount -eq 0 -or $result.FailedCount -or $result.FailedContainersCount) { throw 'Setup tests failed.' }

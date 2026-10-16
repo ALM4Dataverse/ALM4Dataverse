@@ -57,6 +57,8 @@ Describe 'Parallel export logging' {
 Describe 'Parallel export runtime' {
     BeforeAll {
         . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
+        # This process-wide type coordinates separate runspaces. OrganizationDetail rejects a
+        # clone's first lazy read unless the parent primed it, exposing the SDK warm-up contract.
         if (-not ('AlmExportTestClient' -as [type])) {
             Add-Type -TypeDefinition @'
 public sealed class AlmExportTestClient : System.IDisposable
@@ -116,6 +118,8 @@ public sealed class AlmExportTestClient : System.IDisposable
 }
 '@
         }
+        # Workers import this real fixture module because Pester mocks do not cross runspaces.
+        # Its export waits on the shared client barrier; pack/unpack only create comparison inputs.
         $script:exportModuleSource = @'
 function Get-DataverseConnection { param([switch]$GetDefault); [AlmExportTestClient]::Default }
 function Write-TestSolution {
@@ -161,6 +165,7 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
     }
 
     AfterEach {
+        # Unblock workers even after a failed assertion before stopping jobs and restoring modules.
         [AlmExportTestClient]::Release.Set()
         try {
             if ($null -ne $script:workerState) { Stop-AlmExportPipeline -State $script:workerState }
@@ -190,6 +195,7 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         $state.Connection.DetailsRead | Should -BeTrue
         Test-Path $state.HelpersPath | Should -BeTrue
         Start-AlmQueuedExport -State $state
+        # Measure occupancy while workers are held, not elapsed wall time on a busy runner.
         [AlmExportTestClient]::Started.Wait([TimeSpan]::FromSeconds(10)) | Should -BeTrue
         [AlmExportTestClient]::Peak | Should -Be $Limit
         [AlmExportTestClient]::Release.Set()

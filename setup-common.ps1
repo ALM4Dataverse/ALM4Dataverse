@@ -1,3 +1,6 @@
+# Shared library: dot-sourced by provider setup and embedded into release installers.
+# Loading this file defines helpers only; console packages and service connections
+# are initialized by callers, not at library load time.
 function New-DirectoryIfMissing {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory)][string]$Path)
@@ -7,6 +10,13 @@ function New-DirectoryIfMissing {
 }
 
 function Expand-SetupConsoleArchive {
+    <#
+    .SYNOPSIS
+        Extracts a NuGet archive using the ZIP API available to Windows PowerShell.
+    .DESCRIPTION
+        Destination collisions and invalid archives propagate to the cache owner's
+        retry logic. This helper neither clears the destination nor downloads files.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ArchivePath,
@@ -18,6 +28,17 @@ function Expand-SetupConsoleArchive {
 }
 
 function Get-SetupConsoleDependencyAssemblyPath {
+    <#
+    .SYNOPSIS
+        Resolves one framework-specific DLL from a versioned NuGet cache.
+    .DESCRIPTION
+        Returns the DLL path, downloading and extracting under PackageRoot as needed.
+        A failed extraction or missing DLL invalidates both cache entries before a
+        fresh download. Final download/extraction failures, or an absent DLL, throw.
+        PackageRoot must already exist; this does not load the returned assembly.
+    .PARAMETER TargetFramework
+        Exact lib subdirectory to inspect; no framework fallback is attempted.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PackageRoot,
@@ -76,6 +97,14 @@ function Get-SetupConsoleDependencyAssemblyPath {
 }
 
 function Initialize-SetupConsoleFrameworkDependency {
+    <#
+    .SYNOPSIS
+        Loads Spectre's supporting assemblies for Windows PowerShell only.
+    .DESCRIPTION
+        Uses the supplied package cache and loads dependencies in the listed order.
+        An assembly already loaded by simple name is reused, regardless of version.
+        Core editions return without work; package and assembly-load failures throw.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PackageRoot
@@ -133,6 +162,15 @@ function Initialize-SetupConsoleFrameworkDependency {
 }
 
 function Initialize-SetupConsoleCancellationSupport {
+    <#
+    .SYNOPSIS
+        Returns the process-wide C# bridge for console cancellation.
+    .DESCRIPTION
+        Compiles the bridge once per process. Start owns a single active token source
+        and throws on overlapping registrations; null means the host rejected the
+        event subscription. Stop detaches the matching source and disposes it.
+        Compilation failures propagate.
+    #>
     [CmdletBinding()]
     param()
 
@@ -142,6 +180,12 @@ function Initialize-SetupConsoleCancellationSupport {
         return $cancellationType
     }
 
+    # Console events run outside the PowerShell runspace, so cancellation stays in
+    # compiled code. SyncRoot protects registration and source identity, not Cancel:
+    # OnCancel releases the lock before invoking callbacks. A concurrent Stop can
+    # dispose the captured source; that race is deliberately swallowed by OnCancel.
+    # The event suppresses process termination only while an active source exists.
+    # Keep this explanation outside the string array to preserve embedded source.
     $typeDefinition = @(
         'using System;'
         'using System.Threading;'
@@ -224,6 +268,15 @@ function Initialize-SetupConsoleCancellationSupport {
 }
 
 function Initialize-SpectreConsole {
+    <#
+    .SYNOPSIS
+        Makes the optional console assembly available in the current process.
+    .DESCRIPTION
+        Reuses an already loaded Spectre type or downloads an edition-specific
+        package into the shared temporary cache. Incomplete cache entries are
+        refreshed; unrecoverable download, extraction and load failures propagate.
+        Records successful initialization in script scope. It emits no result.
+    #>
     [CmdletBinding()]
     param()
 
@@ -330,6 +383,7 @@ function Initialize-SpectreConsole {
 }
 
 function ConvertTo-SpectreMarkupLiteral {
+    # Null becomes empty text; brackets are escaped rather than interpreted as styling.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -344,6 +398,13 @@ function ConvertTo-SpectreMarkupLiteral {
 }
 
 function Get-OptionalObjectPropertyValue {
+    <#
+    .SYNOPSIS
+        Reads a hashtable key or object property without requiring its presence.
+    .DESCRIPTION
+        Returns null for a missing property or null input. Present false, zero and
+        empty values are preserved, so callers must not use truthiness as existence.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][object]$InputObject,
@@ -370,6 +431,8 @@ function Get-OptionalObjectPropertyValue {
 }
 
 function Test-SetupResourceNotFound {
+    # Only an HTTP 404 on the exception chain means missing; permission and other
+    # failures must remain failures rather than silently triggering resource creation.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -389,6 +452,15 @@ function Test-SetupResourceNotFound {
 }
 
 function Invoke-GenericStaticMethod {
+    <#
+    .SYNOPSIS
+        Invokes a public generic static method through reflection.
+    .DESCRIPTION
+        Tries overloads matching generic arity and argument count in reflection
+        order, returning the first successful result. Type compatibility is left
+        to reflection. If none succeeds, throws the first invocation error (or a
+        missing-method error); candidates may already have executed before failure.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][Type]$Type,
@@ -432,6 +504,7 @@ function Invoke-GenericStaticMethod {
 }
 
 function Test-SetupDebugEnabled {
+    # Opt-in values are trimmed and case-insensitive; an unset or other value is off.
     [CmdletBinding()]
     [OutputType([bool])]
     param()
@@ -458,6 +531,7 @@ function Write-SetupDebug {
 }
 
 function New-SpectreTable {
+    # Column labels are literal text; the returned table is not written to the console.
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
     [OutputType('Spectre.Console.Table')]
@@ -476,6 +550,7 @@ function New-SpectreTable {
 }
 
 function Add-SpectreTableRow {
+    # Mutates the supplied table without emitting it; cell markup is always escaped.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Table,
@@ -495,6 +570,14 @@ function Add-SpectreTableRow {
 }
 
 function New-SpectrePanel {
+    <#
+    .SYNOPSIS
+        Builds a rounded panel without rendering it.
+    .PARAMETER Content
+        Spectre-compatible content; unlike Header, this is not escaped here.
+    .PARAMETER HeaderMarkup
+        Trusted Spectre markup, taking precedence over the literal Header text.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
     [OutputType('Spectre.Console.Panel')]
@@ -527,6 +610,8 @@ function New-SpectrePanel {
 }
 
 function New-SpectreInfoGrid {
+    # Returns an expanded two-column grid; keys and values are literal text and
+    # enumeration order is the supplied hashtable's order, not a sort order.
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
     [OutputType('Spectre.Console.Grid')]
@@ -559,6 +644,14 @@ function New-SpectreInfoGrid {
 }
 
 function New-SpectreMetricColumn {
+    <#
+    .SYNOPSIS
+        Builds metric panels from hashtables or objects without rendering them.
+    .DESCRIPTION
+        Cards may supply Label, Value, Detail and AccentColor; missing text is empty
+        and missing color defaults to deepskyblue1. Null cards are skipped. Text is
+        escaped, but AccentColor is trusted Spectre styling and may fail to parse.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseOutputTypeCorrectly', '', Justification = 'Optional console assembly is loaded inside the function; the string OutputType declares its return type without eager assembly resolution.')]
     [CmdletBinding()]
     [OutputType('Spectre.Console.Columns')]
@@ -615,6 +708,7 @@ function New-SpectreMetricColumn {
 }
 
 function Show-SpectreMetricCard {
+    # No cards means no console initialization or output, rather than an empty panel.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$Cards
@@ -646,6 +740,9 @@ function Show-SolutionSelectionOverview {
 }
 
 function Show-EnvironmentConfigurationOverview {
+    # Readiness here is a display heuristic, not validation: pending flags, missing
+    # credentials or missing service-account UPNs count as pending. Auth counts only
+    # recognize WIF/Secret, and service-account uniqueness uses Select-Object semantics.
     [CmdletBinding()]
     param(
         [Parameter()][array]$EnvironmentConfigurations
@@ -718,6 +815,7 @@ function Show-KeyValueSummaryTable {
 }
 
 function Set-SetupWizardContext {
+    # Script-scoped display/navigation state; CurrentStepIndex is zero-based.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
@@ -733,6 +831,7 @@ function Set-SetupWizardContext {
 }
 
 function Set-SetupPhaseContext {
+    # Phase indexes are zero-based and independent of the wizard's step context.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string[]]$PhaseNames,
@@ -781,6 +880,7 @@ function Get-SetupCurrentSectionMessage {
 }
 
 function Set-SetupPromptDocContext {
+    # Replaces the script-scoped documentation context; it does not display guidance.
     [CmdletBinding()]
     param(
         [Parameter()][string]$DocRelativePath,
@@ -810,6 +910,7 @@ function Get-SetupPromptDocContext {
 }
 
 function Request-SetupWizardBack {
+    # Navigation is an exception protocol so nested prompts can unwind to the wizard.
     [CmdletBinding()]
     param()
 
@@ -817,6 +918,7 @@ function Request-SetupWizardBack {
 }
 
 function Test-IsSetupWizardBackException {
+    # Match the exact marker and exception type, including reflection-wrapped errors.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -836,6 +938,7 @@ function Test-IsSetupWizardBackException {
 }
 
 function New-SetupHeroPanel {
+    # Despite the legacy name this returns plain banner text, not a Spectre panel.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -864,6 +967,7 @@ function New-SetupTipsPanel {
 }
 
 function Write-SetupDashboard {
+    # Prefer a native full-width bar; hosts without cursor APIs get an inline banner.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Message,
@@ -883,6 +987,7 @@ function Write-SetupDashboard {
 }
 
 function Test-IsUserInterruptException {
+    # Inspect wrappers because async/reflection calls can hide the cancellation type.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -906,6 +1011,17 @@ function Test-IsUserInterruptException {
 }
 
 function Invoke-SetupWizard {
+    <#
+    .SYNOPSIS
+        Executes named setup steps with exception-based backward navigation.
+    .PARAMETER Steps
+        Ordered objects with Name and Action scriptblock properties. Action output
+        passes through; actions own their state and may run again after going back.
+    .DESCRIPTION
+        A back marker repeats the preceding step (or the first step at index zero).
+        Other errors propagate. Wizard context is cleared even after failure; no
+        rollback of action side effects or restoration of an outer context occurs.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
@@ -945,6 +1061,7 @@ function Invoke-SetupWizard {
 }
 
 function Confirm-SetupReviewAction {
+    # Returns no value on approval; cancellation, including a null menu result, throws.
     [CmdletBinding()]
     param(
         [Parameter()][string]$ApplyLabel = 'Apply changes',
@@ -968,6 +1085,7 @@ function Confirm-SetupReviewAction {
 
 
 function Show-SetupPromptGuidance {
+    # Prompt-local guidance must not replace the section's stored documentation context.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PromptText,
@@ -1000,6 +1118,7 @@ function Show-SetupPromptGuidance {
 }
 
 function Get-SetupPromptInlineText {
+    # All prompt kinds currently share one escaped label format; this returns markup.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1024,6 +1143,17 @@ function Get-SetupPromptInlineText {
 }
 
 function Write-SetupConsoleBar {
+    <#
+    .SYNOPSIS
+        Attempts a native console row write and reports whether it succeeded.
+    .DESCRIPTION
+        Returns false on unavailable console APIs or write/restore failures so callers
+        can render inline instead. Text is plain, not markup. AtBottom overrides
+        TargetRow; negative TargetRow means the current row. Colors are restored.
+    .PARAMETER RestoreCursorPosition
+        Restores the saved position within current buffer bounds, taking precedence
+        over AdvanceCursor. With neither switch, the cursor stays after the written text.
+    #>
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -1095,6 +1225,8 @@ function Write-SetupConsoleBar {
 }
 
 function Show-SetupStatusBarAtBottom {
+    # Menu hints describe filtering only when enabled. Cursor-host failures render
+    # an inline status line, which Clear-SetupStatusBarAtBottom cannot erase.
     [CmdletBinding()]
     param(
         [Parameter()][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind = 'Text',
@@ -1147,6 +1279,7 @@ function Show-SetupStatusBarAtBottom {
 }
 
 function Clear-SetupStatusBarAtBottom {
+    # Best-effort native-row cleanup only; an unsupported host is not an error.
     [CmdletBinding()]
     param()
 
@@ -1154,6 +1287,8 @@ function Clear-SetupStatusBarAtBottom {
 }
 
 function Add-SetupConsoleCancelHandler {
+    # Returns whether registration succeeded; reflection is a compatibility fallback.
+    # The caller owns removal of the same delegate when this returns true.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -1184,6 +1319,7 @@ function Add-SetupConsoleCancelHandler {
 }
 
 function Remove-SetupConsoleCancelHandler {
+    # Mirrors registration's accessor/reflection fallback; cleanup failure is verbose only.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][System.ConsoleCancelEventHandler]$Handler
@@ -1210,6 +1346,15 @@ function Remove-SetupConsoleCancelHandler {
 }
 
 function Show-SelectionPromptWithInterruptHandling {
+    <#
+    .SYNOPSIS
+        Runs an async Spectre selection prompt synchronously with Ctrl+C cancellation.
+    .DESCRIPTION
+        Returns the prompt's selected value. Uses the compiled console-event bridge
+        when supported, otherwise a local token source. Cancellation is normalized
+        to OperationCanceledException; other failures propagate. The source and any
+        attached handler are released in finally, including on prompt failure.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$Prompt
@@ -1261,6 +1406,8 @@ function Show-SelectionPromptWithInterruptHandling {
 }
 
 function Write-SetupPromptFrame {
+    # Rebuild the current section unless preserving content; guidance suppression
+    # does not suppress that redraw. Without a section, existing content stays.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PromptText,
@@ -1294,6 +1441,7 @@ function Write-SetupPromptFrame {
 }
 
 function Wait-ForUserAcknowledgement {
+    # The only successful result is choosing the first item; no value is emitted.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Message,
@@ -1307,6 +1455,15 @@ function Wait-ForUserAcknowledgement {
 }
 
 function Read-SecretText {
+    <#
+    .SYNOPSIS
+        Reads masked input and returns its plaintext string.
+    .DESCRIPTION
+        Masking is display-only, not SecureString storage. Nonblank input retains
+        whitespace. Blank input retries unless AllowEmpty, which returns an empty
+        string even for whitespace-only input. Prompt failures propagate after
+        status-bar cleanup.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1354,6 +1511,8 @@ function Read-SecretText {
 }
 
 function Write-Section {
+    # Starts a new display section, discarding prompt-document context and clearing
+    # the console. Section guidance is display-only and needs nonempty GuidanceLines.
     param(
         [Parameter(Mandatory)][string]$Message,
         [Parameter()][string[]]$GuidanceLines,
@@ -1380,6 +1539,13 @@ function Select-FromMenu {
 
     .DESCRIPTION
         Arrow keys move, Enter selects, and search is enabled automatically for long lists.
+        Returns a zero-based index into Items, or null for no items, the injected
+        cancel choice, or an unrecognized prompt result. Back choices throw the
+        wizard navigation marker rather than returning an index. Literal labels
+        are escaped for display; duplicate labels resolve to their first match.
+        Console input mode restoration is attempted after selection, including prompt failure.
+    .PARAMETER PreserveExistingContent
+        Prevents the usual section redraw before showing this prompt.
     #>
 
     [CmdletBinding()]
@@ -1535,6 +1701,8 @@ function Select-FromMenu {
 }
 
 function Read-YesNo {
+    # Returns a boolean with Yes as the default unless DefaultNo; the status bar
+    # is cleared on prompt failure, which is allowed to propagate.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -1562,6 +1730,7 @@ function Read-YesNo {
 }
 
 function ConvertFrom-GitRefToBranchName {
+    # Only local-head refs are shortened; tags, remote refs and plain names pass through.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Ref
@@ -1581,6 +1750,8 @@ function ConvertTo-UrlSafeName {
     .DESCRIPTION
         Replaces characters that are not safe in URL segments with hyphens.
         Allowed characters are: A-Z, a-z, 0-9, and hyphens.
+        Collapses repeated hyphens and trims edge hyphens. The result may be empty
+        and is not guaranteed unique; this helper does not validate provider limits.
     #>
     [CmdletBinding()]
     param(
@@ -1595,6 +1766,14 @@ function ConvertTo-UrlSafeName {
 }
 
 function ConvertTo-NormalizedEnvironmentUrl {
+    <#
+    .SYNOPSIS
+        Produces an authority-only HTTP(S) environment URL for identity comparisons.
+    .DESCRIPTION
+        Blank input returns null. Absolute HTTP(S) URLs lose path, query and fragment.
+        Invalid URLs or other schemes are only trimmed, including trailing slashes;
+        this normalization is deliberately not URL validation.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$Url
@@ -1625,6 +1804,8 @@ function Test-IsValidTenantIdentifier {
     .DESCRIPTION
         Accepts either a tenant GUID or a tenant domain name
         (for example contoso.onmicrosoft.com).
+        This is a local syntax check after trimming, not DNS resolution or tenant
+        discovery. The domain pattern is permissive rather than full DNS validation.
     #>
     [CmdletBinding()]
     param(
@@ -1659,6 +1840,8 @@ function Assert-ValidTenantIdentifier {
 }
 
 function Get-Alm4DataverseDocumentationRef {
+    # Explicit Ref wins over script ALM4DataverseRef; blank/missing state uses stable.
+    # Refs are returned as supplied, without trimming, validation or URL encoding.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1685,6 +1868,8 @@ function Get-Alm4DataverseDocumentationRef {
 }
 
 function Get-Alm4DataverseDocUrl {
+    # Builds a repository tree link, not a raw-content URL. Path separators are
+    # normalized but refs and paths are not URL-encoded; callers supply trusted paths.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1710,6 +1895,17 @@ function Get-SetupGuidanceHeaderMarkup {
 }
 
 function Write-SetupPanelBottomBorderOverlay {
+    <#
+    .SYNOPSIS
+        Best-effort placement of a markup link over the last rendered panel border.
+    .PARAMETER VisibleText
+        Plain-text counterpart of MarkupText, used for horizontal placement.
+    .PARAMETER PanelWriteStartTop
+        Cursor row captured before the panel write, used to infer its bottom border.
+    .DESCRIPTION
+        Assumes character count approximates display width. Unsupported cursor APIs
+        or rendering errors are verbose-only; cursor restoration occurs on success.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$VisibleText,
@@ -1748,6 +1944,17 @@ function Write-SetupPanelBottomBorderOverlay {
 }
 
 function Write-SetupGuidance {
+    <#
+    .SYNOPSIS
+        Displays escaped guidance lines with an optional documentation-link overlay.
+    .DESCRIPTION
+        Blank lines are omitted; a link alone can produce a panel. Updates the
+        script prompt-document context even when there is nothing to render, unless
+        SkipContextUpdate is set. A rendered panel requires a nonblank trimmed header.
+        The overlay is best-effort; other console failures propagate.
+    .PARAMETER Ref
+        Documentation revision, falling back to script ALM4DataverseRef then stable.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string[]]$Lines,
@@ -1812,6 +2019,15 @@ function Write-SetupGuidance {
 }
 
 function Read-TextWithDefault {
+    <#
+    .SYNOPSIS
+        Reads trimmed text, with optional default or explicitly empty input.
+    .DESCRIPTION
+        Blank input returns a nonblank DefaultValue unchanged before considering
+        AllowEmpty; otherwise AllowEmpty returns an empty string and required input
+        retries. Nonblank typed values are trimmed. Prompt errors propagate after
+        status-bar cleanup. A blank prompt label is rejected.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1878,6 +2094,8 @@ function Read-TextWithDefault {
 }
 
 function Get-DefaultSetupBranchName {
+    # Sanitization can erase a name, so use setup/main fallbacks. UTC seconds make
+    # readable suggestions, not collision-proof branch reservations.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -1900,6 +2118,15 @@ function Get-DefaultSetupBranchName {
 }
 
 function Get-RepoChangePublishPlan {
+    <#
+    .SYNOPSIS
+        Collects a provider-neutral repository publication decision without publishing.
+    .DESCRIPTION
+        Returns Mode, BranchName, TargetBranch, CommitMessage, PullRequestTitle and
+        PullRequestDescription. Direct mode can target BaseBranch or another entered
+        branch and has null PR fields; PullRequest mode always targets BaseBranch.
+        A cancelled menu throws. Branch existence/protection is not checked here.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProviderName,
@@ -1981,6 +2208,15 @@ function Get-RepoChangePublishPlan {
 }
 
 function Get-BranchTargetedRepoChangePublishPlan {
+    <#
+    .SYNOPSIS
+        Collects a direct-commit or PR plan for one fixed target branch.
+    .DESCRIPTION
+        Returns the publication fields used by Get-RepoChangePublishPlan, but never
+        offers another target: TargetBranch stays fixed in both modes. BranchName
+        is the direct target or the entered PR source. Cancellation throws; this
+        helper prompts only and does not contact the provider or validate branches.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProviderName,
@@ -2050,6 +2286,8 @@ function Get-BranchTargetedRepoChangePublishPlan {
 }
 
 function Get-CredentialSummaryText {
+    # Only identity/type fields are read, never secret values. Name wins over
+    # ApplicationId; existing connections have their own label; null returns empty.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -2088,6 +2326,8 @@ function Get-CredentialSummaryText {
 }
 
 function Show-EnvironmentConfigurationTable {
+    # Expected rows have ShortName, FriendlyName, Url and Credentials; only the
+    # ServiceAccountUPN field is optional here. Credential summaries omit secrets.
     [CmdletBinding()]
     param(
         [Parameter()][array]$EnvironmentConfigurations
@@ -2122,6 +2362,15 @@ function Show-EnvironmentConfigurationTable {
 }
 
 function Select-OrderedSolution {
+    <#
+    .SYNOPSIS
+        Edits an ordered selection while retaining the supplied solution objects.
+    .DESCRIPTION
+        Objects need friendlyname and uniquename. Adds exclude already-selected
+        unique names; initial selections are accepted as supplied. Moves are manual,
+        not dependency resolution. Done or a null management selection returns the
+        current objects in order; a wizard back exception still propagates.
+    #>
     [CmdletBinding()]
     [OutputType([object[]])]
     param(
@@ -2247,6 +2496,20 @@ function Select-OrderedSolution {
 }
 
 function Set-AlmConfigSolutionsInFile {
+    <#
+    .SYNOPSIS
+        Replaces or inserts the solutions value in a PowerShell data file.
+    .PARAMETER Solutions
+        Objects or hashtables with name and optional truthy deployUnmanaged. Other
+        fields are not serialized; names are single-quote escaped.
+    .DESCRIPTION
+        ShouldProcess precedes reads and writes; rejection returns false. A missing
+        file requires CreateIfMissing and uses an existing TemplatePath or a minimal
+        root hashtable. Parses without executing configuration, then replaces only
+        the solutions value, preserving unrelated source. Parse/root errors throw.
+        Returns whether the resulting text differs from the text read after creation,
+        not whether a file was created. Writes are not transactional.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -2298,6 +2561,8 @@ function Set-AlmConfigSolutionsInFile {
         throw "Could not parse existing alm-config.psd1 '$ConfigPath': $($parseErrors[0].Message)"
     }
 
+    # Extent offsets preserve unrelated source rather than reserializing the file.
+    # The first non-nested hashtable is treated as the root configuration contract.
     $rootHashtable = $ast.Find({
         param($node)
         $node -is [System.Management.Automation.Language.HashtableAst]
@@ -2332,6 +2597,17 @@ function Set-AlmConfigSolutionsInFile {
 }
 
 function Set-AlmConfigSolutionCheckEnabledInFile {
+    <#
+    .SYNOPSIS
+        Writes a solutionCheck hashtable containing the requested enabled flag.
+    .DESCRIPTION
+        Replaces the entire solutionCheck value, not just enabled; existing checker
+        subsettings are discarded. Other root settings are preserved by AST offsets.
+        ShouldProcess rejection returns false before I/O. Missing files require
+        CreateIfMissing and use an existing template or minimal hashtable.
+        Parse/root errors throw. Returns text-change status after any initial
+        creation; file writes are not transactional.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -2400,6 +2676,19 @@ function Set-AlmConfigSolutionCheckEnabledInFile {
 }
 
 function Set-AlmConfigBuildValidationBaselineReleaseInFile {
+    <#
+    .SYNOPSIS
+        Inserts or updates buildValidation.baselineRelease while retaining sibling settings.
+    .PARAMETER BaselineRelease
+        Literal selector text; empty is allowed and quotes are escaped. No selector
+        resolution or validation occurs here.
+    .DESCRIPTION
+        Parses source without execution and edits AST extents. Existing buildValidation
+        must contain a hashtable. Missing files require CreateIfMissing and use an
+        existing template or a minimal root. ShouldProcess rejection returns false
+        before I/O; parse/shape errors throw. Returns text-change status after any
+        creation, not file-creation status. Writes are not transactional.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -2489,6 +2778,15 @@ function Set-AlmConfigBuildValidationBaselineReleaseInFile {
 }
 
 function Select-BuildValidationBaselineEnvironment {
+    <#
+    .SYNOPSIS
+        Selects an @shortName deployment baseline distinct from the BUILD environment.
+    .DESCRIPTION
+        Deduplicates nonblank short names case-insensitively. Exclusions match either
+        short name or URL ignoring case and trailing slashes, not full URL normalization.
+        Returns empty for no eligible environments or an explicit no-baseline choice;
+        a cancelled prompt throws. This chooses a selector, not a release artifact.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -2541,6 +2839,20 @@ function Select-BuildValidationBaselineEnvironment {
 }
 
 function Select-ConfiguredDeploymentEnvironment {
+    <#
+    .SYNOPSIS
+        Interactively edits an ordered list using provider-owned environment callbacks.
+    .PARAMETER AddEnvironmentScriptBlock
+        Called with the current selection array as one positional argument. Returns
+        an environment to append, or null to leave the list unchanged.
+    .PARAMETER EditEnvironmentScriptBlock
+        Optional callback receiving the current array, selected object and zero-based
+        index. A non-null result replaces that entry; null retains it.
+    .DESCRIPTION
+        Initial objects are retained, not deep-cloned. Done or a null management
+        selection emits the current list. Callbacks own validation and side effects;
+        exceptions, including wizard navigation, propagate without rollback.
+    #>
     [CmdletBinding()]
     [OutputType([object[]])]
     param(
@@ -2657,6 +2969,15 @@ function Select-ConfiguredDeploymentEnvironment {
 }
 
 function Get-DefaultBranchEnvironmentMappingsFromStrategy {
+    <#
+    .SYNOPSIS
+        Creates suggested branch mappings without changing environment objects.
+    .DESCRIPTION
+        Simple assigns all non-null environments to MainBranch. GitflowLike assigns
+        the first prod/production name match to MainBranch, the rest to DevelopBranch,
+        and none to HotfixBranch. Without a production match main stays empty.
+        Emits BranchName/Environments objects; this heuristic is not policy validation.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -2717,6 +3038,9 @@ function Get-DefaultBranchEnvironmentMappingsFromStrategy {
 }
 
 function Test-BranchEnvironmentMappingDuplicate {
+    # Only cross-branch deployment assignments conflict. DEV fields are not checked;
+    # duplicate entries on one branch are allowed. Identity is normalized URL, falling
+    # back to ShortName; blank identities are ignored and hashtable keys ignore case.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][array]$BranchMappings
@@ -2751,6 +3075,8 @@ function Test-BranchEnvironmentMappingDuplicate {
 }
 
 function Show-BranchEnvironmentMappingTable {
+    # Prefer configured DEV details over discovered existing DEV details. This is
+    # a display projection only; absent DEV labels render as <none>, not an error.
     [CmdletBinding()]
     param(
         [Parameter()][array]$BranchMappings
@@ -2812,6 +3138,26 @@ function Show-BranchEnvironmentMappingTable {
 }
 
 function Select-BranchEnvironmentMapping {
+    <#
+    .SYNOPSIS
+        Edits branch/DEV/deployment mappings before provider publication.
+    .PARAMETER BranchOnly
+        Hides the built-in environment assignment editor; callback-based editors
+        remain available.
+    .PARAMETER EditDevEnvironmentScriptBlock
+        Receives the complete mapping array as one argument, then the current mapping.
+        Its result replaces DevEnvironmentConfiguration, including a null result.
+    .PARAMETER EditDeploymentEnvironmentsScriptBlock
+        Receives the complete mapping array and current mapping. Its non-null outputs
+        replace Environments; no output clears that list.
+    .DESCRIPTION
+        Copies mapping records but shares nested environment objects. A sole empty
+        main mapping triggers bootstrap strategy selection and environment callbacks.
+        Built-in assignment excludes other branches' targets and sorts by ShortName.
+        Done checks cross-branch deployment duplicates; a null management selection
+        returns current mappings without that check. Callback failures/back navigation
+        propagate; no resource changes made by callbacks are rolled back.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -2840,6 +3186,8 @@ function Select-BranchEnvironmentMapping {
         }
     }
 
+    # This exact empty-main shape is the bootstrap signal; existing configured
+    # repositories must not have their branch strategy inferred again.
     $isNewRepositoryBootstrapState = (
         $branchMappings.Count -eq 1 -and
         ([string]$branchMappings[0].BranchName -ieq 'main') -and
@@ -3166,6 +3514,8 @@ function Get-ModulePathDelimiter {
 }
 
 function Install-NuGetProviderIfMissing {
+    # Installs for the current user only when provider discovery returns nothing;
+    # installation errors follow the caller's error preference.
     $nuget = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
     if (-not $nuget) {
         Write-Host "Installing NuGet package provider (required for Save-Module)..." -ForegroundColor Yellow
@@ -3174,6 +3524,8 @@ function Install-NuGetProviderIfMissing {
 }
 
 function Get-ModuleAvailableExact {
+    # Returns the first discoverable exact-version PSModuleInfo, or null. This
+    # checks disk availability on PSModulePath, not whether a module is loaded.
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$RequiredVersion
@@ -3186,6 +3538,8 @@ function Get-ModuleAvailableExact {
 }
 
 function Save-ModuleExact {
+    # Downloads the pinned version (and Save-Module dependencies); Destination
+    # must be made discoverable separately before Import-RequiredModuleVersion runs.
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$RequiredVersion,
@@ -3199,6 +3553,15 @@ function Save-ModuleExact {
 }
 
 function Import-RequiredModuleVersion {
+    <#
+    .SYNOPSIS
+        Imports and verifies an exact module version, downloading it if unavailable.
+    .DESCRIPTION
+        Destination must already be on PSModulePath; saving there does not amend
+        the search path. Rechecks discoverability after download, then force-imports
+        and verifies the loaded version. Failures throw. Host messages, not the
+        loaded module object, are the normal output.
+    #>
     param(
         [Parameter(Mandatory)][string]$Name,
         [Parameter(Mandatory)][string]$RequiredVersion,
@@ -3226,6 +3589,16 @@ function Import-RequiredModuleVersion {
 }
 
 function Resolve-DevelopmentDefaultAlm4DataverseRef {
+    <#
+    .SYNOPSIS
+        Chooses a local branch or detached commit for development setup.
+    .DESCRIPTION
+        Checks PrimaryRepositoryPath then this script's directory, skipping locations
+        without .git. Returns a nonblank current branch or a 40-character lowercase
+        commit; otherwise returns FallbackRef. Caught command/processing errors throw
+        with repository context rather than silently falling back. Restores the
+        caller's error preference after each probe.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$PrimaryRepositoryPath,
@@ -3277,6 +3650,8 @@ function Resolve-DevelopmentDefaultAlm4DataverseRef {
 }
 
 function ConvertTo-SetupActivityOutputLine {
+    # Converts stream records/plain values into escaped, severity-colored markup.
+    # Null/whitespace entries yield null; surrounding whitespace is intentionally lost.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -3322,6 +3697,16 @@ function ConvertTo-SetupActivityOutputLine {
 }
 
 function Show-SetupActivityOutputPanel {
+    <#
+    .SYNOPSIS
+        Displays the tail of preformatted activity markup in a panel.
+    .PARAMETER Lines
+        Trusted markup, normally produced by ConvertTo-SetupActivityOutputLine.
+        These strings are not escaped again.
+    .PARAMETER MaxLines
+        Tail entry count, normally positive; embedded newlines are not split or
+        counted. Omitted entries are reported and empty output gets a placeholder.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Heading,
@@ -3346,6 +3731,22 @@ function Show-SetupActivityOutputPanel {
 }
 
 function Invoke-WithSpectreStatus {
+    <#
+    .SYNOPSIS
+        Runs a callback under a status spinner with optional output capture.
+    .PARAMETER ScriptBlock
+        Receives Spectre StatusContext, or null when falling back without a spinner.
+    .PARAMETER CaptureOutputInPanel
+        Merges streams 2-6, displays strings/stream records, and returns only the last
+        non-string result object. With no such result returns null. Once execution
+        starts it is never retried automatically in this mode; a post-completion
+        display failure returns the stored result instead of repeating the operation.
+    .DESCRIPTION
+        Back/cancellation exceptions propagate. Without capture, other spinner or
+        callback failures fall back to running ScriptBlock with null, which can
+        repeat side effects; callers needing at-most-once execution should not rely
+        on the uncaptured fallback as a transaction boundary.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'context', Justification = 'Status-context callback argument forwarded into the nested captured-output script block.')]
     [CmdletBinding()]
     param(
@@ -3437,6 +3838,18 @@ function Invoke-WithSpectreStatus {
 }
 
 function Invoke-WithErrorHandling {
+    <#
+    .SYNOPSIS
+        Offers interactive retry, optional skip, or abort after an operation error.
+    .DESCRIPTION
+        Returns operation output or null when skipped. Retry invokes the operation
+        again without rollback, so partial side effects must be handled by callers.
+        Back/cancellation exceptions bypass the error menu. Abort or a cancelled
+        menu throws a setup-aborted error.
+    .PARAMETER StatusMessage
+        Nonblank enables Invoke-WithSpectreStatus and its callback/output semantics;
+        blank invokes ScriptBlock directly with no positional arguments.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][scriptblock]$ScriptBlock,
@@ -3517,6 +3930,16 @@ function Invoke-WithErrorHandling {
 }
 
 function Show-SetupCompletionScreen {
+    <#
+    .SYNOPSIS
+        Clears the console and displays completion details and next-step links.
+    .PARAMETER NextStepLinks
+        URLs as strings, dictionaries or custom objects with Url and optional Label,
+        Description or Text (in that precedence). Entries without URLs are skipped.
+    .DESCRIPTION
+        Summary and link labels are escaped; URLs are trusted markup targets supplied
+        by callers, not validated here. This display does not verify setup success.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Heading,
@@ -3603,6 +4026,29 @@ function Show-SetupCompletionScreen {
 }
 
 function Get-AuthToken {
+    <#
+    .SYNOPSIS
+        Acquires an MSAL user authentication result, or lists cached usernames.
+    .PARAMETER ResourceUrl
+        Resource authority used to form its /.default scope after trimming slashes.
+    .PARAMETER TenantId
+        Authority tenant for initial client construction; blank uses common.
+    .PARAMETER ForceInteractive
+        Skips silent acquisition and requests account selection in the interactive flow.
+    .PARAMETER PreferredUsername
+        Case-insensitive cached-account preference and interactive login hint, not
+        an enforced identity. Missing matches fall back to the first cached account.
+    .PARAMETER ListAccountsOnly
+        Returns distinct nonblank cached usernames instead of an authentication result;
+        still loads MSAL, constructs/reuses the client and reads the disk cache.
+    .DESCRIPTION
+        Requires MSAL already available or discoverable inside the loaded Dataverse
+        module. Script-scoped MsalApp is reused: ClientId and TenantId only affect
+        its first construction. Loads/saves serialized MSAL V3 bytes under local app
+        data without additional encryption here; cache read/write failures warn.
+        Silent failure falls back interactively; interactive acquisition errors throw.
+        The normal result is MSAL AuthenticationResult, not just its access-token text.
+    #>
     param(
         [Parameter(Mandatory)][string]$ResourceUrl,
         [Parameter()][string]$TenantId,
@@ -3758,6 +4204,17 @@ function Get-AuthToken {
 }
 
 function New-EntraIdApplicationSecret {
+    <#
+    .SYNOPSIS
+        Requests a new password credential on an Entra application object.
+    .PARAMETER ApplicationObjectId
+        Graph application object ID, not the client/application ID.
+    .DESCRIPTION
+        ShouldProcess precedes authentication and the Graph write; rejection emits
+        nothing. Returns the response's plaintext secretText; existing credentials
+        are not removed. Graph/authentication failures propagate. This helper-level
+        guard does not make an entire setup wizard a dry run.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ApplicationObjectId,
@@ -3785,6 +4242,9 @@ function New-EntraIdApplicationSecret {
 }
 
 function Resolve-DataverseEnvironmentFriendlyName {
+    # Uses the provider-defined environment catalog and normalized WebApplication
+    # endpoint identity. Blank URL, no match or catalog failure returns FallbackName;
+    # lookup failures are informational and never block setup.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -3814,6 +4274,16 @@ function Resolve-DataverseEnvironmentFriendlyName {
 }
 
 function Resolve-EntraIdApplicationByAppId {
+    <#
+    .SYNOPSIS
+        Resolves an application/client ID to the first matching Graph application.
+    .DESCRIPTION
+        Blank tenant/application IDs return null. Script cache keys combine both IDs;
+        successful results, missing results and REST failures (warning plus null) are
+        cached for the session. Authentication occurs outside the REST catch and
+        therefore propagates rather than becoming a cached miss. Returned fields
+        are id, appId and displayName; no object is created.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$ApplicationId,

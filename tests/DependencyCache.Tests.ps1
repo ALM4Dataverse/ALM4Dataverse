@@ -5,6 +5,7 @@ BeforeAll {
 
 Describe 'Dependency cache resolution' {
     BeforeEach {
+        # Redirect append-only action output and OS selection away from the enclosing CI job.
         $script:savedCacheEnvironment = @{ GITHUB_OUTPUT = $env:GITHUB_OUTPUT; RUNNER_OS = $env:RUNNER_OS }
         $script:cacheDirectory = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $script:cacheDirectory | Out-Null

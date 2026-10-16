@@ -1,3 +1,5 @@
+# An empty buildEnvironmentName packs without a connection. A selected environment
+# enables validation deployment; it is not just a label for the resulting artifact.
 parameters:
 - name: useAlm4DataverseExtension
   type: boolean
@@ -19,6 +21,7 @@ stages:
           - ${{ if ne(parameters.buildEnvironmentName, '') }}:
             - group: 'Environment-${{ parameters.buildEnvironmentName }}'
         steps:
+        # Fixed checkout paths are consumed by scripts and copied into artifact metadata.
         - checkout: self
           persistCredentials: true
           fetchDepth: 1
@@ -50,6 +53,8 @@ stages:
           inputs:
             AddToolsToPath: false
 
+        # Compile-time selection chooses the task provider; runtime output macros
+        # from the unselected provider may remain literal and must be rejected.
         - ${{ if ne(parameters.buildEnvironmentName, '') }}:
           - ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
             - task: ALM4Dataverse.alm4dataverse-azdo-extensions.alm4dataverse-set-connection-variables.ALM4DataverseSetConnectionVariables@1
@@ -158,6 +163,8 @@ stages:
               -SourceCommit "$(Build.SourceVersion)"
           displayName: 'Record BUILD version metadata'
 
+        # Baseline resolution sets a runtime variable, so downloading uses a task
+        # condition rather than a compile-time template expression.
         - ${{ if ne(parameters.buildEnvironmentName, '') }}:
           - pwsh: |
               $ErrorActionPreference = 'Stop'
@@ -260,6 +267,8 @@ stages:
                 AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
                 AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
 
+        # Preserve checker diagnostics even when build/validation fails. Publishing
+        # on failure does not make that artifact a successful deployable release.
         - task: PublishPipelineArtifact@1
           displayName: 'Publish Artifacts'
           condition: succeededOrFailed()
@@ -285,6 +294,8 @@ stages:
             targetPath: '$(Build.ArtifactStagingDirectory)/solution-check'
             artifact: 'solution-check-report'
 
+        # Successful builds alone get version tags. A rerun may reuse a tag only
+        # if it resolves to the same source commit; never move another build's tag.
         - pwsh: |
             $ErrorActionPreference = 'Stop'
             $tagName = '$(BuildSemVerTag)'

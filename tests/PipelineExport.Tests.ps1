@@ -38,6 +38,8 @@ Describe 'Export and version changes' {
         $script:exportArtifacts = Join-Path $fixtureRoot 'artifacts'
         $script:exportTemp = Join-Path $fixtureRoot 'temp'
         New-Item -ItemType Directory -Path $script:exportSource, $script:exportArtifacts, $script:exportTemp -Force | Out-Null
+        # Sequential mode keeps Dataverse and reservation calls in Pester's mocked runspace.
+        # The branch base maps to Major.Build, so 1.2.3.4 already matches the configured 1.3.
         Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value "@{ solutions = @(@{ name = 'Example' }); hooks = @{}; export = @{ parallel = `$false }; buildVersion = @{ default = '1.3'; branches = @{} } }"
         Mock Export-DataverseSolution {
             New-Item -ItemType Directory -Path (Join-Path $OutFolder 'Other') -Force | Out-Null

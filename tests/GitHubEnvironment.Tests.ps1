@@ -6,6 +6,8 @@ BeforeAll {
 
 Describe 'GitHub environment mapping and authentication validation' {
     BeforeEach {
+        # Resolver writes survive script scope; remove inherited inputs and restore every tracked
+        # mapping afterward so developer credentials or earlier cases cannot satisfy a missing field.
         $script:savedActionEnvironment = @{}
         foreach ($name in @('GITHUB_ENV', 'VARS_JSON', 'SELECTED_SECRETS_JSON', 'RESOLVED_ENVIRONMENT_NAME', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_CLIENT_SECRET', 'DATAVERSE_URL', 'DATAVERSESERVICEACCOUNTUPN', 'DATAVERSE_SERVICE_ACCOUNT_UPN', 'DATAVERSE_CONNECTION_REFS', 'DATAVERSE_CONN_REFS', 'ALM_TEST_BOOLEAN', 'ALM_TEST_NUMBER', 'ALM_TEST_ARRAY', 'DATAVERSECONNREF_ALM_MAPPING_TEST', 'DATAVERSEENVVAR_ALM_MAPPING_TEST', 'CONFIG_ALM_MAPPING_TEST')) {
             $script:savedActionEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)

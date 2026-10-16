@@ -1,3 +1,5 @@
+# The caller owns job permissions: publishing tags/Releases and dispatching requires
+# contents:write; Azure OIDC also requires id-token:write when validation is enabled.
 name: Build
 description: Build, validate, optionally deploy a baseline and candidate to the validation environment, publish, and tag Dataverse solution artifacts.
 
@@ -48,6 +50,8 @@ outputs:
 runs:
   using: composite
   steps:
+    # Build the explicitly selected source, not necessarily the caller workflow SHA.
+    # Action implementation paths remain github.action_path rather than self/alm.
     - name: Checkout source code
       uses: actions/checkout@v4
       with:
@@ -55,6 +59,8 @@ runs:
         path: self
         fetch-depth: 1
 
+    # Branch identity drives versioning and downstream dispatch, independently of
+    # source-ref checkout. A non-branch workflow ref needs an explicit branch override.
     - name: Resolve SemVer build version
       id: resolve-version
       shell: pwsh
@@ -78,6 +84,8 @@ runs:
         "BUILD_TAG=$($version.TagName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
         Write-Host "Resolved BUILD version $($version.Version)"
 
+    # Keys reflect requested versions (or lock pins); restore never substitutes for
+    # installation/import in the build process, particularly with floating selectors.
     - name: Resolve dependency cache keys
       id: dependency-cache
       shell: pwsh
@@ -102,6 +110,7 @@ runs:
         key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
         path: ~/.alm4dataverse/tools
 
+    # Preserve the caller's exact display name separately from the SemVer Release tag.
     - name: Set build number
       id: build-number
       shell: pwsh
@@ -114,6 +123,8 @@ runs:
         "build_version=$env:BUILD_VERSION" >> $env:GITHUB_OUTPUT
         Write-Host "Exact build name: $env:BUILD_NAME"
 
+    # An empty validation environment skips mapping/login/deployment, not packing
+    # or any enabled solution checks. Secrets are restricted to the caller's selection.
     - name: Resolve prefixed repo variables and explicit secrets
       if: inputs.environment-name != ''
       shell: pwsh
@@ -130,6 +141,8 @@ runs:
       run: |
         & "${{ github.action_path }}/../common/validate-auth.ps1" -RequireServiceAccount
 
+    # No client secret selects OIDC; otherwise the mapper supplies secret credentials.
+    # Authentication is subscription-less because the target is Dataverse.
     - name: Log in to Azure with GitHub OIDC
       if: inputs.environment-name != ''
       uses: azure/login@v3
@@ -141,6 +154,10 @@ runs:
         creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
         allow-no-subscriptions: true
 
+    # Keep module installation, connection, build and validation in one pwsh process:
+    # loaded modules/default Dataverse connection cannot cross action step boundaries.
+    # Metadata records checked-out HEAD, while connection-reference JSON becomes
+    # per-reference process variables before baseline-then-candidate deployment.
     - name: Build artifacts and validate deployment
       shell: pwsh
       working-directory: ${{ github.workspace }}/self
@@ -183,6 +200,8 @@ runs:
           Write-Host '##[endgroup]'
         }
 
+    # Preserve partial outputs/checker diagnostics after failures; success-only tag
+    # and Release steps below must not publish a failed build as deployable.
     - name: Upload build artifacts
       if: always()
       id: upload-build-artifacts
@@ -205,6 +224,8 @@ runs:
         overwrite: true
         if-no-files-found: ignore
 
+    # Reruns may reuse a source tag only at the same commit; never move a published
+    # BUILD identity to a different source commit.
     - name: Tag source with build version
       id: tag-source
       shell: pwsh
@@ -253,6 +274,10 @@ runs:
         "tag_name=$tagName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "source_sha=$sourceCommit" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+    # Download-ArtifactArchive fetches the uploaded artifact by ID as its ZIP and
+    # rejects missing/empty files. Reuse that archive layout as artifacts.zip so
+    # Release consumers see the same artifact root as Actions artifact consumers.
+    # The checker archive is optional; the deployment archive is mandatory.
     - name: Download artifact archives for GitHub Release
       id: release-assets
       if: success()
@@ -296,6 +321,10 @@ runs:
         "artifacts_path=$artifactsPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "solution_check_report_path=$reportPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+    # The JS block's encoded branch marker and BUILD run/source lines are a machine
+    # contract consumed by resolve-deployment.ps1 and deploy-build-validation.ps1.
+    # Only this run's existing Release can be updated; only a 404 permits creation.
+    # Replace assets by name on rerun, and keep BUILD Releases marked prerelease.
     - name: Create GitHub Release
       id: create-release
       if: success()
@@ -356,6 +385,9 @@ runs:
           }
           core.setOutput('release_url', release.html_url);
 
+    # Branch-normalized event types route to branch-specific DEPLOY workflows.
+    # Payload SHA/tag/run refer to the build just published, not the receiving
+    # workflow's default-branch SHA. Native gh failure must fail this handoff.
     - name: Trigger DEPLOY via repository_dispatch
       shell: pwsh
       env:

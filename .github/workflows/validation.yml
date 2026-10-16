@@ -25,6 +25,8 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml copy-to-your-repo/.github/workflows/*.yml
 
   validate-powershell:
+    # Linux owns external YAML/schema checks; both platforms exercise PowerShell.
+    # Windows additionally syntax-checks generated installers with PowerShell 5.1.
     name: PowerShell Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
@@ -115,6 +117,8 @@ jobs:
           retention-days: 14
 
   required-validation:
+    # Always aggregate failures/skips so branch protection has one stable required
+    # check name; this does not configure the repository's ruleset itself.
     name: Validation Required
     if: always()
     needs: [validate-powershell, validate-github-actions]

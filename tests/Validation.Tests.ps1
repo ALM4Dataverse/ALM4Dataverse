@@ -26,6 +26,7 @@ Describe 'Validation orchestration and coverage enforcement' {
                 CodeCoverage = @{ CommandsExecuted = @([pscustomobject]@{ File = (Join-Path $repoRoot 'pipelines/scripts/common.ps1') }); CommandsMissed = @() }
             }
         }
+        # Exercise report production without overwriting the outer validation run's TestResults.
         Mock Set-Content {
             Microsoft.PowerShell.Management\Set-Content -LiteralPath (Join-Path $TestDrive ([IO.Path]::GetFileName($LiteralPath))) -Value $Value
         } -ParameterFilter { $LiteralPath -match '[\\/]TestResults[\\/]' }
@@ -93,6 +94,8 @@ Describe 'Validation orchestration and coverage enforcement' {
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $FunctionName
         }, $true)
+        # Analyzer can highlight only a function name, not its body; synthesize that exact
+        # extent from the current AST so comment/line changes do not invalidate this regression.
         $startOffset = $definition.Extent.StartOffset + 'function '.Length
         $diagnostic = [pscustomobject]@{
             Extent = [pscustomobject]@{ Text = $FunctionName; StartOffset = $startOffset; EndOffset = $startOffset + $FunctionName.Length }
@@ -201,6 +204,8 @@ Describe 'Validation gate enforcement' {
     BeforeEach {
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+        # Inject regressions into a disposable source copy. A child validator must fail before
+        # reaching Pester, avoiding recursive execution of this validation suite.
         $sourcePaths = @(& git -C $repoRoot ls-files --cached --others --exclude-standard) |
             Where-Object { $_ -match '\.(ps1|psm1|psd1|psrc|pssc|ps1xml|cdxml)$' } | Sort-Object -Unique
         foreach ($relativePath in $sourcePaths) {

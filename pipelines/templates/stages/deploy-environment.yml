@@ -8,6 +8,8 @@ parameters:
     type: number
     default: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
 
+# Stage identifiers cannot contain the same characters as environment display
+# names. Keep the original name for approvals, service connections and variables.
 stages:
   - stage: Deploy_${{ replace(replace(replace(replace(replace(replace(parameters.environmentName, ' ', '_'), '-', '_'), '.', '_'), '(', '_'), ')', '_'), '/', '_') }}
     displayName: 'Deploy to ${{ parameters.environmentName }}'
@@ -54,6 +56,9 @@ stages:
                       authenticationType: 'PowerPlatformSPN'
                       PowerPlatformSPN: '${{ parameters.environmentName }}'
                 
+                # Deployment-job artifact download supplies build/artifacts. Execute
+                # its bundled ALM scripts, not the current repository's tool version.
+                # The credential resolver returns null when no candidate is expanded.
                 - pwsh: |
                     & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/installdependencies.ps1"
                     $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
@@ -119,6 +124,10 @@ stages:
                       AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
                       AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
 
+                # Move the environment pointer only after deployment succeeds.
+                # Metadata binds the selected run to its source; older artifacts
+                # without metadata retain the sanitized run-name tag fallback.
+                # ConvertTo-TagSegment is that legacy fallback, not a SemVer parser.
                 - pwsh: |
                     $ErrorActionPreference = 'Stop'
 

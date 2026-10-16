@@ -3,6 +3,7 @@ trigger:
     include:
     - '*'  # Support any branch name
 
+# The alias is consumed by shared templates and must match their second checkout.
 resources:
   repositories:
     - repository: ALM4Dataverse
@@ -13,4 +14,5 @@ stages:
 - template: pipelines/templates/build.yml@ALM4Dataverse
   parameters:
     useAlm4DataverseExtension: true
+    # Leave empty for packaging only; selecting an environment enables deployment validation.
     buildEnvironmentName: ''

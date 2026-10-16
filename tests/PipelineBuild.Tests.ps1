@@ -66,6 +66,8 @@ Describe 'Build artifacts and solution-check helpers' {
         Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4+build pac' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestPac' } } -ParameterFilter { $Name -eq 'pac' }
         Mock Invoke-TestPac { $global:LASTEXITCODE = 0; 'Critical: 0'; 'High: 1'; 'Low: 2' }
+        # Most cases keep work in Pester's runspace so mocks remain visible. The overlap case
+        # opts out and supplies an importable module to exercise actual worker isolation.
         Mock ForEach-Object {
             if ($env:ALM_BUILD_TEST_REAL_PARALLEL -eq 'true') {
                 $InputObject | Microsoft.PowerShell.Core\ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel $Parallel
@@ -187,6 +189,8 @@ Describe 'Build artifacts and solution-check helpers' {
         $barrierDirectory = Join-Path $TestDrive 'pack-worker-barrier'
         New-Item -ItemType Directory -Path $barrierDirectory -Force | Out-Null
         $script:packWorkerModulePath = Join-Path $TestDrive 'Rnwood.Dataverse.Data.PowerShell.psm1'
+        # Each embedded pack invocation must observe its peer's marker before returning;
+        # sequential execution therefore fails instead of passing a timing-only assertion.
         Set-Content -LiteralPath $script:packWorkerModulePath -Value @"
 function Compress-DataverseSolutionFile {
     param([string]`$Path, [string]`$OutputPath, [string]`$PackageType)

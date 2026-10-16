@@ -12,6 +12,8 @@ permissions:
   contents: write
 
 jobs:
+  # This workflow does not wait on Repository Validation. Release-tag publication
+  # must be governed by maintainer policy; a tag trigger alone is not a test gate.
   create-stable-release:
     runs-on: ubuntu-latest
     steps:
@@ -37,6 +39,7 @@ jobs:
           echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> "$GITHUB_OUTPUT"
 
       - name: Update stable tag
+        # Unlike immutable version tags, stable is an intentionally moving pointer.
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -90,7 +93,8 @@ jobs:
             const releaseNotesFile = '${{ steps.release_notes.outputs.RELEASE_NOTES_FILE }}';
             const customNotes = fs.readFileSync(releaseNotesFile, 'utf8');
             
-            // Generate release notes using GitHub API
+            // Generated notes are optional enrichment; the authored setup instructions
+            // remain the release body when GitHub cannot generate comparison notes.
             let generatedNotes = '';
             try {
               const notesResponse = await github.rest.repos.generateReleaseNotes({
@@ -108,7 +112,8 @@ jobs:
               ? customNotes + '\n\n' + generatedNotes
               : customNotes;
             
-            // Create or update release
+            // Preserve the current retry behavior: any lookup/update failure enters
+            // creation, whose errors propagate. This catch is not limited to 404.
             let releaseId;
             try {
               // Try to get existing release
@@ -150,7 +155,8 @@ jobs:
               { path: '${{ steps.prepare_setup.outputs.SETUP_GITHUB_FILE }}', name: 'setup-github.ps1' },
             ];
 
-            // Fetch existing assets once
+            // Listing/deletion failures are warned; a later upload can still fail.
+            // Do not describe these best-effort cleanup paths as guaranteed replacement.
             let existingAssets = [];
             try {
               const { data: assets } = await github.rest.repos.listReleaseAssets({

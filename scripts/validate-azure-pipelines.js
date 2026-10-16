@@ -1,5 +1,8 @@
 'use strict';
 
+// Offline CLI: --schema <file> followed by YAML files/directories. CI supplies
+// AZURE_PIPELINES_LANGUAGE_SERVICE; warnings and errors fail validation except
+// the narrow Marketplace-task schema gaps below. Inputs are never executed.
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -9,6 +12,8 @@ if (!servicePath) {
 }
 
 const { parse, getLanguageService, DiagnosticSeverity } = require(servicePath);
+// CI supplies the pinned service and schema externally; validation must not
+// silently fall back to a different schema or fetch dependencies at runtime.
 const args = process.argv.slice(2);
 const schemaIndex = args.indexOf('--schema');
 if (schemaIndex < 0 || !args[schemaIndex + 1]) {
@@ -85,6 +90,8 @@ const customTaskInputs = new Map([
 ]);
 
 function findTaskForLine(lines, lineNumber) {
+  // Diagnostics use zero-based lines. Only a less-indented preceding task can
+  // own the input property; an allowlisted input alone is not an exemption.
   const propertyIndent = (lines[lineNumber].match(/^\s*/) || [''])[0].length;
   for (let index = lineNumber; index >= 0; index -= 1) {
     const match = lines[index].match(/^\s*-\s*task:\s*['"]?([^\s'"]+)['"]?\s*$/);
@@ -96,6 +103,8 @@ function findTaskForLine(lines, lineNumber) {
 }
 
 function isKnownExtensionDiagnostic(diagnostic, lines) {
+  // Suppress only the known schema gap for the owning Marketplace task, leaving
+  // unrelated diagnostics (including errors on other tasks) visible.
   const lineNumber = diagnostic.range.start.line;
   const line = lines[lineNumber] || '';
   const taskMatch = line.match(/^\s*-\s*task:\s*['"]?([^\s'"]+)['"]?\s*$/);
@@ -124,6 +133,8 @@ async function main() {
       continue;
     }
 
+    // Adapt the source to the language service without normalizing line endings:
+    // offsets and reported positions must refer to the exact file being checked.
     const textDocument = {
       uri: require('node:url').pathToFileURL(file).href,
       languageId: 'azure-pipelines',

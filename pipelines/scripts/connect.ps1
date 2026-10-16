@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Connects to a Dataverse environment using the provided connection string.
+    Connects PAC and the default Dataverse client using an existing Azure identity.
 .DESCRIPTION
 
     This script establishes a connection to the Dataverse environment specified
@@ -9,6 +9,12 @@
 
 .PARAMETER Url
     The URL of the Dataverse environment to connect to.
+.NOTES
+    Requires installed PAC and Dataverse cmdlets plus a non-interactive Azure
+    sign-in context. Creates/selects the PAC profile before setting the default
+    Dataverse connection; WhoAmI failures propagate rather than reporting success.
+.EXAMPLE
+    .\pipelines\scripts\connect.ps1 -Url https://example.crm.dynamics.com
 #>
 
 param(

@@ -15,9 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     environment:
+      # Read environment-scoped credentials without recording a release deployment.
       name: ${{ format('Dev-{0}', github.ref_name) }}
       deployment: false
     concurrency:
+      # Share EXPORT's destination lock; do not cancel a development data operation.
       group: ${{ format('alm4dataverse-environment-{0}', format('Dev-{0}', github.ref_name)) }}
       cancel-in-progress: false
     permissions:

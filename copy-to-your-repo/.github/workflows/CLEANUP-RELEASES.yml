@@ -1,7 +1,8 @@
 name: CLEANUP-RELEASES
 
 # Removes Releases created by BUILD from deleted branches and caps the number
-# retained per source branch, including the default branch.
+# retained per source branch, including the default branch. Active deployment
+# baselines can exceed that cap; the reusable workflow preserves their Releases.
 
 on:
   delete:
@@ -28,4 +29,5 @@ jobs:
     permissions:
       contents: write
     with:
+      # Scheduled/deletion events have no inputs; use the same default as manual runs.
       max-releases-per-branch: ${{ inputs.max-releases-per-branch || 10 }}

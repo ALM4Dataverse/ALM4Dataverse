@@ -4,6 +4,11 @@
 .DESCRIPTION
     For each outdated dependency found, this script creates a new PR or updates
     an existing PR if one is already open for the same dependency.
+.NOTES
+    Run in a disposable repository-root checkout with authenticated git and gh.
+    Consumes outdated-deps.json, changes branches and local Git identity, commits
+    configuration, and pushes with force-with-lease. Failures may leave partial
+    remote updates; a nonzero exit reports that at least one dependency failed.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -50,7 +55,8 @@ foreach ($dep in $outdatedDeps) {
     # Create branch name
     $branchName = "deps/update-$($moduleName.ToLower())-to-$latestVersion"
 
-    # Check if a PR already exists for this dependency
+    # Match the module prefix, not the target version, so later versions reuse
+    # the dependency's open PR instead of opening another update alongside it.
     $existingPRs = Invoke-CheckedNativeCommand -Command gh -Arguments @('pr', 'list', '--state', 'open', '--json', 'number,headRefName,title') | ConvertFrom-Json
     $existingPR = $existingPRs | Where-Object { $_.headRefName -like "deps/update-$($moduleName.ToLower())-*" }
 
@@ -88,7 +94,8 @@ foreach ($dep in $outdatedDeps) {
     $escapedModuleName = [regex]::Escape($moduleName)
     $escapedCurrentVersion = [regex]::Escape($currentVersion)
 
-    # Replace the version for this specific module - handle both single and double quotes
+    # Match the observed old version as well as the module name; a stale discovery
+    # result must not blindly overwrite a version changed since the check step.
     $pattern = "(`"$escapedModuleName`"|'$escapedModuleName')\s*=\s*(`"|')$escapedCurrentVersion(`"|')"
     $replacement = "`${1} = `"$latestVersion`""
     $newContent = $configContent -replace $pattern, $replacement

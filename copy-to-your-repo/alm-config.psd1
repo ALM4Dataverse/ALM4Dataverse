@@ -61,12 +61,17 @@
         }
     }
 
+    # Export limits count package operations, including managed and unmanaged
+    # packages of one solution. Both limits accept 1..8; hooks are not throttled.
+    # Missing/null/empty settings use defaults; explicit parallel = $false is kept.
     export = @{
         parallel = $true
         maxParallel = 2
         maxConcurrentOperations = 4
     }
 
+    # Packing concurrency is independent of solutionCheck.maxParallel.
+    # maxParallel accepts 1..8; parallel = $false packs solutions sequentially.
     build = @{
         parallel = $true
         maxParallel = 2

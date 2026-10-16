@@ -6,6 +6,8 @@ BeforeAll {
         [CmdletBinding()]
         param($ProjectName)
     }
+    # These fallback implementations fail closed if a case misses a mock; the write stub
+    # still honors ShouldProcess so a declined mutation cannot be mistaken for a live write.
     function Get-DataverseConnection {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Url', Justification = 'Pester mock command parameter.')]
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Pester mock command parameter.')]
@@ -50,6 +52,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $Source), [ref]$tokens, [ref]$parseErrors)
+        # Load provider function bodies without executing installer bootstrap/authentication.
         foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
             Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
         }
@@ -194,6 +197,8 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
             $script:existingUser = $false
             $script:existingRole = $false
             Mock Get-DataverseConnection {
+                # Invoke the callback as the module would; returning a connection alone would
+                # miss regressions in deferred authentication and resource normalization.
                 & $AccessToken 'https://test.example.com/api/data/v9.2' | Should -Be 'fake-token'
                 [pscustomobject]@{ ConnectedOrgFriendlyName = 'Test' }
             }
@@ -391,6 +396,7 @@ Describe 'Identity and environment discovery in <Provider>' -ForEach @(
         $script:federatedCredentials = @()
         $script:identityIssuer = if ($Provider -eq 'GitHub') { 'https://token.actions.githubusercontent.com' } else { 'https://issuer.example.com' }
         $script:identitySecret = $false
+        # Catalog caching is script-scoped; reset it so provider cases cannot share discovery.
         $script:dataverseEnvironmentCatalog = $null
         $script:discoveryCatalog = @(
             [pscustomobject]@{ FriendlyName = 'Development'; UniqueName = 'dev'; Endpoints = @{ WebApplication = 'https://dev.example.com/' } }

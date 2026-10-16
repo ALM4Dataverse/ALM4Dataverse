@@ -10,6 +10,8 @@ Describe 'Solution version tag reservations' {
         $script:repositoryPath = Join-Path $fixtureRoot 'work'
         $script:remotePath = Join-Path $fixtureRoot 'remote.git'
         New-Item -ItemType Directory -Path $script:repositoryPath, $script:remotePath -Force | Out-Null
+        # A local bare origin exercises actual remote-tag reservations without publishing anything
+        # to the project's remote; each case starts with an independent tag namespace.
         & git init --bare --quiet $script:remotePath
         if ($LASTEXITCODE -ne 0) { throw 'Failed to initialize the test remote repository.' }
         & git init --quiet $script:repositoryPath
@@ -56,6 +58,8 @@ Describe 'Solution version tag reservations' {
     }
 
     It 'retries when another export wins the reservation push race' {
+        # Deterministically make the candidate appear only after the first rejected push,
+        # reproducing the check-then-push race without relying on concurrent process timing.
         $script:pushAttempts = 0
         $script:raceWon = $false
         Mock Invoke-AlmGitCommand {

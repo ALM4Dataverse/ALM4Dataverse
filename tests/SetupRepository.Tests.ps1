@@ -1,6 +1,8 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'setup-common.ps1')
+    # Fail closed at external boundaries: later mocks simulate provider/native behavior while
+    # generated configuration and workflow files are still written to real fixture directories.
     function git { throw 'Unexpected live Git command' }
     function gh { throw 'Unexpected live GitHub command' }
     function Get-VSTeamProject {}
@@ -43,6 +45,8 @@ Describe 'Azure DevOps repository selection and working trees' {
     BeforeEach {
         $script:workingTemp = $env:TEMP
         $script:workingExitCode = Get-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        # Production working-tree helpers allocate under TEMP; redirect even failed clones
+        # into this case's disposable tree and preserve whether LASTEXITCODE existed at all.
         $env:TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item $env:TEMP -ItemType Directory | Out-Null
         $global:LASTEXITCODE = 0
@@ -300,6 +304,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             $script:publishPlan = [pscustomobject]@{ Mode = 'Direct'; BranchName = 'release'; TargetBranch = 'release'; CommitMessage = 'Setup'; PullRequestTitle = 'Setup'; PullRequestDescription = 'Configure automation' }
             Mock git {
                 $global:LASTEXITCODE = 0
+                # Git diff uses 1 for changes, unlike the failure codes simulated below.
                 if ($args -contains 'diff' -and $script:publishHasChanges) { $global:LASTEXITCODE = 1 }
                 if ($args -contains 'ls-remote') {
                     $exists = if ($args[-1] -eq 'release') { $script:publishTargetExists } else { $script:publishDefaultExists }

@@ -1,4 +1,30 @@
-﻿[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
+﻿<#
+.SYNOPSIS
+    Interactively configures ALM4Dataverse GitHub Actions repositories and identities.
+.DESCRIPTION
+    Requires Git and access to manage the selected GitHub repositories, Entra app
+    registrations and Dataverse users/roles. Downloads missing setup dependencies
+    and a Windows GitHub CLI when necessary. Prompts for authentication, shared
+    workflow source, branch/environment mappings, validation and publication plans.
+    Can create repositories, apps, secrets, federated trusts and administrator users,
+    then commit/push workflow changes directly or through pull requests.
+    Individual helpers support ShouldProcess, but the full wizard is not a dry run
+    and changes across services are not rolled back together.
+.PARAMETER TenantId
+    Azure tenant identifier. When omitted, uses the tenant returned by Azure sign-in.
+.PARAMETER UseDeviceAuthentication
+    Legacy invocation-compatible switch; current authentication does not consume it.
+.PARAMETER ALM4DataverseRef
+    Upstream template ref. Releases inject a default; repository development resolves
+    the current branch/commit after Git is available, with stable as a fallback.
+.EXAMPLE
+    .\setup-github.ps1 -TenantId 'contoso.onmicrosoft.com' -ALM4DataverseRef 'stable'
+    Starts interactive setup using the specified tenant and template ref.
+.NOTES
+    Development loads setup-common.ps1 beside this file. Release preparation embeds
+    that library so the downloaded installer can run without a repository checkout.
+#>
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
 [CmdletBinding()]
 param(
     [Parameter()]
@@ -13,10 +39,10 @@ param(
 
 $resolveDevRefAfterGitIsAvailable = $false
 
-# ALM4DataverseRef default handling - injected during release, fallback for development
+# Release builds supply a pinned ref; development defers branch/commit discovery
+# until Git has been checked, retaining stable as the fallback.
 if (-not $ALM4DataverseRef) {
     $injectedRef = '__ALM4DATAVERSE_REF__'
-    # Check if placeholder was replaced by comparing if it starts with double underscore
     if ($injectedRef -like '__*') {
         # Placeholders not replaced - development mode.
         # We resolve this after Git is available to support local branch/commit selection.
@@ -24,7 +50,6 @@ if (-not $ALM4DataverseRef) {
         Write-Host "Development mode: Will resolve ALM4DataverseRef from current branch/commit after Git is available (fallback: 'stable')." -ForegroundColor Yellow
         $ALM4DataverseRef = 'stable'
     } else {
-        # Placeholder was replaced during release - use the injected value
         $ALM4DataverseRef = $injectedRef
     }
 }
@@ -32,10 +57,6 @@ if (-not $ALM4DataverseRef) {
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue' # Suppress progress bars
-
-# This script is designed to be downloadable and self-contained.
-# It's therefore quite long, as it includes all necessary functions and logic.
-# Version numbers and ALM4Dataverse ref are injected during the release process.
 
 # Shared helper functions are loaded from setup-common.ps1 during development
 # and embedded during release preparation for the downloadable one-file script.
@@ -65,7 +86,6 @@ Write-Host "Using temp module root: $TempModuleRoot"
 # Version numbers are injected during release process
 # For development/testing, fall back to reading from config file if placeholders are present
 $rnwoodDataverseVersion = '__RNWOOD_DATAVERSE_VERSION__'
-# Check if placeholder was replaced by comparing if it starts with double underscore
 if ($rnwoodDataverseVersion -like '__*') {
     # Placeholders not replaced - must be running from repository for development
     $configPath = Join-Path $PSScriptRoot 'alm-config-defaults.psd1'
@@ -81,7 +101,6 @@ if ($rnwoodDataverseVersion -like '__*') {
 # Upstream repository URL is injected during release process
 # For development/testing, use local workspace path or fallback to GitHub
 $upstreamRepo = '__UPSTREAM_REPO__'
-# Check if placeholder was replaced by comparing if it starts with double-underscore
 if ($upstreamRepo -like '__*') {
     # Placeholders not replaced - must be running from repository for development
     if ($PSScriptRoot) {
@@ -97,7 +116,8 @@ $requiredModules = @{
     'Rnwood.Dataverse.Data.PowerShell' = $rnwoodDataverseVersion
 }
 
-# Ensure modules are downloaded before loading so we can patch them
+# Resolve exact dependency versions before import; do not silently use a newer
+# module already installed in the session's search path.
 foreach ($modName in $requiredModules.Keys) {
     $version = $requiredModules[$modName]
     if (-not (Get-ModuleAvailableExact -Name $modName -RequiredVersion $version)) {
@@ -111,6 +131,15 @@ foreach ($modName in $requiredModules.Keys) {
 }
 
 function Install-PortableGitHubCli {
+    <#
+    .SYNOPSIS
+        Returns the bin directory of a Windows GitHub CLI installed beneath Destination.
+    .DESCRIPTION
+        Reuses an existing gh.exe without checking its version. Otherwise downloads the
+        latest architecture-specific release and replaces the installation directory.
+        Throws for unsupported architectures or download/extraction failures; removes
+        the archive in finally, but retains the extracted installation for reuse.
+    #>
     param(
         [Parameter(Mandatory)][string]$Destination
     )
@@ -211,6 +240,11 @@ function Invoke-GhApi {
     <#
     .SYNOPSIS
         Calls the GitHub REST API using the gh CLI.
+    .DESCRIPTION
+        Sends a truthy Body as JSON on stdin. Returns parsed JSON, raw CLI output when
+        parsing fails, or null for an empty response. Nonzero CLI exits throw unless
+        AllowNotFound matches 404/Not Found in the captured error text.
+        Temporarily permits native stderr so the exit code can be handled explicitly.
     #>
     [CmdletBinding()]
     param(
@@ -265,6 +299,11 @@ function Initialize-GitHubEnvironment {
     <#
     .SYNOPSIS
         Ensures a GitHub repository environment exists and optionally configures approvals.
+    .DESCRIPTION
+        Always PUTs the environment, even when it already exists, and returns the API
+        response. RequiredReviewerIds are user IDs; only positive IDs are submitted
+        when EnableApprovals is set. Without valid IDs no reviewer body is sent.
+        This helper performs remote writes without a ShouldProcess guard.
     #>
     [CmdletBinding()]
     param(
@@ -277,7 +316,6 @@ function Initialize-GitHubEnvironment {
 
     Write-Host "Ensuring GitHub environment '$EnvironmentName'..." -ForegroundColor DarkGray
 
-    # Check if environment already exists
     $existing = Invoke-GhApi -Endpoint "repos/$Owner/$Repo/environments/$([Uri]::EscapeDataString($EnvironmentName))" -AllowNotFound
 
     $body = $null
@@ -322,6 +360,10 @@ function Set-GitHubEnvironmentSecret {
     <#
     .SYNOPSIS
         Sets a secret in a GitHub repository environment using the gh CLI.
+    .DESCRIPTION
+        Trims trailing CR/LF characters before passing the value through --body.
+        Throws on a nonzero CLI exit; emits no success result. ShouldProcess guards
+        this individual write, not the surrounding setup wizard.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -363,6 +405,9 @@ function Set-GitHubEnvironmentVariable {
     <#
     .SYNOPSIS
         Sets a variable in a GitHub repository environment using the gh CLI.
+    .DESCRIPTION
+        Passes VariableValue unchanged through --body and throws on a nonzero CLI
+        exit. Emits no success result; declines the write when ShouldProcess is false.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -400,6 +445,10 @@ function Set-GitHubRepoSecret {
     <#
     .SYNOPSIS
         Sets a repository-level secret using the gh CLI.
+    .DESCRIPTION
+        Removes trailing CR/LF characters, matching the environment-secret writer.
+        ShouldProcess guards the write; a nonzero CLI exit throws and successful
+        execution produces no result object.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -439,6 +488,9 @@ function Set-GitHubRepoVariable {
     <#
     .SYNOPSIS
         Sets a repository-level variable using the gh CLI.
+    .DESCRIPTION
+        Writes VariableValue unchanged after ShouldProcess approval. Native output
+        is captured for failure diagnostics; successful execution emits no result.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -474,6 +526,11 @@ function Get-GitHubEnvironmentCapability {
     <#
     .SYNOPSIS
         Detects whether GitHub environments and environment approval rules are available for a repository.
+    .DESCRIPTION
+        Creates a uniquely named remote environment and, when a positive reviewer
+        ID is supplied, separately attempts a reviewer rule. Returns availability
+        flags and a diagnostic Message rather than throwing probe failures.
+        Deletion is best-effort, so a failed cleanup can leave the probe behind.
     #>
     [CmdletBinding()]
     param(
@@ -534,6 +591,10 @@ function Get-GitHubEnvironmentPrefix {
     <#
     .SYNOPSIS
         Derives a repository-level prefix from an environment name.
+    .DESCRIPTION
+        Uppercases and collapses non-alphanumeric runs to underscores, strips edge
+        underscores, then appends one underscore. Throws if nothing remains.
+        Different environment names can normalize to the same prefix.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -553,6 +614,11 @@ function Set-GitHubPrefixedEnvironmentCredential {
     <#
     .SYNOPSIS
         Stores non-sensitive values as repository variables and secrets in the matching environment.
+    .DESCRIPTION
+        UseEnvironmentPrefix controls repository variable names only. A supplied
+        Secret credential is always stored as AZURE_CLIENT_SECRET in a GitHub
+        environment, which this helper creates even in repository-variable mode.
+        An absent ClientSecret leaves any existing secret untouched.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -587,7 +653,10 @@ function Set-GitHubPrefixedEnvironmentCredential {
 function Get-GitHubRepoList {
     <#
     .SYNOPSIS
-        Returns a list of repos the authenticated user has write access to.
+        Returns up to 100 repositories from gh repo list for the authenticated account.
+    .DESCRIPTION
+        Returns nameWithOwner, name, owner and defaultBranchRef metadata. This query
+        does not request or validate write permissions. CLI failures throw.
     #>
     [CmdletBinding()]
     param()
@@ -612,6 +681,9 @@ function Get-GitHubRepo {
     <#
     .SYNOPSIS
         Returns repository details for a single GitHub repository.
+    .DESCRIPTION
+        Returns gh's nameWithOwner, name, owner and defaultBranchRef JSON object.
+        Missing or inaccessible repositories cause a terminating CLI error.
     #>
     [CmdletBinding()]
     param(
@@ -639,6 +711,10 @@ function Get-GitHubRepositoryIdentity {
     <#
     .SYNOPSIS
         Returns the repository IDs and OIDC subject format used by GitHub.
+    .DESCRIPTION
+        Requires numeric owner/repository IDs and an explicit use_immutable_subject
+        setting; missing metadata throws rather than guessing an Entra trust subject.
+        Returns IDs as Int64 plus the original OidcCustomization for later updates.
     #>
     [CmdletBinding()]
     param(
@@ -681,6 +757,15 @@ function Get-GitHubRepositoryIdentity {
 }
 
 function Set-GitHubRepositoryImmutableSubject {
+    <#
+    .SYNOPSIS
+        Enables immutable OIDC subjects without replacing the current claim-selection mode.
+    .DESCRIPTION
+        CurrentCustomization must include use_default and, for custom mode,
+        include_claim_keys. Throws if those settings cannot be preserved or GitHub
+        does not confirm the change. Returns the confirmed customization object;
+        ShouldProcess can skip the mutation and return no object.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -728,6 +813,14 @@ function Set-GitHubRepositoryImmutableSubject {
 }
 
 function New-GitHubEnvironmentWifSubject {
+    <#
+    .SYNOPSIS
+        Formats the environment-scoped subject expected by the selected GitHub OIDC mode.
+    .DESCRIPTION
+        Immutable mode includes owner and repository numeric IDs alongside names;
+        legacy mode uses RepoFullName. EnvironmentName is inserted verbatim, so the
+        caller must supply the same name used by the workflow environment.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -751,6 +844,8 @@ function New-GitHubEnvironmentWifSubject {
 }
 
 function Test-GitHubEnvironmentConfigurationUsesWif {
+    # Partial discovery records have no Credentials/AuthType; treat them as non-WIF
+    # rather than dereferencing missing properties under StrictMode.
     [CmdletBinding()]
     param(
         [Parameter()][object]$EnvironmentConfiguration
@@ -774,6 +869,10 @@ function Initialize-GitHubSharedWorkflowAccessPolicy {
     .SYNOPSIS
         Ensures a private shared action repository has its Actions access policy configured
         to allow other repositories owned by the same user or organization to use its composite actions.
+    .DESCRIPTION
+        Public repositories need no update. Private repositories use organization
+        or user access according to owner type, writing only when the policy differs.
+        Missing repository details warn and return; other API failures propagate.
     #>
     [CmdletBinding()]
     param(
@@ -809,6 +908,14 @@ function Initialize-GitHubSharedWorkflowAccessPolicy {
 }
 
 function Get-GitHubActionsVariableValue {
+    <#
+    .SYNOPSIS
+        Reads one Actions variable from repository scope or a named environment.
+    .DESCRIPTION
+        Blank EnvironmentName selects repository scope; no cross-scope fallback is
+        performed here. Returns the string value, or null for a missing response/value.
+        API failures other than allowed not-found errors propagate.
+    #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -840,6 +947,8 @@ function Get-GitHubActionsVariableValue {
 }
 
 function Test-GitHubActionSecretExistence {
+    # Query metadata only: GitHub cannot return a secret's value. A blank environment
+    # selects repository scope; not-found is false while other API failures propagate.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -862,6 +971,14 @@ function Test-GitHubActionSecretExistence {
 }
 
 function Get-GitHubWorkflowReferenceFromRepoClone {
+    <#
+    .SYNOPSIS
+        Discovers the first recognizable shared action/workflow reference in local files.
+    .DESCRIPTION
+        Checks BUILD, the default branch's DEPLOY, EXPORT, then IMPORT, in that order.
+        Returns Repository and Reference, or null. This regex recognizes installer
+        conventions, not arbitrary YAML; it does not inspect remote branches.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -894,6 +1011,13 @@ function Get-GitHubWorkflowReferenceFromRepoClone {
 }
 
 function Get-GitHubDeploymentEnvironmentNamesFromRepoClone {
+    <#
+    .SYNOPSIS
+        Reads distinct literal environment-name inputs from the local branch-named DEPLOY file.
+    .DESCRIPTION
+        Missing files yield no names. Names retain encounter order; this line-based
+        extraction does not evaluate YAML expressions or parse job environment keys.
+    #>
     [CmdletBinding()]
     [OutputType([string], [object[]])]
     param(
@@ -920,6 +1044,8 @@ function Get-GitHubDeploymentEnvironmentNamesFromRepoClone {
 }
 
 function Get-GitHubDeploymentEnvironmentNamesFromWorkflowContent {
+    # Recognize generated environment-name input lines, not general YAML. Blank
+    # content yields no names; duplicate names are removed in encounter order.
     [CmdletBinding()]
     [OutputType([string], [object[]])]
     param(
@@ -943,6 +1069,8 @@ function Get-GitHubDeploymentEnvironmentNamesFromWorkflowContent {
 }
 
 function Get-GitHubBuildEnvironmentNameFromWorkflowContent {
+    # The first environment-name input is the BUILD association; a job environment
+    # declaration alone is not enough. Blank/unrecognized content returns null.
     [CmdletBinding()]
     param(
         [Parameter()][string]$WorkflowContent
@@ -966,6 +1094,8 @@ function Get-GitHubBuildEnvironmentNameFromWorkflowContent {
 }
 
 function Get-SolutionCheckEnabledFromConfigContent {
+    # Inspect the literal solutionCheck.enabled assignment without executing a data
+    # file. Missing/unrecognized content is false; this is not a full PSD1 parser.
     [CmdletBinding()]
     param(
         [Parameter()][string]$ConfigContent
@@ -984,6 +1114,8 @@ function Get-SolutionCheckEnabledFromConfigContent {
 }
 
 function Get-GitHubBuildValidationEnabledFromRepoClone {
+    # Existing setups may signal validation through either the BUILD environment
+    # input or solutionCheck.enabled. Read committed branch content, not the worktree.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -1001,6 +1133,13 @@ function Get-GitHubBuildValidationEnabledFromRepoClone {
 }
 
 function Get-GitRepoFileContentFromRemoteBranch {
+    <#
+    .SYNOPSIS
+        Reads committed file content, preferring origin/Branch over the local Branch.
+    .DESCRIPTION
+        Does not fetch or switch branches. Returns nonblank git-show output as text,
+        or null when neither candidate succeeds with content.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -1021,6 +1160,14 @@ function Get-GitRepoFileContentFromRemoteBranch {
 }
 
 function Get-GitHubDeployWorkflowBranchMappingsFromRepoClone {
+    <#
+    .SYNOPSIS
+        Finds DEPLOY workflow definitions across locally available origin refs.
+    .DESCRIPTION
+        BranchName comes from the filename, not the ref containing it; SourceBranch
+        records where it was found. Returns one mapping per BranchName after sorting,
+        with WorkflowPath and parsed EnvironmentNames. Does not fetch remote refs.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -1078,6 +1225,17 @@ function Get-GitHubDeployWorkflowBranchMappingsFromRepoClone {
 }
 
 function Get-GitHubExistingEnvironmentState {
+    <#
+    .SYNOPSIS
+        Reconstructs reusable configuration from GitHub variable and secret metadata.
+    .DESCRIPTION
+        Resolves each value from environment, prefixed repository, then unprefixed
+        repository scope. StorageScope reflects discovered values, not necessarily
+        the source of every field. Returns null when no storage scope is detected.
+        Any matching secret metadata implies Secret auth, but ClientSecret remains
+        null because existing values cannot be read; otherwise an app implies WIF.
+        TenantId fills a missing stored tenant and app lookup enriches the record.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -1177,6 +1335,15 @@ function Get-GitHubExistingEnvironmentState {
 }
 
 function Get-GitHubRepositoryExistingSetupState {
+    <#
+    .SYNOPSIS
+        Combines workflow discovery and remote credentials into the wizard's initial state.
+    .DESCRIPTION
+        Uses Dev-DefaultBranch for DEV and discovers deployment mappings across
+        origin refs. Keeps stages with missing credentials as placeholder records
+        so the wizard can repair them. Ensures at least a default-branch mapping,
+        and returns shared workflow, validation and credential-storage metadata.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -1306,6 +1473,8 @@ function Get-GitHubRepositoryExistingSetupState {
 }
 
 function Get-GitHubInitialBranchMapping {
+    # Prefer discovered mappings; older state with only DeploymentEnvironments maps
+    # to DefaultBranch. Preserve a DEV-only default branch even without deploy stages.
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -1348,6 +1517,8 @@ function Get-GitHubInitialBranchMapping {
 }
 
 function New-GitHubBranchSetupState {
+    # Mutable wizard record: null configuration/plan means not selected yet, while
+    # an empty DeploymentEnvironments array is a valid DEV-only branch.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$BranchName,
@@ -1371,6 +1542,10 @@ function Get-GitHubOwnedReposForOwner {
     <#
     .SYNOPSIS
         Returns repositories owned by the specified GitHub account.
+    .DESCRIPTION
+        Filters the first 100 authenticated-user owner-affiliated results to Owner;
+        this is not a paginated organization repository inventory. Returns unique,
+        sorted objects containing full_name only.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
@@ -1420,6 +1595,10 @@ function Resolve-GitHubRepoFullNameFromSource {
     <#
     .SYNOPSIS
         Resolves a GitHub repository full name (owner/repo) from URL, owner/repo text, or a local git repository path.
+    .DESCRIPTION
+        A local path is inspected through remote.origin.url without changing it.
+        Returns Fallback for blank/unrecognized input or an unreadable local origin;
+        this helper does not verify that the resulting repository exists.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -1459,6 +1638,10 @@ function Resolve-UpstreamGitRemoteSource {
     <#
     .SYNOPSIS
         Resolves an upstream git remote source usable by `git fetch`/`git clone`.
+    .DESCRIPTION
+        Existing local paths and HTTP/git@ sources pass through; owner/repo expands
+        to an HTTPS GitHub URL. Unrecognized input falls back to GitHubFullName.
+        Resolution does not test remote connectivity.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -1494,6 +1677,10 @@ function Resolve-GitTargetRefFromRemote {
     <#
     .SYNOPSIS
         Resolves a branch/tag/commit ref against a remote to a local git ref for checkout/merge operations.
+    .DESCRIPTION
+        Uses the first ls-remote match: branches become RemoteName/branch and tags
+        become the returned SHA; other matches retain Ref. Throws for no match or
+        failed queries. Does not fetch: callers must already have the objects locally.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -1543,6 +1730,12 @@ function Get-GitHubForkSyncState {
     <#
     .SYNOPSIS
         Clones a GitHub shared workflow repository into a temporary working tree and computes its sync state against upstream.
+    .DESCRIPTION
+        Deletes any existing WorkRoot, clones and checks out DefaultBranch, then
+        fetches the configured upstream. Returns hashes, UpstreamRef, ancestry flags
+        and an optional canonical-upstream-default match used for initial alignment.
+        Canonical comparison is best-effort; required clone/fetch failures throw.
+        Leaves WorkRoot for the caller to update and remove.
     #>
     [CmdletBinding()]
     param(
@@ -1715,6 +1908,10 @@ function Get-GitHubForksOfRepositoryForOwner {
     <#
     .SYNOPSIS
         Lists repositories owned by a user that are forks of the specified upstream repository.
+    .DESCRIPTION
+        Inspects the first 100 authenticated owner-affiliated repositories, resolving
+        missing parent metadata with individual detail requests. Filters by Owner
+        and immediate parent full name; returns full_name objects, not all fork metadata.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
@@ -1790,11 +1987,17 @@ function Get-GitHubForksOfRepositoryForOwner {
 }
 
 function Initialize-GitHubSharedWorkflowFork {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository-operation callback.')]
     <#
     .SYNOPSIS
         Ensures the user has a shared workflow repository and optionally updates it from upstream.
+    .DESCRIPTION
+        Offers owned repositories, public-fork creation or private-repository creation.
+        Newly created repositories and canonical-default matches are force-aligned
+        with lease protection to Reference; other repositories follow ancestry-based
+        update prompts. Returns repository details and removes its working clone in
+        finally. This interactive operation is not guarded by ShouldProcess.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository-operation callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$UpstreamFullName,
@@ -1974,6 +2177,8 @@ function Initialize-GitHubSharedWorkflowFork {
             Write-Host "Shared workflow repository is already up to date for ref '$Reference'."
         }
         else {
+            # A freshly created fork starts at upstream's default, not necessarily the
+            # selected release ref. Align that initial state before offering merge flows.
             if ($createdNewSharedRepository -or $forkSyncState.MatchesCanonicalUpstreamDefault) {
                 Invoke-WithErrorHandling -OperationName "Aligning shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Aligning shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
                     $previousErrorActionPreference = $ErrorActionPreference
@@ -2095,6 +2300,10 @@ function New-GitHubRepositoryInteractive {
     <#
     .SYNOPSIS
         Interactively creates a new GitHub repository.
+    .DESCRIPTION
+        Prompts for owner, valid repository name and visibility, creates with a README,
+        then returns Get-GitHubRepo metadata. Cancellation of visibility selection or
+        CLI failure throws; declining ShouldProcess skips prompts and returns nothing.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -2160,6 +2369,14 @@ function New-GitHubRepositoryInteractive {
 #region Entra ID Operations
 
 function Initialize-EntraIdServicePrincipal {
+    <#
+    .SYNOPSIS
+        Returns the tenant's first service principal for ApplicationId, creating it if absent.
+    .DESCRIPTION
+        Acquires a Graph token for TenantId and uses the application's client ID,
+        not its application-object ID. Graph failures propagate; this remote mutation
+        has no ShouldProcess guard.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ApplicationId,
@@ -2193,8 +2410,16 @@ function Add-EntraIdFederatedCredential {
         Adds a federated identity credential to an Entra ID application for Workload Identity Federation.
 
     .DESCRIPTION
-        Creates a federated identity credential that allows GitHub Actions to authenticate to Azure
-        without a client secret.
+        Reconciles the named credential through Graph beta using GitHub's issuer and
+        AzureADTokenExchange audience. A same-name record is returned if current or
+        patched if issuer/subject/audience differ; an empty PATCH response is re-read.
+        Without a name match, an existing issuer/subject match is reused regardless
+        of its name. A failed listing warns but still permits a create attempt.
+        Write failures propagate; no ShouldProcess guard is provided.
+    .PARAMETER ApplicationObjectId
+        App registration object ID, not the client ID or enterprise application ID.
+    .PARAMETER Subject
+        Exact subject constructed for the repository's effective OIDC mode and environment.
     #>
     [CmdletBinding()]
     param(
@@ -2306,6 +2531,15 @@ function Add-EntraIdFederatedCredential {
 }
 
 function New-EntraIdApplication {
+    <#
+    .SYNOPSIS
+        Reuses or creates a tenant app registration and ensures its service principal.
+    .DESCRIPTION
+        Reuses the first exact display-name query result. Returns Name, ApplicationId,
+        ApplicationObjectId, TenantId, AuthType and ClientSecret. AuthType Secret
+        creates a fresh secret even for a reused application; other values leave
+        ClientSecret null. ShouldProcess guards the entire operation.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$DisplayName,
@@ -2315,14 +2549,12 @@ function New-EntraIdApplication {
 
     if (-not $PSCmdlet.ShouldProcess($DisplayName, 'Create or configure Entra application')) { return }
 
-    # Get token for Graph
     $graphToken = Get-AuthToken -ResourceUrl "https://graph.microsoft.com" -TenantId $TenantId
     $headers = @{
         Authorization  = "Bearer $($graphToken.AccessToken)"
         "Content-Type" = "application/json"
     }
 
-    # Check if app exists
     $filter = "displayName eq '$DisplayName'"
     $uri = "https://graph.microsoft.com/v1.0/applications?`$filter=$filter"
 
@@ -2367,6 +2599,13 @@ function Get-GitHubCredentialsForEnvironment {
     <#
     .SYNOPSIS
         Interactively selects or creates Entra ID credentials for a GitHub environment.
+    .DESCRIPTION
+        ExistingCredential is copied before optional secret rotation, while cached
+        credentials are returned as supplied. Keeping an existing secret leaves its
+        unreadable value null and retains HasExistingSecret for later storage.
+        New/manual paths return app client/object IDs, tenant, auth type and optional
+        secret; they can create Graph resources before final wizard review.
+        Cancelled required menus throw rather than returning partial credentials.
     #>
     [CmdletBinding()]
     param(
@@ -2377,7 +2616,6 @@ function Get-GitHubCredentialsForEnvironment {
         [Parameter()][object]$ExistingCredential
     )
 
-    # Build Menu
     $menuItems  = @()
     $menuActions = @()
 
@@ -2555,6 +2793,8 @@ function Get-GitHubCredentialsForEnvironment {
 #region Dataverse Operations
 
 function Get-GitHubExistingEnvironmentSelectionSummary {
+    # Display metadata only, never the stored client secret. Partial discovery
+    # records return null when neither credential nor service-account text is available.
     [CmdletBinding()]
     param(
         [Parameter()][object]$ExistingEnvironment
@@ -2580,6 +2820,15 @@ function Get-GitHubExistingEnvironmentSelectionSummary {
 }
 
 function Get-DataverseEnvironmentCatalog {
+    <#
+    .SYNOPSIS
+        Returns the script-scoped Dataverse discovery cache, optionally refreshing it.
+    .DESCRIPTION
+        Uses the enclosing TenantId for token callbacks. Normalizes resource URLs to
+        their authority, retaining unparseable resources without logging their value.
+        ForceRefresh bypasses the cache; ShowStatus affects presentation only.
+        A fresh empty discovery result throws; provider/authentication failures propagate.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -2622,6 +2871,16 @@ function Get-DataverseEnvironmentCatalog {
 }
 
 function Select-DataverseEnvironment {
+    <#
+    .SYNOPSIS
+        Selects a discovered environment with normalized preferred/excluded URL handling.
+    .DESCRIPTION
+        Exclusion applies before preference. The preferred shortcut returns an
+        environment-shaped object with UseExistingConfiguration true; ordinary rows
+        return discovery objects. KeepPreferredInList retains an ordinary row too,
+        allowing reconfiguration of the same target. Menu cancellation returns null;
+        no selectable environments throws.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Prompt,
@@ -2700,6 +2959,15 @@ function Select-DataverseEnvironment {
 }
 
 function Initialize-DataverseApplicationUser {
+    <#
+    .SYNOPSIS
+        Ensures an application user and its root-business-unit System Administrator role.
+    .DESCRIPTION
+        Connects using delegated authentication for TenantId, finds the root business
+        unit and its named role, then creates only missing user/role associations.
+        Existing users are not moved between business units. Missing connection,
+        business unit or role throws; these writes have no ShouldProcess guard here.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
@@ -2725,18 +2993,15 @@ function Initialize-DataverseApplicationUser {
         throw "Failed to connect to Dataverse."
     }
 
-    # 1. Get Root Business Unit
     $rootBu = Get-DataverseRecord -Connection $conn -TableName "businessunit" -FilterValues @{ parentbusinessunitid = $null } -Columns "businessunitid" | Select-Object -First 1
     if (-not $rootBu) { throw "Could not find root business unit." }
     $rootBuId = $rootBu.businessunitid
 
-    # 2. Get System Administrator Role
     $roleName = "System Administrator"
     $role = Get-DataverseRecord -Connection $conn -TableName "role" -FilterValues @{ name = $roleName; businessunitid = $rootBuId } -Columns "roleid" | Select-Object -First 1
     if (-not $role) { throw "Could not find '$roleName' role in root business unit." }
     $roleId = $role.roleid
 
-    # 3. Check/Create System User
     $user = Get-DataverseRecord -Connection $conn -TableName "systemuser" -FilterValues @{ applicationid = $ApplicationId } -Columns "systemuserid" | Select-Object -First 1
     $userId = $null
 
@@ -2755,7 +3020,8 @@ function Initialize-DataverseApplicationUser {
         Write-Host "User created. ID: $userId"
     }
 
-    # 4. Associate User with Role
+    # Role IDs are business-unit-specific; use the role resolved from the root BU
+    # rather than an arbitrary same-name role elsewhere in the organization.
     $existingAssociation = Get-DataverseRecord -Connection $conn -TableName "systemuserroles" -FilterValues @{ systemuserid = $userId; roleid = $roleId } -Top 1
     if (-not $existingAssociation) {
         Write-Host "Associating user with '$roleName' role..."
@@ -2771,6 +3037,15 @@ function Initialize-DataverseApplicationUser {
 }
 
 function Initialize-DataverseServiceAccountUser {
+    <#
+    .SYNOPSIS
+        Ensures a service-account system user and root-BU System Administrator association.
+    .DESCRIPTION
+        Looks up by domainname, creates a missing user in the root business unit, and
+        adds the named role only if not already associated. Does not validate or
+        assign licensing. Connection, lookup and write failures propagate; mutations
+        are not guarded by ShouldProcess within this helper.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
@@ -2839,6 +3114,13 @@ function Initialize-DataverseServiceAccountUser {
 }
 
 function Get-DataverseServiceAccountUPN {
+    <#
+    .SYNOPSIS
+        Selects an existing/cached service account or prompts for a UPN-shaped string.
+    .DESCRIPTION
+        Returns the selected UPN without resolving the user or checking licensing.
+        Only manual input receives format validation. Cancelling the menu throws.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][array]$ExistingServiceAccounts,
@@ -2909,6 +3191,16 @@ function Get-DataverseServiceAccountUPN {
 }
 
 function Get-DataverseSolutionsSelection {
+    <#
+    .SYNOPSIS
+        Discovers and orders user-created unmanaged solutions from a selected DEV environment.
+    .DESCRIPTION
+        ExistingConfigPath preselects still-available names in configured order.
+        Returns Solutions entries with name/deployUnmanaged=false, EnvironmentUrl and
+        ReuseExistingConfiguration; normal selections also include EnvironmentFriendlyName.
+        No eligible solutions returns an empty list, not a cancelled selection.
+        Uses the enclosing TenantId; environment cancellation or connection failure throws.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$ExistingConfigPath,
@@ -3018,6 +3310,14 @@ function Get-DataverseSolutionsSelection {
 }
 
 function Get-GitHubEnvironmentConfiguration {
+    <#
+    .SYNOPSIS
+        Collects a normalized environment record with selected credentials and service account.
+    .DESCRIPTION
+        Returns ShortName, FriendlyName (falling back to EnvironmentName), Url,
+        Credentials and ServiceAccountUPN. Does not apply GitHub/Dataverse environment
+        settings, but credential selection may already create an app or rotate a secret.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentName,
@@ -3053,6 +3353,17 @@ function Get-GitHubEnvironmentConfiguration {
 }
 
 function Set-GitHubEnvironmentConfiguration {
+    <#
+    .SYNOPSIS
+        Applies one environment's trust, GitHub credentials and Dataverse user permissions.
+    .DESCRIPTION
+        After ShouldProcess, configures WIF when an application-object ID is available,
+        writes either environment variables or repository variables, then ensures
+        both Dataverse identities. UseImmutableWifSubject must match GitHub's effective
+        setting. Missing secret values preserve existing secrets rather than clearing
+        them. Repository-variable mode can still create an environment for a secret.
+        Writes are ordered but not transactional; a later failure leaves earlier changes.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$EnvironmentConfiguration,
@@ -3134,8 +3445,16 @@ function Set-GitHubEnvironmentConfiguration {
 
 #region Repository Setup
 
-# Preserve the input block verbatim because GitHub expressions are not valid JSON until runtime.
 function Get-SecretJsonInputBlock {
+    <#
+    .SYNOPSIS
+        Locates secrets-json inputs without evaluating their GitHub expressions.
+    .DESCRIPTION
+        Returns zero-based inclusive StartLine/EndLine, KeyIndent and the nearest
+        preceding environment-name. Block scalars end at the next nonblank line of
+        equal/lower indentation. This recognizes generated workflow layout, not
+        arbitrary YAML structure; no matching inputs produces no records.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines)
 
@@ -3188,6 +3507,15 @@ function Get-SecretJsonInputBlock {
 }
 
 function Merge-SecretJsonInput {
+    <#
+    .SYNOPSIS
+        Carries existing secrets-json inputs into regenerated workflow text.
+    .DESCRIPTION
+        Matches environment names first, then eligible positional fallbacks. Keeps
+        expression-bearing text rather than parsing JSON, adjusts indentation and
+        normalizes newlines to the current platform. Unmatched generated blocks stay
+        unchanged; no existing/generated blocks returns normalized GeneratedContent.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyString()][string]$ExistingContent,
@@ -3256,6 +3584,8 @@ function Merge-SecretJsonInput {
         })
     }
 
+    # Replace from the bottom so a changed block length cannot invalidate the
+    # zero-based locations of blocks that still need to be replaced.
     foreach ($replacement in ($replacements | Sort-Object -Property StartLine -Descending)) {
         $beforeLines = @()
         $afterLines = @()
@@ -3274,12 +3604,18 @@ function Merge-SecretJsonInput {
 }
 
 function Copy-WorkflowTemplatesToRepo {
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Used by the nested workflow-update callback.')]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRef', Justification = 'Used by the nested workflow-update callback.')]
     <#
     .SYNOPSIS
         Copies ALM4Dataverse workflow templates into the user's GitHub repository clone.
+    .DESCRIPTION
+        Rewrites shared action references and preserves custom secrets-json inputs.
+        BUILD is generated separately; an existing branch-named DEPLOY and existing
+        alm-config.psd1 are retained for later targeted updates. Other differing files
+        are overwritten, not generally merged. Temporary patched copies are removed
+        after copying; a missing SourceRoot throws.
     #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Used by the nested workflow-update callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRef', Justification = 'Used by the nested workflow-update callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -3339,7 +3675,7 @@ function Copy-WorkflowTemplatesToRepo {
         $isTempFile      = $false
 
         # Patch all shared action references (build/export/import/deploy/etc.) to the selected repository/ref.
-        # BUILD.yml repository_dispatch branch/SHA resolution is template-driven and is copied verbatim.
+        # BUILD is excluded above and rebuilt by Update-BuildWorkflowInRepoClone.
         if ($normalizedRelativePath -like '.github/workflows/*.yml') {
             $content = Get-Content -LiteralPath $sourceFileToUse -Raw
             $updatedContent = [Regex]::Replace(
@@ -3434,6 +3770,11 @@ function Update-AlmConfigInRepoClone {
     <#
     .SYNOPSIS
         Updates the alm-config.psd1 file in a local clone with the selected solutions.
+    .DESCRIPTION
+        Null Solutions means selection was skipped and preserves the existing list;
+        an empty array explicitly clears it. Always updates solution checking and
+        baseline release through targeted shared setters, retaining extended config.
+        ShouldProcess refusal returns false; successful writes emit no result object.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -3463,6 +3804,15 @@ function Update-AlmConfigInRepoClone {
 }
 
 function Update-BuildWorkflowInRepoClone {
+    <#
+    .SYNOPSIS
+        Regenerates BUILD with explicit source branch/SHA inputs and optional validation scope.
+    .DESCRIPTION
+        Associates a GitHub environment only when validation is enabled with a nonblank
+        name. Preserves existing secrets-json customizations, but replaces other
+        workflow content. Returns false when ShouldProcess declines; otherwise writes
+        the file without returning a result object.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3491,6 +3841,8 @@ function Update-BuildWorkflowInRepoClone {
         ''
     }
 
+    # GitHub evaluates toJSON at workflow runtime, not while this installer builds
+    # text. Without validation there is no default secret to pass to the build action.
     $secretsInput = if ([string]::IsNullOrWhiteSpace($environmentInput)) {
         @'
                 # Add any custom secrets explicitly to this JSON object.
@@ -3519,6 +3871,10 @@ function Update-BuildWorkflowInRepoClone {
         $environmentBlock += "`r`n"
     }
 
+    # repository_dispatch runs on the default branch, so EXPORT's payload supplies
+    # the actual source branch and SHA. Push/manual runs use their event ref instead.
+    # Contents/actions writes support release publication and downstream dispatch;
+    # id-token permits WIF. Validation environment association is not a deployment.
     $newContent = @"
 name: BUILD
 
@@ -3571,6 +3927,12 @@ function Update-DeployWorkflowInRepoClone {
     <#
     .SYNOPSIS
         Rebuilds DEPLOY-{branch}.yml using selected deployment environments.
+    .DESCRIPTION
+        DeploymentEnvironments order defines the promotion chain. An empty list removes
+        the branch's workflow. Environment-approval mode accepts branch-specific dispatch
+        and sequential automatic promotion; manual-gate-tag mode requires an explicit
+        target. Preserves existing secrets-json inputs but regenerates other content.
+        Returns false on ShouldProcess refusal; normal writes/removal have no result.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -3675,6 +4037,9 @@ function Update-DeployWorkflowInRepoClone {
     $lines.Add('')
     $lines.Add('jobs:')
 
+    # Generated jobs limit concurrency per environment, cancelling superseded runs,
+    # and request WIF, artifact-read and deployment-tag-write permissions. Names may normalize alike,
+    # so job IDs must be unique independently of the displayed environment names.
     $previousJobId = $null
     $previousEnvName = ''
     $jobIdSet = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
@@ -3698,6 +4063,8 @@ function Update-DeployWorkflowInRepoClone {
         [void]$jobIdSet.Add($jobId)
 
         $lines.Add("  ${jobId}:")
+        # Targeted manual runs may skip preceding jobs. Automatic continuation must
+        # instead require the previous job's success and the dispatch's matching branch.
         if ($i -eq 0) {
             $lines.Add('    # First stage in the chain.')
             if ($PromotionMode -eq 'manual-gate-tag') {
@@ -3795,6 +4162,17 @@ function Update-DeployWorkflowInRepoClone {
 }
 
 function Publish-GitHubRepoChange {
+    <#
+    .SYNOPSIS
+        Commits and pushes prepared worktree changes, optionally creating/updating a PR.
+    .DESCRIPTION
+        PublishPlan supplies Mode, BranchName, TargetBranch and commit/PR text.
+        Stages all files and sets clone-local author identity. Even without a diff,
+        pushes the branch but does not create a PR. Returns HasChanges, branch names,
+        PullRequestUrl and Mode alongside native command output; callers capture that
+        output through the setup operation wrapper. Restores location/error preference
+        on failure, but does not roll back remote writes.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3881,6 +4259,17 @@ function Publish-GitHubRepoChange {
 }
 
 function Publish-GitHubBranchSetupChange {
+    <#
+    .SYNOPSIS
+        Resets a disposable clone, generates one branch's files and publishes its plan.
+    .DESCRIPTION
+        Hard-resets and cleans RepoRoot, so it must not be a user's working checkout.
+        Refreshes origin refs and seeds missing branches from the default when possible.
+        PR mode creates a missing target branch on origin before preparing the PR head.
+        DeployWorkflowBranchDefinitions overrides the single-branch deployment list;
+        SkipDeployWorkflow leaves deploy files alone. Returns the publication result
+        and restores caller location/error preference; remote changes are not rolled back.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -4042,6 +4431,8 @@ function Publish-GitHubBranchSetupChange {
 }
 
 function Get-GitHubPublishSummaryText {
+    # Branch-creation pushes with HasChanges=false deliberately do not count as
+    # content updates. Null/empty results produce the same no-changes display text.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -4073,6 +4464,18 @@ function Get-GitHubPublishSummaryText {
 }
 
 function Invoke-GitHubBranchAwareSetup {
+    <#
+    .SYNOPSIS
+        Runs branch/environment selection, review and per-branch repository publication.
+    .DESCRIPTION
+        ExistingSetupState seeds editable branch records; callbacks share wizardState
+        so revisiting steps retains choices. Credentials can be created during
+        selection, but repository publication follows successful review.
+        Maintains default-branch workflow availability and synchronizes non-deploy
+        files on removed branches. Returns branch states, solution source/result,
+        global BUILD validation settings and PublishResults; environment credentials
+        are applied later by the entry point. This is not a transactional dry run.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CloneRoot', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Captured by the nested wizard actions.')]
@@ -4136,6 +4539,8 @@ function Invoke-GitHubBranchAwareSetup {
     }
 
     try {
+        # Keep editable choices separate from reconstructed remote state. One BUILD
+        # validation environment is shared by every branch; DEV/deploy selections are not.
         $wizardState = [pscustomobject]@{
             BranchStates        = @($branchStates)
             SolutionResult      = $null
@@ -4479,6 +4884,8 @@ function Invoke-GitHubBranchAwareSetup {
                         $existingBranchState
                     })
 
+                    # The combined branch editor owns these choices now; the separate
+                    # DEV/deploy wizard steps must not prompt for them a second time.
                     $wizardState.BranchEnvironmentMappingCompleted = $true
                 }
             },
@@ -5052,6 +5459,8 @@ function Invoke-GitHubBranchAwareSetup {
 
         $removedBranchNames = @($existingConfiguredBranchNames | Where-Object { $_ -notin $selectedBranchNames -and $_ -ne $DefaultBranch })
 
+        # Dispatch/manual workflow availability depends on the default branch having
+        # every configured DEPLOY definition, even if it is not a deployment branch.
         $publishBranchStates = @($wizardState.BranchStates)
         $defaultBranchState = $publishBranchStates | Where-Object { $_.BranchName -ieq $DefaultBranch } | Select-Object -First 1
         if (-not $defaultBranchState) {
@@ -5073,6 +5482,8 @@ function Invoke-GitHubBranchAwareSetup {
             $publishBranchStates += $defaultBranchState
         }
 
+        # Removed branches still receive shared non-deploy updates. Their DEPLOY
+        # definitions are removed from the default branch via empty environment lists.
         foreach ($removedBranchName in @($removedBranchNames)) {
             $removedBranchState = New-GitHubBranchSetupState -BranchName $removedBranchName -ExistingDevEnvironment $null -DeploymentEnvironments @()
             $removedBranchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
@@ -5270,6 +5681,8 @@ Write-Host "- Your Entra ID tenant (to manage App Registrations)" -ForegroundCol
 Write-Host "- Your Dataverse DEV environment (SYSTEM ADMINISTRATOR role)" -ForegroundColor Green
 Write-Host ""
 
+# GitHub and Azure identities are independent. Reusing an Azure cache entry pins
+# the preferred username; switching requests interactive authentication explicitly.
 $cachedAzureAccounts = @(Get-AuthToken -ResourceUrl "https://graph.microsoft.com" -TenantId $TenantId -ListAccountsOnly)
 $preferredAzureUsername = $null
 $forceAzureInteractive = $false
@@ -5478,6 +5891,8 @@ if ([string]::IsNullOrWhiteSpace($cloneRoot)) {
     throw 'Clone operation did not produce a working directory path.'
 }
 
+# Fetching all origin branches above is required for cross-branch DEPLOY discovery;
+# inspecting only the checked-out default branch would lose existing mappings.
 $existingSetupState = Invoke-WithSpectreStatus -Status 'Inspecting the existing repository configuration...' -ScriptBlock {
     Get-GitHubRepositoryExistingSetupState `
         -RepoRoot $cloneRoot `
@@ -5543,6 +5958,8 @@ Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workf
     Initialize-GitHubSharedWorkflowAccessPolicy -Owner $sharedWorkflowRepoParts[0] -Repo $sharedWorkflowRepoParts[1]
 } | Out-Null
 
+# Preserve discovered repository-variable layouts even when environment support
+# is available; only new/unclassified setups choose directly from the capability probe.
 $useGitHubEnvironments = $false
 $useRepositoryVariablePrefix = $existingSetupState.CredentialStorageScope -ne 'RepositoryUnprefixed'
 $enableEnvironmentApprovals = $false
@@ -5648,6 +6065,9 @@ if (Test-GitHubEnvironmentConfigurationUsesWif -EnvironmentConfiguration $buildV
     $hasWifCredential = $true
 }
 
+# OIDC mode is repository-wide: opt-in can invalidate unrelated legacy trusts.
+# Decide before applying any ALM4Dataverse federated credentials so they all use
+# the same effective format, including the optional BUILD validation identity.
 if (-not $useImmutableWifSubject -and $hasWifCredential) {
     $immutableSubjectChangelogUrl = 'https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories'
     $enableImmutableSubject = Read-YesNo `
@@ -5685,6 +6105,8 @@ if (-not $useImmutableWifSubject -and $hasWifCredential) {
     }
 }
 
+# Repository publication has already happened. Credential application below is a
+# separate, non-transactional phase and does not require the disposable clone.
 try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the repository clone; continuing cleanup.' }
 
 # ─────────────────────────────────────────────────────────────
@@ -5729,6 +6151,9 @@ else {
 Write-Section `
     -Message "Configure Global BUILD Validation Environment"
 
+# DEV and BUILD identities have no required-reviewer gate; approval reviewers are
+# applied only to deployment targets. BUILD/deployment application can be skipped
+# by the error-handling wrapper, so completion does not imply a live deployment test.
 if (-not $buildValidationEnabled -or -not $buildValidationEnvironmentConfiguration) {
     [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]Global BUILD validation is disabled, so BUILD environment credentials will be skipped.[/]')
 }

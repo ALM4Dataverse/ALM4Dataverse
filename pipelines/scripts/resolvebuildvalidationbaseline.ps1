@@ -1,3 +1,20 @@
+<#
+.SYNOPSIS
+    Resolves an Azure DevOps validation baseline to BuildValidationBaselineBuildId.
+.DESCRIPTION
+    Reads buildValidation.baselineRelease directly from ConfigPath: a numeric run
+    ID, exact build number or @environment pointer. Requires REST access to the
+    specified collection/project/BUILD definition and Git origin access for pointers.
+    Emits an Azure task variable, not a pipeline result object. Blank selectors and
+    absent remote pointers clear the variable for candidate-only validation; lookup
+    failures, invalid selectors and unsuccessful/wrong-definition builds throw.
+.PARAMETER SourceDirectory
+    Git working tree used to fetch deployment pointer tags (local tags may be replaced).
+.PARAMETER AccessToken
+    Bearer token for Azure DevOps REST requests; never written to diagnostics here.
+.EXAMPLE
+    .\resolvebuildvalidationbaseline.ps1 -ConfigPath .\alm-config.psd1 -SourceDirectory . -CollectionUri $env:SYSTEM_COLLECTIONURI -Project $env:SYSTEM_TEAMPROJECT -DefinitionId 7 -AccessToken $env:SYSTEM_ACCESSTOKEN
+#>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CollectionUri', Justification = 'Used by nested Azure DevOps REST helpers.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Project', Justification = 'Used by nested Azure DevOps REST helpers.')]
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DefinitionId', Justification = 'Used by nested build-selection helpers.')]
@@ -15,6 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function Get-AzureBuild {
+    # Uses the enclosing script's project/token; REST failures propagate unchanged.
     param([Parameter(Mandatory)][string]$BuildId)
 
     $projectSegment = [System.Uri]::EscapeDataString($Project)
@@ -23,6 +41,8 @@ function Get-AzureBuild {
 }
 
 function Assert-SuccessfulBuild {
+    # Return the server's numeric ID only after verifying definition and completed
+    # success; fixed selectors and pointer-derived IDs pass through the same gate.
     param([Parameter(Mandatory)][string]$BuildId)
 
     if ($BuildId -notmatch '^\d+$') {
@@ -41,6 +61,8 @@ function Assert-SuccessfulBuild {
 }
 
 function Resolve-FixedBuildIdentifier {
+    # Numeric input always means run ID, never build number. Named lookup is exact
+    # and case-sensitive within the first 100 successful matches, and must be unique.
     param([Parameter(Mandatory)][string]$Identifier)
 
     if ($Identifier -match '^\d+$') {
@@ -67,6 +89,8 @@ function Resolve-FixedBuildIdentifier {
 }
 
 function Find-SuccessfulBuildForCommit {
+    # Legacy pointers lack run identity. Inspect every page and reject multiple
+    # page matches rather than silently choosing a newer run for the deployed commit.
     param([Parameter(Mandatory)][string]$CommitSha)
 
     $projectSegment = [System.Uri]::EscapeDataString($Project)
@@ -137,6 +161,8 @@ elseif ($selector -match '^@(?<environment>[A-Za-z0-9._/-]+)$' -and $Matches.env
         $pointerLookupOutput = @(& git ls-remote --exit-code origin $tagRef 2>&1)
         $pointerLookupExitCode = $LASTEXITCODE
         if ($pointerLookupExitCode -eq 2) {
+            # ls-remote --exit-code uses 2 for no matching ref. Only this case is
+            # an expected first deployment; transport/authentication errors must fail.
             Write-Warning "No successful deployment pointer exists for '$environmentName'; skipping the baseline and validating the candidate only."
             Write-Host '##vso[task.setvariable variable=BuildValidationBaselineBuildId]'
             $global:LASTEXITCODE = 0
@@ -157,6 +183,8 @@ elseif ($selector -match '^@(?<environment>[A-Za-z0-9._/-]+)$' -and $Matches.env
         }
 
         if ($tagType -eq 'tag') {
+            # Annotated pointer metadata preserves the deployed BUILD identity even
+            # when several successful runs have the same source commit.
             $tagContents = @(& git cat-file -p $tagRef)
             if ($LASTEXITCODE -ne 0) {
                 throw "Annotated deployment pointer '$pointerTag' could not be read."

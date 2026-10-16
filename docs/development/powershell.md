@@ -1,5 +1,40 @@
 # PowerShell Development
 
+## Commenting Standard
+
+Review every entry point, helper and embedded program when changing a contract.
+Comments are written individually after reading the implementation, callers and
+tests. Do not generate help blocks from names, bulk-insert comments, or use scripts
+to draft prose. Automated inventories and validation are useful; automated comment
+authorship is not part of this repository's workflow.
+
+- Give executable entry points accurate comment-based help for purpose, meaningful
+  parameters, prerequisites, side effects, outputs and errors. Examples must match
+  actual invocation contracts and must not include credentials.
+- Document shared and non-trivial helpers where their contract is not evident:
+  return shape, sentinel/null behavior, ordering, caller-owned state, failure
+  propagation and mutation/confirmation boundaries.
+- Use short inline comments for non-obvious reasons, invariants and compatibility
+  constraints. Do not narrate assignments, loops, assertions or readable names.
+  A trivial private helper does not need boilerplate merely to increase a count.
+- Assess existing comments too. Correct misleading claims and remove redundant
+  narration; preserve explanations of constraints that still apply.
+- Keep one authoritative explanation near the behavior it owns. Review source
+  templates and generators together, using the correct host/embedded comment
+  syntax. Do not accidentally change a YAML scalar or a here-string's emitted code.
+- Keep comment-only work behavior-neutral: preserve executable tokens, literals,
+  configuration, test assertions and generated contracts. Run existing validation,
+  including the changed-file coverage gate, rather than assuming prose cannot
+  affect parsing or help discovery.
+- Never claim complete dry-run support, runtime compatibility, security assurance
+  or live integration coverage based only on comments or mocked tests.
+
+Complete coverage means every file and relevant symbol/block has a documented
+review decision, not a compulsory comment on every line. See the
+[manual review record](commenting-review.md) for the repository-wide baseline.
+Assistant-authored prose is not represented as human-authored or human-approved;
+maintainers review it through the normal pull-request process.
+
 ## Local Validation
 
 Use PowerShell 7.2 or newer and Git. Install the pinned validation tools from

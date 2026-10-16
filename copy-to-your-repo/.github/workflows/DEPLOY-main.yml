@@ -59,6 +59,8 @@ jobs:
     timeout-minutes: 360
     environment: TEST-main
     concurrency:
+      # Serialize by destination, not source branch: different releases target
+      # the same environment. A newer request cancels the running job.
       group: alm4dataverse-environment-TEST-main
       cancel-in-progress: true
     permissions:
@@ -87,6 +89,8 @@ jobs:
     # Allow manual targeted deploys even when prior jobs are skipped in this run,
     # but do not bypass failed prerequisite stages on automatic runs.
     needs: deploy-test
+    # Targeted replay can skip deploy-test here; previous-environment-name still
+    # lets the deploy action enforce the selected release's promotion contract.
     if: >-
       !cancelled() && (
       (

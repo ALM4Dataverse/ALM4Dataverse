@@ -1,5 +1,18 @@
 #Requires -Version 7.2
 
+<#
+.SYNOPSIS
+    Runs repository PowerShell syntax, analyzer, test and command-coverage gates.
+.PARAMETER BaseRef
+    Git comparison base. Without HeadRef, defaults to HEAD against the working tree.
+.PARAMETER HeadRef
+    Optional committed head. An omitted base uses its first parent; a zero base
+    checks all source files in that commit.
+.DESCRIPTION
+    Imports pinned tools and checks tracked and non-ignored untracked PowerShell.
+    Analyzer failures stop before Pester. Test and per-file coverage reports are
+    saved under TestResults before test/coverage failures are reported.
+#>
 [CmdletBinding()]
 param(
     [string]$BaseRef = '',
@@ -58,6 +71,7 @@ foreach ($relativePath in $sourcePaths) {
     if ($relativePath -match '\.(psrc|pssc)$') {
         continue
     }
+    # Exceptions bind to source text and enclosing function, not shifting line numbers.
     foreach ($diagnostic in @(Invoke-ScriptAnalyzer -Path $fullPath -Settings $policy.AnalyzerSettings)) {
         $node = $null
         $source = ''
@@ -92,6 +106,7 @@ foreach ($relativePath in $sourcePaths) {
     }
 }
 foreach ($key in $exceptions.Keys) {
+    # Stale or ambiguous exceptions must fail rather than suppress future findings.
     if ($exceptions[$key] -ne 1) {
         $failures.Add("Analyzer exception must match exactly one finding; found $($exceptions[$key]): $key")
     }
@@ -119,6 +134,7 @@ $result = Invoke-Pester -Configuration $configuration
 $coverageReport = @(Get-PowerShellFileCoverage -RepositoryRoot $repoRoot -ModifiedFiles $modifiedFiles -Coverage $result.CodeCoverage -MinimumPercent 65)
 $reportPath = Join-Path $repoRoot 'TestResults/coverage-files.json'
 ConvertTo-Json -InputObject $coverageReport -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding utf8
+# Keep the diagnostic all-file report separate from the changed-file enforcement gate.
 $allFileCoverage = @(Get-PowerShellFileCoverage -RepositoryRoot $repoRoot -ModifiedFiles $coveragePaths -Coverage $result.CodeCoverage -MinimumPercent 65)
 ConvertTo-Json -InputObject $allFileCoverage -Depth 5 | Set-Content -LiteralPath (Join-Path $repoRoot 'TestResults/coverage-all-files.json') -Encoding utf8
 $summary = [System.Collections.Generic.List[string]]::new()

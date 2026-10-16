@@ -3,8 +3,9 @@
     Exports Dataverse solutions from a specified environment and unpacks them into the source directory.
 .DESCRIPTION
     This script exports the Dataverse solutions defined in alm-config.psd1 from the connected
-    Dataverse environment. It exports both managed and unmanaged versions of each solution
-    and saves them to the specified artifact staging directory.
+    Dataverse environment. Parallel mode exports managed and unmanaged packages to a
+    working directory under TempDirectory before unpacking into the source tree.
+    ArtifactStagingDirectory receives export diagnostics, not deployment packages.
 
     After exporting, it unpacks each solution into the source directory's solution folders.
     If any changes are detected in the unpacked solutions compared to the existing source,
@@ -12,6 +13,31 @@
 
     Hooks defined in alm-config.psd1 are invoked at various stages of the export process
     to allow for custom pre- and post-export actions.
+.PARAMETER SourceDirectory
+    Git working tree containing alm-config.psd1 and solutions. Run from that root
+    when hooks use repository-relative paths.
+.PARAMETER ArtifactStagingDirectory
+    Root for export-logs; diagnostics are retained after worker cleanup.
+.PARAMETER TempDirectory
+    Scratch root for comparison packages and parallel export work. Supply a real
+    usable path explicitly; the declared default leaves the GetTempPath expression
+    as literal text while evaluating only the GetTempFileName subexpression.
+.PARAMETER EnvironmentName
+    Diagnostic label and hook context value, not the connection target.
+.PARAMETER BranchName
+    Branch used to resolve buildVersion MAJOR.MINOR into solution Major.Build.
+.PARAMETER DefaultBranchName
+    Optional default branch for warnings; otherwise origin's symbolic HEAD is queried.
+.PARAMETER PassThru
+    Emits Parallel, TotalSeconds and WorkerTimings after successful completion.
+.NOTES
+    Requires installed dependencies, a default Dataverse connection and Git access
+    to push reservation tags to origin. Changed solutions reserve a version before
+    updating source XML and Dataverse. Failures do not roll back tags or source changes.
+    Parallel worker resources are released in finally; diagnostics describe overall
+    run status, not a per-solution transaction outcome.
+.EXAMPLE
+    .\pipelines\scripts\export.ps1 -SourceDirectory . -ArtifactStagingDirectory .\staging -TempDirectory .\export-work -BranchName main -DefaultBranchName main
 #>
 
 param(
@@ -129,6 +155,8 @@ foreach ($solution in $solutionsConfig.solutions) {
         [xml]$solutionXml = Get-Content -Path $solutionXmlPath
         $currentVersion = [version] $solutionXml.ImportExportXml.SolutionManifest.Version
 
+        # Branch bases occupy Major.Build. Minor/Revision are change counters and
+        # reset when that base changes, before the additive/non-additive increment.
         $baseMatches = $currentVersion.Major -eq $branchBaseVersion.Major -and
             [Math]::Max(0, $currentVersion.Build) -eq $branchBaseVersion.Build
         if ($baseMatches) {
@@ -162,6 +190,8 @@ foreach ($solution in $solutionsConfig.solutions) {
         Write-Host "##[debug][$solutionName][Version] Reserved and updated solution folder to $newversion"
 
         if ($null -ne $exportPipeline) {
+            # Version writes compete with package exports for the same Dataverse
+            # operation budget, not just with other version writes.
             $exportPipeline.OperationBudget.Wait($exportPipeline.Cancellation.Token)
             try { Set-DataverseSolution -UniqueName $solutionName -Version $newversion.ToString() }
             finally { $exportPipeline.OperationBudget.Release() | Out-Null }
@@ -180,6 +210,8 @@ Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solu
 }
 $exportStatus = 'Succeeded'
 } finally {
+    # Stop workers before summarizing so teardown can contribute terminal timings
+    # and no worker writes to scratch files after their directory is removed.
     if ($null -ne $exportPipeline) { Stop-AlmExportPipeline -State $exportPipeline }
     New-Item -ItemType Directory -Path $exportLogDirectory -Force | Out-Null
     $summary = @(foreach ($solution in $solutionsConfig.solutions) {

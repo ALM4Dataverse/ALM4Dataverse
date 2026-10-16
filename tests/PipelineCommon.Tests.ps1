@@ -173,6 +173,7 @@ Describe 'PAC authentication' {
 
 Describe 'Checked native commands' {
     BeforeAll {
+        # Model the output/exit-code split of a native process without starting another executable.
         function Invoke-TestNativeCommand {
             param([int]$ExitCode)
             $global:LASTEXITCODE = $ExitCode

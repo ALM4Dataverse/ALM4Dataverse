@@ -9,6 +9,8 @@ resources:
       name: ALM4Dataverse
 
 variables:
+# Supplies branch-specific hook/settings values; the shared template chooses the
+# matching Dev service connection and imports freshly built unmanaged packages.
 - group: Environment-Dev-${{ variables['Build.SourceBranchName'] }}
 
 stages:

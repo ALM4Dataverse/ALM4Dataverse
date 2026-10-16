@@ -4,6 +4,9 @@
 .DESCRIPTION
     This script tests the basic functionality of the dependency check script
     without requiring network access to PowerShell Gallery.
+.NOTES
+    Exercises local data/regex conventions, not the production workflow or GitHub
+    API. Its temporary working directory is removed and the caller's restored.
 #>
 
 $ErrorActionPreference = "Stop"

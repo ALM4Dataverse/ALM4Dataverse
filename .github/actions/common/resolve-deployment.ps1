@@ -1,3 +1,14 @@
+<#
+.SYNOPSIS
+    Resolves deployment inputs to a BUILD identity, artifact source and promotion tags.
+.DESCRIPTION
+    Consumes INPUT_* environment values supplied by the deploy composite action and
+    GitHub context/caller-input JSON. Uses GITHUB_TOKEN and GITHUB_REPOSITORY for
+    API lookup and appends selection fields to GITHUB_OUTPUT; it does not deploy
+    or create tags. Branch mismatches, unsupported promotion modes and unresolved
+    or unsuccessful BUILD identities throw. Release metadata can retain identity
+    after the historical run disappears, with an empty build_run_id output.
+#>
 $ErrorActionPreference = 'Stop'
 
 function Get-GitHubApiHeader {
@@ -9,6 +20,13 @@ function Get-GitHubApiHeader {
 }
 
 function Invoke-GitHubApi {
+    <#
+    .SYNOPSIS
+        Gets a repository-relative REST resource with the current GitHub token.
+    .PARAMETER AllowNotFound
+        Converts only HTTP 404 to null; authorization, transport and other failures
+        propagate. RelativePath must already encode any dynamic path components.
+    #>
     param(
         [Parameter(Mandatory)][string]$RelativePath,
         [switch]$AllowNotFound
@@ -31,6 +49,7 @@ function Invoke-GitHubApi {
 }
 
 function Resolve-BuildRunDisplayName {
+    # Prefer supplied titles; older run payloads fall back to branch-number, then ID.
     param([Parameter(Mandatory)][object]$Run)
 
     foreach ($propertyName in @('display_title', 'run_name')) {
@@ -52,6 +71,8 @@ function Resolve-BuildRunDisplayName {
 }
 
 function Resolve-BuildRunCanonicalName {
+    # Display identity remains authoritative, including its numeric-ID fallback.
+    # Only an empty display result reaches the legacy repository/branch/date form.
     param([Parameter(Mandatory)][object]$Run)
 
     $displayName = Resolve-BuildRunDisplayName -Run $Run
@@ -93,6 +114,8 @@ function Resolve-BuildRunCanonicalName {
 }
 
 function ConvertTo-BuildReleaseTag {
+    # Legacy selector normalization is not gate normalization: preserve their
+    # distinct dot/hyphen rules so existing published names remain addressable.
     param([Parameter(Mandatory)][string]$BuildName)
 
     $sanitized = $BuildName.Trim() `
@@ -110,6 +133,8 @@ function ConvertTo-BuildReleaseTag {
 }
 
 function ConvertTo-GateTagSegment {
+    # Returns a path-capable segment (slashes remain), not a URL-encoded string;
+    # reject names that sanitize away completely before building gate tag paths.
     param([Parameter(Mandatory)][string]$Value)
 
     $sanitized = $Value.Trim()
@@ -128,6 +153,13 @@ function ConvertTo-GateTagSegment {
 }
 
 function Resolve-WorkflowDispatchBranch {
+    <#
+    .SYNOPSIS
+        Reads a manual dispatch branch from short or full GitHub ref fields.
+    .DESCRIPTION
+        Missing ref returns ''; a known non-branch ref throws. When only ref_name
+        is supplied without ref_type, the name is accepted as a branch.
+    #>
     param([Parameter(Mandatory)][object]$GitHubContext)
 
     $refType = if ($null -ne $GitHubContext.PSObject.Properties['ref_type']) { [string]$GitHubContext.ref_type } else { '' }
@@ -153,6 +185,8 @@ function Resolve-WorkflowDispatchBranch {
 }
 
 function Test-IsBuildWorkflowRun {
+    # Accept either the conventional workflow path or BUILD display name for
+    # older payloads; this identity test does not verify the run's conclusion.
     param([Parameter(Mandatory)][object]$Run)
 
     $workflowPath = if ($Run.PSObject.Properties.Name -contains 'path') { [string]$Run.path } else { '' }
@@ -173,12 +207,15 @@ function Get-BuildRunById {
 }
 
 function Get-GitHubReleaseByTag {
+    # Absence is a supported fallback to metadata tags or workflow-run lookup.
     param([Parameter(Mandatory)][string]$TagName)
     $encodedTag = [System.Uri]::EscapeDataString($TagName)
     return Invoke-GitHubApi -RelativePath "releases/tags/$encodedTag" -AllowNotFound
 }
 
 function Resolve-GitTagCommitSha {
+    # Peel annotated tags (including nested tags) until reaching a commit; the
+    # caller compares it to the selected BUILD source rather than trusting tag names.
     param([Parameter(Mandatory)][string]$TagName)
 
     $encodedTag = [System.Uri]::EscapeDataString($TagName)
@@ -199,6 +236,14 @@ function Resolve-GitTagCommitSha {
 }
 
 function Get-BuildMetadataForTag {
+    <#
+    .SYNOPSIS
+        Reads legacy ALM metadata from an annotated companion tag.
+    .DESCRIPTION
+        Looks under alm4dataverse/metadata/TagName. Missing/lightweight tags or
+        incomplete messages return null. Valid messages return BuildName, Branch,
+        SourceCommit, RunId and TagName; non-404 API failures still throw.
+    #>
     param([Parameter(Mandatory)][string]$TagName)
 
     $metadataTag = "alm4dataverse/metadata/$TagName"
@@ -225,6 +270,14 @@ function Get-BuildMetadataForTag {
 }
 
 function Get-ReleaseInformation {
+    <#
+    .SYNOPSIS
+        Extracts the machine-readable BUILD identity from a Release body.
+    .DESCRIPTION
+        Requires the encoded branch marker, Build, full source SHA and linked
+        numeric BUILD run. Returns BuildName, decoded Branch, SourceCommit, RunId
+        and TagName, throwing on incomplete metadata. Does not verify tag contents.
+    #>
     param([Parameter(Mandatory)][object]$Release)
 
     $body = [string]$Release.body
@@ -246,6 +299,9 @@ function Get-ReleaseInformation {
 }
 
 function Find-LatestManagedReleaseForBranch {
+    # Scan at most 100 pages; ignore unrelated/incomplete releases and stable
+    # publications. "Latest" means greatest numeric BUILD run ID, not Release date.
+    # Return a Release/Metadata/BuildRunId wrapper or null when none match exactly.
     param([Parameter(Mandatory)][string]$BranchName)
 
     $latestMatch = $null
@@ -273,6 +329,7 @@ function Find-LatestManagedReleaseForBranch {
 }
 
 function Test-GitHubReleasePrerelease {
+    # Support both REST objects and hashtable fixtures; absent prerelease is false.
     param([Parameter(Mandatory)][object]$Release)
 
     if ($Release -is [System.Collections.IDictionary]) {
@@ -283,6 +340,8 @@ function Test-GitHubReleasePrerelease {
 }
 
 function Find-ReleaseForBuildRun {
+    # Search up to 100 pages of ALM prereleases by exact metadata RunId.
+    # Return Release/Metadata or null; multiple matches are an error, not a choice.
     param([Parameter(Mandatory)][string]$RunId)
 
     $matchingReleases = @()
@@ -311,6 +370,8 @@ function Find-ReleaseForBuildRun {
 }
 
 function Find-BuildRunByName {
+    # Legacy run-name selection is case-insensitive and returns the first match
+    # within 100 pages; it does not establish uniqueness or success here.
     param([Parameter(Mandatory)][string]$RunName)
     for ($page = 1; $page -le 100; $page++) {
         $response = Invoke-GitHubApi -RelativePath "actions/workflows/BUILD.yml/runs?per_page=100&page=$page"
@@ -323,6 +384,7 @@ function Find-BuildRunByName {
 }
 
 function Find-LatestSuccessfulBuildRunForBranch {
+    # Ask GitHub for one successful conventional BUILD workflow run; no match throws.
     param([Parameter(Mandatory)][string]$BranchName)
     $encodedBranch = [System.Uri]::EscapeDataString($BranchName.Trim())
     $response = Invoke-GitHubApi -RelativePath "actions/workflows/BUILD.yml/runs?branch=$encodedBranch&status=success&per_page=1"
@@ -354,6 +416,8 @@ if ($eventName -eq 'workflow_dispatch' -and [string]::IsNullOrWhiteSpace($target
 $release = $null
 $metadata = $null
 $requestedReleaseTag = $dispatchReleaseTag.Trim()
+# Manual text may name a current Release, normalized legacy tag or metadata
+# companion. With no selector, prefer managed branch Releases before run history.
 if ($eventName -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($manualSelector) -and $manualSelector -notmatch '^\d+$') {
     $normalizedTag = ConvertTo-BuildReleaseTag $manualSelector
     $tagCandidates = @($manualSelector)
@@ -409,6 +473,8 @@ elseif ($eventName -eq 'workflow_dispatch') {
 }
 
 if ($null -eq $buildRun -and $null -ne $metadata) {
+    # Retained Release metadata can outlive Actions run retention. An empty run ID
+    # deliberately disables artifact-download fallback in the composite action.
     $buildRun = [pscustomobject]@{ id = ''; path = '.github/workflows/BUILD.yml'; name = 'BUILD'; run_name = $metadata.BuildName; display_title = $metadata.BuildName; head_sha = $metadata.SourceCommit; head_branch = $metadata.Branch; conclusion = 'success' }
 }
 if ($null -eq $buildRun) { throw 'Could not resolve a BUILD run for deployment.' }
@@ -440,6 +506,8 @@ if ($requestedReleaseTag) { $tagSha = Resolve-GitTagCommitSha $requestedReleaseT
 $releaseHasArtifacts = $false
 if ($null -ne $release) { $releaseHasArtifacts = @($release.assets | Where-Object { $_.name -eq 'artifacts.zip' }).Count -gt 0 }
 
+# Per-build gates are append-only promotion evidence; the environment pointer is
+# separate and moves after deployment in both promotion modes.
 $requiredGateTag = if ($promotionMode -eq 'manual-gate-tag' -and $previousName) { "deployed/$buildTagKey/$previousName" } else { '' }
 $successGateTag = if ($promotionMode -eq 'manual-gate-tag') { "deployed/$buildTagKey/$environmentName" } else { '' }
 $environmentPointerTag = "deployed/$environmentName"

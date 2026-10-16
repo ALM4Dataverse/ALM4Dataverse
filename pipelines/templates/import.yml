@@ -1,3 +1,5 @@
+# Development import builds the checked-out source before importing unmanaged
+# solutions; unlike release deployment it does not select a prior BUILD artifact.
 parameters:
 - name: useAlm4DataverseExtension
   type: boolean
@@ -44,6 +46,8 @@ stages:
               authenticationType: 'PowerPlatformSPN'
               PowerPlatformSPN: Dev-${{ variables['Build.SourceBranchName'] }}
 
+        # The embedded resolver returns the first usable credential candidate, or
+        # null. Reject unexpanded $(...) macros left by the other task provider.
         - pwsh: |
             & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
             $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'

@@ -13,6 +13,14 @@
     The root directory containing the solution folders and alm-config.psd1 file.
 .PARAMETER ArtifactStagingDirectory
     The directory where the built artifacts will be placed.
+.NOTES
+    Run installdependencies.ps1 first in this process. Requires PowerShell 7 for
+    parallel packing/checks. Checker failures write reports before throwing;
+    missing assets or unresolved installed dependency versions also fail the build.
+    Artifact contents include deployment scripts, configuration and exact dependency
+    versions; this script does not publish or tag the artifact.
+.EXAMPLE
+    .\pipelines\scripts\build.ps1 -SourceDirectory . -ArtifactStagingDirectory .\artifacts
 #>
 
 param(
@@ -30,6 +38,8 @@ $ErrorActionPreference = "Stop"
 Write-Host "##[section]Building Artifacts"
 
 function Get-PacCliInstalledPackageVersion {
+    # dotnet's package listing, not pac's display banner, supplies the lock-file version.
+    # Missing tools/path or an unmatched listing return ''; strip NuGet build metadata.
     param(
         [Parameter(Mandatory = $true)]
         [string]$PacToolPath
@@ -55,6 +65,14 @@ function Get-PacCliInstalledPackageVersion {
 }
 
 function Get-AlmBuildSetting {
+    <#
+    .SYNOPSIS
+        Returns validated packing settings without mutating Config.
+    .DESCRIPTION
+        Defaults to parallel=true and maxParallel=2. Null or empty-string entries
+        retain defaults; explicit false is honored. Parallel must be Boolean and
+        maxParallel an integer from 1 to 8, even when sequential packing is selected.
+    #>
     [OutputType([hashtable])]
     param([Parameter(Mandatory)][hashtable]$Config)
 
@@ -102,6 +120,7 @@ function Convert-SolutionCheckSeverityToRank {
 }
 
 function Convert-SolutionCheckRankToSeverity {
+    # Unknown ranks represent no findings; unlike severity-to-rank, this does not throw.
     param(
         [Parameter(Mandatory = $true)]
         [int]$Rank
@@ -118,6 +137,7 @@ function Convert-SolutionCheckRankToSeverity {
 }
 
 function Get-SolutionCheckHighestSeverity {
+    # Missing or zero counts do not count as findings; return the 'None' sentinel.
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$SeverityCounts
@@ -133,6 +153,8 @@ function Get-SolutionCheckHighestSeverity {
 }
 
 function ConvertFrom-SolutionCheckSeverityText {
+    # Parse PAC's textual summaries, not SARIF: repeated "Severity[:=] count" entries
+    # accumulate, and unmatched categories remain zero. Keep the worker parser aligned.
     param(
         [Parameter(Mandatory = $true)]
         [string]$ConsoleText
@@ -152,6 +174,14 @@ function ConvertFrom-SolutionCheckSeverityText {
 }
 
 function Resolve-SolutionCheckExcludedFile {
+    <#
+    .SYNOPSIS
+        Expands exclusion patterns to unique absolute file paths for PAC.
+    .DESCRIPTION
+        Relative patterns resolve under solutions/SolutionName; rooted patterns
+        remain rooted. Null/blank entries are ignored and unmatched entries warn
+        rather than failing the check. Patterns may match recursively.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$SourceDirectory,
@@ -206,6 +236,14 @@ function Resolve-SolutionCheckExcludedFile {
 }
 
 function ConvertTo-SolutionCheckRuleOverrideFile {
+    <#
+    .SYNOPSIS
+        Resolves an override path or writes structured overrides as JSON.
+    .DESCRIPTION
+        Null/blank returns ''; a nonblank string is passed through without path
+        validation. Hashtable/array inputs overwrite a solution-named JSON file in
+        the existing ReportRoot and return its path. Other types throw.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [string]$ReportRoot,
@@ -246,6 +284,15 @@ function ConvertTo-SolutionCheckRuleOverrideFile {
 }
 
 function Write-SolutionCheckSummary {
+    <#
+    .SYNOPSIS
+        Writes Markdown/JSON checker results and publishes available CI summaries.
+    .DESCRIPTION
+        Results require SolutionName, Error, ThresholdBreached, FailThreshold,
+        HighestSeverity and SeverityCounts. Overwrites both requested files, appends
+        Markdown to GITHUB_STEP_SUMMARY when set and emits an Azure summary attachment.
+        Error takes display precedence over threshold failure.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [array]$Results,
@@ -297,6 +344,16 @@ function Write-SolutionCheckSummary {
 }
 
 function Invoke-SolutionCheck {
+    <#
+    .SYNOPSIS
+        Checks enabled packed solutions and fails after collecting their reports.
+    .DESCRIPTION
+        Merges global and per-solution settings with Merge-AlmConfigValue. Uses
+        global maxParallel (default 4, clamped to at least 1), not packing limits.
+        Disabled solutions are skipped. Worker exceptions/nonzero PAC exits fail,
+        as do findings at or above failThreshold (default Critical). Reports live
+        under ArtifactStagingDirectory/solution-check; no result objects are returned.
+    #>
     param(
         [Parameter(Mandatory = $true)]
         [hashtable]$Config,
@@ -415,6 +472,8 @@ function Invoke-SolutionCheck {
 
     Write-Host "##[section]Running PAC solution checks for $($plans.Count) solution(s) with max parallelism $maxParallel"
 
+    # Parallel runspaces do not inherit these helper definitions. Keep the local
+    # count/parser/highest helpers self-contained and equivalent to the outer helpers.
     $results = @($plans | ForEach-Object -ThrottleLimit $maxParallel -Parallel {
         $plan = $_
         $ErrorActionPreference = 'Stop'
@@ -513,6 +572,8 @@ function Invoke-SolutionCheck {
         }
     })
 
+    # Workers return failures as data so all per-solution logs and the aggregate
+    # summary survive a failed check instead of aborting at the first PAC error.
     $hasFailures = $false
     foreach ($result in $results) {
         if ($result.Error) {
@@ -586,6 +647,8 @@ $packPlans = @(
         }
     }
 )
+# Resolve the command first to trigger module autoload before capturing its path
+# for isolated packing runspaces.
 $null = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
 $packModule = Get-Module -Name 'Rnwood.Dataverse.Data.PowerShell' | Select-Object -First 1
 if ($null -eq $packModule) {
@@ -599,6 +662,8 @@ if ($buildSettings.parallel) {
         $plan | Add-Member -NotePropertyName ModulePath -NotePropertyValue $buildModulePath
     }
     Write-Host "##[section]Packing $($packPlans.Count) solution(s) with max parallelism $($buildSettings.maxParallel)"
+    # Capture each worker's streams as data, then replay in configuration order;
+    # parallel completion order must not interleave solution log groups.
     $packResults = @($packPlans | ForEach-Object -ThrottleLimit $buildSettings.maxParallel -Parallel {
         $plan = $_
         $ErrorActionPreference = 'Stop'
@@ -680,7 +745,8 @@ Write-Host "##[group]Copying deployment scripts"
 Copy-Item $PSScriptRoot/../.. -Destination "$ArtifactStagingDirectory/alm" -Recurse -Force -Verbose
 Copy-Item (Join-Path $SourceDirectory 'alm-config.psd1') -Destination (Join-Path $ArtifactStagingDirectory 'alm-config.psd1') -Force -Verbose
 
-# Create lock file with pinned module versions
+# Pin what this process actually loaded/installed, not the requested floating
+# selectors, so deployments can reproduce the build's dependency selection.
 $lockConfig = @{
     scriptDependencies = $config.scriptDependencies.Clone()
     pacCliVersion = [string]$config.pacCliVersion
