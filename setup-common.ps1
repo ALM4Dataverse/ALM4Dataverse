@@ -2342,7 +2342,7 @@ function Set-AlmConfigSolutionsInFile {
             if ($existingSolutionIndex -ge 0 -and $existingSolutionIndex -lt $existingSolutionAsts.Count) {
                 foreach ($property in $existingSolutionAsts[$existingSolutionIndex].KeyValuePairs) {
                     $propertyName = [string]$property.Item1.SafeGetValue()
-                    if ($propertyName -in @('name', 'deployUnmanaged')) { continue }
+                    if ($propertyName -in @('name', 'deployUnmanaged', 'mappingFile', 'buildCommands')) { continue }
                     $solutionsArray += "            $($property.Item1.Extent.Text) = $($property.Item2.Extent.Text)`n"
                 }
             }

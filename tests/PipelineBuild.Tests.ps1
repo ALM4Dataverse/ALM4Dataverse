@@ -436,14 +436,14 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
 
         Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly -ParameterFilter { -not [string]::IsNullOrWhiteSpace($MappingFile) }
         Should -Invoke Invoke-TestPac -Times 0 -Exactly
-        [AlmBuildMappingTestCapture]::MappingXml | Should -Match '<Mapping>'
+        [AlmBuildMappingTestCapture]::MappingXml | Should -Match '<Mappings>'
         [AlmBuildMappingTestCapture]::MappingXml | Should -Match 'bin&amp;build'
         $mappingXml = [xml][AlmBuildMappingTestCapture]::MappingXml
-        $mappingTypes = @($mappingXml.Mapping.ChildNodes | ForEach-Object { $_.LocalName }) -join ','
+        $mappingTypes = @($mappingXml.Mappings.ChildNodes | ForEach-Object { $_.LocalName }) -join ','
         $mappingTypes | Should -Be 'FileToFile,Folder,FileToPath'
-        $mappingXml.Mapping.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath($pluginFile))
+        $mappingXml.Mappings.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath($pluginFile))
         $expectedPluginDestination = [System.IO.Path]::GetFullPath((Join-Path $script:sourceDirectory 'solutions/Example/PluginAssemblies/Example.dll'))
-        $mappingXml.Mapping.FileToFile.GetAttribute('map') | Should -Be $expectedPluginDestination
+        $mappingXml.Mappings.FileToFile.GetAttribute('map') | Should -Be $expectedPluginDestination
         Test-Path -LiteralPath ([AlmBuildMappingTestCapture]::MappingPath) | Should -BeFalse
     }
 

@@ -167,7 +167,29 @@ foreach ($solution in $solutionsConfig.solutions) {
     $solutionXml.Save($solutionXmlPath)
 
     # Test if anything changed and increment version if so
-    $gitStatus = git -C "$SourceDirectory" status --porcelain solutions/$solutionName
+    $gitStatusPathspecs = [System.Collections.Generic.List[string]]::new()
+    $gitStatusPathspecs.Add("solutions/$solutionName")
+    $repositoryRoot = [System.IO.Path]::GetFullPath($SourceDirectory)
+    foreach ($mappingEntry in $mappingEntriesBySolution[$solutionName]) {
+        $sourcePath = [string]$mappingEntry.Source
+        if ($sourcePath -match '%[^%]+%') {
+            $sourcePath = [System.Environment]::ExpandEnvironmentVariables($sourcePath)
+            if ($sourcePath -match '%[^%]+%') { continue }
+        }
+        if (-not [System.IO.Path]::IsPathRooted($sourcePath)) {
+            $sourcePath = Join-Path $SourceDirectory $sourcePath
+        }
+        $fullSourcePath = [System.IO.Path]::GetFullPath($sourcePath)
+        $repositoryRelativePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $fullSourcePath)
+        $outsideRepository = [System.IO.Path]::IsPathRooted($repositoryRelativePath) -or
+            $repositoryRelativePath -eq '..' -or
+            $repositoryRelativePath.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::Ordinal)
+        if (-not $outsideRepository -and $repositoryRelativePath -ne '.') {
+            $gitStatusPathspecs.Add($repositoryRelativePath.Replace('\', '/'))
+        }
+    }
+    $gitStatusArguments = @('-C', $SourceDirectory, 'status', '--porcelain', '--') + $gitStatusPathspecs.ToArray()
+    $gitStatus = & git @gitStatusArguments
     if ([string]::IsNullOrEmpty($gitStatus)) {
         Write-Host "##[debug][$solutionName][Compare] No changes"
     } else {

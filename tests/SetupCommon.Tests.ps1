@@ -375,6 +375,8 @@ Describe 'Setup configuration and validation helpers' {
     solutions = @(
         @{
             name = 'PluginSolution'
+            mappingFile = 'legacy-mapping.xml'
+            buildCommands = @(@{ executable = 'dotnet'; arguments = @('build') })
             mappings = @(
                 @{
                     type = 'FileToFile'
@@ -404,6 +406,8 @@ Describe 'Setup configuration and validation helpers' {
         $solution.mappings[0].buildCommand.arguments | Should -Be @('build', 'plugins/Example.csproj')
         $solution.customSetting.keep | Should -BeTrue
         $solution.deployUnmanaged | Should -BeTrue
+        $solution.ContainsKey('mappingFile') | Should -BeFalse
+        $solution.ContainsKey('buildCommands') | Should -BeFalse
         (Import-PowerShellDataFile -LiteralPath $configPath).solutions.Count | Should -Be 1
     }
 
