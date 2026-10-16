@@ -29,9 +29,10 @@ authorship is not part of this repository's workflow.
 - Never claim complete dry-run support, runtime compatibility, security assurance
   or live integration coverage based only on comments or mocked tests.
 
-Complete coverage means every file and relevant symbol/block has a documented
-review decision, not a compulsory comment on every line. See the
-[manual review record](commenting-review.md) for the repository-wide baseline.
+Complete coverage means every file and relevant symbol/block is assessed for
+useful documentation, not a compulsory comment on every line. Maintain comments
+and help alongside future behavior changes as required by
+[repository instructions](../../AGENTS.md).
 Assistant-authored prose is not represented as human-authored or human-approved;
 maintainers review it through the normal pull-request process.
 

@@ -29,7 +29,7 @@ Application teams should start with [updating and customizing](usage/updating.md
 
 For comment/help changes, follow the
 [commenting standard](development/powershell.md#commenting-standard) and
-[manual review record](development/commenting-review.md). Review generated
+[repository instructions](../AGENTS.md). Review generated
 installers and caller templates as well as the source: prose inside embedded code
 can alter emitted content even when the outer script still parses.
 
