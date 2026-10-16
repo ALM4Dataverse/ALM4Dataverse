@@ -334,6 +334,14 @@ function Wait-AlmSolutionExport {
 }
 
 function Invoke-AlmQueuedPostExportSolutionHook {
+    <#
+    .SYNOPSIS
+        Starts queued post-export solution hooks in background workers.
+    .DESCRIPTION
+        Each hook runs in an isolated thread-job runspace and receives its cloned
+        Dataverse connection as Context.Connection. Hooks pass that connection
+        explicitly to Dataverse commands rather than relying on ambient state.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker receives the hook context and cloned Dataverse client explicitly through Start-ThreadJob ArgumentList.')]
     param([Parameter(Mandatory)][hashtable]$State)
 
@@ -377,6 +385,13 @@ function Invoke-AlmQueuedPostExportSolutionHook {
 }
 
 function Add-AlmPostExportSolutionHook {
+    <#
+    .SYNOPSIS
+        Queues the post-export hook for a solution after unpack and comparison.
+    .DESCRIPTION
+        Copies the export context, adds solution-specific values and schedules
+        the hook without waiting for other exports to finish.
+    #>
     param(
         [Parameter(Mandatory)][hashtable]$State,
         [Parameter(Mandatory)][hashtable]$SolutionConfig,
@@ -405,6 +420,13 @@ function Add-AlmPostExportSolutionHook {
 }
 
 function Invoke-AlmPostExportSolutionHookQueue {
+    <#
+    .SYNOPSIS
+        Collects completed solution hooks and starts queued hooks.
+    .DESCRIPTION
+        Stores each hook's results by solution name, surfaces worker failures and
+        fills available parallel slots from the pending queue.
+    #>
     param([Parameter(Mandatory)][hashtable]$State)
 
     foreach ($job in @($State.ActiveSolutionHooks.ToArray())) {
@@ -419,6 +441,13 @@ function Invoke-AlmPostExportSolutionHookQueue {
 }
 
 function Complete-AlmPostExportSolutionHook {
+    <#
+    .SYNOPSIS
+        Waits for all queued post-export solution hooks to finish.
+    .DESCRIPTION
+        Continues draining hook events and completion records until no pending
+        or active hooks remain, before the global postExport hook runs.
+    #>
     param([Parameter(Mandatory)][hashtable]$State)
 
     while ($State.PendingSolutionHooks.Count -or $State.ActiveSolutionHooks.Count) {
