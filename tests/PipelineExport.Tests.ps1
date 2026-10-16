@@ -111,6 +111,31 @@ Describe 'Export and version changes' {
         Test-Path -LiteralPath ([AlmExportMappingTestCapture]::MappingPath) | Should -BeFalse
     }
 
+    It 'rejects duplicate solution names before generating sequential mapping files' -ForEach @(
+        @{ FirstName = 'Example'; SecondName = 'Example' }
+        @{ FirstName = 'Example'; SecondName = 'example' }
+    ) {
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'alm-config.psd1') -Value @"
+@{
+    solutions = @(
+        @{ name = '$FirstName'; mappings = @(@{ type = 'FileToFile'; source = 'plugins/First.dll'; destination = 'First.dll' }) }
+        @{ name = '$SecondName'; mappings = @(@{ type = 'FileToFile'; source = 'plugins/Second.dll'; destination = 'Second.dll' }) }
+    )
+    hooks = @{}
+    export = @{ parallel = `$false }
+    buildVersion = @{ default = '1.3'; branches = @{} }
+}
+"@
+
+        {
+            & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
+        } | Should -Throw '*Duplicate solution in export configuration*'
+
+        Should -Invoke Export-DataverseSolution -Times 0 -Exactly
+        Should -Invoke Compress-DataverseSolutionFile -Times 0 -Exactly
+        [AlmExportMappingTestCapture]::MappingPath | Should -BeNullOrEmpty
+    }
+
     It 'uses inline mappings for old and new packages when comparing export changes' {
         New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins'), (Join-Path $script:exportSource 'solutions/Example') -Force | Out-Null
         Set-Content (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'

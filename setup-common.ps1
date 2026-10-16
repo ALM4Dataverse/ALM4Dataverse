@@ -2272,25 +2272,6 @@ function Set-AlmConfigSolutionsInFile {
     }
 
     $configContent = Get-Content -LiteralPath $ConfigPath -Raw
-
-    $solutionsArray = "@("
-    if ($Solutions.Count -gt 0) {
-        $solutionsArray += "`n"
-        foreach ($solution in $Solutions) {
-            $escapedSolutionName = ([string]$solution.name).Replace("'", "''")
-            $solutionsArray += "        @{`n"
-            $solutionsArray += "            name = '$escapedSolutionName'`n"
-            if (Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'deployUnmanaged') {
-                $solutionsArray += "            deployUnmanaged = `$true`n"
-            }
-            $solutionsArray += "        }`n"
-        }
-        $solutionsArray += "    )"
-    }
-    else {
-        $solutionsArray += "`n    )"
-    }
-
     $tokens = $null
     $parseErrors = $null
     $ast = [System.Management.Automation.Language.Parser]::ParseInput($configContent, [ref]$tokens, [ref]$parseErrors)
@@ -2311,6 +2292,67 @@ function Set-AlmConfigSolutionsInFile {
         $keyText = $_.Item1.Extent.Text.Trim()
         $keyText -in @('solutions', "'solutions'", '"solutions"')
     } | Select-Object -First 1
+
+    $existingSolutions = @()
+    $existingSolutionAsts = @()
+    if ($solutionsEntry) {
+        $existingConfig = Import-PowerShellDataFile -LiteralPath $ConfigPath
+        $existingSolutions = @($existingConfig.solutions)
+        $solutionArrayAst = $solutionsEntry.Item2.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.ArrayExpressionAst] -and
+                $node.Parent -is [System.Management.Automation.Language.CommandExpressionAst] -and
+                $node.Parent.Parent -eq $solutionsEntry.Item2
+        }, $true)
+        if ($solutionArrayAst) {
+            $existingSolutionAsts = @($solutionArrayAst.FindAll({
+                param($node)
+                $node -is [System.Management.Automation.Language.HashtableAst]
+            }, $true) | Where-Object {
+                $ancestor = $_.Parent
+                while ($ancestor -and $ancestor -ne $solutionArrayAst -and
+                    $ancestor -isnot [System.Management.Automation.Language.HashtableAst] -and
+                    $ancestor -isnot [System.Management.Automation.Language.ArrayExpressionAst]) {
+                    $ancestor = $ancestor.Parent
+                }
+                $ancestor -eq $solutionArrayAst
+            })
+        }
+    }
+
+    $solutionsArray = "@("
+    if ($Solutions.Count -gt 0) {
+        $solutionsArray += "`n"
+        foreach ($solution in $Solutions) {
+            $solutionName = [string]$solution.name
+            $escapedSolutionName = $solutionName.Replace("'", "''")
+            $solutionsArray += "        @{`n"
+            $solutionsArray += "            name = '$escapedSolutionName'`n"
+            if (Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'deployUnmanaged') {
+                $solutionsArray += "            deployUnmanaged = `$true`n"
+            }
+
+            $existingSolutionIndex = -1
+            for ($index = 0; $index -lt $existingSolutions.Count; $index++) {
+                if ([string]$existingSolutions[$index].name -ieq $solutionName) {
+                    $existingSolutionIndex = $index
+                    break
+                }
+            }
+            if ($existingSolutionIndex -ge 0 -and $existingSolutionIndex -lt $existingSolutionAsts.Count) {
+                foreach ($property in $existingSolutionAsts[$existingSolutionIndex].KeyValuePairs) {
+                    $propertyName = [string]$property.Item1.SafeGetValue()
+                    if ($propertyName -in @('name', 'deployUnmanaged')) { continue }
+                    $solutionsArray += "            $($property.Item1.Extent.Text) = $($property.Item2.Extent.Text)`n"
+                }
+            }
+            $solutionsArray += "        }`n"
+        }
+        $solutionsArray += "    )"
+    }
+    else {
+        $solutionsArray += "`n    )"
+    }
 
     if ($solutionsEntry) {
         $valueExtent = $solutionsEntry.Item2.Extent

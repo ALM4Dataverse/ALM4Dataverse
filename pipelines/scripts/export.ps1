@@ -45,6 +45,14 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSetting -Config $solutionsConfig
+$solutionNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+foreach ($solution in $solutionsConfig.solutions) {
+    $solutionName = [string]$solution.name
+    if (-not $solutionNames.Add($solutionName)) {
+        throw "Duplicate solution in export configuration: $solutionName"
+    }
+}
+
 $branchBaseVersion = Resolve-AlmBranchBaseVersion -Config $solutionsConfig -BranchName $BranchName
 if (-not $branchBaseVersion.HasBranchOverride) {
     $defaultBranch = Resolve-AlmDefaultBranchName -RepositoryPath $SourceDirectory -DefaultBranchName $DefaultBranchName
