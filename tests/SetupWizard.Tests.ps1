@@ -1,6 +1,8 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'setup-common.ps1')
+    # Standalone runs need only these no-op console members; reuse a richer fixture type
+    # when SetupCommon has already loaded it because CLR types cannot be replaced in-process.
     if (-not ('Spectre.Console.AnsiConsole' -as [type])) {
         Add-Type -TypeDefinition @'
 namespace Spectre.Console {
@@ -21,6 +23,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $Source), [ref]$tokens, [ref]$parseErrors)
+        # Exercise orchestration functions without running installer startup and authentication.
         foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
             Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
         }
@@ -161,6 +164,8 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
 
     It 'executes standalone environment-step contracts before branch editing' {
         Mock Invoke-SetupWizard {
+            # Bypass branch editing and invoke the otherwise separate environment-step actions;
+            # the sentinel ends the wizard before normal fallback orchestration can resume.
             foreach ($step in @($Steps | Select-Object -Skip 1)) { & $step.Action }
             throw 'Environment step contracts completed.'
         }

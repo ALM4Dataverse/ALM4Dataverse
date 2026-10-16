@@ -27,6 +27,12 @@ Application teams should start with [updating and customizing](usage/updating.md
 
 ## Local Checks
 
+For comment/help changes, follow the
+[commenting standard](development/powershell.md#commenting-standard) and
+[repository instructions](../AGENTS.md). Review generated
+installers and caller templates as well as the source: prose inside embedded code
+can alter emitted content even when the outer script still parses.
+
 Use PowerShell 7.2 or newer from the repository root. YAML-related checks require `powershell-yaml`;
 the documentation checker also uses `ConvertFrom-Markdown`/Markdig supplied with PowerShell.
 Install the pinned validation tools from the trusted PowerShell Gallery:

@@ -37,6 +37,8 @@ BeforeAll {
         param($Verb, $Operation)
     }
 
+    # Settings is literal solution-entry syntax, allowing missing/null/false keys to remain distinct.
+    # Disable parallel packing so the IMPORT case can use the same in-runspace command mocks.
     function Write-DeploymentConfig {
         param([string]$Settings = '')
         Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @"

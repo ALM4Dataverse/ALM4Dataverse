@@ -9,6 +9,8 @@ BeforeAll {
 
 Describe 'Dependency installation' {
     BeforeEach {
+        # Installation updates PATH and action path files; keep those effects local while mocks
+        # prevent package installation and the fixture directory owns lock/config writes.
         $script:savedEnvironment = @{
             PATH = $env:PATH
             GITHUB_PATH = $env:GITHUB_PATH

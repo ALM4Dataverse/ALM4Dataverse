@@ -12,6 +12,15 @@
     - '' (empty string): installs the latest version
     - 'prerelease': installs the latest prerelease version
     - specific version number (e.g. '1.2.3' or '1.2.3-beta.1'): installs that specific version
+.NOTES
+    Run from the directory containing alm-config.psd1 and any lock file. Installs
+    modules for CurrentUser, imports their exact installed manifests in this process
+    and installs/updates PAC under HOME/.alm4dataverse/tools using dotnet.
+    A lock replaces module selectors and, when present, the PAC selector.
+    Resolved module versions must meet the bundled numeric minimums.
+    PATH is updated for this process and exported through available CI path channels.
+.EXAMPLE
+    .\alm\pipelines\scripts\installdependencies.ps1
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -77,6 +86,8 @@ foreach ($module in $config.scriptDependencies.Keys) {
 }
 
 function Get-PacCliInstalledPackageVersion {
+    # Use the NuGet tool-list version for locking; absence/unmatched output yields
+    # '' for the caller to reject. Build metadata after '+' is not part of the pin.
     param(
         [Parameter(Mandatory = $true)]
         [string]$PacToolPath
@@ -102,6 +113,14 @@ function Get-PacCliInstalledPackageVersion {
 }
 
 function Resolve-PacCliVersionSpecifier {
+    <#
+    .SYNOPSIS
+        Normalizes a PAC NuGet selector or rejects unsupported version syntax.
+    .DESCRIPTION
+        Whitespace becomes '' (latest stable); 'prerelease' permits previews.
+        Otherwise requires an exact three-part numeric version with an optional
+        prerelease suffix, not a wildcard, range or build-metadata suffix.
+    #>
     param(
         [Parameter(Mandatory = $false)]
         [string]$RawValue
@@ -157,6 +176,8 @@ if (-not $dotnet) {
 $pacExecutableName = if ($IsWindows) { 'pac.exe' } else { 'pac' }
 $pacExecutablePath = Join-Path $pacToolPath $pacExecutableName
 if (Test-Path $pacExecutablePath) {
+    # Updating an existing tool may fail (including version changes); fall back to
+    # uninstall/install with the same selector instead of silently retaining it.
     & dotnet @updateArgs
     if (-not $?) {
         Write-Host "PAC CLI update failed. Reinstalling..."
@@ -173,6 +194,8 @@ if (-not $?) {
 }
 
 $pathSeparator = [System.IO.Path]::PathSeparator
+# The current process needs PATH immediately; runner-specific channels persist it
+# for later steps, whose shells do not inherit this process's environment changes.
 if (-not (($env:PATH -split [regex]::Escape([string]$pathSeparator)) -contains $pacToolPath)) {
     $env:PATH = "$pacToolPath$pathSeparator$env:PATH"
 }

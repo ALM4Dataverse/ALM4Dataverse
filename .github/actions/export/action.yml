@@ -1,3 +1,6 @@
+# Caller permissions must allow source/reservation-tag writes (contents:write),
+# plus id-token:write for OIDC. An explicitly selected WORKFLOW_DISPATCH_TOKEN can
+# override github.token for the final repository dispatch only.
 name: Export
 description: Export Dataverse solutions, commit the unpacked changes, and request a build.
 
@@ -35,6 +38,8 @@ outputs:
 runs:
   using: composite
   steps:
+    # Persist checkout credentials for both version-reservation tags and the later
+    # source commit push. The selected workflow branch is the export target.
     - name: Checkout source code
       uses: actions/checkout@v4
       with:
@@ -42,6 +47,8 @@ runs:
         persist-credentials: true
         fetch-depth: 1
 
+    # Cache restore is only an accelerator; installation still resolves/imports the
+    # requested versions and must run in the same process as export.
     - name: Resolve dependency cache keys
       id: dependency-cache
       shell: pwsh
@@ -66,6 +73,8 @@ runs:
         key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
         path: ~/.alm4dataverse/tools
 
+    # Default the mapping environment to Dev-<branch>; the display label below can
+    # differ and does not choose credentials or the actual Dataverse connection.
     - name: Resolve prefixed repo variables and explicit secrets
       shell: pwsh
       env:
@@ -80,6 +89,7 @@ runs:
       run: |
         & "${{ github.action_path }}/../common/validate-auth.ps1"
 
+    # Use OIDC without a client secret, otherwise mapper-produced login credentials.
     - name: Log in to Azure
       uses: azure/login@v3
       env:
@@ -90,6 +100,8 @@ runs:
         creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
         allow-no-subscriptions: true
 
+    # Export needs explicit scratch paths, branch version policy and the repository
+    # default branch for warnings. Modules and default connection stay in this process.
     - name: Install dependencies, connect, and export
       shell: pwsh
       working-directory: ${{ github.workspace }}/self
@@ -111,6 +123,7 @@ runs:
           -BranchName $env:GITHUB_REF_NAME `
           -DefaultBranchName $env:DEFAULT_BRANCH_NAME
 
+    # Failed exports can still provide worker logs and timing summaries.
     - name: Upload export diagnostics
       if: always()
       uses: actions/upload-artifact@v4
@@ -119,6 +132,8 @@ runs:
         path: ${{ runner.temp }}/export-staging/export-logs
         if-no-files-found: ignore
 
+    # Stage all resulting working-tree changes, not only solution folders (hooks may
+    # update other files). Mark pushed only after commit, push and SHA lookup succeed.
     - name: Commit and push changes
       id: commit-and-push
       shell: pwsh
@@ -153,6 +168,8 @@ runs:
         "pushed=$didPush" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
         "pushed_sha=$pushedSha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+    # No source changes means no BUILD request. Dispatch the actual pushed SHA so
+    # BUILD need not race the branch tip; selected dispatch token wins over job token.
     - name: Trigger BUILD via repository_dispatch
       if: steps.commit-and-push.outputs.pushed == 'true'
       shell: pwsh

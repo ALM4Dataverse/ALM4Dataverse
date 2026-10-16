@@ -1,4 +1,21 @@
+<#
+.SYNOPSIS
+    Defines the shared in-process export scheduler and logging helpers.
+.DESCRIPTION
+    Dot-source this file; it does not start workers. State returned by
+    Start-AlmExportPipeline owns jobs, cloned clients, synchronization handles and
+    a working directory and must be released with Stop-AlmExportPipeline in finally.
+#>
 function Get-AlmExportSetting {
+    <#
+    .SYNOPSIS
+        Validates export settings while preserving explicit sequential opt-out.
+    .DESCRIPTION
+        Defaults: parallel=true, maxParallel=2 package workers,
+        maxConcurrentOperations=4 Dataverse operation slots. Null/empty strings
+        retain defaults; parallel must be Boolean and both limits integers 1-8,
+        even when parallel is false. Returns a new hashtable or throws.
+    #>
     [OutputType([hashtable])]
     param([Parameter(Mandatory)][hashtable]$Config)
 
@@ -22,6 +39,8 @@ function Get-AlmExportSetting {
 }
 
 function Format-AlmLogLine {
+    # CI directives must remain at column zero for the runner to interpret them;
+    # insert context after the directive rather than hiding it behind our prefix.
     [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$SolutionName,
@@ -38,6 +57,8 @@ function Format-AlmLogLine {
 }
 
 function Send-AlmExportEvent {
+    # Thread jobs share these references: enqueue before signalling so the reader
+    # can drain all available events after a wake-up without polling worker output.
     param($Events, [string]$SolutionName, [string]$Phase, [string]$Message)
 
     $Events.Queue.Enqueue([pscustomobject]@{ SolutionName = $SolutionName; Phase = $Phase; Message = $Message })
@@ -45,6 +66,9 @@ function Send-AlmExportEvent {
 }
 
 function Expand-AlmExportSolution {
+    # The SDK locates the managed companion beside the unmanaged ZIP returned by
+    # Wait-AlmSolutionExport; both exports must finish before unpacking Both.
+    # MappingFile redirects unpacked components; blank preserves the ordinary layout.
     param(
         [Parameter(Mandatory)][string]$ZipPath,
         [Parameter(Mandatory)][string]$OutputPath,
@@ -59,6 +83,18 @@ function Expand-AlmExportSolution {
 }
 
 function Start-AlmExportPipeline {
+    <#
+    .SYNOPSIS
+        Allocates scheduler state and queues managed/unmanaged packages per solution.
+    .DESCRIPTION
+        Requires a loaded Dataverse module, a default cloneable connection and
+        Start-ThreadJob. Duplicate names (case-insensitive) or missing cloning throw.
+        Creates a unique directory beneath TempDirectory but does not launch jobs.
+        Returns mutable state for the queue/wait/stop helpers; declined ShouldProcess
+        returns nothing. The borrowed default connection is not owned by the state.
+    .PARAMETER MaxParallel
+        Maximum active package workers, separately bounded by operation slots from Config.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     [OutputType([hashtable])]
     param(
@@ -76,6 +112,8 @@ function Start-AlmExportPipeline {
     $connection = Get-DataverseConnection -GetDefault
     $cloneMethod = $connection.GetType().GetMethods() | Where-Object { $_.Name -eq 'Clone' -and $_.GetParameters().Count -eq 1 } | Select-Object -First 1
     if (-not $cloneMethod) { throw 'Connection cloning is unavailable. Set export.parallel = $false to use sequential processing.' }
+    # Populate details on the original client before cloning so workers do not
+    # independently refresh partially initialized organization metadata.
     $null = $connection.OrganizationDetail
     Get-Command Start-ThreadJob -ErrorAction Stop | Out-Null
     $settings = Get-AlmExportSetting -Config $Config
@@ -113,6 +151,15 @@ function Start-AlmExportPipeline {
 }
 
 function Start-AlmQueuedExport {
+    <#
+    .SYNOPSIS
+        Fills free worker slots from PendingExports, mutating the shared state.
+    .DESCRIPTION
+        Clones one client per package. ArgumentList passes live client, semaphore,
+        cancellation and event references to thread jobs rather than serialized
+        process-job copies. Declined ShouldProcess leaves the queue untouched.
+        Worker output contains one Kind=Export completion record plus diagnostics.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker explicitly binds its parameters through Start-ThreadJob ArgumentList, preserving shared client and semaphore references.')]
     [CmdletBinding(SupportsShouldProcess = $true)]
     param([Parameter(Mandatory)][hashtable]$State)
@@ -132,6 +179,8 @@ function Start-AlmQueuedExport {
             Import-Module $ModulePath
             . $HelpersPath
             $phase = if ($Task.Managed) { 'Export:Managed' } else { 'Export:Unmanaged' }
+            # Cancellation can fail the wait before ownership is acquired; only
+            # release a slot actually held, including when export itself throws.
             $acquired = $false
             try {
                 $Budget.Wait($Cancellation)
@@ -155,6 +204,15 @@ function Start-AlmQueuedExport {
 }
 
 function Receive-AlmExportJob {
+    <#
+    .SYNOPSIS
+        Drains a terminal worker's streams, logs details and returns its completion record.
+    .DESCRIPTION
+        Job must carry AlmSolutionName/AlmPhase. Writes an optional per-worker log
+        and host diagnostics, filtering nested group markers. Throws unless the job
+        completed with exactly one Kind-bearing record and no ErrorRecord, even if
+        other output appears successful. Does not remove the job or dispose its client.
+    #>
     [OutputType([pscustomobject])]
     param([Parameter(Mandatory)]$Job, [string]$LogDirectory = '')
 
@@ -188,6 +246,8 @@ function Receive-AlmExportJob {
 }
 
 function Write-AlmExportEvent {
+    # Drain progress separately from completion records so long-running exports
+    # remain visible while Receive-AlmExportJob waits until a worker is terminal.
     param([Parameter(Mandatory)][hashtable]$State)
 
     $entry = $null
@@ -197,6 +257,15 @@ function Write-AlmExportEvent {
 }
 
 function Wait-AlmSolutionExport {
+    <#
+    .SYNOPSIS
+        Advances all queued work until both packages for one configured solution finish.
+    .DESCRIPTION
+        Drains events and terminal jobs for any solution, records timings and starts
+        more queued work while waiting. Returns the unmanaged ZIP path only after
+        its managed companion completes. Worker failure or declined startup with no
+        active jobs throws; callers still own mandatory Stop-AlmExportPipeline cleanup.
+    #>
     [OutputType([string])]
     param([Parameter(Mandatory)][hashtable]$State, [Parameter(Mandatory)][string]$SolutionName)
 
@@ -222,6 +291,15 @@ function Wait-AlmSolutionExport {
 }
 
 function Stop-AlmExportPipeline {
+    <#
+    .SYNOPSIS
+        Cancels and releases an owned scheduler, including after failure.
+    .DESCRIPTION
+        Stops/removes jobs, drains remaining logs, disposes cloned clients and
+        synchronization handles and deletes WorkDirectory, but not the default
+        connection or external LogDirectory. Intended for one finally call per
+        initialized state, not repeated disposal. Cleanup bypasses ambient WhatIf.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Mandatory teardown cancels owned jobs and releases clients, synchronization handles and temporary files; prompting must not strand resources after an export failure.')]
     param([Parameter(Mandatory)][hashtable]$State)
 

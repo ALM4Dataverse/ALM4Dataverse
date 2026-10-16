@@ -18,6 +18,7 @@ Describe 'Dependency update automation' {
         $script:savedDependencyExitCode = $global:LASTEXITCODE
         $fixtureDirectory = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $fixtureDirectory | Out-Null
+        # These entry points use relative config paths; isolate their writes as well as CLI calls.
         Push-Location $fixtureDirectory
         $env:GITHUB_OUTPUT = Join-Path $fixtureDirectory 'outputs.txt'
         Set-Content 'alm-config-defaults.psd1' -Value "@{ scriptDependencies = @{ 'Test.Module' = '1.0.0' } }"

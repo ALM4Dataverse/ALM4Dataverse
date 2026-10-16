@@ -1,4 +1,6 @@
 @{
+    # Consumer configuration overrides scalars, recursively merges hashtables and
+    # appends arrays. Keep shared defaults here rather than in copied repositories.
     scriptDependencies = @{
         "Rnwood.Dataverse.Data.PowerShell" = "3.2.0"
     }
@@ -18,13 +20,16 @@
         branches = @{}
     }
 
+    # Package exports and version updates share an operation budget; hooks do not.
+    # Both integer limits accept 1..8; parallel = $false retains sequential export.
     export = @{
         parallel = $true
         maxParallel = 2
         maxConcurrentOperations = 4
     }
 
-    # Maximum number of solutions to pack concurrently during BUILD.
+    # Build-command and packing stages each use this limit (1..8), independently
+    # of checker concurrency. All build commands finish before packing starts.
     build = @{
         parallel = $true
         maxParallel = 2

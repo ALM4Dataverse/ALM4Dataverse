@@ -18,6 +18,8 @@ name: 'Deploy $(resources.pipeline.build.runName)'
 appendCommitMessageToRunName: false
 
 stages:
+  # Intentionally empty until setup or a maintainer defines the target stages.
+  # The build resource selects the artifacts; this is not a checkout-and-rebuild flow.
   # Example - uncomment and repeat for each environment to deploy to
 
   # - template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse

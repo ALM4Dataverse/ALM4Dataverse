@@ -5,6 +5,10 @@
     Reads the scriptDependencies from alm-config-defaults.psd1 and checks
     PowerShell Gallery for newer versions. Outputs information about outdated
     dependencies for use in the next workflow step.
+.NOTES
+    Run from the repository root in GitHub Actions with GITHUB_OUTPUT available.
+    Writes has_updates and, when updates exist, outdated-deps.json. A failed
+    registry lookup is warned and skipped, not proof that a module is current.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -43,7 +47,7 @@ foreach ($moduleName in $scriptDependencies.Keys) {
 
         Write-Host "  Latest version: $latestVersion"
 
-        # Compare versions
+        # Use numeric ordering so, for example, 2.10 is newer than 2.9.
         if ($currentVersion -ne $latestVersion) {
             $currentVersionObj = [version]$currentVersion
             $latestVersionObj = [version]$latestVersion

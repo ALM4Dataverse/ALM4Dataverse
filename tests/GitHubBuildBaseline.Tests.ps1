@@ -16,6 +16,8 @@ Describe 'GitHub baseline package selection and deployment order' {
         $env:GITHUB_REPOSITORY = 'example/repository'
         $script:candidatePath = Join-Path $env:RUNNER_TEMP 'candidate'
         $baselineSource = Join-Path $env:RUNNER_TEMP 'baseline-source'
+        # Both packages expose a recording-only deploy entry point, so archive extraction and
+        # invocation order are exercised without importing solutions into a live environment.
         foreach ($packagePath in @($script:candidatePath, $baselineSource)) {
             $deployPath = Join-Path $packagePath 'alm/pipelines/scripts/deploy.ps1'
             New-Item -ItemType Directory -Path (Split-Path $deployPath -Parent) -Force | Out-Null

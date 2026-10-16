@@ -1,6 +1,17 @@
 #Requires -Version 7.0
 #Requires -Modules powershell-yaml
 
+<#
+.SYNOPSIS
+    Validates local Markdown links, fenced examples and configuration references.
+.PARAMETER Paths
+    Explicit Markdown files; otherwise checks README, docs and the scripts README.
+.PARAMETER SkipCoverage
+    Skips configuration/action/template reference checks, not links or examples.
+.DESCRIPTION
+    Parses PowerShell, YAML and JSON examples without executing them. External
+    links are not fetched. Collects failures across files and throws once at the end.
+#>
 param(
     [string[]]$Paths = @(),
     [switch]$SkipCoverage
@@ -25,6 +36,8 @@ $null = [Markdig.MarkdownExtensions]::UseAutoIdentifiers($pipelineBuilder, [Mark
 $markdownPipeline = $pipelineBuilder.Build()
 
 function Get-HeadingId {
+    # Cache IDs from the same GitHub-style heading renderer used for anchor checks;
+    # punctuation, duplicate headings and escaped text cannot be matched by title alone.
     param([string]$Path)
 
     if (-not $headingCache.ContainsKey($Path)) {
@@ -47,6 +60,8 @@ foreach ($path in $Paths) {
         if ($node -is [Markdig.Syntax.Inlines.LinkInline] -and $node.Url -and
             $node.Url -notmatch '^(?:[a-z][a-z0-9+.-]*:|//)') {
             $linkCount++
+            # Query strings are not filesystem paths; decode escaped path characters
+            # only after separating the fragment and query components.
             $parts = $node.Url -split '#', 2
             $relativePath = [Uri]::UnescapeDataString(($parts[0] -split '\?', 2)[0])
             $target = if ($relativePath) {
@@ -91,6 +106,8 @@ foreach ($path in $Paths) {
 }
 
 if (-not $SkipCoverage) {
+    # These are reference-presence checks, not proof that the prose is semantically
+    # complete. Contract accuracy still requires review against the consumers.
     $configReference = Get-Content (Join-Path $repoRoot 'docs/config/alm-config.md') -Raw
     $defaults = Import-PowerShellDataFile (Join-Path $repoRoot 'alm-config-defaults.psd1')
     $template = Import-PowerShellDataFile (Join-Path $repoRoot 'copy-to-your-repo/alm-config.psd1')

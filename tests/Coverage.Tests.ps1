@@ -47,6 +47,8 @@ Describe 'Pester module coverage integration' {
     It 'records execution of an imported module' {
         $fixtureRoot = Join-Path $TestDrive 'module-coverage'
         New-Item -ItemType Directory -Path $fixtureRoot -Force | Out-Null
+        # Run nested Pester in a child process so its coverage instrumentation cannot affect this run.
+        # The embedded Get-FixtureValue is deliberately executable module code, not a Pester mock.
         Set-Content -LiteralPath (Join-Path $fixtureRoot 'Fixture.psm1') -Value @'
 function Get-FixtureValue {
     return 42
@@ -86,6 +88,7 @@ $result.CodeCoverage | ConvertTo-Json -Depth 8 | Set-Content (Join-Path $PSScrip
 
 Describe 'Modified PowerShell file selection' {
     BeforeEach {
+        # Use real Git state in a disposable repository; never stage or rename this checkout's files.
         $repositoryRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $repositoryRoot -Force | Out-Null
         & git -C $repositoryRoot init --quiet

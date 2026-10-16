@@ -35,6 +35,8 @@ jobs:
             const branchCache = new Map();
 
             function getBuildMetadata(release) {
+              // Treat incomplete/unparseable metadata as unowned: ordinary Releases
+              // must not become cleanup candidates merely because of their tag names.
               const body = String(release.body || '');
               const marker = body.match(/<!--\s*alm4dataverse-build-branch:([^\s]+)\s*-->/i);
               if (!marker) return null;
@@ -61,6 +63,8 @@ jobs:
             }
 
             async function ensureMetadataTag(release) {
+              // Preserve the build/run identity before deleting its Release assets.
+              // Existing durable tags are reused; unexpected API failures propagate.
               const metadata = getBuildMetadata(release);
               if (!metadata) {
                 throw new Error(`Release '${release.tag_name}' is missing complete ALM build metadata; refusing to delete it.`);
@@ -100,6 +104,8 @@ jobs:
             }
 
             async function branchExists(branchName) {
+              // Only a 404 proves absence; permission/server failures must not make
+              // a live branch look orphaned and eligible for deletion.
               if (branchCache.has(branchName)) return branchCache.get(branchName);
               let exists = true;
               try {
@@ -112,6 +118,8 @@ jobs:
             }
 
             async function getActiveDeploymentReleaseTags() {
+              // Annotated deployment pointers carry the Release identity in their
+              // message. Lightweight tags have no such metadata and are skipped.
               const activeReleaseTags = new Set();
               const pointerRefs = await github.paginate(github.rest.git.listMatchingRefs, {
                 owner,
@@ -155,6 +163,8 @@ jobs:
                     const dateDifference = (Number.isFinite(rightDate) ? rightDate : 0) - (Number.isFinite(leftDate) ? leftDate : 0);
                     return dateDifference !== 0 ? dateDifference : Number(right.id || 0) - Number(left.id || 0);
                   }).slice(maxReleasesPerBranch);
+              // Apply active-baseline protection after the branch retention cutoff:
+              // protected old releases are additional to the newest retained set.
               const releasesToDelete = retentionCandidates.filter(release =>
                 !activeDeploymentReleaseTags.has(String(release.tag_name))
               );

@@ -40,7 +40,6 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-# Get the directory where this script is located
 $ScriptDir = $PSScriptRoot
 
 Write-Host "==========================================" -ForegroundColor Cyan
@@ -105,6 +104,8 @@ if (-not (Test-Path $CommonLibraryFile)) {
 
 try {
     $commonLibraryContent = Get-Content -Path $CommonLibraryFile -Raw
+    # The library is inserted inside each installer's bootstrap block. Preserve
+    # its text (including authored comments) rather than loading a second file at runtime.
     $commonLibraryContent = ($commonLibraryContent -split "`r?`n" | ForEach-Object { "    $_" }) -join [Environment]::NewLine
 }
 catch {
@@ -112,13 +113,21 @@ catch {
     exit 1
 }
 
-# Create output directory
 if (-not (Test-Path $OutputDir)) {
     New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
 }
 
-# Helper: process a single setup script
 function Invoke-ProcessSetupScript {
+    <#
+    .SYNOPSIS
+        Writes one standalone installer using the release values in script scope.
+    .DESCRIPTION
+        Substitutes release/version/upstream placeholders and embeds the shared
+        library. Exits the process on read/write failure or a required placeholder
+        remaining in the output; it does not publish the generated installer.
+    .PARAMETER PlaceholdersToVerify
+        Placeholders required to disappear for this provider's source template.
+    #>
     param(
         [Parameter(Mandatory)][string]$SourceFile,
         [Parameter(Mandatory)][string]$OutputFile,

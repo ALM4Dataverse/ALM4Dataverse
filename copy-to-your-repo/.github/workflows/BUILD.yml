@@ -2,7 +2,7 @@ name: BUILD
 
 # Triggers on every push to any branch.
 # Also supports manual runs and repository_dispatch from EXPORT.
-# Packs Dataverse solutions into deployable artifacts and tags the source commit.
+# Packs Dataverse solutions into deployable artifacts, tags the source commit,
 # and publishes the same artifacts as GitHub Release assets.
 #
 # See docs/usage/building-releases.md and docs/setup/github-setup.md
@@ -15,6 +15,8 @@ on:
       - '**'
   workflow_dispatch:
   repository_dispatch:
+    # Dispatch runs on the default branch; the payload selects exported source.
+    # source-ref below preserves its exact SHA instead of building a newer tip.
     types:
       - alm4dataverse-export-build
 
@@ -27,6 +29,8 @@ jobs:
     #   name: Build
     #   deployment: false
     permissions:
+      # Release/tag publication and optional deploy dispatch need repository writes;
+      # id-token permits federated authentication when a validation environment is used.
       contents: write
       actions: write
       id-token: write

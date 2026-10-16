@@ -1,4 +1,25 @@
-
+<#
+.SYNOPSIS
+Interactively configures Azure DevOps repositories, pipelines and Dataverse environments.
+.DESCRIPTION
+Requires an interactive PowerShell session on Windows and identities allowed to administer
+the selected Azure DevOps project and Dataverse environments. Downloads pinned modules
+and portable Git, authenticates, then offers branch-aware setup and publication choices.
+Remote resource provisioning can occur before repository changes are published; cancelling
+publication does not roll back those resources.
+.NOTES
+Selected mutation helpers support ShouldProcess; the interactive installer as a whole
+does not provide a dry run.
+.PARAMETER TenantId
+Optional tenant hint for the initial Azure DevOps token acquisition.
+.PARAMETER UseDeviceAuthentication
+Retained for invocation compatibility; the current authentication flow does not use it.
+.PARAMETER ALM4DataverseRef
+Upstream template ref. Releases supply a default; development resolves a local branch or
+commit after Git is available, falling back to stable.
+.EXAMPLE
+.\setup-azdo.ps1 -TenantId contoso.onmicrosoft.com -ALM4DataverseRef stable
+#>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
 [CmdletBinding()]
 param(
@@ -17,7 +38,6 @@ $resolveDevRefAfterGitIsAvailable = $false
 # ALM4DataverseRef default handling - injected during release, fallback for development
 if (-not $ALM4DataverseRef) {
     $injectedRef = '__ALM4DATAVERSE_REF__'
-    # Check if placeholder was replaced by comparing if it starts with double underscore
     if ($injectedRef -like '__*') {
         # Placeholders not replaced - development mode.
         # We resolve this after Git is available to support local branch/commit selection.
@@ -25,7 +45,6 @@ if (-not $ALM4DataverseRef) {
         Write-Host "Development mode: Will resolve ALM4DataverseRef from current branch/commit after Git is available (fallback: 'stable')." -ForegroundColor Yellow
         $ALM4DataverseRef = 'stable'
     } else {
-        # Placeholder was replaced during release - use the injected value
         $ALM4DataverseRef = $injectedRef
     }
 }
@@ -38,7 +57,7 @@ $ProgressPreference = 'SilentlyContinue' # Suppress progress bars
 # It's therefore quite long, as it includes all necessary functions and logic.
 # Version numbers and ALM4Dataverse ref are injected during the release process.
 
-# Any changes must be also reflected in the docs/manual-setup.md file.
+# Keep the user-facing setup steps aligned with docs/setup/azdo-automated-setup.md.
 
 # Shared helper functions are loaded from setup-common.ps1 during development
 # and embedded during release preparation for the downloadable one-file script.
@@ -53,6 +72,13 @@ else {
 #region Initialization
 
 function Install-PortableGit {
+    <#
+    .SYNOPSIS
+    Returns the Git directory under Destination, downloading the pinned Windows archive if needed.
+    .NOTES
+    An existing bin\git.exe is reused without version verification. Download, extraction
+    and missing-executable failures terminate setup; PATH is updated by the caller.
+    #>
     param(
         [Parameter(Mandatory)][string]$Destination
     )
@@ -129,7 +155,6 @@ Write-Host "Using temp module root: $TempModuleRoot"
 # Version numbers are injected during release process
 # For development/testing, fall back to reading from config file if placeholders are present
 $rnwoodDataverseVersion = '__RNWOOD_DATAVERSE_VERSION__'
-# Check if placeholder was replaced by comparing if it starts with double underscore
 if ($rnwoodDataverseVersion -like '__*') {
     # Placeholders not replaced - must be running from repository for development
     $configPath = Join-Path $PSScriptRoot 'alm-config-defaults.psd1'
@@ -145,7 +170,6 @@ if ($rnwoodDataverseVersion -like '__*') {
 # Upstream repository URL is injected during release process
 # For development/testing, use local workspace path or fallback to GitHub
 $upstreamRepo = '__UPSTREAM_REPO__'
-# Check if placeholder was replaced by comparing if it starts with double-underscore
 if ($upstreamRepo -like '__*') {
     # Placeholders not replaced - must be running from repository for development
     if ($PSScriptRoot) {
@@ -162,7 +186,7 @@ $requiredModules = @{
     'Rnwood.Dataverse.Data.PowerShell' = $rnwoodDataverseVersion
 }
 
-# Ensure modules are downloaded before loading so we can patch them
+# Resolve exact module versions before importing; shared helpers handle dependency compatibility.
 foreach ($modName in $requiredModules.Keys) {
     $version = $requiredModules[$modName]
     if (-not (Get-ModuleAvailableExact -Name $modName -RequiredVersion $version)) {
@@ -263,6 +287,7 @@ $secureToken = ConvertTo-SecureString -String $adoAccessToken.Token -AsPlainText
 #region Azure DevOps Setup
 
 function ConvertTo-AzDoOrganizationName {
+    # This is permissive URL/name extraction, not organization existence or URL validation.
     param([Parameter(Mandatory)][string]$InputText)
 
     $text = $InputText.Trim()
@@ -285,6 +310,14 @@ function ConvertTo-AzDoOrganizationName {
 }
 
 function New-AzDoProject {
+    <#
+    .SYNOPSIS
+    Prompts for a process template and returns the newly created VSTeam project.
+    .NOTES
+    Uses the configured VSTeam organization; Organization labels the ShouldProcess
+    target only. Cancellation of the process menu retains Agile, or the first template.
+    WhatIf returns no project; empty names, unavailable processes and creation failures throw.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -361,6 +394,7 @@ function New-AzDoProject {
 }
 
 function Test-AzDoGitRepositoryCommit {
+    # False means no commit was observed, including lookup errors; it is not proof of emptiness.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -380,6 +414,13 @@ function Test-AzDoGitRepositoryCommit {
 }
 
 function Start-AzDoGitRepositoryImport {
+    <#
+    .SYNOPSIS
+    Starts an Azure DevOps server-side Git import and returns its request response.
+    .NOTES
+    Uses the current VSTeam context. Completion is separate: pass the response to
+    Wait-AzDoGitRepositoryImport. A declined ShouldProcess returns no response.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$RepositoryId,
@@ -401,6 +442,15 @@ function Start-AzDoGitRepositoryImport {
 }
 
 function Wait-AzDoGitRepositoryImport {
+    <#
+    .SYNOPSIS
+    Polls an import response's request ID until success, failure or the timeout in seconds.
+    .OUTPUTS
+    System.Object. The successful status response.
+    .NOTES
+    Accepts alternate request-ID and status field names. Polls every five seconds;
+    missing IDs, terminal failure states and elapsed deadlines throw.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryId,
@@ -456,6 +506,16 @@ function Wait-AzDoGitRepositoryImport {
 }
 
 function Get-AzDoSharedRepositorySyncState {
+    <#
+    .SYNOPSIS
+    Clones into WorkRoot and compares HEAD with an upstream ref without changing the remote.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. UpstreamRef, LocalHash, UpstreamHash,
+    CanFastForward and IsAhead; both flags are false for equal or divergent histories.
+    .NOTES
+    WorkRoot must be suitable for git clone. Branch refs resolve to upstream tracking
+    refs, tags to the advertised SHA. The caller owns clone cleanup; preference state is restored.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryRemoteUrl,
@@ -465,6 +525,8 @@ function Get-AzDoSharedRepositorySyncState {
         [Parameter(Mandatory)][string]$AccessToken
     )
 
+    # Git can write progress to stderr on success. Use exit codes for native failures
+    # and restore the caller's terminating-error policy after the comparison.
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
@@ -669,6 +731,17 @@ Set-VSTeamAccount -Account $orgName -SecurePersonalAccessToken $secureToken -Use
 Write-Host "VSTeam configured for organization '$orgName' using a bearer token."
 
 function Initialize-AzDoProjectAndRepository {
+    <#
+    .SYNOPSIS
+    Selects project/repositories, prepares the main clone and reconciles shared template history.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. SelectedProject, MainRepo, MainRepoWorkingTree,
+    MainRepoWorkingRoot, AzDevOpsAccessToken, SharedRepo and SharedRepoName; null on project cancellation.
+    .NOTES
+    Depends on authenticated script context. Sets branch, DEV-name and extension-mode
+    script state, may install extensions and push shared-repository history. Rebase/reset
+    require an explicit menu choice; main-clone cleanup belongs to the outer setup flow.
+    #>
     [CmdletBinding()]
     param()
 
@@ -1057,6 +1130,14 @@ function Initialize-AzDoProjectAndRepository {
 #region Dataverse Environment Selection Helper
 
 function Get-DataverseEnvironmentCatalog {
+    <#
+    .SYNOPSIS
+    Returns discovery environments, reusing the script cache unless ForceRefresh is specified.
+    .NOTES
+    ShowStatus affects discovery presentation only. The token callback requests the
+    resource authority, falling back to global discovery when no resource is supplied.
+    An empty discovery result throws; it is not a valid initial catalog.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -1099,6 +1180,13 @@ function Get-DataverseEnvironmentCatalog {
 }
 
 function Select-DataverseEnvironment {
+    <#
+    .SYNOPSIS
+    Returns a discovered environment selected from a URL-normalized menu, or null on cancellation.
+    .NOTES
+    ExcludeUrl removes a target before PreferredUrl is promoted to the first choice.
+    No remaining environments is an error; PreferredUrl does not bypass discovery.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$Prompt = "Select a Dataverse environment",
@@ -1114,7 +1202,6 @@ function Select-DataverseEnvironment {
     $normalizedExcludeUrl = ConvertTo-NormalizedEnvironmentUrl -Url $ExcludeUrl
     $normalizedPreferredUrl = ConvertTo-NormalizedEnvironmentUrl -Url $PreferredUrl
 
-    # Filter out excluded URL if provided
     if ($ExcludeUrl) {
         $environments = @($environments | Where-Object {
             (ConvertTo-NormalizedEnvironmentUrl -Url $_.Endpoints["WebApplication"]) -ne $normalizedExcludeUrl
@@ -1148,7 +1235,6 @@ function Select-DataverseEnvironment {
         $menuActions += $env
     }
 
-    # Show menu
     $selectedIndex = Select-FromMenu `
         -Title $Prompt `
         -Items $menuItems `
@@ -1163,6 +1249,7 @@ function Select-DataverseEnvironment {
 }
 
 function Get-OptionalObjectPropertyValue {
+    # Missing objects/keys/properties return null under StrictMode; preserve false and zero values.
     [CmdletBinding()]
     param(
         [Parameter()][object]$InputObject,
@@ -1193,6 +1280,13 @@ function Get-OptionalObjectPropertyValue {
 #region Pipeline Setup
 
 function Select-AzDoMainRepository {
+    <#
+    .SYNOPSIS
+    Selects or creates the application's repository in ProjectName and returns its VSTeam object.
+    .NOTES
+    SharedRepositoryName optionally excludes the template repository. Cancellation,
+    blank new names and unresolved repository IDs throw rather than returning a partial choice.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -1256,6 +1350,8 @@ function Select-AzDoMainRepository {
 }
 
 function Get-AzDoSharedRepositoryNameFromWorkingTree {
+    # Reads the first matching scaffold resource declaration in BUILD/EXPORT/IMPORT/branch DEPLOY
+    # order. This is a layout-specific regex, not a general YAML parser; no match returns null.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -1285,6 +1381,7 @@ function Get-AzDoSharedRepositoryNameFromWorkingTree {
 }
 
 function Get-AzDoDeploymentEnvironmentNamesFromWorkingTree {
+    # Extracts distinct literal environmentName lines in file order; missing branch YAML yields none.
     [CmdletBinding()]
     [OutputType([string], [object[]])]
     param(
@@ -1311,6 +1408,15 @@ function Get-AzDoDeploymentEnvironmentNamesFromWorkingTree {
 }
 
 function Get-AzDoExtensionModeFromWorkingTree {
+    <#
+    .SYNOPSIS
+    Detects explicit extension-mode booleans in export, import and branch deployment YAML.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. IsConfigured, HasConflict,
+    UseAlm4DataverseExtension and SourceFiles. The mode is null when absent or conflicting.
+    .NOTES
+    Only unquoted literal true/false lines are recognized; template expressions are not evaluated.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -1358,6 +1464,13 @@ function Get-AzDoExtensionModeFromWorkingTree {
 }
 
 function Select-AzDoSharedRepository {
+    <#
+    .SYNOPSIS
+    Returns the selected or newly created template repository, excluding the application repository.
+    .NOTES
+    PreferredRepositoryName is promoted when available and otherwise seeds the new-name
+    prompt. Blank names are reprompted; cancellation or a missing created ID throws.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -1438,6 +1551,14 @@ function Select-AzDoSharedRepository {
 }
 
 function Sync-CopyToYourRepoIntoGitRepo {
+    <#
+    .SYNOPSIS
+    Copies the scaffold into a working tree, adapting branch, repository and extension references.
+    .NOTES
+    Overwrites differing scaffold files but preserves existing alm-config.psd1 for the
+    later merge. DEPLOY-main becomes DEPLOY-Branch; extension false selects the fallback.
+    Obsolete .template companions are removed for existing destinations. Does not commit.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
@@ -1549,6 +1670,15 @@ function Sync-CopyToYourRepoIntoGitRepo {
 }
 
 function New-AzDoRepoWorkingTree {
+    <#
+    .SYNOPSIS
+    Clones an Azure DevOps repository and returns Path and BaseBranch for subsequent edits.
+    .NOTES
+    The repository default branch takes precedence over PreferredBranch. WorkBranch,
+    when supplied, is reset/created from that base. Uses a per-command bearer header;
+    restores location and error preference but leaves clone cleanup to the caller.
+    WhatIf returns nothing; clone or branch preparation failures throw.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$TargetRepo,
@@ -1641,6 +1771,7 @@ function New-AzDoRepoWorkingTree {
 }
 
 function Get-AzDoDefaultAgentQueueId {
+    # Prefer hosted Azure Pipelines, then Default, then the first queue; no usable ID throws.
     [CmdletBinding()]
     [OutputType([int])]
     param(
@@ -1668,12 +1799,12 @@ function Get-AzDoDefaultAgentQueueId {
 }
 
 function Get-AzDoSecurityNamespaceByName {
+    # Resolve either API name or display name; callers require a namespace with an ID.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Name
     )
 
-    # Use VSTeam command to get security namespace by name
     $allNamespaces = Get-VSTeamSecurityNamespace
     $ns = $allNamespaces | Where-Object { $_.Name -eq $Name -or $_.DisplayName -eq $Name } | Select-Object -First 1
     if (-not $ns -or -not $ns.Id) {
@@ -1683,6 +1814,7 @@ function Get-AzDoSecurityNamespaceByName {
 }
 
 function Get-AzDoSecurityNamespaceActionBit {
+    # Return a long mask bit by action name/display name; missing bit metadata is an error.
     [CmdletBinding()]
     [OutputType([long])]
     param(
@@ -1707,6 +1839,13 @@ function Get-AzDoSecurityNamespaceActionBit {
 }
 
 function Get-AzDoBuildServiceIdentity {
+    <#
+    .SYNOPSIS
+    Returns the ACL identity descriptor for the project's Build Service, not its Graph descriptor.
+    .NOTES
+    Decodes svc. descriptors to match the Build:ProjectId suffix, avoiding display-name
+    ambiguity. Malformed descriptors are skipped; no matching identity throws.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectId,
@@ -1761,6 +1900,7 @@ function Get-AzDoBuildServiceIdentity {
 }
 
 function Get-AzDoAccessControlEntry {
+    # Null means absent OR unreadable ACL/ACE data; callers must not infer successful authorization.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$NamespaceId,
@@ -1798,12 +1938,19 @@ function Get-AzDoAccessControlEntry {
         return $ace
     }
     catch {
-        # If VSTeam command fails, return null (ACE doesn't exist)
+        # Lookup failures share the absent-entry sentinel used by the provisioning caller.
         return $null
     }
 }
 
 function Set-AzDoAccessControlEntry {
+    <#
+    .SYNOPSIS
+    Overwrites the descriptor's allow/deny masks for a security namespace token.
+    .NOTES
+    Callers must merge any bits they intend to retain before invoking this helper.
+    Resolves the namespace object required by VSTeam; honors ShouldProcess.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$NamespaceId,
@@ -1822,6 +1969,14 @@ function Set-AzDoAccessControlEntry {
 }
 
 function Initialize-AzDoBuildServiceRepositoryPermission {
+    <#
+    .SYNOPSIS
+    Grants project Build Service Contribute on one repository.
+    .NOTES
+    Preserves observed unrelated mask bits and clears only the Contribute deny bit.
+    An unreadable ACE is treated as zero masks by the lookup helper; this is not
+    effective/inherited-permission evaluation.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -1829,7 +1984,6 @@ function Initialize-AzDoBuildServiceRepositoryPermission {
         [Parameter(Mandatory)][string]$RepositoryId
     )
 
-    # Find the Build Service identity by searching identities
     $descriptor = Get-AzDoBuildServiceIdentity  -ProjectId $ProjectId -ProjectName $ProjectName
     $descriptor = $descriptor.Trim()  # Clean any whitespace
     Write-Host "Found Build Service descriptor: $descriptor" -ForegroundColor DarkGray
@@ -1867,6 +2021,15 @@ function Initialize-AzDoBuildServiceRepositoryPermission {
 }
 
 function Initialize-AzDoYamlPipelineDefinition {
+    <#
+    .SYNOPSIS
+    Creates or retargets a named YAML build definition in the specified folder.
+    .NOTES
+    DefinitionBranch accepts a branch name or refs/heads ref and must be nonempty.
+    Creates CI triggers sourced from YAML; existing definitions are checked for
+    YAML path, repository and default branch, not reconciled for every setting.
+    Uses the current VSTeam REST project context for writes. Returns no definition.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Project,
@@ -1980,6 +2143,8 @@ function Initialize-AzDoYamlPipelineDefinition {
 }
 
 function Initialize-AzDoMainRepositoryPipeline {
+    # Registers filenames as pipeline names; only DEPLOY-<branch>.yml uses its suffix
+    # as the definition branch. Other YAML uses the repository default (or main).
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Project,
@@ -2011,6 +2176,13 @@ function Initialize-AzDoMainRepositoryPipeline {
 }
 
 function Initialize-AzDoDeploymentApproverTeam {
+    <#
+    .SYNOPSIS
+    Returns the environment's deployment-approver team, creating it and adding the current user.
+    .NOTES
+    Membership requires resolving both profile email to a user and team name to a
+    group descriptor; failure throws. This does not remove any existing members.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -2048,6 +2220,8 @@ function Initialize-AzDoDeploymentApproverTeam {
 }
 
 function Initialize-AzDoVariableGroupApproval {
+    # An existing Approval check is retained without reconciling its approvers/settings.
+    # Otherwise resolve the team Graph identity and add a check; REST failures propagate.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2124,6 +2298,8 @@ function Initialize-AzDoVariableGroupApproval {
 }
 
 function Initialize-AzDoVariableGroupExclusiveLock {
+    # Add the variable-group lock only if none is reported; existing checks are not rewritten.
+    # The shared resource serializes consumers independently of branch-specific YAML names.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2178,6 +2354,8 @@ function Initialize-AzDoVariableGroupExclusiveLock {
 }
 
 function Initialize-AzDoEnvironment {
+    # Return the named Azure Pipelines environment, creating it if absent.
+    # Existing descriptions are preserved; lookup/create failures terminate provisioning.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2222,11 +2400,13 @@ function Initialize-AzDoEnvironment {
 }
 
 function Initialize-AzDoPipelinePermission {
+    # Authorize one pipeline for the named resource, not all pipelines.
+    # Failures warn and continue so the user can authorize the resource on first run.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
         [Parameter(Mandatory)][string]$Project,
-        [Parameter(Mandatory)][string]$ResourceType, # 'endpoint' or 'variablegroup'
+        [Parameter(Mandatory)][string]$ResourceType, # endpoint, variablegroup, environment or repository
         [Parameter(Mandatory)][string]$ResourceId,
         [Parameter(Mandatory)][int]$PipelineId
     )
@@ -2279,6 +2459,15 @@ function Initialize-AzDoPipelinePermission {
 }
 
 function Initialize-AzDoServiceEndpoint {
+    <#
+    .SYNOPSIS
+    Returns a named Power Platform service connection, recreating it when its binding changes.
+    .NOTES
+    Compares normalized URL, application ID and auth type. Supplying a new secret
+    forces recreation; an unchanged secret connection can be reused without its secret.
+    Recreation removes the old endpoint before creating the replacement and is not
+    transactional. Refetches after creation to obtain Azure DevOps WIF issuer/subject.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -2383,6 +2572,8 @@ function Initialize-AzDoServiceEndpoint {
 }
 
 function Initialize-EntraIdServicePrincipal {
+    # Return the first appId match in the tenant or create its enterprise application.
+    # Lookup failure warns but still attempts creation; creation failure propagates.
     param(
         [Parameter(Mandatory)][string]$ApplicationId,
         [Parameter(Mandatory)][string]$TenantId
@@ -2433,6 +2624,10 @@ function Add-EntraIdFederatedCredential {
     .DESCRIPTION
         Creates a federated identity credential that allows Azure DevOps to authenticate to Azure
         using Workload Identity Federation (WIF) without requiring client secrets.
+        Reuses the first issuer/subject match, regardless of credential name.
+        A failed lookup warns and proceeds to creation; a failed creation throws.
+    .PARAMETER ApplicationObjectId
+        Directory object ID of the application, not its client/application ID.
     #>
     param(
         [Parameter(Mandatory)][string]$ApplicationObjectId,
@@ -2492,6 +2687,16 @@ function Add-EntraIdFederatedCredential {
 }
 
 function New-EntraIdApplication {
+    <#
+    .SYNOPSIS
+    Reuses the first display-name match or creates an application, and ensures its service principal.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. Credential metadata including client ID,
+    application object ID, tenant, auth type and optional plaintext ClientSecret.
+    .NOTES
+    WIF leaves ClientSecret null; other auth types create a new secret even for an
+    existing application. WhatIf returns nothing. Graph/secret failures propagate.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$DisplayName,
@@ -2551,6 +2756,16 @@ function New-EntraIdApplication {
 }
 
 function Get-PowerPlatformSCCredential {
+    <#
+    .SYNOPSIS
+    Interactively selects, creates or reuses deployment credentials for an environment.
+    .NOTES
+    Returns credential metadata, not necessarily a secret: existing endpoints can be
+    represented by IsExistingServiceConnection with a null ClientSecret. Explicit
+    rotation generates a secret and clears that marker. Cached objects are reused;
+    an existing environment credential is copied before rotation. Disabling extension
+    mode limits new/manual choices to secret auth. Cancellation throws.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][array]$ExistingCredentials,
@@ -2629,7 +2844,6 @@ function Get-PowerPlatformSCCredential {
         Write-Warning "Failed to list applications from Entra ID: $($_.Exception.Message)"
     }
 
-    # 3. Build Menu
     $menuItems = @()
     $menuActions = @() # To track what each item does
 
@@ -2646,7 +2860,7 @@ function Get-PowerPlatformSCCredential {
         $menuActions += @{ Type = 'Existing'; Creds = $ExistingCredential }
     }
 
-    # Priority 1: Recommended App (Existing SC or Exact Name Match)
+    # Recommend the application already bound to the existing service connection.
     $recommendedApp = $null
 
     if ($existingScAppId) {
@@ -2675,7 +2889,6 @@ function Get-PowerPlatformSCCredential {
     }
 
 
-    # 4. Show Menu
     Write-Host ""
     Write-SetupGuidance -Lines @(
         "Service Principal credentials are used to authenticate the pipeline to Dataverse.",
@@ -2856,6 +3069,8 @@ function Get-PowerPlatformSCCredential {
 }
 
 function Get-DataverseServiceAccountUPN {
+    # Returns an existing/cached or manually entered ownership UPN; cancellation throws.
+    # The manual check is format-only, not a directory, role or licensing verification.
     [CmdletBinding()]
     param(
         [Parameter()][array]$ExistingServiceAccounts,
@@ -2863,7 +3078,6 @@ function Get-DataverseServiceAccountUPN {
         [Parameter()][string]$ExistingValue
     )
 
-    # Build Menu
     $menuItems = @()
     $menuActions = @() # To track what each item does
 
@@ -2885,7 +3099,6 @@ function Get-DataverseServiceAccountUPN {
         }
     }
 
-    # Show Menu
     Write-Host ""
     Write-SetupGuidance -Lines @(
         "Service Account credentials are used for ownership and licensing of Cloud Flows.",
@@ -2932,6 +3145,14 @@ function Get-DataverseServiceAccountUPN {
 }
 
 function Initialize-AzDoVariableGroup {
+    <#
+    .SYNOPSIS
+    Returns or creates a variable group and ensures locking plus optional deployment approval.
+    .NOTES
+    Variables seed new groups only; updates are handled separately. Only not-found
+    lookup failures permit creation. Existing approval checks are not removed when
+    RequireDeploymentApproval is false.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Organization,
@@ -2993,6 +3214,14 @@ function Initialize-AzDoVariableGroup {
 }
 
 function Update-AzDoVariableGroup {
+    <#
+    .SYNOPSIS
+    Merges supplied string values over the existing group's values and submits an update.
+    .NOTES
+    Returns the pre-update group object on success, null on missing group or failure.
+    Copies values only, not secret metadata; this helper is for setup's nonsecret
+    environment variables. WhatIf skips lookup and mutation.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -3038,6 +3267,7 @@ function Update-AzDoVariableGroup {
     }
 }
 
+# Resource provisioning precedes branch review/publication; later cancellation does not undo it.
 $initialization = Initialize-AzDoProjectAndRepository
 if (-not $initialization) {
     return
@@ -3131,6 +3361,16 @@ Invoke-WithErrorHandling -OperationName "Preparing main repository working tree"
 #region Dev Environment and Solutions Selection
 
 function Get-DataverseSolutionsSelection {
+    <#
+    .SYNOPSIS
+    Selects a DEV environment and an ordered list of its visible unmanaged user solutions.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. Solutions (name/deployUnmanaged entries)
+    and EnvironmentUrl; EnvironmentFriendlyName is present on selection-completion paths.
+    .NOTES
+    Existing config seeds only solutions still discoverable. An empty selection is a
+    valid empty Solutions list; environment cancellation and connection failures throw.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$ExistingConfigPath,
@@ -3257,6 +3497,9 @@ function Get-DataverseSolutionsSelection {
 }
 
 function Update-AlmConfigInWorkingTree {
+    # Null Solutions preserves the list (discovery skipped); an empty array clears it.
+    # Checker/baseline settings are always reconciled. Returns whether any helper changed
+    # the file, or false under WhatIf; shared helpers preserve unrelated configuration.
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter()][AllowNull()][array]$Solutions,
@@ -3291,6 +3534,14 @@ function Update-AlmConfigInWorkingTree {
 }
 
 function Update-AzDoBuildPipelineInWorkingTree {
+    <#
+    .SYNOPSIS
+    Replaces an existing BUILD scaffold with the shared build-template invocation.
+    .NOTES
+    The generated CI trigger includes every branch. An empty BuildEnvironmentName leaves
+    validation unassociated; single quotes in its YAML scalar are escaped. This is a
+    whole-file replacement, not a merge of custom YAML. WhatIf skips the write.
+    #>
         [CmdletBinding(SupportsShouldProcess = $true)]
         param(
                 [Parameter(Mandatory)][string]$RepoRoot,
@@ -3336,6 +3587,9 @@ stages:
 #region Deployment Environments Selection
 
 function Initialize-DataverseApplicationUser {
+    # Ensure an app-ID systemuser and its root-business-unit System Administrator role.
+    # Uses interactive tenant-scoped tokens, not the app's credentials; missing root BU,
+    # role or connection throws. Existing user/role associations are retained.
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
@@ -3407,6 +3661,8 @@ function Initialize-DataverseApplicationUser {
 }
 
 function Initialize-DataverseServiceAccountUser {
+    # Resolve/create the UPN systemuser in the root BU and add System Administrator
+    # if absent. This provisions Dataverse records/roles, not an Entra account or license.
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
@@ -3494,6 +3750,7 @@ function Get-ExistingEnvironmentsFromWorkingTree {
 }
 
 function Get-AzDoExistingEnvironmentServiceAccountUPN {
+    # Best-effort discovery: missing groups/variables and lookup failures all yield null.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -3514,6 +3771,15 @@ function Get-AzDoExistingEnvironmentServiceAccountUPN {
 }
 
 function Get-AzDoExistingEnvironmentState {
+    <#
+    .SYNOPSIS
+    Reconstructs environment URL, ownership and credential metadata from existing Azure DevOps resources.
+    .NOTES
+    Returns null only when URL, credentials and service-account UPN are all unavailable;
+    otherwise fields can be partial. Endpoint tenant overrides the supplied hint.
+    Secret values are not read: HasExistingSecret marks the configured authentication
+    scheme, while ClientSecret remains null for subsequent keep-or-rotate selection.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$ProjectName,
@@ -3587,6 +3853,8 @@ function Get-AzDoExistingEnvironmentState {
 }
 
 function Get-GitRepoFileContentFromRemoteBranch {
+    # Inspect fetched origin first, then local branch without checkout or network fetch.
+    # Missing refs/files and whitespace-only content share the null sentinel.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3613,6 +3881,7 @@ function Get-GitRepoFileContentFromRemoteBranch {
 }
 
 function ConvertTo-NormalizedGitBranchName {
+    # Strip repeated origin/ tracking prefixes only; refs/heads is not normalized here.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Branch
@@ -3627,6 +3896,7 @@ function ConvertTo-NormalizedGitBranchName {
 }
 
 function Resolve-GitExistingBranchRef {
+    # Return the first commit-resolving origin/local ref, or null; does not fetch.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3650,6 +3920,8 @@ function Resolve-GitExistingBranchRef {
 }
 
 function Get-AzDoDeploymentEnvironmentNamesFromPipelineContent {
+    # Scaffold-only line parsing: distinct literal environmentName values in encounter
+    # order, or no output for empty content. YAML expressions/structure are not evaluated.
     [CmdletBinding()]
     [OutputType([string], [object[]])]
     param(
@@ -3673,6 +3945,8 @@ function Get-AzDoDeploymentEnvironmentNamesFromPipelineContent {
 }
 
 function Get-AzDoBuildEnvironmentNameFromPipelineContent {
+    # Return the first buildEnvironmentName scalar, trimming optional quotes/whitespace;
+    # missing or empty association is null, not a default BUILD environment.
     [CmdletBinding()]
     param(
         [Parameter()][string]$PipelineContent
@@ -3696,6 +3970,8 @@ function Get-AzDoBuildEnvironmentNameFromPipelineContent {
 }
 
 function Get-SolutionCheckEnabledFromConfigContent {
+    # Detect the scaffold's literal solutionCheck.enabled; absent/unrecognized means false.
+    # This intentionally inspects text without executing/importing remote configuration.
     [CmdletBinding()]
     param(
         [Parameter()][string]$ConfigContent
@@ -3714,6 +3990,8 @@ function Get-SolutionCheckEnabledFromConfigContent {
 }
 
 function Get-AzDoBuildValidationEnabledFromRepoClone {
+    # Legacy detection accepts either BUILD's environment association OR enabled checker
+    # config; both files are read from refs, not uncommitted working-tree edits.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3731,6 +4009,14 @@ function Get-AzDoBuildValidationEnabledFromRepoClone {
 }
 
 function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
+    <#
+    .SYNOPSIS
+    Inspects fetched origin branches for DEPLOY YAML and returns one mapping per filename branch.
+    .NOTES
+    BranchName comes from the filename; SourceBranch is where that file was found.
+    EnvironmentNames come from scaffold text. Multiple copies collapse by BranchName,
+    so this is discovery for the wizard, not validation of cross-branch consistency.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -3774,6 +4060,8 @@ function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
 }
 
 function Get-AzDoRegisteredDeployPipelineBranch {
+    # Include branches named by project build definitions even if clone discovery misses
+    # their YAML; DEPLOY definition names take precedence over their YAML filename.
     [CmdletBinding()]
     [OutputType([string], [object[]])]
     param(
@@ -3801,6 +4089,17 @@ function Get-AzDoRegisteredDeployPipelineBranch {
 }
 
 function Get-AzDoRepositoryExistingSetupState {
+    <#
+    .SYNOPSIS
+    Combines clone YAML discovery and registered definitions into branch/environment setup defaults.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. BranchStates plus default-branch BUILD
+    validation flag, environment name and discovered environment metadata.
+    .NOTES
+    Falls back to DefaultBranch only when neither discovery source yields branches.
+    Accepts alternate environment-list/property shapes from mapping providers; unresolved
+    environment resources are omitted rather than fabricated as configured targets.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -3892,6 +4191,8 @@ function Get-AzDoRepositoryExistingSetupState {
 }
 
 function Get-AzDoInitialBranchMapping {
+    # Adapt discovered states to the branch editor's BranchName/Environments contract.
+    # Null targets are removed; no usable states gives one empty DefaultBranch mapping.
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -3924,6 +4225,8 @@ function Get-AzDoInitialBranchMapping {
 }
 
 function New-AzDoBranchSetupState {
+    # Keep discovery separate from later interactive DEV configuration and publication plan.
+    # Drop null deployment entries but preserve the supplied environment objects and order.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$BranchName,
@@ -3944,6 +4247,8 @@ function New-AzDoBranchSetupState {
 }
 
 function Get-AzDoEnvironmentConfiguration {
+    # Collect credentials/ownership, normalize URL and return setup metadata with DEV/BUILD
+    # role flags. This prompts (and may create credentials), but does not provision Dataverse roles.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentName,
@@ -3985,6 +4290,17 @@ function Get-AzDoEnvironmentConfiguration {
 }
 
 function Get-DataverseEnvironmentsSelection {
+    <#
+    .SYNOPSIS
+    Edits ordered deployment targets and completes missing URL, credential and ownership metadata.
+    .NOTES
+    InitialEnvironments and branch YAML can seed the editor. Add/edit callbacks receive
+    the current selections (edit also receives the target and index); null leaves that
+    action unchanged. Duplicate URL/short-name checks exclude the edited row.
+    ExcludedUrl protects DEV from deployment selection, including final completion.
+    Returns completed targets in promotion order; credentials/accounts become reusable
+    within this selection. Cancelling required resolution throws.
+    #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
@@ -4211,6 +4527,15 @@ function Get-DataverseEnvironmentsSelection {
 }
 
 function Update-DeployPipelineInWorkingTree {
+    <#
+    .SYNOPSIS
+    Replaces scaffold deployment-template entries with the selected environment sequence.
+    .NOTES
+    An empty target list removes the branch DEPLOY file; nonempty targets require the
+    scaffold to exist. The line scanner recognizes the exact template and six-space
+    parameter layout, not arbitrary YAML. Preserves other lines and appends entries
+    in promotion order. Returns whether content changed (false under WhatIf).
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][array]$Environments,
@@ -4280,6 +4605,8 @@ function Update-DeployPipelineInWorkingTree {
 }
 
 function New-AzDoPullRequest {
+    # SourceBranch/TargetBranch are short names: refs/heads/ is added to the REST payload.
+    # Return the API response, or nothing if ShouldProcess declines; API failures propagate.
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][string]$RepositoryId,
@@ -4302,6 +4629,17 @@ function New-AzDoPullRequest {
 }
 
 function Publish-AzDoRepoChange {
+    <#
+    .SYNOPSIS
+    Stages all clone changes, commits/pushes the planned branch and optionally creates a pull request.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. HasChanges, BranchName, TargetBranch,
+    PullRequestUrl and Mode. Native Git output can also appear on the success stream.
+    .NOTES
+    Assumes the planned branch is already checked out. Even a clean index is pushed
+    to ensure the branch exists, but no PR is created for that no-change path.
+    Writes clone-local author config; location/error preference are restored on failure.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -4386,6 +4724,17 @@ function Publish-AzDoRepoChange {
 }
 
 function Publish-AzDoBranchSetupChange {
+    <#
+    .SYNOPSIS
+    Rebuilds one branch's setup files in the disposable clone and publishes its plan.
+    .NOTES
+    Destructively resets tracked changes and cleans untracked files before switching
+    branches; RepoRoot must not be a user's working checkout. Existing target history
+    wins, then default-branch history, then an orphan/available HEAD path.
+    PR mode first creates a missing target branch (with an empty commit if needed)
+    so Azure DevOps has a target. Null Solutions preserves that branch's list.
+    Returns the publication result; failures do not roll back prior remote pushes.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
@@ -4526,6 +4875,8 @@ function Publish-AzDoBranchSetupChange {
 }
 
 function Get-AzDoPublishSummaryText {
+    # Count content-changing results only; no-change pushes are intentionally not
+    # described as updates, and PullRequest mode does not guarantee a returned PR URL.
     [CmdletBinding()]
     [OutputType([string])]
     param(
@@ -4557,6 +4908,18 @@ function Get-AzDoPublishSummaryText {
 }
 
 function Set-AzDoEnvironmentConfiguration {
+    <#
+    .SYNOPSIS
+    Applies selected credentials, Dataverse roles, variable-group checks and pipeline access.
+    .NOTES
+    DEV authorizes EXPORT; other roles use DeployPipeline (BUILD is passed there for
+    validation). Existing-connection markers skip endpoint recreation and federation.
+    WIF issuer/subject must come from Azure DevOps before adding the Entra credential;
+    missing federation metadata warns for manual completion.
+    All groups get locking; only non-DEV/non-BUILD targets request deployment approval.
+    Example CR/EV variables are scaffolds, not discovered connection IDs or values.
+    Honors ShouldProcess at entry; provisioning is not transactional.
+    #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         [Parameter(Mandatory)][object]$EnvironmentConfiguration,
@@ -4672,6 +5035,18 @@ function Set-AzDoEnvironmentConfiguration {
 }
 
 function Invoke-AzDoBranchAwareSetup {
+    <#
+    .SYNOPSIS
+    Runs the branch/environment/BUILD/solution wizard and returns its reviewed configuration.
+    .NOTES
+    Returns BranchStates, SolutionData, SolutionSourceBranch and global BUILD settings;
+    this function does not publish Git changes. Credential selection can provision
+    Entra resources before review. Requires authenticated setup context and shared UI helpers.
+    Branch callbacks take allMappings then mappingToEdit positionally. Completed
+    branch editing suppresses the separate DEV/deployment steps. Only DEV-configured
+    branches can supply solution discovery; otherwise SolutionData stays null so
+    publication preserves existing solution lists.
+    #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'MainRepoWorkingRoot', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'MainRepo', Justification = 'Captured by the nested wizard actions.')]
@@ -4908,6 +5283,8 @@ function Invoke-AzDoBranchAwareSetup {
                     $existingBranchState
                 })
 
+                # The branch editor already gathered both roles; later standalone steps
+                # remain available for wizard flows that have not completed this mapping.
                 $wizardState.BranchEnvironmentMappingCompleted = $true
             }
         },
@@ -5097,6 +5474,8 @@ function Invoke-AzDoBranchAwareSetup {
                     $serviceAccountsCache += $wizardState.BuildValidationEnvironmentConfiguration.ServiceAccountUPN
                 }
 
+                # BUILD validation is shared across branches; its optional baseline must
+                # come from a separate deployment environment, not the validation target.
                 $baselineEnvironments = @()
                 foreach ($branchState in @($wizardState.BranchStates)) {
                     $baselineEnvironments += @($branchState.DeploymentEnvironments)
@@ -5213,6 +5592,8 @@ function Invoke-AzDoBranchAwareSetup {
     }
 }
 
+# Capture reviewed choices before publishing each branch independently. Partial remote
+# updates can survive later failures; the completion links identify PRs still needing merge.
 $azDoSetupResult = Invoke-AzDoBranchAwareSetup `
     -MainRepoWorkingRoot $mainRepoWorkingRoot `
     -MainRepo $mainRepo `
@@ -5293,6 +5674,8 @@ $script:yamlFiles = @(
 )
 $script:yamlFiles += @($branchStates | Where-Object { @($_.DeploymentEnvironments).Count -gt 0 } | ForEach-Object { "pipelines/DEPLOY-$($_.BranchName).yml" })
 
+# Definitions and resource authorization follow publication, even in PR mode; generated
+# branch files may not be effective until those PRs are merged.
 Write-Section `
     -Message 'Ensuring Build Service has Contribute on main repo'
 Invoke-WithErrorHandling -OperationName 'Setting Up Build Service Permissions' -StatusMessage 'Granting build service permissions for the main repository...' -CaptureOutputInPanel -ScriptBlock {

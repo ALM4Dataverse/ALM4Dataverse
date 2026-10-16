@@ -14,6 +14,8 @@ parameters:
   displayName: 'Commit message for exported changes'
 
 variables:
+# Keep the variable group and Dev service connection named for the selected branch.
+# This convention uses Build.SourceBranchName, not the complete refs/heads/... ref.
 - group: Environment-Dev-${{ variables['Build.SourceBranchName'] }}
 
 stages:

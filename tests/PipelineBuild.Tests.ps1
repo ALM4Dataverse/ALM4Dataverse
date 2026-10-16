@@ -1,6 +1,8 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:buildScript = Join-Path $repoRoot 'pipelines/scripts/build.ps1'
+    # Capture XML during packing: production removes the generated mapping file before
+    # assertions run, so retaining its path alone cannot verify directives or escaping.
     if (-not ('AlmBuildMappingTestCapture' -as [type])) {
         Add-Type -TypeDefinition @'
 public static class AlmBuildMappingTestCapture
@@ -88,6 +90,8 @@ Describe 'Build artifacts and solution-check helpers' {
         Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4+build pac' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestPac' } } -ParameterFilter { $Name -eq 'pac' }
         Mock Invoke-TestPac { $global:LASTEXITCODE = 0; 'Critical: 0'; 'High: 1'; 'Low: 2' }
+        # Most cases keep work in Pester's runspace so mocks remain visible. Both overlap cases
+        # opt out and supply an importable pack module to exercise actual worker isolation.
         Mock ForEach-Object {
             if ($env:ALM_BUILD_TEST_REAL_PARALLEL -eq 'true') {
                 $InputObject | Microsoft.PowerShell.Core\ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel $Parallel
@@ -320,6 +324,8 @@ Set-Content -LiteralPath $OutputPath -Value built
         $barrierDirectory = Join-Path $TestDrive 'build-command-barrier'
         New-Item -ItemType Directory -Path $barrierDirectory -Force | Out-Null
         $commandWorkerScript = Join-Path $TestDrive 'build-command-worker.ps1'
+        # Child build commands must both reach their markers before either exits; this proves
+        # overlap independently of pack-worker concurrency and fails with bounded waiting.
         Set-Content -LiteralPath $commandWorkerScript -Value @'
 param([string]$BarrierDirectory, [string]$Name)
 $marker = Join-Path $BarrierDirectory "$Name.started"
@@ -334,6 +340,8 @@ while ([datetime]::UtcNow -lt $deadline) {
 throw "Build command '$Name' did not overlap with the other command."
 '@
         $packModulePath = Join-Path $TestDrive 'Rnwood.Dataverse.Data.PowerShell.psm1'
+        # This pack stub only completes the pipeline; the separate worker script above is
+        # the concurrency probe, unlike the pack-overlap fixture later in this suite.
         Set-Content -LiteralPath $packModulePath -Value @'
 function Compress-DataverseSolutionFile {
     param($Path, $OutputPath, $PackageType, $MappingFile)
@@ -405,6 +413,7 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
     }
 
     It 'generates mapping XML in entry order with all supported directive types' {
+        # Ampersands force XML attribute escaping as well as ordered directive generation.
         $pluginDirectory = Join-Path $script:sourceDirectory 'plugins/Source&Metadata'
         $pluginFile = Join-Path $script:sourceDirectory 'plugins/bin&build/Example.dll'
         $webResourceDirectory = Join-Path $script:sourceDirectory 'webresources'
@@ -547,6 +556,8 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
         $barrierDirectory = Join-Path $TestDrive 'pack-worker-barrier'
         New-Item -ItemType Directory -Path $barrierDirectory -Force | Out-Null
         $script:packWorkerModulePath = Join-Path $TestDrive 'Rnwood.Dataverse.Data.PowerShell.psm1'
+        # Each embedded pack invocation must observe its peer's marker before returning;
+        # sequential execution therefore fails instead of passing a timing-only assertion.
         Set-Content -LiteralPath $script:packWorkerModulePath -Value @"
 function Compress-DataverseSolutionFile {
     param([string]`$Path, [string]`$OutputPath, [string]`$PackageType)

@@ -1,3 +1,5 @@
+# The caller owns job environment/permissions; OIDC requires id-token:write.
+# This imports current source as unmanaged packages, not a published BUILD Release.
 name: Import
 description: Build the current source and import unmanaged solutions into Dataverse.
 
@@ -20,12 +22,14 @@ inputs:
 runs:
   using: composite
   steps:
+    # self is the source/configuration tree; implementation is taken from this action.
     - name: Checkout source code
       uses: actions/checkout@v4
       with:
         path: self
         fetch-depth: 1
 
+    # Requested-version cache keys do not pin floating versions or replace install.
     - name: Resolve dependency cache keys
       id: dependency-cache
       shell: pwsh
@@ -50,6 +54,8 @@ runs:
         key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
         path: ~/.alm4dataverse/tools
 
+    # Match export's Dev-<branch> default and persist values for following steps;
+    # explicit selected secrets override runtime values, variables only fill blanks.
     - name: Resolve prefixed repo variables and explicit secrets
       shell: pwsh
       env:
@@ -59,11 +65,13 @@ runs:
       run: |
         & "${{ github.action_path }}/../common/resolve-prefixed-env.ps1"
 
+    # Unlike export, import runs deployment/process activation and needs a service UPN.
     - name: Validate authentication inputs
       shell: pwsh
       run: |
         & "${{ github.action_path }}/../common/validate-auth.ps1" -RequireServiceAccount
 
+    # Empty client secret selects OIDC; otherwise consume the mapper's credentials.
     - name: Log in to Azure
       uses: azure/login@v3
       env:
@@ -74,6 +82,9 @@ runs:
         creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
         allow-no-subscriptions: true
 
+    # Expand connection-reference JSON for deploy.ps1, then retain loaded modules/
+    # default connection within one process. Import builds (including enabled
+    # checker policy) before forcing unmanaged deployment to the connected environment.
     - name: Install dependencies, connect, and import
       shell: pwsh
       working-directory: ${{ github.workspace }}/self

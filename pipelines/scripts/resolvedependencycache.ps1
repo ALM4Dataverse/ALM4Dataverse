@@ -14,6 +14,16 @@
     - module_cache_key
     - pac_cache_enabled (true/false)
     - pac_cache_key
+.PARAMETER BaseDirectory
+    Configuration/lock-file directory; must exist and contain alm-config.psd1.
+.PARAMETER AlmScriptsRoot
+    Directory containing common.ps1, allowing artifact-bundled defaults to be used.
+.NOTES
+    Keys are partitioned by RUNNER_OS (or 'unknown'). Missing GITHUB_OUTPUT prints
+    name=value pairs to the host instead. Cache hits do not replace dependency
+    installation: floating selectors are requested versions, not resolved versions.
+.EXAMPLE
+    .\pipelines\scripts\resolvedependencycache.ps1 -BaseDirectory .
 #>
 
 param(
@@ -27,6 +37,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 function ConvertTo-VersionSpecifier {
+    # Cache identity treats blank as latest and ignores selector casing/outer spaces.
     param(
         [Parameter(Mandatory = $false)]
         [string]$Value
@@ -51,6 +62,7 @@ function Get-HashHex {
 }
 
 function Write-StepOutput {
+    # This helper only emits single-line values; cache hashes/flags need no heredoc.
     param(
         [Parameter(Mandatory = $true)]
         [string]$Name,
@@ -99,6 +111,8 @@ else {
     Write-Host "Resolved cache versions from alm-config.psd1/defaults (no lock file found)."
 }
 
+# Sort both collection and serialization so hashtable iteration order cannot
+# invalidate an otherwise identical dependency cache key.
 $moduleSpecs = @{}
 if ($config.scriptDependencies -is [hashtable]) {
     foreach ($name in ($config.scriptDependencies.Keys | Sort-Object)) {

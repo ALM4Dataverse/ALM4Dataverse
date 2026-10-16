@@ -3,8 +3,9 @@
     Exports Dataverse solutions from a specified environment and unpacks them into the source directory.
 .DESCRIPTION
     This script exports the Dataverse solutions defined in alm-config.psd1 from the connected
-    Dataverse environment. It exports both managed and unmanaged versions of each solution
-    and saves them to the specified artifact staging directory.
+    Dataverse environment. Parallel mode exports managed and unmanaged packages to a
+    working directory under TempDirectory before unpacking into the source tree.
+    ArtifactStagingDirectory receives export diagnostics, not deployment packages.
 
     After exporting, it unpacks each solution into the source directory's solution folders.
     If any changes are detected in the unpacked solutions compared to the existing source,
@@ -12,6 +13,35 @@
 
     Hooks defined in alm-config.psd1 are invoked at various stages of the export process
     to allow for custom pre- and post-export actions.
+
+    Inline mappings redirect unpacked components to their configured source paths
+    without running buildCommand entries. Old/new comparison packages use the same
+    mappings; Git change detection includes mapped source paths inside the repository.
+.PARAMETER SourceDirectory
+    Git working tree containing alm-config.psd1 and solutions. Run from that root
+    when hooks use repository-relative paths.
+.PARAMETER ArtifactStagingDirectory
+    Root for export-logs; diagnostics are retained after worker cleanup.
+.PARAMETER TempDirectory
+    Scratch root for comparison packages and parallel export work. Supply a real
+    usable path explicitly; the declared default leaves the GetTempPath expression
+    as literal text while evaluating only the GetTempFileName subexpression.
+.PARAMETER EnvironmentName
+    Diagnostic label and hook context value, not the connection target.
+.PARAMETER BranchName
+    Branch used to resolve buildVersion MAJOR.MINOR into solution Major.Build.
+.PARAMETER DefaultBranchName
+    Optional default branch for warnings; otherwise origin's symbolic HEAD is queried.
+.PARAMETER PassThru
+    Emits Parallel, TotalSeconds and WorkerTimings after successful completion.
+.NOTES
+    Requires installed dependencies, a default Dataverse connection and Git access
+    to push reservation tags to origin. Changed solutions reserve a version before
+    updating source XML and Dataverse. Failures do not roll back tags or source changes.
+    Parallel worker resources are released in finally; diagnostics describe overall
+    run status, not a per-solution transaction outcome.
+.EXAMPLE
+    .\pipelines\scripts\export.ps1 -SourceDirectory . -ArtifactStagingDirectory .\staging -TempDirectory .\export-work -BranchName main -DefaultBranchName main
 #>
 
 param(
@@ -75,6 +105,8 @@ $generatedMappingFiles = [System.Collections.Generic.List[string]]::new()
 try {
 $mappingEntriesBySolution = @{}
 $mappingFilesBySolution = @{}
+# Unpacking may create mapped sources on first export, so defer existence checks.
+# Export validates mapping structure but never executes attached build commands.
 foreach ($solution in $solutionsConfig.solutions) {
     $solutionName = [string]$solution.name
     $entries = @(Get-SolutionPackagerMappingEntry -Solution $solution)
@@ -95,6 +127,8 @@ foreach ($solution in $solutionsConfig.solutions) {
 
 $mappedSolutions = @($mappingEntriesBySolution.GetEnumerator() | Where-Object { $_.Value.Count -gt 0 })
 if ($mappedSolutions.Count -gt 0) {
+    # Parallel workers only download packages; mappings apply during main-thread
+    # expansion. Both modes also need mapped compression for old/new comparisons.
     $exportCommandName = if ($exportSettings.parallel) { 'Expand-DataverseSolutionFile' } else { 'Export-DataverseSolution' }
     $exportCommand = Get-Command -Name $exportCommandName -ErrorAction Stop
     $packCommand = Get-Command -Name 'Compress-DataverseSolutionFile' -ErrorAction Stop
@@ -124,6 +158,8 @@ foreach ($solution in $solutionsConfig.solutions) {
     if ((Test-Path $SourceDirectory/solutions/$solutionName)) {
         $mappingFile = $mappingFilesBySolution[$solutionName]
         if (-not [string]::IsNullOrWhiteSpace($mappingFile)) {
+            # An existing solution needs its old mapped sources for a meaningful
+            # baseline package; validate before deleting the solution directory.
             $null = ConvertTo-SolutionPackagerMappingXml `
                 -Entries $mappingEntriesBySolution[$solutionName] `
                 -SourceDirectory $SourceDirectory `
@@ -166,7 +202,9 @@ foreach ($solution in $solutionsConfig.solutions) {
     [xml]$solutionXml = Get-Content -Path $solutionXmlPath
     $solutionXml.Save($solutionXmlPath)
 
-    # Test if anything changed and increment version if so
+    # Mapped files can change outside solutions/<name>. Include only resolved paths
+    # inside this repository (not its whole root), skipping unresolved placeholders,
+    # so unrelated files and external mapping locations do not trigger version bumps.
     $gitStatusPathspecs = [System.Collections.Generic.List[string]]::new()
     $gitStatusPathspecs.Add("solutions/$solutionName")
     $repositoryRoot = [System.IO.Path]::GetFullPath($SourceDirectory)
@@ -219,6 +257,8 @@ foreach ($solution in $solutionsConfig.solutions) {
         [xml]$solutionXml = Get-Content -Path $solutionXmlPath
         $currentVersion = [version] $solutionXml.ImportExportXml.SolutionManifest.Version
 
+        # Branch bases occupy Major.Build. Minor/Revision are change counters and
+        # reset when that base changes, before the additive/non-additive increment.
         $baseMatches = $currentVersion.Major -eq $branchBaseVersion.Major -and
             [Math]::Max(0, $currentVersion.Build) -eq $branchBaseVersion.Build
         if ($baseMatches) {
@@ -252,6 +292,8 @@ foreach ($solution in $solutionsConfig.solutions) {
         Write-Host "##[debug][$solutionName][Version] Reserved and updated solution folder to $newversion"
 
         if ($null -ne $exportPipeline) {
+            # Version writes compete with package exports for the same Dataverse
+            # operation budget, not just with other version writes.
             $exportPipeline.OperationBudget.Wait($exportPipeline.Cancellation.Token)
             try { Set-DataverseSolution -UniqueName $solutionName -Version $newversion.ToString() }
             finally { $exportPipeline.OperationBudget.Release() | Out-Null }
@@ -273,6 +315,8 @@ $exportStatus = 'Succeeded'
     foreach ($mappingFile in $generatedMappingFiles) {
         if (Test-Path -LiteralPath $mappingFile) { Remove-Item -LiteralPath $mappingFile -Force }
     }
+    # Mapping XML is consumed on the main thread, not by package-export workers.
+    # Stop workers before summarizing so teardown can contribute terminal timings.
     if ($null -ne $exportPipeline) { Stop-AlmExportPipeline -State $exportPipeline }
     New-Item -ItemType Directory -Path $exportLogDirectory -Force | Out-Null
     $summary = @(foreach ($solution in $solutionsConfig.solutions) {

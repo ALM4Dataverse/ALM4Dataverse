@@ -1,4 +1,5 @@
 @{
+    # Local validation and CI import these exact versions to keep findings comparable.
     Tools = @{
         Pester = '5.7.1'
         PSScriptAnalyzer = '1.24.0'
@@ -10,6 +11,8 @@
             'PSAvoidUsingWriteHost'
         )
     }
+    # Each tuple must match exactly once. Source is executable text, not a line number;
+    # do not refresh entries just to hide new findings or stale suppressions.
     Exceptions = @(
         @{
             Path = 'setup-azdo.ps1'

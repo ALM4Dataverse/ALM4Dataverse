@@ -10,6 +10,13 @@
     The root directory containing the solution folders and alm-config.psd1 file.
 .PARAMETER ArtifactStagingDirectory
     The directory where the built artifacts will be placed.
+.NOTES
+    Requires installed build dependencies and a default Dataverse connection.
+    Runs the normal build (including enabled solution checks) before deployment.
+    Forces unmanaged imports, avoiding managed upgrade behavior, but still runs
+    deployment hooks, process reassignment/activation and publishing.
+.EXAMPLE
+    .\pipelines\scripts\import.ps1 -SourceDirectory . -ArtifactStagingDirectory .\artifacts
 #>
 param(
     [Parameter(Mandatory=$true)]
@@ -52,4 +59,3 @@ if (-not $?) {
 
 Write-Host "##[endgroup]"
 Write-Host "##[section]Import completed successfully!"
-

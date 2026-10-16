@@ -6,6 +6,8 @@ BeforeAll {
 
 Describe 'Setup status callback state' {
     BeforeAll {
+        # The embedded Spectre substitute captures renderables and dequeues prompt answers;
+        # it tests wrapper contracts, not terminal rendering. CLR types persist for this process.
         if (-not ('Spectre.Console.AnsiConsole' -as [type])) {
             Add-Type -TypeDefinition @'
 namespace Spectre.Console {
@@ -93,6 +95,8 @@ namespace Spectre.Console.Rendering { public interface IRenderable {} }
     It 'does not repeat a completed operation when the output panel fails' {
         Mock Initialize-SpectreConsole {}
         Mock Show-SetupActivityOutputPanel { throw 'Display failed' }
+        # Shared mutable state crosses the status delegate boundary and reveals an accidental
+        # retry of a completed side effect when only rendering the result failed.
         $executionState = @{ Count = 0 }
         $result = Invoke-WithSpectreStatus -Status 'Test operation' -CaptureOutputInPanel -ScriptBlock {
             $executionState.Count++
@@ -107,6 +111,8 @@ Describe 'Setup selector state transitions' {
     BeforeEach {
         Mock Initialize-SpectreConsole {}
         Mock Write-SetupConsoleBar { $false }
+        # Resolve answers against the current menu instead of hard-coded indexes; unexpected
+        # extra prompts fail immediately rather than silently navigating a different branch.
         $script:menuAnswers = [System.Collections.Generic.Queue[string]]::new()
         $script:textAnswers = [System.Collections.Generic.Queue[string]]::new()
         Mock Select-FromMenu {
@@ -195,6 +201,7 @@ Describe 'Shared setup prompt and rendering contracts' {
     BeforeEach {
         Mock Initialize-SpectreConsole {}
         Mock Write-SetupConsoleBar { $false }
+        # Both the wrappers and fake console hold process/session state between prompt calls.
         Clear-SetupWizardContext
         Clear-SetupPromptDocContext
         [Spectre.Console.AnsiConsole]::Answers.Clear()
@@ -370,6 +377,8 @@ Describe 'Setup configuration and validation helpers' {
 
     It 'preserves existing per-solution mappings and custom properties when replacing selections' {
         $configPath = Join-Path $TestDrive 'mapped-solutions.psd1'
+        # Deliberately mix retired solution-level keys with supported inline entries:
+        # refreshing selection must drop the former without discarding mapping metadata.
         Set-Content -LiteralPath $configPath -Value @'
 @{
     solutions = @(

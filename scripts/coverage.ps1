@@ -1,4 +1,15 @@
 function Get-ModifiedPowerShellFile {
+    <#
+    .SYNOPSIS
+        Lists existing executable PowerShell source paths affected by a comparison.
+    .DESCRIPTION
+        With HeadRef, compares committed revisions; an all-zero base selects the
+        complete head tree, and an omitted base uses the head's first parent.
+        Without HeadRef, includes staged, unstaged and non-ignored untracked files.
+        Tests and deleted paths are excluded. Git failures terminate validation.
+    .OUTPUTS
+        System.String. Unique repository-relative paths with forward slashes.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
@@ -15,6 +26,7 @@ function Get-ModifiedPowerShellFile {
             $commitParts = ($commitInfo -join ' ').Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
             $BaseRef = if ($commitParts.Count -gt 1) { $commitParts[1] } else { '0000000000000000000000000000000000000000' }
         }
+        # A new branch/root commit has no prior tree; do not silently skip its files.
         if ($BaseRef -match '^0+$') {
             $output = @(& git -c core.quotepath=false -C $RepositoryRoot ls-tree -r --name-only -z $HeadRef)
         }
@@ -45,6 +57,21 @@ function Get-ModifiedPowerShellFile {
 }
 
 function Get-PowerShellFileCoverage {
+    <#
+    .SYNOPSIS
+        Returns whole-file command coverage decisions for the supplied source paths.
+    .DESCRIPTION
+        Matches Pester's executed and missed commands by absolute path. Files with
+        no commands are not applicable and pass; other files use the unrounded
+        percentage, so display rounding cannot turn a failing result into a pass.
+    .PARAMETER Coverage
+        Pester CodeCoverage data containing CommandsExecuted and CommandsMissed.
+    .PARAMETER MinimumPercent
+        Inclusive per-file threshold, from 0 to 100; defaults to 65.
+    .OUTPUTS
+        PSCustomObject with Path, command counts, Percent, MinimumPercent, Passed
+        and a human-readable Status for each requested file.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,

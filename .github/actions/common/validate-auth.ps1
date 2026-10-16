@@ -1,3 +1,14 @@
+<#
+.SYNOPSIS
+    Rejects missing mapped authentication inputs before azure/login runs.
+.DESCRIPTION
+    Reads AZURE_CLIENT_ID, AZURE_TENANT_ID and DATAVERSE_URL from this process.
+    Tenant must resemble a GUID or DNS name; this is local presence/shape validation,
+    not credential, URL or Dataverse authorization verification. Throws on failure.
+.PARAMETER RequireServiceAccount
+    Also requires DATAVERSESERVICEACCOUNTUPN for deployment/process activation;
+    export does not require that value.
+#>
 param(
     [switch]$RequireServiceAccount
 )

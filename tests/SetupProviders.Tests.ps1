@@ -28,6 +28,8 @@ BeforeAll {
         [CmdletBinding()]
         param($ProjectName, $Id)
     }
+    # Nonempty fallbacks make an unmocked provider mutation fail rather than call an installed
+    # module; removal retains its ShouldProcess boundary for mutation-guard cases.
     function Invoke-VSTeamRequest {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Method', Justification = 'Pester mock command parameter.')]
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Resource', Justification = 'Pester mock command parameter.')]
@@ -69,6 +71,7 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $ScriptName), [ref]$tokens, [ref]$parseErrors)
+        # Import only the function under test, not the installer's interactive entry point.
         $definition = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-DataverseEnvironmentCatalog'
@@ -221,6 +224,8 @@ Describe 'Provider mutation guards in <ScriptName>: <Helper>' -ForEach @(
         Mock gh { throw 'Unexpected GitHub CLI call' }
         Mock git { throw 'Unexpected Git call' }
         $parameters = @{}
+        # Populate mandatory bindings only to reach the early ShouldProcess guard. The fake
+        # values are not a valid provisioning request and must never reach any mocked boundary.
         foreach ($parameter in (Get-Command $Helper).Parameters.Values) {
             if (@($parameter.Attributes | Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] -and $_.Mandatory }).Count -eq 0) { continue }
             $parameters[$parameter.Name] = switch ($parameter.ParameterType.FullName) {
@@ -359,6 +364,7 @@ Describe 'Provider cleanup failure handling' {
     BeforeEach {
         $script:savedCleanupExitCode = $global:LASTEXITCODE
         $script:savedCleanupTemp = $env:TEMP
+        # Clone/probe cleanup is production behavior; any created folders must belong to Pester.
         $env:TEMP = $TestDrive
     }
 
@@ -429,6 +435,8 @@ Describe 'Generated GitHub workflow files' {
         if ($env:ACTIONLINT_REQUIRED -eq 'true' -and -not $script:actionlintPath) {
             throw 'ACTIONLINT_REQUIRED is true, but actionlint was not found on PATH.'
         }
+        # Optional locally, mandatory when ACTIONLINT_REQUIRED is set above; validate via stdin
+        # so linting sees the generated text without depending on the test process's location.
         function Assert-GeneratedWorkflowActionlint {
             param([Parameter(Mandatory)][string]$Content)
             if (-not $script:actionlintPath) { return }
@@ -559,6 +567,8 @@ Describe 'Generated Azure DevOps pipeline files' {
                 -not $script:nodePath)) {
             throw 'Azure Pipelines schema validation is required, but the schema, language service, or Node.js was not found.'
         }
+        # No schema means a local opt-out; required CI prerequisites are checked above.
+        # This validates pipeline semantics in addition to ConvertFrom-Yaml syntax checks.
         function Assert-GeneratedAzurePipelineSchema {
             param([Parameter(Mandatory)][string]$Path)
             if (-not $script:azurePipelineSchemaPath) { return }

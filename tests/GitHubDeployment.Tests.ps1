@@ -9,6 +9,8 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Arguments', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
     }
+    # Execute the action's actual publishing body after substituting resolver outputs, rather
+    # than maintaining a test copy of the gate/pointer update algorithm.
     function Invoke-DeploymentTagStep {
         $run = $script:deploymentTagStep.run
         foreach ($line in Get-Content $env:GITHUB_OUTPUT) {
@@ -17,6 +19,7 @@ BeforeAll {
         }
         & ([scriptblock]::Create($run))
     }
+    # Supply both caller inputs and event context; repository_dispatch selects by payload identity.
     function Set-DeploymentDispatchFixture {
         param([string]$Selector = 'release-1', [string]$EventName = 'workflow_dispatch')
         $payload = @{ build_run_id = ''; branch = ''; sha = ''; release_tag = '' }
@@ -95,6 +98,7 @@ Describe 'GitHub deployment selection and gates' {
         $output = Get-Content $env:GITHUB_OUTPUT
         $gateTag = ($output | Where-Object { $_ -like 'success_gate_tag=*' }) -replace '^success_gate_tag=', ''
         $pointerTag = ($output | Where-Object { $_ -like 'environment_pointer_tag=*' }) -replace '^environment_pointer_tag=', ''
+        # Mocked refs cannot expose Git's file/directory namespace conflicts; use real local tags.
         $gitDirectory = Join-Path $TestDrive 'tag-namespace'
         git init --quiet $gitDirectory
         $LASTEXITCODE | Should -Be 0

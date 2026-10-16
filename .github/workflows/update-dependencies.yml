@@ -37,6 +37,8 @@ jobs:
           . .github/scripts/check-outdated-dependencies.ps1
 
       - name: Create or update PRs
+        # GITHUB_TOKEN-created PRs do not trigger ordinary pull_request workflows.
+        # A required validation check needs an explicit trigger or different token.
         if: steps.check.outputs.has_updates == 'true'
         shell: pwsh
         env:

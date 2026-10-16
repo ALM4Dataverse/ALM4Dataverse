@@ -1,6 +1,8 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:exportScript = Join-Path $repoRoot 'pipelines/scripts/export.ps1'
+    # Snapshot generated XML and mapping/pathspec calls inside the mocks: export deletes its
+    # mapping files on return. Reset the shared capture below to isolate each regression case.
     if (-not ('AlmExportMappingTestCapture' -as [type])) {
         Add-Type -TypeDefinition @'
 public static class AlmExportMappingTestCapture
@@ -50,6 +52,8 @@ Describe 'Export and version changes' {
         $script:exportArtifacts = Join-Path $fixtureRoot 'artifacts'
         $script:exportTemp = Join-Path $fixtureRoot 'temp'
         New-Item -ItemType Directory -Path $script:exportSource, $script:exportArtifacts, $script:exportTemp -Force | Out-Null
+        # Sequential mode keeps Dataverse and reservation calls in Pester's mocked runspace.
+        # The branch base maps to Major.Build, so 1.2.3.4 already matches the configured 1.3.
         Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value "@{ solutions = @(@{ name = 'Example' }); hooks = @{}; export = @{ parallel = `$false }; buildVersion = @{ default = '1.3'; branches = @{} } }"
         Mock Export-DataverseSolution {
             if (-not [string]::IsNullOrWhiteSpace($MappingFile)) {
@@ -87,6 +91,8 @@ Describe 'Export and version changes' {
     It 'uses inline mappings during sequential export without running build commands' {
         New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins') -Force | Out-Null
         Set-Content (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'
+        # The deliberately unavailable executable makes accidental BUILD work during EXPORT
+        # fail, while the existing source file still permits mapping/unpack validation.
         Set-Content (Join-Path $script:exportSource 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{
@@ -133,6 +139,8 @@ Describe 'Export and version changes' {
     buildVersion = @{ default = '1.3'; branches = @{} }
 }
 '@
+        # Return a change only if EXPORT asks Git about the mapped source outside solutions;
+        # a hard-coded nonempty status would hide regressions in pathspec construction.
         Mock git {
             if ($RemainingArguments -contains 'plugins/Example.dll') {
                 [AlmExportMappingTestCapture]::GitStatusArguments.AddRange($RemainingArguments)

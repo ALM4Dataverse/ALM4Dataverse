@@ -5,6 +5,7 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $First, $Second, $Third, [Alias('t')][switch]$TagType, [Alias('p')][switch]$PrintContents)
     }
+    # Keep selector cases on the same config/ADO identity so only resolution policy varies.
     function Invoke-BaselineFixture {
         param([string]$Selector)
         $configPath = Join-Path $TestDrive 'alm-config.psd1'
@@ -16,6 +17,7 @@ BeforeAll {
 
 Describe 'Azure DevOps BUILD baseline selection' {
     BeforeEach {
+        # Native-command mocks set process-wide exit state just as git would; restore it per case.
         $script:savedExitCode = $global:LASTEXITCODE
         Mock git {
             $global:LASTEXITCODE = 0

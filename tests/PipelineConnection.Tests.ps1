@@ -14,6 +14,8 @@ BeforeAll {
 
 Describe 'Dataverse pipeline connection' {
     BeforeEach {
+        # Authentication consumes process environment, not just parameters; use fake identities
+        # and restore the caller's values even when the identity probe throws.
         $script:savedConnectionEnvironment = @{ AZURE_CLIENT_ID = $env:AZURE_CLIENT_ID; AZURE_TENANT_ID = $env:AZURE_TENANT_ID; DATAVERSE_URL = $env:DATAVERSE_URL }
         $script:savedConnectionExitCode = $global:LASTEXITCODE
         $env:AZURE_CLIENT_ID = 'test-client'

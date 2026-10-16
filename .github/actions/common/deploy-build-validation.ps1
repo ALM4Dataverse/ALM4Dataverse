@@ -1,3 +1,21 @@
+<#
+.SYNOPSIS
+    Deploys an optional Release baseline, then candidate artifacts to validation.
+.DESCRIPTION
+    Reads buildValidation.baselineRelease from the candidate's alm-config.psd1
+    without merging defaults. Blank config or a missing @environment pointer deploys
+    only the candidate. Other resolution/download failures throw, not silently skip.
+    Baselines use Release artifacts.zip, not expiring Actions artifacts, and invoke
+    their own bundled deploy.ps1 before invoking the candidate's copy.
+.PARAMETER ArtifactsPath
+    Candidate artifact root containing alm/pipelines/scripts/deploy.ps1.
+.PARAMETER EnvironmentName
+    Diagnostic label; the caller must already establish the Dataverse connection.
+.NOTES
+    Requires installed dependencies; baseline lookup also needs GITHUB_TOKEN,
+    GITHUB_REPOSITORY, gh and writable RUNNER_TEMP. Temporary downloads/extractions
+    are removed in finally. Dataverse deployment effects are not rolled back.
+#>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ArtifactsPath,
@@ -15,6 +33,8 @@ function Get-GitHubApiHeader {
 }
 
 function Invoke-GitHubApi {
+    # Repository-relative GET; only an opted-in 404 becomes null. Other errors
+    # must not be mistaken for an absent baseline on first deployment.
     param(
         [Parameter(Mandatory)][string]$RelativePath,
         [switch]$AllowNotFound
@@ -34,6 +54,9 @@ function Invoke-GitHubApi {
 }
 
 function Get-ReleaseInformation {
+    # Require the BUILD producer's marker, name, source SHA and linked run ID.
+    # Return BuildName/SourceCommit/RunId/TagName; branch presence is checked but
+    # branch is not returned or used to restrict an explicitly selected baseline.
     param([Parameter(Mandatory)][object]$Release)
 
     $body = [string]$Release.body
@@ -54,6 +77,7 @@ function Get-ReleaseInformation {
 }
 
 function Get-ReleaseByTag {
+    # Explicit tag lookup may return null; selection policy is enforced by callers.
     param([Parameter(Mandatory)][string]$TagName)
 
     $encodedTag = [System.Uri]::EscapeDataString($TagName)
@@ -61,6 +85,8 @@ function Get-ReleaseByTag {
 }
 
 function Resolve-CommitFromTagReference {
+    # Peel annotated pointers recursively and require a full commit SHA for legacy
+    # release lookup; blobs/trees and incomplete objects are not deployment identities.
     param([Parameter(Mandatory)][object]$Reference)
 
     $tagObject = $Reference.object
@@ -75,6 +101,7 @@ function Resolve-CommitFromTagReference {
 }
 
 function Test-GitHubReleasePrerelease {
+    # Missing prerelease means false for both REST objects and dictionary inputs.
     param([Parameter(Mandatory)][object]$Release)
 
     if ($Release -is [System.Collections.IDictionary]) {
@@ -85,6 +112,9 @@ function Test-GitHubReleasePrerelease {
 }
 
 function Find-UniqueReleaseForCommit {
+    # Legacy commit pointers cannot distinguish repeated builds of one commit.
+    # Search at most 100 pages of ALM prereleases, return null for none and throw
+    # for multiple matches rather than guessing which package was deployed.
     param([Parameter(Mandatory)][string]$CommitSha)
 
     $matchingReleases = @()
@@ -123,6 +153,8 @@ function Find-UniqueReleaseForCommit {
 }
 
 function Find-ReleaseForRunId {
+    # Run IDs resolve only to one ALM prerelease within 100 pages. Missing or
+    # duplicate matches throw: baseline deployment requires a retained Release asset.
     param([Parameter(Mandatory)][string]$RunId)
 
     $matchingReleases = @()
@@ -160,6 +192,15 @@ function Find-ReleaseForRunId {
 }
 
 function Resolve-Baseline {
+    <#
+    .SYNOPSIS
+        Resolves a run ID, exact Release tag or @environment deployment pointer.
+    .DESCRIPTION
+        Returns a RunId/TagName-bearing object. Only an absent environment pointer
+        returns null. Annotated pointer BUILD run metadata takes priority over
+        legacy commit lookup; Release tag text in the message is not used to choose.
+        Invalid selectors and missing/ambiguous Release identities throw.
+    #>
     param([Parameter(Mandatory)][string]$Selector)
 
     if ($Selector -match '^\d+$') {
@@ -208,6 +249,8 @@ function Resolve-Baseline {
 }
 
 function Resolve-BaselineReleaseTag {
+    # A normal baseline has one tag. For noisy/array output, split and deduplicate
+    # candidates, then require exactly one whose metadata matches the BUILD run.
     param([Parameter(Mandatory)][object]$Baseline)
 
     $tagCandidates = @(
@@ -255,6 +298,8 @@ function Resolve-BaselineReleaseTag {
 }
 
 function Expand-BaselineArchive {
+    # Replaces DestinationPath completely, then requires the package's deployment
+    # entry point. This is a structural check, not archive authenticity validation.
     param(
         [Parameter(Mandatory)][string]$ArchivePath,
         [Parameter(Mandatory)][string]$DestinationPath
@@ -272,6 +317,15 @@ function Expand-BaselineArchive {
 }
 
 function Save-BaselineReleaseAsset {
+    <#
+    .SYNOPSIS
+        Downloads artifacts.zip from one Release and extracts a deployable baseline.
+    .DESCRIPTION
+        Requires a single nonblank tag and the named asset. Uses gh with GH_TOKEN
+        set from GITHUB_TOKEN (not restored here), replaces DestinationPath through
+        Expand-BaselineArchive and removes its private download directory in finally.
+        Missing assets, failed downloads and invalid package structure throw.
+    #>
     param(
         [Parameter(Mandatory)][string]$ReleaseTag,
         [Parameter(Mandatory)][string]$DestinationPath
@@ -342,6 +396,8 @@ if ($null -eq $baseline) {
 }
 
 $baselineArtifactsPath = Join-Path $env:RUNNER_TEMP "alm4dataverse-baseline-$([guid]::NewGuid().ToString('N'))"
+# Use each package's bundled deployment implementation, but the caller's current
+# connection/dependencies. A baseline failure must stop before candidate deployment.
 try {
     $baselineReleaseTag = Resolve-BaselineReleaseTag -Baseline $baseline
     Save-BaselineReleaseAsset -ReleaseTag $baselineReleaseTag -DestinationPath $baselineArtifactsPath

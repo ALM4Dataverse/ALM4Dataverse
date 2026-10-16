@@ -1,3 +1,6 @@
+# The caller supplies job-level environment approvals and permissions; this action
+# cannot create an approval boundary. Tags/pointers require contents:write and OIDC
+# login requires id-token:write; private run artifacts also need Actions read access.
 name: Deploy
 description: Resolve a BUILD run, download its artifacts, deploy them, and publish deployment gate tags.
 
@@ -37,6 +40,8 @@ inputs:
 runs:
   using: composite
   steps:
+    # Resolve/validate branch, BUILD identity and promotion mode before credentials
+    # or artifact execution. A retained Release may outlive its Actions run.
     - name: Resolve deployment execution context
       id: resolve
       shell: pwsh
@@ -51,6 +56,8 @@ runs:
       run: |
         & "${{ github.action_path }}/../common/resolve-deployment.ps1"
 
+    # Manual promotion checks existence of the predecessor's per-build success tag.
+    # Approval mode emits no required gate and relies on the caller's job environment.
     - name: Check deployment gate tag
       if: steps.resolve.outputs.required_gate_tag != ''
       shell: pwsh
@@ -68,6 +75,8 @@ runs:
 
         Write-Host "Gate tag '$gateTag' found."
 
+    # Prefer retained Release assets; continue-on-error is limited to download/
+    # extraction so an available numeric BUILD run can supply the fallback package.
     - name: Download Release artifacts
       id: download-release-artifacts
       if: steps.resolve.outputs.artifact_source == 'release'
@@ -96,6 +105,8 @@ runs:
           throw "Release asset 'artifacts.zip' is not a valid deployment artifact."
         }
 
+    # Remove partial Release content before downloading a different artifact source;
+    # mixing the two trees could leave stale deployment scripts or configuration.
     - name: Remove failed Release extraction before BUILD fallback
       if: >-
         steps.resolve.outputs.artifact_source == 'release' &&
@@ -122,6 +133,8 @@ runs:
         repository: ${{ github.repository }}
         path: artifacts
 
+    # Expired run metadata has no fallback ID; never let a failed Release download
+    # proceed to executing an absent or partial deployment package.
     - name: Fail when Release and BUILD assets are unavailable
       if: >-
         steps.resolve.outputs.artifact_source == 'release' &&
@@ -131,6 +144,8 @@ runs:
       run: |
         throw 'The GitHub Release asset could not be downloaded and its BUILD fallback is no longer available.'
 
+    # Read the selected package's bundled configuration/defaults and lock, not the
+    # caller repository's potentially newer dependency requirements.
     - name: Resolve dependency cache keys
       id: dependency-cache
       shell: pwsh
@@ -155,6 +170,7 @@ runs:
         key: ${{ steps.dependency-cache.outputs.pac_cache_key }}
         path: ~/.alm4dataverse/tools
 
+    # Persist mapped environment values before validation/login in later processes.
     - name: Resolve prefixed repo variables and explicit secrets
       shell: pwsh
       env:
@@ -169,6 +185,7 @@ runs:
       run: |
         & "${{ github.action_path }}/../common/validate-auth.ps1" -RequireServiceAccount
 
+    # A supplied secret uses mapper-produced credentials; otherwise use OIDC.
     - name: Log in to Azure
       uses: azure/login@v3
       env:
@@ -179,6 +196,8 @@ runs:
         creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
         allow-no-subscriptions: true
 
+    # Package-bundled scripts and the default Dataverse connection share one process.
+    # Expand connection-reference JSON into the variable names deploy.ps1 consumes.
     - name: Install dependencies, connect, and deploy
       shell: pwsh
       working-directory: artifacts
@@ -194,6 +213,10 @@ runs:
         & "./alm/pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
         & "./alm/pipelines/scripts/deploy.ps1" -ArtifactsPath "."
 
+    # Publish only after deployment succeeds. A per-build gate is create-only (an
+    # existing ref is accepted); the environment pointer is a new annotated object
+    # carrying BUILD identity, then a delete/create ref replacement, not an atomic move.
+    # Pointer metadata disambiguates later baseline selection for repeated source SHAs.
     - name: Push deployment tags
       if: steps.resolve.outputs.success_gate_tag != '' || steps.resolve.outputs.environment_pointer_tag != ''
       shell: pwsh
