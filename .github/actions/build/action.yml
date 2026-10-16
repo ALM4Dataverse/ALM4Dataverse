@@ -1,5 +1,7 @@
 # The caller owns job permissions: publishing tags/Releases and dispatching requires
 # contents:write; Azure OIDC also requires id-token:write when validation is enabled.
+# PR/merge-queue runs retain configured validation but skip publication and dispatch;
+# release-tag/release-url outputs are empty because those runs have no durable Release.
 name: Build
 description: Build, validate, optionally deploy a baseline and candidate to the validation environment, publish, and tag Dataverse solution artifacts.
 
@@ -224,6 +226,7 @@ runs:
         overwrite: true
         if-no-files-found: ignore
 
+    # PR/queue merge commits are validation candidates, not published BUILD identities.
     # Reruns may reuse a source tag only at the same commit; never move a published
     # BUILD identity to a different source commit.
     - name: Tag source with build version

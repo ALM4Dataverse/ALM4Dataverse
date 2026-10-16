@@ -294,8 +294,9 @@ stages:
             targetPath: '$(Build.ArtifactStagingDirectory)/solution-check'
             artifact: 'solution-check-report'
 
-        # Successful builds alone get version tags. A rerun may reuse a tag only
-        # if it resolves to the same source commit; never move another build's tag.
+        # PR policy runs validate merge candidates without publishing source tags.
+        # Other successful builds may reuse a tag only at the same source commit;
+        # never move another build's tag.
         - pwsh: |
             $ErrorActionPreference = 'Stop'
             $tagName = '$(BuildSemVerTag)'

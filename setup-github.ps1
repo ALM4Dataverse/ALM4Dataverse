@@ -3809,9 +3809,11 @@ function Update-BuildWorkflowInRepoClone {
         Regenerates BUILD with explicit source branch/SHA inputs and optional validation scope.
     .DESCRIPTION
         Associates a GitHub environment only when validation is enabled with a nonblank
-        name. Preserves existing secrets-json customizations, but replaces other
-        workflow content. Returns false when ShouldProcess declines; otherwise writes
-        the file without returning a result object.
+        name. PR and merge-queue jobs validate the merge result with read-only
+        repository permissions and optional Azure OIDC access; branch jobs also publish.
+        Preserves existing secrets-json customizations, but replaces other workflow
+        content. Returns false when ShouldProcess declines; otherwise writes the file
+        without returning a result object.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -3879,8 +3881,8 @@ function Update-BuildWorkflowInRepoClone {
 name: BUILD
 
 # Triggers on every push to any branch.
-# Also supports manual runs and repository_dispatch from EXPORT.
-# Packs Dataverse solutions into deployable artifacts and tags the source commit.
+# Also supports PR merge results, merge-queue candidates, manual runs, and EXPORT dispatch.
+# PR/queue validation retains configured Dataverse checks but never publishes a Release.
 #
 # See docs/usage/building-releases.md and docs/setup/github-setup.md
 
@@ -3898,6 +3900,7 @@ on:
             - alm4dataverse-export-build
 
 jobs:
+    # Publishing needs repository writes; keep these permissions off PR/queue jobs.
     build:
         if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         runs-on: ubuntu-latest
@@ -3917,6 +3920,8 @@ $environmentBlock        permissions:
                 vars-json: `${{ toJSON(vars) }}
 $secretsInput
 
+    # A separate job keeps repository access read-only while retaining Azure OIDC.
+    # Fork workflow approval and Azure/environment access policies are managed by the host.
     build-pr:
         if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
         name: BUILD PR validation
@@ -3943,7 +3948,7 @@ $secretsInput
                     if (-not (Test-Path -LiteralPath $buildWorkflowDirectory)) {
                         New-Item -ItemType Directory -Path $buildWorkflowDirectory -Force | Out-Null
                     }
-    Set-Content -LiteralPath $buildWorkflowPath -Value $newContent.TrimStart("`r", "`n") -NoNewline
+    Set-Content -LiteralPath $buildWorkflowPath -Value $newContent.TrimStart("`r", "`n").TrimEnd("`r", "`n") -NoNewline
 }
 
 function Update-DeployWorkflowInRepoClone {
