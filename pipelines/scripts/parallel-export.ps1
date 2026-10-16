@@ -100,7 +100,9 @@ function Start-AlmExportPipeline {
     param(
         [Parameter(Mandatory)][hashtable]$Config,
         [Parameter(Mandatory)][string]$TempDirectory,
-        [ValidateRange(1, 8)][int]$MaxParallel = 2
+        [ValidateRange(1, 8)][int]$MaxParallel = 2,
+        [string]$BaseDirectory = '',
+        [hashtable]$AdditionalHookContext = @{}
     )
 
     if (-not $PSCmdlet.ShouldProcess($TempDirectory, 'Initialize parallel export workers')) { return }
@@ -120,9 +122,17 @@ function Start-AlmExportPipeline {
     $workDirectory = Join-Path $TempDirectory ('export-' + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $workDirectory -Force | Out-Null
     $state = @{
+        Config = $Config
+        BaseDirectory = $BaseDirectory
+        AdditionalHookContext = $AdditionalHookContext
         PendingExports = [System.Collections.Generic.Queue[object]]::new()
         ActiveExports = [System.Collections.Generic.List[object]]::new()
+        PreparedSolutions = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
         CompletedExports = @{}
+        PendingSolutionHooks = [System.Collections.Generic.Queue[object]]::new()
+        ActiveSolutionHooks = [System.Collections.Generic.List[object]]::new()
+        SolutionHookResults = @{}
+        SolutionIndexes = @{}
         Jobs = [System.Collections.Generic.List[object]]::new()
         Clients = [System.Collections.Generic.List[object]]::new()
         Timings = [System.Collections.Generic.List[object]]::new()
@@ -130,6 +140,7 @@ function Start-AlmExportPipeline {
         CloneMethod = $cloneMethod
         ModulePath = (Get-Module Rnwood.Dataverse.Data.PowerShell | Select-Object -First 1).Path
         HelpersPath = $PSCommandPath
+        CommonPath = Join-Path $PSScriptRoot 'common.ps1'
         WorkDirectory = $workDirectory
         MaxParallel = $MaxParallel
         OperationBudget = [System.Threading.SemaphoreSlim]::new($settings.maxConcurrentOperations, $settings.maxConcurrentOperations)
@@ -140,11 +151,19 @@ function Start-AlmExportPipeline {
         }
         LogDirectory = ''
     }
-    foreach ($solution in $Config.solutions) {
+    for ($solutionIndex = 0; $solutionIndex -lt $Config.solutions.Count; $solutionIndex++) {
+        $solution = $Config.solutions[$solutionIndex]
         $state.CompletedExports[$solution.name] = @{}
+        $state.SolutionIndexes[$solution.name] = $solutionIndex
         foreach ($managed in @($false, $true)) {
             $suffix = if ($managed) { '_managed' } else { '' }
-            $state.PendingExports.Enqueue(@{ SolutionName = $solution.name; Managed = $managed; Path = (Join-Path $workDirectory "$($solution.name)$suffix.zip") })
+            $state.PendingExports.Enqueue(@{
+                SolutionName = $solution.name
+                SolutionConfig = $solution
+                SolutionIndex = $solutionIndex
+                Managed = $managed
+                Path = (Join-Path $workDirectory "$($solution.name)$suffix.zip")
+            })
         }
     }
     return $state
@@ -168,6 +187,26 @@ function Start-AlmQueuedExport {
 
     while ($State.PendingExports.Count -and $State.ActiveExports.Count -lt $State.MaxParallel) {
         $task = $State.PendingExports.Dequeue()
+        if ($State.PreparedSolutions.Add($task.SolutionName)) {
+            $hookContext = @{}
+            foreach ($key in $State.AdditionalHookContext.Keys) { $hookContext[$key] = $State.AdditionalHookContext[$key] }
+            $hookContext.SolutionName = $task.SolutionName
+            $hookContext.SolutionConfig = $task.SolutionConfig
+            $hookContext.SolutionIndex = $task.SolutionIndex
+            $hasPreExportSolutionHooks = $State.Config.ContainsKey('hooks') -and
+                $State.Config['hooks'] -is [hashtable] -and
+                $State.Config['hooks'].ContainsKey('preExportSolution') -and
+                $State.Config['hooks']['preExportSolution']
+            if ($hasPreExportSolutionHooks) {
+                $hookClient = $State.CloneMethod.Invoke($State.Connection, [object[]]@($null))
+                if ($null -eq $hookClient) { throw "[$($task.SolutionName)][preExportSolution] Connection cloning returned no client." }
+                $State.Clients.Add($hookClient)
+                $hookContext.Connection = $hookClient
+                $hookContext.OperationBudget = $State.OperationBudget
+                $hookContext.CancellationToken = $State.Cancellation.Token
+                $null = Invoke-Hook -HookType preExportSolution -BaseDirectory $State.BaseDirectory -Config $State.Config -AdditionalContext $hookContext -LogContext:$false
+            }
+        }
         $client = $State.CloneMethod.Invoke($State.Connection, [object[]]@($null))
         if ($null -eq $client) { throw "[$($task.SolutionName)][Export] Connection cloning returned no client." }
         $State.Clients.Add($client)
@@ -271,10 +310,14 @@ function Wait-AlmSolutionExport {
 
     Start-AlmQueuedExport -State $State
     while ($State.CompletedExports[$SolutionName].Count -lt 2) {
+        Update-AlmPostExportSolutionHook -State $State
         Write-AlmExportEvent -State $State
         if ($State.ActiveExports.Count -eq 0) { throw "[$SolutionName][Export] No active export workers; queued exports were not started." }
-        $handles = [System.Threading.WaitHandle[]]@($State.LogEvents.Signal) + [System.Threading.WaitHandle[]]@($State.ActiveExports | ForEach-Object { $_.Finished })
+        $handles = [System.Threading.WaitHandle[]]@($State.LogEvents.Signal) +
+            [System.Threading.WaitHandle[]]@($State.ActiveExports | ForEach-Object { $_.Finished }) +
+            [System.Threading.WaitHandle[]]@($State.ActiveSolutionHooks | ForEach-Object { $_.Finished })
         [System.Threading.WaitHandle]::WaitAny($handles) | Out-Null
+        Update-AlmPostExportSolutionHook -State $State
         Write-AlmExportEvent -State $State
         foreach ($job in @($State.ActiveExports.ToArray())) {
             if ($job.State -in @('Completed', 'Failed', 'Stopped')) {
@@ -288,6 +331,119 @@ function Wait-AlmSolutionExport {
         Start-AlmQueuedExport -State $State
     }
     return $State.CompletedExports[$SolutionName].Unmanaged
+}
+
+function Start-AlmQueuedPostExportSolutionHook {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker receives the hook context and cloned Dataverse client explicitly through Start-ThreadJob ArgumentList.')]
+    param([Parameter(Mandatory)][hashtable]$State)
+
+    while ($State.PendingSolutionHooks.Count -and $State.ActiveSolutionHooks.Count -lt $State.MaxParallel) {
+        $task = $State.PendingSolutionHooks.Dequeue()
+        $client = $State.CloneMethod.Invoke($State.Connection, [object[]]@($null))
+        if ($null -eq $client) { throw "[$($task.SolutionName)][postExportSolution] Connection cloning returned no client." }
+        $State.Clients.Add($client)
+        $additionalContext = @{}
+        foreach ($key in $task.AdditionalContext.Keys) { $additionalContext[$key] = $task.AdditionalContext[$key] }
+        $additionalContext.Connection = $client
+        $additionalContext.OperationBudget = $State.OperationBudget
+        $additionalContext.CancellationToken = $State.Cancellation.Token
+        $task.AdditionalContext = $additionalContext
+        $job = Start-ThreadJob -ThrottleLimit 32 -ArgumentList @(
+            $State.ModulePath, $State.HelpersPath, $State.CommonPath, $client, $task, $State.LogEvents
+        ) -ScriptBlock {
+            param($ModulePath, $HelpersPath, $CommonPath, $Client, $Task, $Events)
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            $started = [datetime]::UtcNow
+            $phase = 'postExportSolution'
+            try {
+                Import-Module $ModulePath -ErrorAction Stop
+                . $HelpersPath
+                $sqlCommand = Get-Command Invoke-DataverseSQL -ErrorAction SilentlyContinue
+                $recordCommand = Get-Command Get-DataverseRecord -ErrorAction SilentlyContinue
+                $metadataCommand = Get-Command Get-DataverseEntityMetadata -ErrorAction SilentlyContinue
+                $requestCommand = Get-Command Invoke-DataverseRequest -ErrorAction SilentlyContinue
+                function Invoke-DataverseSQL { param($Sql, $Parameters); if ($null -eq $sqlCommand) { throw 'Invoke-DataverseSQL is unavailable in this hook worker.' }; & $sqlCommand -Connection $Client @PSBoundParameters }
+                function Get-DataverseRecord { param($TableName, $Id, $Columns, $Top); if ($null -eq $recordCommand) { throw 'Get-DataverseRecord is unavailable in this hook worker.' }; & $recordCommand -Connection $Client @PSBoundParameters }
+                Set-Item -Path Function:\Get-DataverseEntityMetadata -Value {
+                    param($EntityName, [switch]$UseMetadataCache, [switch]$ExcludeAttributes, [switch]$ExcludeRelationships, [switch]$ExcludePrivileges)
+                    if ($null -eq $metadataCommand) { throw 'Get-DataverseEntityMetadata is unavailable in this hook worker.' }
+                    & $metadataCommand -Connection $Client @PSBoundParameters
+                }
+                function Invoke-DataverseRequest { param($Method, $Path); if ($null -eq $requestCommand) { throw 'Invoke-DataverseRequest is unavailable in this hook worker.' }; & $requestCommand -Connection $Client @PSBoundParameters }
+                function Get-DataverseConnection { param([switch]$GetDefault); $null = $GetDefault; return $Client }
+                . $CommonPath
+                $null = $Client
+                Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message 'Started'
+                $results = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $Task.BaseDirectory -Config $Task.Config -AdditionalContext $Task.AdditionalContext -LogContext:$false)
+                Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Completed in $([math]::Round(([datetime]::UtcNow-$started).TotalSeconds,2))s"
+                [pscustomobject]@{ Kind = 'SolutionHook'; SolutionName = $Task.SolutionName; Results = $results; Started = $started; Finished = [datetime]::UtcNow }
+            } catch {
+                Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Failed: $(($_ | Out-String).TrimEnd())"
+                throw
+            }
+        }
+        $job | Add-Member -NotePropertyName AlmSolutionName -NotePropertyValue $task.SolutionName
+        $job | Add-Member -NotePropertyName AlmPhase -NotePropertyValue 'postExportSolution'
+        $State.Jobs.Add($job)
+        $State.ActiveSolutionHooks.Add($job)
+    }
+}
+
+function Add-AlmPostExportSolutionHook {
+    param(
+        [Parameter(Mandatory)][hashtable]$State,
+        [Parameter(Mandatory)][hashtable]$SolutionConfig,
+        [Parameter(Mandatory)][int]$SolutionIndex
+    )
+
+    $hasHooks = $State.Config.ContainsKey('hooks') -and
+        $State.Config['hooks'] -is [hashtable] -and
+        $State.Config['hooks'].ContainsKey('postExportSolution') -and
+        $State.Config['hooks']['postExportSolution']
+    if (-not $hasHooks) { return }
+    $additionalContext = @{}
+    foreach ($key in $State.AdditionalHookContext.Keys) { $additionalContext[$key] = $State.AdditionalHookContext[$key] }
+    $additionalContext.SolutionName = $SolutionConfig.name
+    $additionalContext.SolutionConfig = $SolutionConfig
+    $additionalContext.SolutionIndex = $SolutionIndex
+    $State.PendingSolutionHooks.Enqueue(@{
+        SolutionName = $SolutionConfig.name
+        SolutionIndex = $SolutionIndex
+        SolutionConfig = $SolutionConfig
+        Config = $State.Config
+        BaseDirectory = $State.BaseDirectory
+        AdditionalContext = $additionalContext
+    })
+    Update-AlmPostExportSolutionHook -State $State
+}
+
+function Update-AlmPostExportSolutionHook {
+    param([Parameter(Mandatory)][hashtable]$State)
+
+    foreach ($job in @($State.ActiveSolutionHooks.ToArray())) {
+        if ($job.State -in @('Completed', 'Failed', 'Stopped')) {
+            $result = Receive-AlmExportJob -Job $job -LogDirectory $State.LogDirectory
+            if ($result.Kind -ne 'SolutionHook') { throw "[$($job.AlmSolutionName)][postExportSolution] Unexpected worker result '$($result.Kind)'." }
+            $State.SolutionHookResults[$result.SolutionName] = @($result.Results)
+            $State.ActiveSolutionHooks.Remove($job) | Out-Null
+        }
+    }
+    Start-AlmQueuedPostExportSolutionHook -State $State
+}
+
+function Complete-AlmPostExportSolutionHook {
+    param([Parameter(Mandatory)][hashtable]$State)
+
+    while ($State.PendingSolutionHooks.Count -or $State.ActiveSolutionHooks.Count) {
+        Update-AlmPostExportSolutionHook -State $State
+        if ($State.ActiveSolutionHooks.Count) {
+            $handles = [System.Threading.WaitHandle[]]@($State.LogEvents.Signal) +
+                [System.Threading.WaitHandle[]]@($State.ActiveSolutionHooks | ForEach-Object { $_.Finished })
+            [System.Threading.WaitHandle]::WaitAny($handles) | Out-Null
+        }
+        Write-AlmExportEvent -State $State
+    }
 }
 
 function Stop-AlmExportPipeline {
@@ -308,7 +464,10 @@ function Stop-AlmExportPipeline {
         foreach ($job in $State.Jobs) {
             if ($job.State -notin @('Completed', 'Failed', 'Stopped')) { Stop-Job -Job $job -WhatIf:$false -Confirm:$false }
             if ($job.HasMoreData) {
-                try { $State.Timings.Add((Receive-AlmExportJob -Job $job -LogDirectory $State.LogDirectory)) }
+                try {
+                    $result = Receive-AlmExportJob -Job $job -LogDirectory $State.LogDirectory
+                    if ($result.Kind -eq 'Export') { $State.Timings.Add($result) }
+                }
                 catch { Write-Host ([string]$_) }
             }
             Remove-Job -Job $job -Force -WhatIf:$false -Confirm:$false

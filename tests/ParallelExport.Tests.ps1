@@ -243,6 +243,41 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         $failureText | Should -Match 'Second failure detail'
     }
 
+    It 'runs post-solution hooks while later exports are still running' {
+        [AlmExportTestClient]::Reset(2)
+        $hookPath = Join-Path $script:workerRoot 'post-solution.ps1'
+        Set-Content -LiteralPath $hookPath -Value 'param($Context); [pscustomobject]@{ SolutionName = $Context.SolutionName; ActiveExports = [AlmExportTestClient]::Peak; HasConnection = ($null -ne $Context.Connection) }'
+        $config = @{
+            solutions = @(@{ name = 'First' }, @{ name = 'Second' })
+            hooks = @{ postExportSolution = $hookPath }
+        }
+        $script:workerState = Start-AlmExportPipeline -Config $config -TempDirectory $script:workerRoot -MaxParallel 2 -BaseDirectory $script:workerRoot
+        Start-AlmQueuedExport -State $script:workerState
+        [AlmExportTestClient]::Started.Wait([TimeSpan]::FromSeconds(10)) | Should -BeTrue
+
+        Add-AlmPostExportSolutionHook -State $script:workerState -SolutionConfig $config.solutions[0] -SolutionIndex 0
+        Complete-AlmPostExportSolutionHook -State $script:workerState
+
+        $result = $script:workerState.SolutionHookResults.First[0]
+        $result.ActiveExports | Should -Be 2
+        $result.HasConnection | Should -BeTrue
+        [AlmExportTestClient]::Release.Set()
+        Wait-AlmSolutionExport -State $script:workerState -SolutionName First | Should -Exist
+        Wait-AlmSolutionExport -State $script:workerState -SolutionName Second | Should -Exist
+    }
+
+    It 'propagates post-solution hook failures' {
+        $hookPath = Join-Path $script:workerRoot 'failing-post-solution.ps1'
+        Set-Content -LiteralPath $hookPath -Value "param(`$Context); throw 'Post-solution hook failed'"
+        $config = @{
+            solutions = @(@{ name = 'First' })
+            hooks = @{ postExportSolution = $hookPath }
+        }
+        $script:workerState = Start-AlmExportPipeline -Config $config -TempDirectory $script:workerRoot -BaseDirectory $script:workerRoot
+        Add-AlmPostExportSolutionHook -State $script:workerState -SolutionConfig $config.solutions[0] -SolutionIndex 0
+        { Complete-AlmPostExportSolutionHook -State $script:workerState } | Should -Throw '*Worker failed*'
+    }
+
     It 'preserves hooks, unchanged versions and summaries with parallel=<Parallel>' -ForEach @(
         @{ Parallel = $false }
         @{ Parallel = $true }
@@ -252,10 +287,30 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         $staging = Join-Path $script:workerRoot 'staging'
         $temp = Join-Path $script:workerRoot 'temp'
         New-Item -ItemType Directory -Path "$source/hooks", $staging, $temp -Force | Out-Null
-        Set-Content "$source/alm-config.psd1" -Value "@{ solutions = @(@{ name = 'First' }, @{ name = 'Second' }); export = @{ parallel = `$$Parallel }; hooks = @{ preExport = 'hooks/pre.ps1'; postExport = 'hooks/post.ps1' } }"
-        foreach ($phase in @('pre', 'post')) {
-            Set-Content "$source/hooks/$phase.ps1" -Value "param(`$Context) Add-Content (Join-Path `$Context.SourceDirectory 'hook-order.log') '$phase'"
-        }
+        $preSolutionPath = Join-Path $source 'hooks/pre-solution.ps1'
+        $postSolutionPath = Join-Path $source 'hooks/post-solution.ps1'
+        Set-Content "$source/hooks/pre.ps1" -Value "param(`$Context) Add-Content (Join-Path `$Context.SourceDirectory 'hook-order.log') 'pre'"
+        Set-Content "$source/hooks/pre-solution.ps1" -Value @'
+param($Context)
+if ($null -eq $Context.Connection) { throw 'Missing per-solution connection.' }
+Add-Content (Join-Path $Context.SourceDirectory 'hook-order.log') "preSolution-$($Context.SolutionName)"
+'@
+        Set-Content "$source/hooks/post-solution.ps1" -Value @'
+param($Context)
+if ($null -eq $Context.Connection) { throw 'Missing per-solution connection.' }
+[pscustomobject]@{ SolutionName = $Context.SolutionName; SolutionIndex = $Context.SolutionIndex }
+'@
+        Set-Content "$source/hooks/post.ps1" -Value @'
+param($Context)
+Add-Content (Join-Path $Context.SourceDirectory 'hook-order.log') 'post'
+$summary = foreach ($name in ($Context.SolutionHookResults.Keys | Sort-Object)) {
+    "${name}:$($Context.SolutionHookResults[$name][0].SolutionIndex)"
+}
+Set-Content (Join-Path $Context.SourceDirectory 'solution-hook-results.log') $summary
+'@
+        $preSolutionLiteral = "'" + $preSolutionPath.Replace("'", "''") + "'"
+        $postSolutionLiteral = "'" + $postSolutionPath.Replace("'", "''") + "'"
+        Set-Content "$source/alm-config.psd1" -Value "@{ solutions = @(@{ name = 'First' }, @{ name = 'Second' }); export = @{ parallel = `$$Parallel }; hooks = @{ preExport = 'hooks/pre.ps1'; preExportSolution = @($preSolutionLiteral); postExportSolution = @($postSolutionLiteral); postExport = 'hooks/post.ps1' } }"
         foreach ($name in @('First', 'Second')) { Write-TestSolution "$source/solutions/$name" }
         Invoke-CheckedNativeCommand -Command git -Arguments @('-C', $source, 'init', '--quiet')
         Invoke-CheckedNativeCommand -Command git -Arguments @('-C', $source, 'add', '.')
@@ -268,7 +323,8 @@ function Set-DataverseSolution { param($UniqueName, $Version); [AlmExportTestCli
         $result.Parallel | Should -Be $Parallel
         $result.TotalSeconds | Should -BeGreaterOrEqual 0
         [AlmExportTestClient]::VersionUpdates | Should -Be 0
-        @(Get-Content "$source/hook-order.log") | Should -Be @('pre', 'post')
+        @(Get-Content "$source/hook-order.log") | Should -Be @('pre', 'preSolution-First', 'preSolution-Second', 'post')
+        @(Get-Content "$source/solution-hook-results.log") | Should -Be @('First:0', 'Second:1')
         $summary = @(Get-Content "$staging/export-logs/summary.json" -Raw | ConvertFrom-Json)
         $summary.Count | Should -Be 2
         @($summary | Where-Object RunStatus -ne 'Succeeded').Count | Should -Be 0

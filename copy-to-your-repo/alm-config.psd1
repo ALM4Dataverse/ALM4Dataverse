@@ -130,6 +130,12 @@
     #   - TempDirectory: path to temporary directory for export operations
     #   - EnvironmentName: name of the Dataverse environment being exported from
     #
+    # preExportSolution, postExportSolution:
+    #   - SourceDirectory, ArtifactStagingDirectory, TempDirectory, EnvironmentName
+    #   - SolutionName, SolutionConfig, SolutionIndex
+    #   - Connection: a Dataverse connection for this hook
+    #   - OperationBudget and CancellationToken: available for parallel exports
+    #
     # preDeploy, dataMigrations, postDeploy:
     #   - ArtifactsPath: path to the artifacts directory
     #   - UseUnmanagedSolutions: boolean indicating if unmanaged solutions are being deployed
@@ -137,6 +143,13 @@
     hooks = @{
         # Called by `pipelines/scripts/export.ps1` before exporting solutions.
         preExport  = @()
+
+        # Called before each solution's export begins.
+        preExportSolution = @()
+
+        # Called after each solution is unpacked and compared. In parallel export mode,
+        # hooks for different solutions run concurrently with the remaining exports.
+        postExportSolution = @()
 
         # Called by `pipelines/scripts/export.ps1` after exporting/unpacking/version bump logic.
         postExport = @(
