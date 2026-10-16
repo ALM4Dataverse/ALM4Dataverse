@@ -495,7 +495,7 @@ function Invoke-AlmSolutionHookQueue {
     Invoke-AlmQueuedSolutionHook -State $State
 }
 
-function Complete-AlmSolutionHooks {
+function Complete-AlmSolutionHook {
     <#
     .SYNOPSIS
         Waits for all queued per-solution export hooks to finish.
@@ -519,7 +519,7 @@ function Complete-AlmSolutionHooks {
 function Complete-AlmPostExportSolutionHook {
     param([Parameter(Mandatory)][hashtable]$State)
 
-    Complete-AlmSolutionHooks -State $State
+    Complete-AlmSolutionHook -State $State
 }
 
 function Stop-AlmExportPipeline {

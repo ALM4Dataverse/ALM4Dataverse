@@ -347,7 +347,7 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
 }
 
 if ($null -ne $exportPipeline) {
-    Complete-AlmSolutionHooks -State $exportPipeline
+    Complete-AlmSolutionHook -State $exportPipeline
     $solutionHookResults = $exportPipeline.SolutionHookResults
     $parallelExportSolutionHookResults = $exportPipeline.ParallelExportSolutionHookResults
 }
