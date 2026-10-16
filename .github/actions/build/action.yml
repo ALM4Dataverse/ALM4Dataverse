@@ -228,6 +228,7 @@ runs:
     # BUILD identity to a different source commit.
     - name: Tag source with build version
       id: tag-source
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       shell: pwsh
       working-directory: ${{ github.workspace }}/self
       run: |
@@ -280,7 +281,7 @@ runs:
     # The checker archive is optional; the deployment archive is mandatory.
     - name: Download artifact archives for GitHub Release
       id: release-assets
-      if: success()
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       shell: pwsh
       env:
         GH_REPO: ${{ github.repository }}
@@ -327,7 +328,7 @@ runs:
     # Replace assets by name on rerun, and keep BUILD Releases marked prerelease.
     - name: Create GitHub Release
       id: create-release
-      if: success()
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       uses: actions/github-script@v7
       env:
         RELEASE_TAG: ${{ steps.tag-source.outputs.tag_name }}
@@ -389,6 +390,7 @@ runs:
     # Payload SHA/tag/run refer to the build just published, not the receiving
     # workflow's default-branch SHA. Native gh failure must fail this handoff.
     - name: Trigger DEPLOY via repository_dispatch
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       shell: pwsh
       env:
         GH_REPO: ${{ github.repository }}

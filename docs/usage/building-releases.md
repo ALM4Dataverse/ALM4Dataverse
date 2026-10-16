@@ -60,7 +60,29 @@ deployment archives as both Actions artifacts and GitHub prerelease assets:
 The prerelease assets and Actions artifacts contain the same deployment package.
 Both retain the branch-suffixed BUILD tag and version.
 
-The `BUILD` job triggers automatically when any changes are made in the associated repo, including when `EXPORT` completes (unless no changes were found). The copied GitHub workflow and Azure Pipeline trigger on pushes to branches; setting a repository's PR or branch policy to require successful validation is a separate configuration step.
+The `BUILD` job triggers automatically when changes are pushed to a branch,
+including when `EXPORT` completes (unless no changes were found). GitHub BUILD
+also validates pull requests and merge-queue candidates. Those runs perform
+configured PAC Solution Checker and Dataverse BUILD validation, but do not tag
+the source, publish a GitHub Release, or dispatch deployment. The GitHub API
+token remains read-only. For fork PRs, require maintainer approval before
+workflow execution; use OIDC and the protected BUILD environment for Azure
+access where possible. Azure DevOps PR validation is configured separately
+with a Build validation branch policy; those runs perform configured BUILD
+validation and publish pipeline artifacts, but skip source tagging. Protect
+the Azure DevOps service connection with an approval check if each PR run
+requires review.
+
+For an existing GitHub caller repository, rerun `setup-github.ps1` or update
+its generated `.github/workflows/BUILD.yml` to add the PR and merge-queue
+triggers and the `BUILD PR validation` job. Shared action changes alone do not
+add those workflow triggers. Configure **Settings > Actions > General >
+Approval for running fork pull request workflows from contributors** so
+outside-contributor runs wait for maintainer approval. That approval allows
+the run to start; it does not elevate the GitHub API token. Fork secret
+availability is governed separately by GitHub Actions policy, so prefer
+OIDC-based Azure credentials and review the consequences before allowing
+long-lived secrets in fork workflows.
 
 GitHub EXPORT explicitly dispatches BUILD with the exported branch and SHA. Repository-dispatch definitions must exist on the default branch. To build manually, select BUILD in **Actions > Run workflow** on GitHub or **Pipelines > BUILD > Run pipeline** in Azure DevOps, then select the intended branch.
 
@@ -222,7 +244,7 @@ What happens:
 The BUILD result is useful as a merge gate: a failed build or enabled solution check marks that branch's build as failed. ALM4Dataverse does not automatically add branch protection or PR policies. Configure those in your source-control platform if a PR must not merge until validation succeeds:
 
 - **Azure DevOps**: add a **Build validation** branch policy for the target branch and select the BUILD pipeline.
-- **GitHub**: add the BUILD status check to the target branch's ruleset or branch protection required checks. The copied BUILD workflow is triggered by pushes, not by `pull_request`; it checks the pushed branch commit. If policy requires validation of the generated PR merge result, configure a PR-triggered workflow or merge-queue validation separately.
+- **GitHub**: add the `BUILD PR validation` check to the target branch's ruleset or branch protection required checks. The workflow validates the generated PR merge result and merge-queue candidate; it does not publish a Release or deploy on those events.
 
 Solution check report outputs:
 

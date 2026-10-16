@@ -49,13 +49,15 @@ entry when a branch begins a distinct release line; see the
 ## Build validation and pull requests
 
 `BUILD` runs when changes are pushed to a branch, including commits created by
-`EXPORT`. Optional PAC Solution Checker analysis checks packed solutions for
-rule findings and can fail the build at its configured severity threshold.
-Separately, BUILD can connect to a shared Dataverse validation environment to
-authenticate and confirm access, then deploy the generated artifacts there
-using the normal deployment process. This validates that imports/upgrades and
-configured deployment hooks complete; it changes that environment and is not
-a runtime/functional test or a `DEPLOY` target.
+`EXPORT`, and validates GitHub pull requests and merge-queue candidates. GitHub
+PR validation builds the proposed merge result, runs configured PAC Solution
+Checker rules, and deploys to the configured BUILD validation environment
+after any required workflow approval. Its GitHub API token is read-only; it
+does not publish a Release, push a build tag, or dispatch deployment. Azure
+DevOps PR validation likewise runs the configured validation and deployment
+steps, and skips source tagging. Validation deployment checks whether
+imports/upgrades and configured deployment hooks complete; it changes that
+environment and is not a runtime/functional test or a `DEPLOY` target.
 See [Building Releases](building-releases.md) for how these validations work
 and how to configure a successful build as a PR/branch-policy requirement.
 If a baseline release is configured, BUILD deploys that successful package to
@@ -65,11 +67,14 @@ baseline source environment is separate from the validation target.
 > [!IMPORTANT]
 > For the `main`/`develop` and feature-branch models below, configure your repository's
 > PR policy to require successful validation before merging into `main`. ALM4Dataverse
-> builds branch pushes but does not create branch protection or PR policies.
+> does not create branch protection or PR policies. GitHub BUILD validates PR merge
+> results and merge-queue candidates, but repository rules must require those checks.
+> Azure DevOps requires a Build validation branch policy on the target branch.
 >
-> The default GitHub BUILD workflow checks pushed branch commits and has no `pull_request`
-> trigger. Add PR-triggered or merge-queue validation if your policy requires a fresh
-> build of the proposed merge result.
+> For GitHub fork PRs, configure maintainer approval before workflow execution and
+> use the configured BUILD environment credentials only after that approval. In Azure
+> DevOps, protect the BUILD service connection with an approval check if each PR
+> validation run must be reviewed.
 
 ## Main only
 

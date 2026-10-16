@@ -330,3 +330,4 @@ stages:
             }
           displayName: 'Tag Source with Build Version'
           workingDirectory: '$(Pipeline.Workspace)/self'
+          condition: and(succeeded(), ne(variables['Build.Reason'], 'PullRequest'))

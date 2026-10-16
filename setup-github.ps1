@@ -3890,6 +3890,8 @@ on:
     push:
         branches:
             - '**'
+    pull_request:
+    merge_group:
     workflow_dispatch:
     repository_dispatch:
         types:
@@ -3897,6 +3899,7 @@ on:
 
 jobs:
     build:
+        if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
         runs-on: ubuntu-latest
         timeout-minutes: 360
 $environmentBlock        permissions:
@@ -3910,6 +3913,26 @@ $environmentBlock        permissions:
                 build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name, (github.event_name == 'repository_dispatch' && github.event.client_payload.exported_at) || github.event.head_commit.timestamp || github.event.repository.updated_at || github.run_id, github.run_number) }}
                 source-branch: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.branch) || github.ref_name }}
                 source-ref: `${{ (github.event_name == 'repository_dispatch' && github.event.client_payload.sha) || github.sha }}
+                environment-name: '$environmentInput'
+                vars-json: `${{ toJSON(vars) }}
+$secretsInput
+
+    build-pr:
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        name: BUILD PR validation
+        runs-on: ubuntu-latest
+        timeout-minutes: 360
+$environmentBlock        permissions:
+            contents: read
+            actions: read
+            id-token: write
+        steps:
+            - name: Build and validate pull request
+              uses: $SharedWorkflowRepository/.github/actions/build@$SharedWorkflowReference
+              with:
+                build-name: `${{ format('{0}-{1}-{2}-{3}', github.event.repository.name, github.head_ref || github.ref_name, github.run_id, github.run_number) }}
+                source-branch: `${{ github.head_ref || github.ref_name }}
+                source-ref: `${{ github.sha }}
                 environment-name: '$environmentInput'
                 vars-json: `${{ toJSON(vars) }}
 $secretsInput
