@@ -101,7 +101,8 @@
     # Power Platform Environment Management API settings applied before deployment.
     # Example: @{ PowerApps_AllowCodeApps = $true }
     # No complete setting catalog is available; inspect the setting's request in the PPAC browser Network tab.
-    # Power Platform RBAC roles are currently available only at tenant scope; assign an appropriate role to the service principal:
+    # Power Platform RBAC roles are currently available only at tenant scope; assign an appropriate role to the authenticated identity:
+    # AZURE_CLIENT_SECRET is used when configured; otherwise DefaultAzureCredential supports WIF, managed identity, and Azure CLI.
     # https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2
     # https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment
     # API and setting model:
@@ -113,7 +114,7 @@
 
     # Power Platform Environment Management API settings applied after the postDeploy hook.
     # Example: @{ PowerApps_AllowCodeApps = $false }
-    # Uses the same API, setting-name discovery, and tenant-scoped service-principal RBAC as powerPlatformSettings.
+    # Uses the same API, setting-name discovery, RBAC scope, and identity options as powerPlatformSettings.
     # Values may be static or trusted scriptblocks emitting exactly one value.
     # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions; EnvironmentId }.
     postDeployPowerPlatformSettings = @{}

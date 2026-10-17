@@ -26,6 +26,7 @@ BeforeAll {
     function Set-DataverseOrganizationSettings {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Pester replaces this mock stub; the real Dataverse cmdlet implements ShouldProcess.')]
         [CmdletBinding(SupportsShouldProcess = $true)]
         param([switch]$OrgDbOrgSettings, $InputObject)
     }
@@ -192,7 +193,7 @@ Describe 'Deployment options' {
         $powerPlatformEvents.Count | Should -Be 2
         $powerPlatformEvents[0].Values.PowerApps_AllowCodeApps | Should -BeTrue
         $powerPlatformEvents[0].Values.ComputedEnvironmentId | Should -Be 'environment-id'
-        $powerPlatformEvents[0].Uri | Should -Be 'https://api.powerplatform.com/environmentmanagement/environments/environment-id/settings?api-version=1'
+        $powerPlatformEvents[0].Uri | Should -Be 'https://api.powerplatform.com/environmentmanagement/environments/environment-id/settings?api-version=2024-10-01'
         $powerPlatformEvents[0].Authorization | Should -Be 'Bearer fake-power-platform-token'
         $powerPlatformEvents[1].Values.PowerApps_AllowCodeApps | Should -BeFalse
         Should -Invoke Get-DataverseWhoAmI -Times 1 -Exactly

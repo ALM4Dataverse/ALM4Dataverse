@@ -25,6 +25,38 @@ Describe 'ALM configuration loading' {
     }
 }
 
+Describe 'Configured setting maps' {
+    It 'identifies the source map when a scriptblock emits an invalid number of values' {
+        $settings = @{
+            ComputedValue = { 'first'; 'second' }
+        }
+
+        {
+            Resolve-ConfiguredSettingMap -Settings $settings -SettingMapName 'powerPlatformSettings' -Context @{}
+        } | Should -Throw '*powerPlatformSettings*'
+    }
+
+    It 'uses DefaultAzureCredential when a client secret is not configured' {
+        $savedClientId = $env:AZURE_CLIENT_ID
+        $savedTenantId = $env:AZURE_TENANT_ID
+        $savedClientSecret = $env:AZURE_CLIENT_SECRET
+        $env:AZURE_CLIENT_ID = 'federated-client'
+        $env:AZURE_TENANT_ID = 'federated-tenant'
+        $env:AZURE_CLIENT_SECRET = $null
+        Mock Get-DefaultAzureCredentialAccessToken { 'default-credential-token' }
+
+        try {
+            Get-PowerPlatformApiAccessToken | Should -Be 'default-credential-token'
+            Should -Invoke Get-DefaultAzureCredentialAccessToken -Times 1 -Exactly
+        }
+        finally {
+            $env:AZURE_CLIENT_ID = $savedClientId
+            $env:AZURE_TENANT_ID = $savedTenantId
+            $env:AZURE_CLIENT_SECRET = $savedClientSecret
+        }
+    }
+}
+
 Describe 'BUILD SemVer resolution' {
     BeforeEach {
         $script:buildVersionConfig = @{

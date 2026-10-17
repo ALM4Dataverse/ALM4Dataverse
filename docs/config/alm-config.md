@@ -95,7 +95,10 @@ number of output values fails deployment. Updates already applied aren't rolled 
 The organization-table and OrgDb maps use `Set-DataverseOrganizationSettings`; the
 OrgDb maps use its `-OrgDbOrgSettings` mode rather than updating the organization
 table's XML column. Power Platform maps are sent as a PATCH request to the Power
-Platform Environment Management API using the pipeline service principal.
+Platform Environment Management API using the pipeline's authenticated Azure identity.
+When `AZURE_CLIENT_SECRET` is configured, that service-principal credential is used;
+otherwise the Dataverse module's `DefaultAzureCredential` supports workload identity
+federation, managed identity, Azure CLI, and other configured Azure identities.
 
 ```powershell
 organizationSettings = @{
@@ -133,7 +136,7 @@ request and payload in your browser's developer tools Network tab. See Microsoft
 and [EnvironmentManagementSetting model reference](https://learn.microsoft.com/en-us/dotnet/api/microsoft.powerplatform.management.models.environmentmanagementsetting?view=power-platform-latest)
 and [Power Platform API authentication guidance](https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2).
 Power Platform RBAC roles are currently available only at tenant scope; assign an
-appropriate role to the service principal. See the [service-principal RBAC tutorial](https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment).
+appropriate role to the identity used for the API call. See the [service-principal RBAC tutorial](https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment).
 
 Organization settings are applied by `DEPLOY`, `IMPORT`, and BUILD deployment
 validation because all three use the standard deployment script. This can change the

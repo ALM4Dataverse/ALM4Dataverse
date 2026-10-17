@@ -71,8 +71,10 @@ See the [EnvironmentManagementSetting model reference](https://learn.microsoft.c
 for additional API model details.
 
 Power Platform RBAC roles are currently available only at tenant scope; assign an
-appropriate role to the service principal and provide a token for the Power Platform
-API. See Microsoft's [authentication guidance](https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2)
+appropriate role to the identity used for the Power Platform API. When
+`AZURE_CLIENT_SECRET` is configured, it is used; otherwise authentication uses the
+Dataverse module's `DefaultAzureCredential` chain, including workload identity
+federation, managed identity, and Azure CLI. See Microsoft's [authentication guidance](https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2)
 and [service-principal RBAC tutorial](https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment).
 
 Organization settings run during DEPLOY, IMPORT, and BUILD deployment validation,

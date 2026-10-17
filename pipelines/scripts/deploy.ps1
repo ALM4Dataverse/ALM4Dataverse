@@ -12,7 +12,7 @@
     Configured organization-table, OrgDbOrgSettings, and Power Platform environment
     settings are applied before the preDeploy hook and again after the postDeploy
     hook when post-deployment maps are configured. Power Platform API settings use
-    the authenticated service principal and require tenant-scoped Power Platform RBAC.
+    the authenticated Azure identity and require tenant-scoped Power Platform RBAC.
 
     Hooks defined in alm-config.psd1 are invoked at various stages of the deployment
     process to allow for custom pre- and post-deployment actions.
@@ -60,10 +60,10 @@ $organizationSettingsContext = @{
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }
 
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -Context $organizationSettingsContext
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -Context $organizationSettingsContext -OrgDbOrgSettings
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -SettingMapName 'organizationSettings' -Context $organizationSettingsContext
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -SettingMapName 'orgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
 $powerPlatformEnvironmentContext = @{}
-Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
+Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
 
 Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
@@ -242,8 +242,8 @@ Invoke-Hook -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $soluti
 }
 
 $organizationSettingsContext.HookType = 'postDeploy'
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.postDeployOrganizationSettings -Context $organizationSettingsContext
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.postDeployOrgDbOrgSettings -Context $organizationSettingsContext -OrgDbOrgSettings
-Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.postDeployPowerPlatformSettings -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.postDeployOrganizationSettings -SettingMapName 'postDeployOrganizationSettings' -Context $organizationSettingsContext
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.postDeployOrgDbOrgSettings -SettingMapName 'postDeployOrgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
+Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.postDeployPowerPlatformSettings -SettingMapName 'postDeployPowerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
 
 Write-Host "##[section]Deployment  completed successfully!"
