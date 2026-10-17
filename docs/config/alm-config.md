@@ -45,6 +45,10 @@ The supplied template additionally includes the `data` asset and example data ho
 | `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
+| `organizationSettings`, `orgDbOrgSettings` | Hashtable of setting names to values | Empty; applied before deployment. |
+| `postDeployOrganizationSettings`, `postDeployOrgDbOrgSettings` | Hashtable of setting names to values | Empty; applied after the `postDeploy` hook. |
+| `powerPlatformSettings` | Hashtable of setting names to values | Empty; patched before deployment through the Power Platform API. |
+| `postDeployPowerPlatformSettings` | Hashtable of setting names to values | Empty; patched after the `postDeploy` hook. |
 | `scriptDependencies` | Hashtable of module names and versions | `Rnwood.Dataverse.Data.PowerShell = '3.2.0'`. |
 | `pacCliVersion` | String | `'2.7.4'`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
@@ -52,6 +56,90 @@ The supplied template additionally includes the `data` asset and example data ho
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
+
+### Organization Settings
+
+Use six top-level hashtables to configure organization-wide and Power Platform settings:
+
+| Key | Setting type | When applied |
+| --- | --- | --- |
+| `organizationSettings` | Organization-table columns | At the start of deployment, before the `preDeploy` hook. |
+| `orgDbOrgSettings` | OrgDbOrgSettings entries | At the start of deployment, before the `preDeploy` hook. |
+| `postDeployOrganizationSettings` | Organization-table columns | After the `postDeploy` hook, as the last deployment work. |
+| `postDeployOrgDbOrgSettings` | OrgDbOrgSettings entries | After the `postDeploy` hook, as the last deployment work. |
+| `powerPlatformSettings` | Power Platform environment-management settings | At the start of deployment, before the `preDeploy` hook. |
+| `postDeployPowerPlatformSettings` | Power Platform environment-management settings | After the `postDeploy` hook, as the last deployment work. |
+
+The unprefixed maps are the pre-deployment defaults. Each is optional; an omitted or
+empty map does nothing. Values can be static PowerShell values or scriptblocks that
+accept a `$Context` argument and emit exactly one value. The argument is a hashtable
+with this shape:
+
+```powershell
+@{
+    HookType = 'preDeploy' # 'postDeploy' for post-deployment maps
+    BaseDirectory = $ArtifactsPath
+    Config = $solutionsConfig
+    ArtifactsPath = $ArtifactsPath
+    UseUnmanagedSolutions = $UseUnmanagedSolutions
+}
+```
+
+`BaseDirectory` and `ArtifactsPath` are the artifact directory paths; `Config` is
+the merged configuration hashtable; `UseUnmanagedSolutions` is a Boolean. Power
+Platform setting scriptblocks additionally receive `EnvironmentId`, the resolved
+environment ID as a string.
+Scriptblocks are trusted PowerShell executed in the deployment process; use them to
+compute setting values, not as a security boundary. A scriptblock error or invalid
+number of output values fails deployment. Updates already applied aren't rolled back.
+The organization-table and OrgDb maps use `Set-DataverseOrganizationSettings`; the
+OrgDb maps use its `-OrgDbOrgSettings` mode rather than updating the organization
+table's XML column. Power Platform maps are sent as a PATCH request to the Power
+Platform Environment Management API using the pipeline service principal.
+
+```powershell
+organizationSettings = @{
+    IsCustomControlsInCanvasAppsEnabled = $true
+}
+
+orgDbOrgSettings = @{
+    IsLockDownOfUnmanagedCustomizationEnabled = $false
+}
+
+postDeployOrgDbOrgSettings = @{
+    IsLockDownOfUnmanagedCustomizationEnabled = $true
+}
+
+powerPlatformSettings = @{
+    PowerApps_AllowCodeApps = $true
+}
+```
+
+This example enables PCF controls in canvas apps, temporarily allows
+unmanaged customizations during deployment, then blocks them after successful
+deployment, and enables Code Apps. The setting keys and types must match the
+target feature's documentation.
+Microsoft lists organization-table columns in the [Organization table reference](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/organization)
+and describes supported setting updates in [Read and update environment settings](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/organization-table).
+For OrgDbOrgSettings, use Microsoft's [environment database settings guidance](https://learn.microsoft.com/en-us/power-platform/admin/environment-database-settings)
+and the [community-maintained settings list](https://github.com/seanmcne/OrgDbOrgSettings/blob/master/mspfedyn_/OrgDbOrgSettings/Solution/WebResources/mspfedyn_/OrgDbOrgSettings/Settings.xml).
+The third-party list may not include newer settings; verify each name and its type
+against current feature guidance before using it.
+
+The Power Platform API doesn't provide a complete catalog of environment-setting
+names. To discover a name, change the setting manually in PPAC and inspect the
+request and payload in your browser's developer tools Network tab. See Microsoft's
+[Environment Management Settings API](https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environment-management-settings)
+and [EnvironmentManagementSetting model reference](https://learn.microsoft.com/en-us/dotnet/api/microsoft.powerplatform.management.models.environmentmanagementsetting?view=power-platform-latest)
+and [Power Platform API authentication guidance](https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2).
+Power Platform RBAC roles are currently available only at tenant scope; assign an
+appropriate role to the service principal. See the [service-principal RBAC tutorial](https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment).
+
+Organization settings are applied by `DEPLOY`, `IMPORT`, and BUILD deployment
+validation because all three use the standard deployment script. This can change the
+validation environment and must be considered when choosing settings and targets.
+See [Organization Settings](example-hooks/organization-settings.md) for examples and
+the scope of each setting type.
 
 ### BUILD SemVer
 

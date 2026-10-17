@@ -13,9 +13,10 @@ Describe 'ALM configuration loading' {
     }
 
     It 'retains defaults while merging overrides and custom keys' {
-        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value "@{ custom = 42; importTimeoutSeconds = 30; solutionCheck = @{ enabled = `$true } }"
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value "@{ custom = 42; dynamicSetting = { param(`$Context) `$Context.HookType }; importTimeoutSeconds = 30; solutionCheck = @{ enabled = `$true } }"
         $config = Get-AlmConfig -BaseDirectory $TestDrive
         $config.custom | Should -Be 42
+        $config.dynamicSetting | Should -BeOfType [scriptblock]
         $config.importTimeoutSeconds | Should -Be 30
         $config.solutionCheck.enabled | Should -BeTrue
         $config.solutionCheck.geo | Should -Be 'Europe'

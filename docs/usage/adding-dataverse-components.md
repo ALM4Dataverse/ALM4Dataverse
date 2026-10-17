@@ -1,9 +1,40 @@
 # Adding Dataverse Components
 
 Use this guide to get common Dataverse components into an ALM4Dataverse release. 
-For the full solution configuration reference, , see [Solutions](../config/alm-config.md#solutions). For export, build, and
+For the full solution configuration reference, see [Solutions](../config/alm-config.md#solutions). For export, build, and
 deployment behavior, see [Exporting changes](exporting-changes.md),
 [Building releases](building-releases.md), and [Deploying](deploying.md).
+
+## Organization-Wide Settings
+
+Some environment switches aren't solution components. Configure them in `alm-config.psd1`
+with `organizationSettings` or `orgDbOrgSettings` to apply them before deployment;
+use `postDeployOrganizationSettings` or `postDeployOrgDbOrgSettings` to apply values
+after deployment. For example, enable PCF controls and Code Apps, allow unmanaged
+customizations during deployment, then block them afterward:
+
+```powershell
+organizationSettings = @{
+    IsCustomControlsInCanvasAppsEnabled = $true
+}
+
+orgDbOrgSettings = @{
+    IsLockDownOfUnmanagedCustomizationEnabled = $false
+}
+
+postDeployOrgDbOrgSettings = @{
+    IsLockDownOfUnmanagedCustomizationEnabled = $true
+}
+
+powerPlatformSettings = @{
+    PowerApps_AllowCodeApps = $true
+}
+```
+
+See the detailed [organization settings configuration](../config/alm-config.md#organization-settings)
+and its [setting references and examples](../config/example-hooks/organization-settings.md)
+before applying environment-wide changes. Power Platform API setting names have no
+complete public catalog; inspect the PPAC request in your browser's Network tab.
 
 ## Solutions
 

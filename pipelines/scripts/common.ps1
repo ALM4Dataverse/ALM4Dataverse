@@ -218,6 +218,38 @@ function Merge-AlmConfigValue {
     return $OverrideValue
 }
 
+function ConvertTo-AlmConfigLogValue {
+    <#
+    .SYNOPSIS
+        Replaces executable configuration values before diagnostic serialization.
+    .DESCRIPTION
+        Recursively preserves hashtable and array contents while rendering scriptblocks
+        as markers, avoiding serialization of their executable PowerShell internals.
+    #>
+    param($Value)
+
+    if ($Value -is [scriptblock]) {
+        return '[ScriptBlock]'
+    }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $sanitized = @{}
+        foreach ($key in $Value.Keys) {
+            $sanitized[$key] = ConvertTo-AlmConfigLogValue -Value $Value[$key]
+        }
+        return ,$sanitized
+    }
+    if ($Value -is [array]) {
+        $sanitized = @(
+            foreach ($item in $Value) {
+                ConvertTo-AlmConfigLogValue -Value $item
+            }
+        )
+        return ,$sanitized
+    }
+
+    return $Value
+}
+
 function Get-AlmConfig {
     <#
     .SYNOPSIS
@@ -273,9 +305,248 @@ function Get-AlmConfig {
     $config["_main"] = $mainConfig
     $config["_defaults"] = $defaultConfig
 
-    if ($LogConfig) { Write-Host "##[debug]Loaded configuration: $($config | ConvertTo-Json -Depth 20)" }
+    if ($LogConfig) {
+        $sanitizedConfig = ConvertTo-AlmConfigLogValue -Value $config
+        Write-Host "##[debug]Loaded configuration: $($sanitizedConfig | ConvertTo-Json -Depth 20)"
+    }
 
     return $config
+}
+
+function Resolve-ConfiguredSettingMap {
+    <#
+    .SYNOPSIS
+        Resolves one configured setting map into a PowerShell object.
+    .DESCRIPTION
+        Scriptblock values receive the deployment context and must emit one value.
+        Imported PSD1 scriptblocks are unwrapped once before their body is evaluated.
+        Invalid maps or scriptblock output stop deployment.
+    .PARAMETER Settings
+        Hashtable mapping setting names to static values or scriptblocks.
+    .PARAMETER Context
+        Deployment context supplied as the scriptblock's positional argument.
+    #>
+    param(
+        $Settings,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Context
+    )
+
+    if ($null -eq $Settings) {
+        return
+    }
+    if ($Settings -isnot [hashtable]) {
+        $settingType = $Settings.GetType().FullName
+        throw "Settings must be a hashtable; received '$settingType'."
+    }
+    if ($Settings.Count -eq 0) {
+        return
+    }
+
+    $resolvedSettings = [ordered]@{}
+    foreach ($settingName in $Settings.Keys) {
+        $value = $Settings[$settingName]
+        if ($value -is [scriptblock]) {
+            $output = @(& $value $Context)
+            if ($output.Count -eq 1 -and $output[0] -is [scriptblock]) {
+                $output = @(& $output[0] $Context)
+            }
+            if ($output.Count -ne 1) {
+                throw "Scriptblock for organization setting '$settingName' must emit exactly one value; emitted $($output.Count)."
+            }
+            $value = $output[0]
+        }
+
+        $resolvedSettings[$settingName] = $value
+    }
+
+    return [PSCustomObject]$resolvedSettings
+}
+
+function Invoke-ConfiguredOrganizationSettingMap {
+    <#
+    .SYNOPSIS
+        Resolves and applies one configured organization-settings map.
+    .DESCRIPTION
+        OrgDbOrgSettings maps use the dedicated cmdlet parameter; all other maps
+        update organization-table columns. Cmdlet errors stop deployment without
+        rolling back any earlier setting updates.
+    .PARAMETER Settings
+        Hashtable mapping organization setting names to static values or scriptblocks.
+    .PARAMETER Context
+        Deployment context supplied to configured scriptblocks.
+    .PARAMETER OrgDbOrgSettings
+        Applies the map as OrgDbOrgSettings rather than organization-table columns.
+    #>
+    param(
+        $Settings,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Context,
+        [switch]$OrgDbOrgSettings
+    )
+
+    $inputObject = Resolve-ConfiguredSettingMap -Settings $Settings -Context $Context
+    if ($null -eq $inputObject) {
+        return
+    }
+
+    if ($OrgDbOrgSettings) {
+        Set-DataverseOrganizationSettings -OrgDbOrgSettings -Verbose -Confirm:$false -InputObject $inputObject
+    }
+    else {
+        Set-DataverseOrganizationSettings -Verbose -Confirm:$false -InputObject $inputObject
+    }
+}
+
+function Get-PowerPlatformApiAccessToken {
+    <#
+    .SYNOPSIS
+        Gets a Power Platform API bearer token for the active pipeline identity.
+    .DESCRIPTION
+        Uses the configured service-principal secret when available; otherwise uses
+        the existing Azure CLI sign-in. Tokens are requested for the Power Platform
+        API and are not written to logs.
+    #>
+    param()
+
+    $clientId = [System.Environment]::GetEnvironmentVariable('AZURE_CLIENT_ID')
+    $tenantId = [System.Environment]::GetEnvironmentVariable('AZURE_TENANT_ID')
+    $clientSecret = [System.Environment]::GetEnvironmentVariable('AZURE_CLIENT_SECRET')
+
+    if (-not [string]::IsNullOrWhiteSpace($clientSecret)) {
+        if ([string]::IsNullOrWhiteSpace($clientId) -or [string]::IsNullOrWhiteSpace($tenantId)) {
+            throw 'AZURE_CLIENT_ID and AZURE_TENANT_ID are required when AZURE_CLIENT_SECRET is set.'
+        }
+
+        $tenant = [System.Uri]::EscapeDataString($tenantId)
+        $tokenResponse = Invoke-RestMethod `
+            -Uri "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" `
+            -Method Post `
+            -ContentType 'application/x-www-form-urlencoded' `
+            -Body @{
+                client_id     = $clientId
+                client_secret = $clientSecret
+                grant_type    = 'client_credentials'
+                scope         = 'https://api.powerplatform.com/.default'
+            } `
+            -ErrorAction Stop
+    }
+    else {
+        $azCommand = Get-Command -Name 'az' -ErrorAction SilentlyContinue
+        if ($null -eq $azCommand) {
+            throw 'Power Platform environment settings require AZURE_CLIENT_SECRET or an authenticated Azure CLI session to acquire a Power Platform API token.'
+        }
+
+        $tokenOutput = & $azCommand.Source account get-access-token --scope 'https://api.powerplatform.com/.default' --output json 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Azure CLI could not acquire a Power Platform API token (exit code $LASTEXITCODE)."
+        }
+        $tokenResponse = ($tokenOutput -join [Environment]::NewLine) | ConvertFrom-Json -ErrorAction Stop
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$tokenResponse.access_token)) {
+        throw 'The identity provider returned no Power Platform API access token.'
+    }
+
+    return [string]$tokenResponse.access_token
+}
+
+function Resolve-PowerPlatformEnvironmentId {
+    <#
+    .SYNOPSIS
+        Resolves the Power Platform environment ID for a Dataverse organization.
+    .DESCRIPTION
+        Queries the Power Platform environments API by Dataverse organization ID.
+        Exactly one match is required; the API caller must have tenant-scoped access.
+    .PARAMETER OrganizationId
+        Organization ID returned by Dataverse WhoAmI.
+    .PARAMETER AccessToken
+        Bearer token for the Power Platform API.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$OrganizationId,
+        [Parameter(Mandatory = $true)]
+        [string]$AccessToken
+    )
+
+    $encodedFilter = [System.Uri]::EscapeDataString("dataverseId eq '$OrganizationId'")
+    $uri = "https://api.powerplatform.com/environmentmanagement/environments?%24filter=$encodedFilter&%24select=id,dataverseId&%24top=2&api-version=2024-10-01"
+    $response = Invoke-RestMethod -Uri $uri -Method Get -Headers @{
+        Authorization = "Bearer $AccessToken"
+    } -ErrorAction Stop
+
+    if ($null -eq $response -or $null -eq $response.value) {
+        throw "The Power Platform API returned no environment list for Dataverse organization '$OrganizationId'."
+    }
+
+    $matchingEnvironments = @($response.value | Where-Object { $_.dataverseId -eq $OrganizationId })
+    if ($matchingEnvironments.Count -ne 1 -or [string]::IsNullOrWhiteSpace([string]$matchingEnvironments[0].id)) {
+        throw "Expected one Power Platform environment for Dataverse organization '$OrganizationId'; found $($matchingEnvironments.Count)."
+    }
+
+    return [string]$matchingEnvironments[0].id
+}
+
+function Invoke-PowerPlatformSettingMap {
+    <#
+    .SYNOPSIS
+        Resolves and patches one Power Platform environment-settings map.
+    .DESCRIPTION
+        Resolves the target environment ID from the connected Dataverse organization
+        once and reuses it across deployment phases. Acquires a fresh API token for
+        each patch. API, authentication, and setting errors stop deployment.
+    .PARAMETER Settings
+        Hashtable mapping Power Platform setting names to values or scriptblocks.
+    .PARAMETER Context
+        Deployment context supplied to configured scriptblocks.
+    .PARAMETER EnvironmentContext
+        Mutable hashtable used to cache the resolved environment ID across phases.
+    #>
+    param(
+        $Settings,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Context,
+        [Parameter(Mandatory = $true)]
+        [hashtable]$EnvironmentContext
+    )
+
+    if ($null -eq $Settings) {
+        return
+    }
+    if ($Settings -isnot [hashtable]) {
+        $settingType = $Settings.GetType().FullName
+        throw "Power Platform environment settings must be a hashtable; received '$settingType'."
+    }
+    if ($Settings.Count -eq 0) {
+        return
+    }
+
+    $accessToken = Get-PowerPlatformApiAccessToken
+    if (-not $EnvironmentContext.ContainsKey('EnvironmentId')) {
+        $whoAmI = Get-DataverseWhoAmI
+        $organizationId = [string]$whoAmI.OrganizationId
+        if ([string]::IsNullOrWhiteSpace($organizationId)) {
+            throw 'Dataverse WhoAmI returned no organization ID; cannot resolve the Power Platform environment.'
+        }
+        $EnvironmentContext.EnvironmentId = Resolve-PowerPlatformEnvironmentId -OrganizationId $organizationId -AccessToken $accessToken
+    }
+
+    $scriptContext = @{}
+    foreach ($key in $Context.Keys) {
+        $scriptContext[$key] = $Context[$key]
+    }
+    $scriptContext.EnvironmentId = $EnvironmentContext.EnvironmentId
+    $inputObject = Resolve-ConfiguredSettingMap -Settings $Settings -Context $scriptContext
+    if ($null -eq $inputObject) {
+        return
+    }
+
+    $uri = "https://api.powerplatform.com/environmentmanagement/environments/$($EnvironmentContext.EnvironmentId)/settings?api-version=1"
+    $body = $inputObject | ConvertTo-Json -Depth 10 -Compress
+    $null = Invoke-RestMethod -Uri $uri -Method Patch -Headers @{
+        Authorization = "Bearer $accessToken"
+    } -ContentType 'application/json' -Body $body -ErrorAction Stop
 }
 
 function Resolve-AlmBranchBaseVersion {
