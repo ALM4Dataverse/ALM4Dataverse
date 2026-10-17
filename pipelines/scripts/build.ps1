@@ -815,7 +815,7 @@ foreach ($solution in $config.solutions) {
 
         $npm = Get-Command npm -ErrorAction SilentlyContinue
         if (-not $npm) {
-            throw "npm is required to build code app '$codeAppPath'. Install Node.js LTS on the pipeline agent."
+            throw "npm is required to build code app '$codeAppPath'. Run installdependencies.ps1 -ForBuild to install the configured Node.js version."
         }
 
         Write-Host "##[group]Building code app: $codeAppPath"

@@ -24,7 +24,7 @@ param(
 
 . (Join-Path $PSScriptRoot 'common.ps1')
 
-Initialize-PacAuthentication
+Initialize-PacAuthentication -Url $url
 
 $env:DATAVERSE_URL = $url
 

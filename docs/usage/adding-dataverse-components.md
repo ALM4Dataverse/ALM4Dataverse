@@ -1,7 +1,7 @@
 # Adding Dataverse Components
 
-Use this guide to get common Dataverse components into an ALM4Dataverse release. 
-For the full solution configuration reference, , see [Solutions](../config/alm-config.md#solutions). For export, build, and
+Use this guide to get common Dataverse components into an ALM4Dataverse release.
+For the full solution configuration reference, see [Solutions](../config/alm-config.md#solutions). For export, build, and
 deployment behavior, see [Exporting changes](exporting-changes.md),
 [Building releases](building-releases.md), and [Deploying](deploying.md).
 
@@ -200,65 +200,29 @@ requirements and other supported options.
 ## Power Apps Code Apps
 
 Follow Microsoft's [Code Apps quickstart](https://learn.microsoft.com/en-us/power-apps/developer/code-apps/how-to/create-an-app-from-scratch)
-to create and initialize a Vite-based app with the Power Apps CLI.
-
-**Simple workflow:** From the project directory, run `pa app push` to publish the app to
-DEV and include it in the solution managed by ALM4Dataverse. Run EXPORT to capture the
-solution. If this is a new solution, add its unique name as described in [Solutions](#solutions).
-
-**Build and map repository output:**
-
-> [!NOTE]
-> Non-interactive publishing currently requires client-secret authentication because of
-> a Power Apps CLI limitation. More direct Code Apps support is planned for a future
-> ALM4Dataverse improvement.
-
-To publish the repository copy automatically after IMPORT instead of running
-`pa app push` manually, create `hooks/code-apps/push-after-import.ps1` with this content:
-
-```powershell
-param([hashtable]$Context)
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
-if (-not $Context.UseUnmanagedSolutions) {
-    return
-}
-
-$appDirectory = Join-Path $Context.BaseDirectory 'apps/ContosoCodeApp'
-Push-Location $appDirectory
-try {
-    $env:PA_CLI_USE_SP_AUTH = 'true'
-    $env:PA_CLI_SP_CLIENT_ID = $env:AZURE_CLIENT_ID
-    $env:PA_CLI_SP_CLIENT_SECRET = $env:AZURE_CLIENT_SECRET
-    $env:PA_CLI_SP_TENANT_ID = $env:AZURE_TENANT_ID
-
-    & pa app push --non-interactive
-    if ($LASTEXITCODE -ne 0) {
-        throw "Power Apps CLI push failed with exit code $LASTEXITCODE."
-    }
-}
-finally {
-    Pop-Location
-}
-```
-
-Keep the Code App project in `apps/ContosoCodeApp/`. Then edit `alm-config.psd1` to
-include the app and script in `assets`, and add the script path to `hooks.postDeploy`:
+to create the app. Keep its project and npm lockfile in source control. Add the
+repository-relative project path to the owning solution's `codeApps` setting:
 
 ```powershell
 @{
-    assets = @(
-        'data'
-        'apps/ContosoCodeApp'
-        'hooks/code-apps'
+    solutions = @(
+        @{
+            name = 'ContosoApp'
+            codeApps = @('code-apps/ContosoCodeApp')
+        }
     )
-    hooks = @{
-        postDeploy = @(
-            'data/system/import.ps1'
-            'hooks/code-apps/push-after-import.ps1'
-        )
-    }
 }
 ```
+
+BUILD and IMPORT install dependencies and run each app's build before packaging it.
+By default, DEPLOY and IMPORT patch the built files into the app's existing component in
+the owning solution before importing it. The Code App must already be included as a root
+component in that solution; otherwise deployment fails before any solution is imported.
+Set `codeAppPublishMethod = 'pac'` to use `pac code push` after import instead. Keep code
+app projects out of `assets`.
+
+The PAC method requires Power Platform API RBAC access; Dataverse permissions alone
+aren't sufficient. The solution-package default avoids this broader permission
+requirement. See [solution settings](../config/alm-config.md#solutions) for details and
+[Node.js for Code Apps](../config/alm-config.md#nodejs-for-code-apps) for version
+selection and conditional installation.

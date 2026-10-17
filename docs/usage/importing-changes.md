@@ -66,11 +66,15 @@ followed by `preDeploy`, `dataMigrations`, and `postDeploy`. There are no separa
 `preImport` or `postImport` hooks.
 
 The build step runs `npm ci` and `npm run build` for each configured code app before
-packing. After the solution imports and customizations are published, IMPORT runs
-`pac code push` for those apps. Code app project directories and their build output are
-included in build artifacts automatically. The agent must have Node.js LTS/npm available,
-and each app must have a committed npm lock file. See
-[solution configuration](../config/alm-config.md#solutions).
+packing. By default, IMPORT patches each app's built files into its existing component
+in the solution package before import and fails before importing solutions if that
+component is missing. Set `codeAppPublishMethod = 'pac'` to run `pac code push` after
+import instead. Code app project directories and their build output are included in build
+artifacts automatically. `installdependencies.ps1 -ForBuild`
+automatically ensures the configured Node.js version and npm are available only when
+code apps are configured. Each app must have a committed npm lock file. See
+[solution configuration](../config/alm-config.md#solutions) for the PAC method's API
+permission requirements.
 
 > [!NOTE]
 > **Advanced: import behavior.** Unmanaged imports use `NoUpgrade` mode and do not set

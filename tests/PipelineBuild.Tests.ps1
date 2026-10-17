@@ -90,7 +90,7 @@ Describe 'Build artifacts and solution-check helpers' {
         } -ParameterFilter { $Name -eq 'Compress-DataverseSolutionFile' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
-        Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4+build pac' }
+        Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.13.1+build pac' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestPac' } } -ParameterFilter { $Name -eq 'pac' }
         Mock Invoke-TestPac { $global:LASTEXITCODE = 0; 'Critical: 0'; 'High: 1'; 'Low: 2' }
         # Most cases keep work in Pester's runspace so mocks remain visible. Both overlap cases
@@ -125,7 +125,7 @@ Describe 'Build artifacts and solution-check helpers' {
         Test-Path (Join-Path $script:artifactDirectory 'alm-config.psd1') | Should -BeTrue
         $lock = Get-Content (Join-Path $script:artifactDirectory 'scriptDependencies.lock.json') -Raw | ConvertFrom-Json -AsHashtable
         $lock.scriptDependencies['Rnwood.Dataverse.Data.PowerShell'] | Should -Be '3.0.4-preview.1'
-        $lock.pacCliVersion | Should -Be '2.7.4'
+        $lock.pacCliVersion | Should -Be '2.13.1'
     }
 
     It 'rejects a missing extra asset' {

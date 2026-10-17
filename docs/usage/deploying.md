@@ -124,7 +124,7 @@ separately with the same build identity.
   This stage is designed to let you run steps that need both the old and new components to be present. For instance, moving data from an old/obsolete column (which is no longer present in the solution version being upgraded to) and into a new column.
 - **Solutions that have a pending upgrade then have them applied in reverse dependency order**.
 - **Processes are assigned to the configured service-account user and activated.** Custom per-solution owner keys can select different users.
-- **Customizations are published, configured code apps are pushed, then `postDeploy` hooks run.** This commonly imports data captured by EXPORT. Code apps are configured per solution using the [`codeApps` setting](../config/alm-config.md#solutions).
+- **Code apps are deployed with their solution changes, then `postDeploy` hooks run.** By default, built files are patched into existing solution components before import; set `codeAppPublishMethod = 'pac'` to push with PAC after customizations are published. Code apps are configured per solution using the [`codeApps` setting](../config/alm-config.md#solutions).
 - **The caller records deployment success only after these steps complete.** Azure DevOps updates the environment pointer; GitHub updates the environment pointer in both promotion modes and writes a per-build success gate only in `manual-gate-tag` mode.
 
 `preDeploy` runs before staging. The default is managed deployment; `deployUnmanaged`
