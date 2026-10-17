@@ -188,11 +188,11 @@ Describe 'Deployment options' {
         ($eventNames -join ',') | Should -Be 'settings:organization,settings:orgdb,auth,resolve,settings:powerplatform,hook:preDeploy,import,hook:dataMigrations,publish,hook:postDeploy,settings:organization,settings:orgdb,auth,settings:powerplatform'
         $settingEvents = @($events | Where-Object Kind -eq 'settings' | Where-Object Target -ne 'powerplatform')
         $settingEvents.Count | Should -Be 4
-        $settingEvents[0].Values.IsCustomControlsInCanvasAppsEnabled | Should -BeTrue
-        $settingEvents[0].Values.ComputedStage | Should -Be 'preDeploy'
+        $settingEvents[0].Values.iscustomcontrolsincanvasappsenabled | Should -BeTrue
+        $settingEvents[0].Values.computedstage | Should -Be 'preDeploy'
         $settingEvents[1].Target | Should -Be 'orgdb'
         $settingEvents[1].Values.IsLockDownOfUnmanagedCustomizationEnabled | Should -BeFalse
-        $settingEvents[2].Values.ComputedStage | Should -Be 'postDeploy'
+        $settingEvents[2].Values.computedstage | Should -Be 'postDeploy'
         $settingEvents[3].Target | Should -Be 'orgdb'
         $settingEvents[3].Values.IsLockDownOfUnmanagedCustomizationEnabled | Should -BeTrue
         $powerPlatformEvents = @($events | Where-Object { $_.Kind -eq 'settings' -and $_.Target -eq 'powerplatform' })

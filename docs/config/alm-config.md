@@ -97,6 +97,9 @@ The organization-table and OrgDb maps use `Set-DataverseOrganizationSettings`; t
 OrgDb maps use its `-OrgDbOrgSettings` mode rather than updating the organization
 table's XML column. Power Platform maps are sent as a PATCH request to the Power
 Platform Environment Management API using the pipeline's authenticated Azure identity.
+Organization-map keys can use the SchemaName casing shown in Microsoft's reference;
+the pipeline converts them to the lowercase logical names required by the Dataverse
+settings cmdlet. OrgDbOrgSettings names keep their documented casing.
 When `AZURE_CLIENT_SECRET` is configured, that service-principal credential is used;
 otherwise the Dataverse module's `DefaultAzureCredential` supports workload identity
 federation, managed identity, Azure CLI, and other configured Azure identities.

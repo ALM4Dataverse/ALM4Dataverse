@@ -84,6 +84,7 @@
     # Organization-table columns applied before deployment.
     # Example: @{ IsCustomControlsInCanvasAppsEnabled = $true }
     # Column names: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/organization
+    # Schema names are normalized to the lowercase logical names required by the Dataverse settings cmdlet.
     # Use supported settings: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/organization-table
     # Values may be static or trusted scriptblocks emitting exactly one value.
     # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions }.
@@ -91,6 +92,7 @@
 
     # Organization-table columns applied after the postDeploy hook.
     # Example: @{ IsCustomControlsInCanvasAppsEnabled = $false }
+    # Schema names are normalized to the lowercase logical names required by the Dataverse settings cmdlet.
     # Values may be static or trusted scriptblocks emitting exactly one value.
     # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions }.
     postDeployOrganizationSettings = @{}

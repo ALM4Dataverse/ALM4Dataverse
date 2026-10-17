@@ -402,7 +402,13 @@ function Invoke-ConfiguredOrganizationSettingMap {
         Set-DataverseOrganizationSettings -OrgDbOrgSettings -Verbose -Confirm:$false -InputObject $inputObject
     }
     else {
-        Set-DataverseOrganizationSettings -Verbose -Confirm:$false -InputObject $inputObject
+        # The cmdlet resolves organization attributes by case-sensitive logical name.
+        $logicalSettings = [ordered]@{}
+        foreach ($setting in $inputObject.PSObject.Properties) {
+            $logicalSettings[$setting.Name.ToLowerInvariant()] = $setting.Value
+        }
+        $logicalInputObject = [PSCustomObject]$logicalSettings
+        Set-DataverseOrganizationSettings -Verbose -Confirm:$false -InputObject $logicalInputObject
     }
 }
 
