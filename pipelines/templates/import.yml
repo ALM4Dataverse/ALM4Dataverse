@@ -49,7 +49,7 @@ stages:
         # The embedded resolver returns the first usable credential candidate, or
         # null. Reject unexpanded $(...) macros left by the other task provider.
         - pwsh: |
-            & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
+            & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1" -ForBuild
             $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
             if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
               $environmentUrl = '$(BuildTools.EnvironmentUrl)'

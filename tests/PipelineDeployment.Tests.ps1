@@ -43,6 +43,9 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $Operation)
     }
+    function Invoke-DeploymentTestPac {
+        $global:LASTEXITCODE = 0
+    }
 
     # Settings is literal solution-entry syntax, allowing missing/null/false keys to remain distinct.
     # Disable parallel packing so the IMPORT case can use the same in-runspace command mocks.
@@ -67,6 +70,7 @@ Describe 'Deployment options' {
         Mock Import-DataverseSolution {}
         Mock Invoke-DataverseSolutionUpgrade {}
         Mock Publish-DataverseCustomizations {}
+        Mock Update-SolutionCodeAppPackage {}
         Mock Get-DataverseRecord {
             if ($TableName -eq 'systemuser') {
                 return @{ fullname = 'Service Account'; Id = 'user-id' }
@@ -230,6 +234,102 @@ Describe 'Deployment options' {
         Should -Invoke Invoke-DataverseSolutionUpgrade -Times 0 -Exactly
     }
 
+    It 'patches configured code apps into solution packages before importing by default' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal')"
+        Mock Update-SolutionCodeAppPackage {}
+        Mock Import-DataverseSolution {
+            Should -Invoke Update-SolutionCodeAppPackage -Times 1 -Exactly -ParameterFilter {
+                $SolutionName -eq 'Example'
+            }
+        }
+        Mock Invoke-DeploymentTestPac {}
+
+        & $script:deployScript -ArtifactsPath $TestDrive
+
+        Should -Invoke Update-SolutionCodeAppPackage -Times 1 -Exactly -ParameterFilter {
+            $SolutionName -eq 'Example' -and $SolutionFile -like '*Example_managed.zip'
+        }
+        Should -Invoke Invoke-DeploymentTestPac -Times 0 -Exactly
+    }
+
+    It 'fails before importing when a configured code app is absent from the solution package' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal')"
+        Mock Update-SolutionCodeAppPackage { throw "Configured app is not present" }
+
+        { & $script:deployScript -ArtifactsPath $TestDrive } |
+            Should -Throw '*not present*'
+        Should -Invoke Import-DataverseSolution -Times 0 -Exactly
+    }
+
+    It 'pushes configured code apps with PAC when explicitly selected' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{}'
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac'"
+        $savedDataverseUrl = $env:DATAVERSE_URL
+        $env:DATAVERSE_URL = 'https://example.crm.dynamics.com'
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestPac' } } -ParameterFilter { $Name -eq 'pac' }
+        Mock Invoke-DeploymentTestPac { $global:LASTEXITCODE = 0 }
+
+        try {
+            & $script:deployScript -ArtifactsPath $TestDrive
+
+            Should -Invoke Invoke-DeploymentTestPac -Times 1 -Exactly -ParameterFilter {
+                $args -contains 'code' -and
+                $args -contains 'push' -and
+                $args -contains '--environment' -and
+                $args -contains 'https://example.crm.dynamics.com' -and
+                $args -contains '--solutionName' -and
+                $args -contains 'Example'
+            }
+            Should -Invoke Update-SolutionCodeAppPackage -Times 0 -Exactly
+        }
+        finally {
+            $env:DATAVERSE_URL = $savedDataverseUrl
+        }
+    }
+
+    It 'fails PAC code app pushes when the target environment URL is missing' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac'"
+        $savedDataverseUrl = $env:DATAVERSE_URL
+        Remove-Item Env:DATAVERSE_URL -ErrorAction SilentlyContinue
+
+        try {
+            { & $script:deployScript -ArtifactsPath $TestDrive } |
+                Should -Throw '*DATAVERSE_URL is required*'
+        }
+        finally {
+            $env:DATAVERSE_URL = $savedDataverseUrl
+        }
+    }
+
+    It 'fails and includes PAC output when its API request fails despite a zero exit code' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac'"
+        $savedDataverseUrl = $env:DATAVERSE_URL
+        $env:DATAVERSE_URL = 'https://example.crm.dynamics.com'
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestPac' } } -ParameterFilter { $Name -eq 'pac' }
+        Mock Invoke-DeploymentTestPac {
+            $global:LASTEXITCODE = 0
+            'HTTP error status: 403 for POST https://example.environment.api.powerplatform.com/powerapps/apps?api-version=1: Forbidden'
+        }
+
+        try {
+            { & $script:deployScript -ArtifactsPath $TestDrive } |
+                Should -Throw '*HTTP error status: 403*'
+        }
+        finally {
+            $env:DATAVERSE_URL = $savedDataverseUrl
+        }
+    }
+
     It 'selects package and service-account defaults for <Label>' -ForEach @(
         @{ Label = 'missing keys'; Settings = ''; Unmanaged = $false; Package = 'Example_managed.zip'; Upn = 'default@example.com' }
         @{ Label = 'per-solution overrides'; Settings = "deployUnmanaged = `$true; serviceAccountUpnConfigKey = 'CustomUpn'"; Unmanaged = $false; Package = 'Example.zip'; Upn = 'custom@example.com' }
@@ -257,7 +357,7 @@ Describe 'Deployment options' {
         Mock Get-Module { [pscustomobject]@{ Version = [version]'3.0.4'; PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } } } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
-        Mock Invoke-DeploymentTestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.7.4 pac' }
+        Mock Invoke-DeploymentTestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.13.1 pac' }
         $savedExitCode = $global:LASTEXITCODE
         try {
             & (Join-Path $repoRoot 'pipelines/scripts/import.ps1') -SourceDirectory $TestDrive -ArtifactStagingDirectory (Join-Path $TestDrive 'artifacts')

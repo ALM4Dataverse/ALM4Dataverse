@@ -96,7 +96,7 @@ runs:
           }
         }
 
-        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
+        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1" -ForBuild
         & "${{ github.action_path }}/../../../pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
         & "${{ github.action_path }}/../../../pipelines/scripts/import.ps1" `
           -SourceDirectory "${{ github.workspace }}/self" `
