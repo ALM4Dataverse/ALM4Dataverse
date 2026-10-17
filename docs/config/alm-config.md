@@ -349,7 +349,7 @@ Each hook script receives a `$Context` parameter containing:
   - Per-solution hooks also receive a cloned `Connection`. In parallel export mode, the hook worker sets that clone as its default connection for the duration of the hook, so existing Dataverse commands resolve to the right client. Hooks can also pass `$Context.Connection` explicitly. Parallel hooks receive the shared `OperationBudget` and `CancellationToken`.
   - `postExportSolution` hook output is collected by solution in `SolutionHookResults` and passed to the `postExport` hook.
   - `parallelExportSolution` hook output is collected by solution in `ParallelExportSolutionHookResults` and passed to the `postExport` hook.
-  - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`
+  - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`. The switch is true for IMPORT, which forces unmanaged packages; DEPLOY and BUILD validation leave it false, even when a solution is configured with `deployUnmanaged`.
 
 Start a hook with a parameter block. Resolve application-owned files from `$PSScriptRoot` or `$Context.BaseDirectory`, not from assumptions about the runner's working directory. Guard optional configuration keys when using strict mode:
 

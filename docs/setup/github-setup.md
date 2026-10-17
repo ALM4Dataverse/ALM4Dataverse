@@ -100,12 +100,16 @@ Copy the following from a consistent ALM4Dataverse release into your application
 | Source | Destination |
 | --- | --- |
 | [alm-config.psd1](../../copy-to-your-repo/alm-config.psd1) | Repository root |
+| [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the repository root |
 | [data](../../copy-to-your-repo/data) | `data/` |
 | [GitHub workflows](../../copy-to-your-repo/.github/workflows) | `.github/workflows/` |
 
 Include the hidden `.github` directory. Do not copy the Azure DevOps `pipelines` callers
 unless you also intend to configure that platform. Select a tested action/workflow ref
 instead of unintentionally following the template's `@main` references.
+
+Automated setup syncs the same `AGENTS.md` scaffold. Keep it in the application repository
+and ask an AI agent to read it before changing Dataverse components or ALM configuration.
 
 The caller workflows are BUILD, EXPORT, IMPORT, DEPLOY-main, and CLEANUP-RELEASES.
 Configure `solutions` using unique names in dependency order, then customize optional
