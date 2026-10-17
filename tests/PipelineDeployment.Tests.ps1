@@ -23,6 +23,16 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($TableName, $Id, $InputObject)
     }
+    function Set-DataverseOrganizationSettings {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
+        [CmdletBinding(SupportsShouldProcess = $true)]
+        param([switch]$OrgDbOrgSettings, $InputObject)
+
+        $target = if ($OrgDbOrgSettings) { 'OrgDbOrgSettings' } else { 'organization' }
+        $settingCount = @($InputObject.PSObject.Properties).Count
+        $null = $PSCmdlet.ShouldProcess("$target ($settingCount settings)", "Update $target settings")
+    }
+    function Get-DataverseWhoAmI {}
     function Publish-DataverseCustomizations {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
         param()
@@ -75,6 +85,125 @@ Describe 'Deployment options' {
     AfterEach {
         $env:DATAVERSESERVICEACCOUNTUPN = $script:savedDefaultUpn
         $env:CUSTOMUPN = $script:savedCustomUpn
+    }
+
+    It 'applies static and dynamic organization settings in pre- and post-deployment order' {
+        $eventLogPath = Join-Path $TestDrive 'deployment-events.jsonl'
+        $savedEventLogPath = $env:ALM4DATAVERSE_TEST_EVENT_LOG
+        $env:ALM4DATAVERSE_TEST_EVENT_LOG = $eventLogPath
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example' })
+    organizationSettings = @{
+        IsCustomControlsInCanvasAppsEnabled = $true
+        ComputedStage = { param($Context) $Context.HookType }
+    }
+    orgDbOrgSettings = @{
+        IsLockDownOfUnmanagedCustomizationEnabled = $false
+    }
+    powerPlatformSettings = @{
+        PowerApps_AllowCodeApps = $true
+        ComputedEnvironmentId = { param($Context) $Context.EnvironmentId }
+    }
+    postDeployOrganizationSettings = @{
+        ComputedStage = { param($Context) $Context.HookType }
+    }
+    postDeployOrgDbOrgSettings = @{
+        IsLockDownOfUnmanagedCustomizationEnabled = $true
+    }
+    postDeployPowerPlatformSettings = @{
+        PowerApps_AllowCodeApps = $false
+    }
+}
+'@
+        Mock Set-DataverseOrganizationSettings {
+            $target = if ($OrgDbOrgSettings) { 'orgdb' } else { 'organization' }
+            $loggedEvent = [pscustomobject]@{
+                Kind = 'settings'
+                Target = $target
+                Values = $InputObject
+            }
+            Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value ($loggedEvent | ConvertTo-Json -Compress)
+        }
+        Mock Invoke-Hook {
+            $loggedEvent = [pscustomobject]@{ Kind = 'hook'; Target = $HookType }
+            Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value ($loggedEvent | ConvertTo-Json -Compress)
+        }
+        Mock Import-DataverseSolution {
+            Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value '{"Kind":"import"}'
+        }
+        Mock Publish-DataverseCustomizations {
+            Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value '{"Kind":"publish"}'
+        }
+        Mock Get-DataverseWhoAmI { [pscustomobject]@{ OrganizationId = 'org-id' } }
+        Mock Invoke-RestMethod {
+            if ($Uri -like 'https://login.microsoftonline.com/*') {
+                $loggedEvent = [pscustomobject]@{ Kind = 'auth' }
+                Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value ($loggedEvent | ConvertTo-Json -Compress)
+                return [pscustomobject]@{ access_token = 'fake-power-platform-token' }
+            }
+            if ($Method -eq 'Get') {
+                $loggedEvent = [pscustomobject]@{ Kind = 'resolve' }
+                Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value ($loggedEvent | ConvertTo-Json -Compress)
+                return [pscustomobject]@{
+                    value = @([pscustomobject]@{ id = 'environment-id'; dataverseId = 'org-id' })
+                }
+            }
+
+            $loggedEvent = [pscustomobject]@{
+                Kind = 'settings'
+                Target = 'powerplatform'
+                Values = ConvertFrom-Json -InputObject $Body
+                Uri = $Uri
+                Authorization = $Headers.Authorization
+            }
+            Add-Content -LiteralPath $env:ALM4DATAVERSE_TEST_EVENT_LOG -Value ($loggedEvent | ConvertTo-Json -Compress)
+        }
+
+        $savedApiClientId = $env:AZURE_CLIENT_ID
+        $savedApiTenantId = $env:AZURE_TENANT_ID
+        $savedApiClientSecret = $env:AZURE_CLIENT_SECRET
+        $env:AZURE_CLIENT_ID = 'client-id'
+        $env:AZURE_TENANT_ID = 'tenant-id'
+        $env:AZURE_CLIENT_SECRET = 'client-secret'
+
+        try {
+            & $script:deployScript -ArtifactsPath $TestDrive
+            $events = @(Get-Content -LiteralPath $eventLogPath | ForEach-Object { ConvertFrom-Json $_ })
+        }
+        finally {
+            $env:ALM4DATAVERSE_TEST_EVENT_LOG = $savedEventLogPath
+            $env:AZURE_CLIENT_ID = $savedApiClientId
+            $env:AZURE_TENANT_ID = $savedApiTenantId
+            $env:AZURE_CLIENT_SECRET = $savedApiClientSecret
+        }
+
+        $eventNames = foreach ($loggedEvent in $events) {
+            switch ($loggedEvent.Kind) {
+                'settings' { "settings:$($loggedEvent.Target)" }
+                'hook' { "hook:$($loggedEvent.Target)" }
+                default { $loggedEvent.Kind }
+            }
+        }
+        ($eventNames -join ',') | Should -Be 'settings:organization,settings:orgdb,auth,resolve,settings:powerplatform,hook:preDeploy,import,hook:dataMigrations,publish,hook:postDeploy,settings:organization,settings:orgdb,auth,settings:powerplatform'
+        $settingEvents = @($events | Where-Object Kind -eq 'settings' | Where-Object Target -ne 'powerplatform')
+        $settingEvents.Count | Should -Be 4
+        $settingEvents[0].Values.iscustomcontrolsincanvasappsenabled | Should -BeTrue
+        $settingEvents[0].Values.computedstage | Should -Be 'preDeploy'
+        $settingEvents[1].Target | Should -Be 'orgdb'
+        $settingEvents[1].Values.IsLockDownOfUnmanagedCustomizationEnabled | Should -BeFalse
+        $settingEvents[2].Values.computedstage | Should -Be 'postDeploy'
+        $settingEvents[3].Target | Should -Be 'orgdb'
+        $settingEvents[3].Values.IsLockDownOfUnmanagedCustomizationEnabled | Should -BeTrue
+        $powerPlatformEvents = @($events | Where-Object { $_.Kind -eq 'settings' -and $_.Target -eq 'powerplatform' })
+        $powerPlatformEvents.Count | Should -Be 2
+        $powerPlatformEvents[0].Values.PowerApps_AllowCodeApps | Should -BeTrue
+        $powerPlatformEvents[0].Values.ComputedEnvironmentId | Should -Be 'environment-id'
+        $powerPlatformEvents[0].Uri | Should -Be 'https://api.powerplatform.com/environmentmanagement/environments/environment-id/settings?api-version=2024-10-01'
+        $powerPlatformEvents[0].Authorization | Should -Be 'Bearer fake-power-platform-token'
+        $powerPlatformEvents[1].Values.PowerApps_AllowCodeApps | Should -BeFalse
+        Should -Invoke Get-DataverseWhoAmI -Times 1 -Exactly
+        Should -Invoke Invoke-RestMethod -Times 5 -Exactly
     }
 
     It 'uses managed packages when deployUnmanaged is <Label>' -ForEach @(

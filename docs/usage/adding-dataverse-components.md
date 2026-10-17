@@ -5,6 +5,37 @@ For the full solution configuration reference, see [Solutions](../config/alm-con
 deployment behavior, see [Exporting changes](exporting-changes.md),
 [Building releases](building-releases.md), and [Deploying](deploying.md).
 
+## Organization-Wide Settings
+
+Some environment switches aren't solution components. Configure them in `alm-config.psd1`
+with `organizationSettings` or `orgDbOrgSettings` to apply them before deployment;
+use `postDeployOrganizationSettings` or `postDeployOrgDbOrgSettings` to apply values
+after deployment. For example, enable PCF controls and Code Apps, allow unmanaged
+customizations during deployment, then block them afterward:
+
+```powershell
+organizationSettings = @{
+    IsCustomControlsInCanvasAppsEnabled = $true
+}
+
+orgDbOrgSettings = @{
+    IsLockDownOfUnmanagedCustomizationEnabled = $false
+}
+
+postDeployOrgDbOrgSettings = @{
+    IsLockDownOfUnmanagedCustomizationEnabled = $true
+}
+
+powerPlatformSettings = @{
+    PowerApps_AllowCodeApps = $true
+}
+```
+
+See the detailed [organization settings configuration](../config/alm-config.md#organization-settings)
+and its [setting references and examples](../config/example-hooks/organization-settings.md)
+before applying environment-wide changes. Power Platform API setting names have no
+complete public catalog; inspect the PPAC request in your browser's Network tab.
+
 ## Solutions
 
 Create or select a solution in Power Apps, set its publisher and unique name, then add

@@ -1,67 +1,88 @@
 # Organization Settings
 
-Use a deployment hook for environment-wide settings that are not solution components.
+Configure organization-wide settings directly in `alm-config.psd1` rather than
+creating a deployment hook for ordinary setting updates. The six setting maps are:
 
-> [!CAUTION]
-> The hook runs during DEPLOY, IMPORT, and BUILD deployment validation. Choose settings
-> appropriate to every target using this configuration and review their environment-wide
-> impact before enabling them.
+| Key | Applies |
+| --- | --- |
+| `organizationSettings` | Organization-table columns before deployment. |
+| `postDeployOrganizationSettings` | Organization-table columns after deployment. |
+| `orgDbOrgSettings` | OrgDbOrgSettings values before deployment. |
+| `postDeployOrgDbOrgSettings` | OrgDbOrgSettings values after deployment. |
+| `powerPlatformSettings` | Power Platform Environment Management API settings before deployment. |
+| `postDeployPowerPlatformSettings` | Power Platform Environment Management API settings after deployment. |
 
-Add the script to both the hook list and the assets list in your existing configuration:
+The unprefixed maps are applied before the `preDeploy` hook and before any solution
+imports. The `postDeploy` maps run after the `postDeploy` hook. Omit unused maps.
+Each map is a hashtable of setting names to static PowerShell values or scriptblocks.
+Scriptblocks receive `$Context` with `HookType`, `BaseDirectory`, `Config`,
+`ArtifactsPath`, and `UseUnmanagedSolutions`; each must emit exactly one setting
+value. They run as trusted PowerShell in the deployment process.
 
 ```powershell
-hooks = @{
-    preDeploy     = @('deploy-orgsettings.ps1')
+organizationSettings = @{
+    # Enable PCF controls in canvas apps.
+    IsCustomControlsInCanvasAppsEnabled = $true
 }
 
-assets = @('deploy-orgsettings.ps1')
+postDeployOrganizationSettings = @{}
+
+orgDbOrgSettings = @{
+    # Allow unmanaged changes during deployment.
+    IsLockDownOfUnmanagedCustomizationEnabled = $false
+
+    # Resolve a setting value from the target runner's environment.
+    SomeDynamicSetting = {
+        param($Context)
+        [int]$env:MY_ORGANIZATION_SETTING
+    }
+}
+
+powerPlatformSettings = @{
+    # This name is the property sent by PPAC; there is no complete public catalog.
+    PowerApps_AllowCodeApps = $true
+}
+
+postDeployOrgDbOrgSettings = @{
+    # Block unmanaged customizations after the deployment has completed.
+    IsLockDownOfUnmanagedCustomizationEnabled = $true
+}
 ```
 
-> [!IMPORTANT]
-> Merge these fragments into existing `hooks` and `assets` entries without removing other
-> hooks or data assets. The script must be in both lists. Use `preDeploy` for prerequisites
-> needed before solution import, or `postDeploy` for settings that must be applied afterward.
+For organization-table names, see Microsoft's [Organization table reference](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/organization).
+Microsoft's [environment-setting guidance](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/organization-table)
+explains which organization columns are supported to change; writable does not
+necessarily mean supported. See Microsoft's [block unmanaged customizations guidance](https://learn.microsoft.com/en-us/power-platform/alm/block-unmanaged-customizations)
+for the behavior of that example.
 
-Add your settings to the relevant blocks below.
+For OrgDbOrgSettings names and types, see Microsoft's [environment database settings
+guidance](https://learn.microsoft.com/en-us/power-platform/admin/environment-database-settings)
+and its linked [OrgDbOrgSettings tool reference](https://support.microsoft.com/help/2691237/orgdborgsettings-tool-for-microsoft-dynamics-crm). The community-maintained
+[settings XML](https://github.com/seanmcne/OrgDbOrgSettings/blob/master/mspfedyn_/OrgDbOrgSettings/Solution/WebResources/mspfedyn_/OrgDbOrgSettings/Settings.xml)
+is a searchable list, but can lag newer settings; verify the setting name and type
+against current feature documentation.
 
-You can find column names [in the documentation for the organization table](https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/organization).
+Power Platform API setting names don't have a complete public catalog. To discover
+one, change it in PPAC and inspect the request URL and JSON payload in your browser's
+developer tools Network tab. The pipeline resolves the environment ID by matching
+the connected Dataverse organization against the Power Platform [environment list API](https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environments)
+and patches the selected setting through the [Environment Management Settings API](https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environment-management-settings).
+See the [EnvironmentManagementSetting model reference](https://learn.microsoft.com/en-us/dotnet/api/microsoft.powerplatform.management.models.environmentmanagementsetting?view=power-platform-latest)
+for additional API model details.
 
-You can find many "OrgDbOrgSettings" [in the settings for the OrgDbOrgSettings OSS tool](https://github.com/seanmcne/OrgDbOrgSettings/blob/master/mspfedyn_/OrgDbOrgSettings/Solution/WebResources/mspfedyn_/OrgDbOrgSettings/Settings.xml).
+Power Platform RBAC roles are currently available only at tenant scope; assign an
+appropriate role to the identity used for the Power Platform API. When
+`AZURE_CLIENT_SECRET` is configured, it is used; otherwise authentication uses the
+Dataverse module's `DefaultAzureCredential` chain, including workload identity
+federation, managed identity, and Azure CLI. See Microsoft's [authentication guidance](https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2)
+and [service-principal RBAC tutorial](https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment).
 
-Check the type in the above sources carefully, as many are not as you would expect:
+Organization settings run during DEPLOY, IMPORT, and BUILD deployment validation,
+so these values can also modify a shared validation environment. The deployment
+is not transactional: if a later import or hook fails, earlier setting changes
+remain applied. Use settings appropriate to every target and test them in a
+non-production environment first.
 
-- Boolean values are `$true` and `$false`.
-- String values are `"example"`.
-- Numeric values are `1234.56`
-
-> [!TIP]
-> If you're not sure which settings are used or the values you need, use your browser F12 Network tools to see the request the standard PPAC/other settings UI sends.
-
-Create `deploy-orgsettings.ps1` in your application repository:
-
-```powershell
-param([hashtable]$Context)
-
-$ErrorActionPreference = 'Stop'
-
-Set-DataverseOrganizationSettings -Verbose -Confirm:$false -InputObject ([PSCustomObject]@{
-  advancedfilteringenabled=$true
-  multicolumnsortenabled=1
-})
-
-Set-DataverseOrganizationSettings -OrgDbOrgSettings -Verbose -Confirm:$false -InputObject ([PSCustomObject]@{
-  SkipSuffixOnKBArticles=$true
-  SendEmailSynchronously=$false
-})
-```
-
-When this executes, it will log out settings that were or were not changed:
-
-```text
-VERBOSE: Column 'advancedfilteringenabled': No change (value is 'True')
-VERBOSE: Column 'multicolumnsortenabled': Changing from '0' to '1'
-VERBOSE: Performing the operation "Update organization settings" on target "Organization record 9bf94c2a-1ee5-ee11-9048-0022481a23a4".
-VERBOSE: Updated 1 attribute(s) in organization record 9bf94c2a-1ee5-ee11-9048-0022481a23a4
-```
-
-The hook reuses the connection established by the pipeline. Do not embed credentials or connect to a hard-coded target inside the script. For target-specific choices, read explicitly configured runner environment variables. See [hook context and ordering](../alm-config.md#hooks).
+Keep hook scripts for custom actions that can't be expressed as setting values.
+Hooks reuse the pipeline's Dataverse connection; don't embed credentials or connect
+to a hard-coded target. See [hook context and ordering](../alm-config.md#hooks).

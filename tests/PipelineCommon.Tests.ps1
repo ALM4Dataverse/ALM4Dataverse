@@ -13,14 +13,47 @@ Describe 'ALM configuration loading' {
     }
 
     It 'retains defaults while merging overrides and custom keys' {
-        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value "@{ custom = 42; importTimeoutSeconds = 30; solutionCheck = @{ enabled = `$true } }"
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value "@{ custom = 42; dynamicSetting = { param(`$Context) `$Context.HookType }; importTimeoutSeconds = 30; solutionCheck = @{ enabled = `$true } }"
         $config = Get-AlmConfig -BaseDirectory $TestDrive
         $config.custom | Should -Be 42
+        $config.dynamicSetting | Should -BeOfType [scriptblock]
         $config.importTimeoutSeconds | Should -Be 30
         $config.solutionCheck.enabled | Should -BeTrue
         $config.solutionCheck.geo | Should -Be 'Europe'
         $config.buildVersion.default | Should -Be '1.0'
         $config.buildVersion.branches | Should -BeOfType [hashtable]
+    }
+}
+
+Describe 'Configured setting maps' {
+    It 'identifies the source map when a scriptblock emits an invalid number of values' {
+        $settings = @{
+            ComputedValue = { 'first'; 'second' }
+        }
+
+        {
+            Resolve-ConfiguredSettingMap -Settings $settings -SettingMapName 'powerPlatformSettings' -Context @{}
+        } | Should -Throw '*powerPlatformSettings*'
+    }
+
+    It 'uses DefaultAzureCredential when a client secret is not configured' {
+        $savedClientId = $env:AZURE_CLIENT_ID
+        $savedTenantId = $env:AZURE_TENANT_ID
+        $savedClientSecret = $env:AZURE_CLIENT_SECRET
+        $env:AZURE_CLIENT_ID = 'federated-client'
+        $env:AZURE_TENANT_ID = 'federated-tenant'
+        $env:AZURE_CLIENT_SECRET = $null
+        Mock Get-DefaultAzureCredentialAccessToken { 'default-credential-token' }
+
+        try {
+            Get-PowerPlatformApiAccessToken | Should -Be 'default-credential-token'
+            Should -Invoke Get-DefaultAzureCredentialAccessToken -Times 1 -Exactly
+        }
+        finally {
+            $env:AZURE_CLIENT_ID = $savedClientId
+            $env:AZURE_TENANT_ID = $savedTenantId
+            $env:AZURE_CLIENT_SECRET = $savedClientSecret
+        }
     }
 }
 

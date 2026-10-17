@@ -9,6 +9,11 @@
     It also sets connection references and environment variables based on environment
     variables prefixed with "DataverseConnRef_" and "DataverseEnvVar_" respectively.
 
+    Configured organization-table, OrgDbOrgSettings, and Power Platform environment
+    settings are applied before the preDeploy hook and again after the postDeploy
+    hook when post-deployment maps are configured. Power Platform API settings use
+    the authenticated Azure identity and require tenant-scoped Power Platform RBAC.
+
     Hooks defined in alm-config.psd1 are invoked at various stages of the deployment
     process to allow for custom pre- and post-deployment actions.
 .PARAMETER ArtifactsPath
@@ -49,6 +54,19 @@ Write-Host "##[section]Deploying "
 # Simplified logic: alm-config.psd1 should be in the artifacts root
 $solutionsConfig = Get-AlmConfig -BaseDirectory $ArtifactsPath
 Write-Host "##[debug]Loaded configuration"
+
+$organizationSettingsContext = @{
+    HookType = 'preDeploy'
+    BaseDirectory = $ArtifactsPath
+    Config = $solutionsConfig
+    ArtifactsPath = $ArtifactsPath
+    UseUnmanagedSolutions = $UseUnmanagedSolutions
+}
+
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -SettingMapName 'organizationSettings' -Context $organizationSettingsContext
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -SettingMapName 'orgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
+$powerPlatformEnvironmentContext = @{}
+Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
 
 Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
@@ -291,5 +309,10 @@ Invoke-Hook -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $soluti
     ArtifactsPath = $ArtifactsPath
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }
+
+$organizationSettingsContext.HookType = 'postDeploy'
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.postDeployOrganizationSettings -SettingMapName 'postDeployOrganizationSettings' -Context $organizationSettingsContext
+Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.postDeployOrgDbOrgSettings -SettingMapName 'postDeployOrgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
+Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.postDeployPowerPlatformSettings -SettingMapName 'postDeployPowerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
 
 Write-Host "##[section]Deployment  completed successfully!"

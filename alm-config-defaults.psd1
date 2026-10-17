@@ -16,6 +16,12 @@
     # Timeout in seconds for each solution import operation.
     # Increase this value if solution imports time out in large or complex environments.
     importTimeoutSeconds = 10800
+    organizationSettings = @{}
+    postDeployOrganizationSettings = @{}
+    orgDbOrgSettings = @{}
+    postDeployOrgDbOrgSettings = @{}
+    powerPlatformSettings = @{}
+    postDeployPowerPlatformSettings = @{}
 
     # Branch release base used by BUILD SemVer and solution versions.
     # The MAJOR.MINOR pair is mapped to Dataverse solution Major.Build.

@@ -81,6 +81,55 @@
         # }
     )
 
+    # Organization-table columns applied before deployment.
+    # Example: @{ IsCustomControlsInCanvasAppsEnabled = $true }
+    # Column names: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/organization
+    # Schema names are normalized to the lowercase logical names required by the Dataverse settings cmdlet.
+    # Use supported settings: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/organization-table
+    # Values may be static or trusted scriptblocks emitting exactly one value.
+    # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions }.
+    organizationSettings = @{}
+
+    # Organization-table columns applied after the postDeploy hook.
+    # Example: @{ IsCustomControlsInCanvasAppsEnabled = $false }
+    # Schema names are normalized to the lowercase logical names required by the Dataverse settings cmdlet.
+    # Values may be static or trusted scriptblocks emitting exactly one value.
+    # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions }.
+    postDeployOrganizationSettings = @{}
+
+    # OrgDbOrgSettings entries applied before deployment.
+    # Example: @{ IsLockDownOfUnmanagedCustomizationEnabled = $false }
+    # Setting names and types: https://github.com/seanmcne/OrgDbOrgSettings/blob/master/mspfedyn_/OrgDbOrgSettings/Solution/WebResources/mspfedyn_/OrgDbOrgSettings/Settings.xml
+    # Values may be static or trusted scriptblocks emitting exactly one value.
+    # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions }.
+    orgDbOrgSettings = @{}
+
+    # OrgDbOrgSettings entries applied after the postDeploy hook.
+    # Example: @{ IsLockDownOfUnmanagedCustomizationEnabled = $true }
+    # Values may be static or trusted scriptblocks emitting exactly one value.
+    # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions }.
+    postDeployOrgDbOrgSettings = @{}
+
+    # Power Platform Environment Management API settings applied before deployment.
+    # Example: @{ PowerApps_AllowCodeApps = $true }
+    # No complete setting catalog is available; inspect the setting's request in the PPAC browser Network tab.
+    # Power Platform RBAC roles are currently available only at tenant scope; assign an appropriate role to the authenticated identity:
+    # AZURE_CLIENT_SECRET is used when configured; otherwise DefaultAzureCredential supports WIF, managed identity, and Azure CLI.
+    # https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2
+    # https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment
+    # API and setting model:
+    # https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environment-management-settings
+    # https://learn.microsoft.com/en-us/dotnet/api/microsoft.powerplatform.management.models.environmentmanagementsetting?view=power-platform-latest
+    # Values may be static or trusted scriptblocks emitting exactly one value.
+    # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions; EnvironmentId }.
+    powerPlatformSettings = @{}
+
+    # Power Platform Environment Management API settings applied after the postDeploy hook.
+    # Example: @{ PowerApps_AllowCodeApps = $false }
+    # Uses the same API, setting-name discovery, RBAC scope, and identity options as powerPlatformSettings.
+    # Values may be static or trusted scriptblocks emitting exactly one value.
+    # Scriptblocks receive $Context = @{ HookType; BaseDirectory; Config; ArtifactsPath; UseUnmanagedSolutions; EnvironmentId }.
+    postDeployPowerPlatformSettings = @{}
     # Node.js version used only when BUILD or IMPORT includes configured codeApps.
     # A major version (for example '22') accepts an installed compatible release or installs the latest stable patch.
     # An exact version (for example '22.14.0') pins the release.
