@@ -25,10 +25,12 @@ BeforeAll {
     }
     function Set-DataverseOrganizationSettings {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns', '', Justification = 'External Dataverse cmdlet name required by the mock contract.')]
-        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
-        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Pester replaces this mock stub; the real Dataverse cmdlet implements ShouldProcess.')]
         [CmdletBinding(SupportsShouldProcess = $true)]
         param([switch]$OrgDbOrgSettings, $InputObject)
+
+        $target = if ($OrgDbOrgSettings) { 'OrgDbOrgSettings' } else { 'organization' }
+        $settingCount = @($InputObject.PSObject.Properties).Count
+        $null = $PSCmdlet.ShouldProcess("$target ($settingCount settings)", "Update $target settings")
     }
     function Get-DataverseWhoAmI {}
     function Publish-DataverseCustomizations {
