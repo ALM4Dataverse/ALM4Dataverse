@@ -84,6 +84,14 @@ extensions, service connections, target settings, and pipeline resource permissi
 4. Deploy that exact successful build to the first non-production target and verify application behavior.
 5. Promote the same build through later targets. Configure branch/PR policies separately if validation is required before merge.
 
+### AI-Assisted Application Changes
+
+New application repositories scaffolded from ALM4Dataverse include an
+[`AGENTS.md`](copy-to-your-repo/AGENTS.md) that tells coding agents which shared
+framework is in use and where its guides live. When asking an agent to add or update
+Dataverse components, have it read that file and the
+[guide to adding solutions, plug-ins, web resources, and Code Apps](docs/usage/adding-dataverse-components.md) first.
+
 ## Documentation
 
 ### Initial Setup
@@ -96,6 +104,7 @@ extensions, service connections, target settings, and pipeline resource permissi
 ### Usage Instructions
 
 - [Branching strategies](docs/usage/branching-strategies.md): choose development and promotion branches.
+- [Adding solutions, plug-ins, web resources, and Code Apps](docs/usage/adding-dataverse-components.md): add Dataverse components to configured solutions.
 - [Exporting changes](docs/usage/exporting-changes.md): capture maker changes and understand version increments.
 - [Building releases](docs/usage/building-releases.md): artifacts, checker reports, deployment validation, and retention.
 - [Deploying](docs/usage/deploying.md): select builds, promote, retry, redeploy, and plan recovery.

@@ -71,12 +71,16 @@ Create or clone the application repository. Copy these items from the same share
 | Source | Destination |
 | --- | --- |
 | [Configuration template](../../copy-to-your-repo/alm-config.psd1) | `alm-config.psd1` at the root |
+| [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the root |
 | [Data hook examples](../../copy-to-your-repo/data) | `data/` |
 | [Azure DevOps callers](../../copy-to-your-repo/pipelines) | `pipelines/` |
 
 Do not copy the GitHub workflows unless you also intend to configure GitHub Actions.
 Check each caller's shared repository resource. Add an explicit `ref` if you need to
 pin the shared repository to a tag/branch instead of its default branch.
+
+Keep `AGENTS.md` in the application repository and ask an AI agent to read it before
+changing Dataverse components or ALM configuration.
 
 > [!IMPORTANT]
 > In the DEPLOY caller, set the `build` pipeline resource's `source` to the BUILD pipeline's
