@@ -168,7 +168,7 @@ runs:
         BUILD_RUN_NUMBER: ${{ github.run_number }}
       run: |
         $ErrorActionPreference = 'Stop'
-        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1"
+        & "${{ github.action_path }}/../../../pipelines/scripts/installdependencies.ps1" -ForBuild
         if (-not [string]::IsNullOrWhiteSpace($env:BUILD_ENVIRONMENT_NAME)) {
           & "${{ github.action_path }}/../../../pipelines/scripts/connect.ps1" -Url $env:DATAVERSE_URL
         }

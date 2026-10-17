@@ -149,10 +149,34 @@ Describe 'PAC authentication' {
         Should -Invoke Invoke-TestPac -Times 1 -Exactly -ParameterFilter { $Operation -eq 'who' }
     }
 
+    It 'creates and selects a profile for the target environment' {
+        Initialize-PacAuthentication -Url 'https://example.crm.dynamics.com' -Quiet
+        Should -Invoke Invoke-TestPac -Times 1 -Exactly -ParameterFilter {
+            $Area -eq 'auth' -and $Operation -eq 'create' -and
+            $args -contains '--environment' -and
+            $args -contains 'https://example.crm.dynamics.com'
+        }
+        Should -Invoke Invoke-TestPac -Times 1 -Exactly -ParameterFilter {
+            $Area -eq 'env' -and $Operation -eq 'select' -and
+            $args -contains '--environment' -and
+            $args -contains 'https://example.crm.dynamics.com'
+        }
+    }
+
     It 'selects an existing profile when creation fails' {
         Mock Invoke-TestPac { $global:LASTEXITCODE = 1; 'Profile exists' } -ParameterFilter { $Operation -eq 'create' }
-        Initialize-PacAuthentication -Quiet
-        Should -Invoke Invoke-TestPac -Times 1 -Exactly -ParameterFilter { $Operation -eq 'select' }
+        Initialize-PacAuthentication -Quiet -Url 'https://example.crm.dynamics.com'
+        Should -Invoke Invoke-TestPac -Times 1 -Exactly -ParameterFilter { $Area -eq 'auth' -and $Operation -eq 'select' }
+        Should -Invoke Invoke-TestPac -Times 1 -Exactly -ParameterFilter {
+            $Area -eq 'env' -and $Operation -eq 'select' -and
+            $args -contains 'https://example.crm.dynamics.com'
+        }
+    }
+
+    It 'reports target environment selection failures' {
+        Mock Invoke-TestPac { $global:LASTEXITCODE = 1; 'Environment selection failed' } -ParameterFilter { $Area -eq 'env' -and $Operation -eq 'select' }
+        { Initialize-PacAuthentication -Url 'https://example.crm.dynamics.com' } |
+            Should -Throw '*PAC environment selection failed*'
     }
 
     It 'reports creation and selection failures' {

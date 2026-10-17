@@ -46,7 +46,8 @@ The supplied template additionally includes the `data` asset and example data ho
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
 | `scriptDependencies` | Hashtable of module names and versions | `Rnwood.Dataverse.Data.PowerShell = '3.2.0'`. |
-| `pacCliVersion` | String | `'2.7.4'`. |
+| `pacCliVersion` | String | `'2.13.1'`. |
+| `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
 | `buildValidation.baselineRelease` | String | `''`; no baseline. |
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
@@ -106,6 +107,8 @@ solutions = @(
         name                      = 'MySolution'
         deployUnmanaged           = $false  # Optional
         serviceAccountUpnConfigKey = 'MySolutionServiceAccountUpn'  # Optional
+        codeApps                  = @('code-apps/customer-portal')  # Optional
+        codeAppPublishMethod     = 'solution'  # Optional: 'solution' (default) or 'pac'
     }
 )
 ```
@@ -115,10 +118,32 @@ solutions = @(
 - `name` (required): Dataverse unique solution name, not display name; must match `solutions/<name>` in source control.
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
+- `codeApps` (optional): One or more code app project directories, relative to the repository root, to build and publish with this solution. Each project must contain `package.json`, `package-lock.json` (or `npm-shrinkwrap.json`), and `power.config.json`. BUILD and IMPORT run `npm ci` followed by `npm run build`, then include the project and built output in the artifacts, excluding `node_modules` and `.git`. The dependency installer ensures the configured `nodeVersion` and npm are available only when BUILD/IMPORT has at least one code app. Do not also list code app directories in `assets`.
+- `codeAppPublishMethod` (optional, default: `'solution'`): `'solution'` patches each built app's files and package URIs into its existing Code App component in the solution ZIP before any solution is imported. The app must already be present as a root component in that solution, with a matching `appDisplayName` in its `power.config.json`; otherwise deployment fails before importing any solution. `'pac'` retains the `pac code push` method after import.
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
 - `mappings` (optional): Ordered SolutionPackager mapping entries used during BUILD and EXPORT; each entry may include the build command that produces its source during BUILD; see [Build Processing](#build-processing).
 
+The default `'solution'` method avoids calling the Power Platform API during deployment.
+This is useful when the pipeline identity does not have the broader Power Platform API
+RBAC assignment required by PAC's push operation. Dataverse application-user roles alone
+don't grant access to that API, and the documented RBAC assignment is not scoped to a
+single environment. If using `codeAppPublishMethod = 'pac'`, authorize the identity with
+an appropriate Power Platform API RBAC role (rather than relying on Entra application
+permissions alone), following Microsoft's [authentication guidance](https://learn.microsoft.com/en-us/power-platform/admin/programmability-authentication-v2)
+and [RBAC role assignment tutorial](https://learn.microsoft.com/en-us/power-platform/admin/programmability-tutorial-rbac-role-assignment).
+
 `BUILD` packs both managed and unmanaged packages. `DEPLOY` selects the package using `deployUnmanaged`; `IMPORT` always selects unmanaged packages for every solution. Use managed deployment for controlled downstream environments unless you have a specific reason to retain unmanaged customizations.
+
+BUILD and IMPORT install locked dependencies and run each configured app's
+`npm run build` script before packaging it. DEPLOY uses that built output from the
+selected artifact. With the default `'solution'` method, it updates the app files and
+manifest in the solution package before import. With `'pac'`, deployment runs
+`pac code push` after publishing Dataverse customizations, targeting the current
+environment and the owning solution. PAC uses the authentication established by the
+normal `connect.ps1` step.
+Dataverse `canvasapp` row CRUD can update metadata, but the `assets` file column is marked
+non-creatable and non-updatable; direct row updates cannot publish or replace the app's
+code.
 
 The service account is a real Dataverse user used to own and activate processes, not the
 application user used to authenticate.
@@ -130,6 +155,16 @@ application user used to authenticate.
 > on Linux, where environment variables are case-sensitive. See the
 > [Azure DevOps variable reference](azdo-environment-variable-group.md) or
 > [GitHub variable reference](github-secrets.md).
+
+### Node.js for Code Apps
+
+`nodeVersion` accepts a major version such as `'22'` or an exact release such as
+`'22.14.0'`. For a major version, the installer reuses an already available compatible
+Node.js version or downloads the latest stable patch from nodejs.org. Exact versions
+are pinned. Downloads are checksum-verified and cached under the runner user's
+`.alm4dataverse/tools/node` directory. This setup runs only when the dependency installer
+is invoked with its build flag by BUILD or IMPORT and at least one `codeApps` path is
+configured; EXPORT and deployment-only jobs do not install Node.js.
 
 ### Export Processing
 
@@ -415,14 +450,14 @@ The build writes the exact loaded module versions and installed PAC version to `
 The pipeline scripts require Power Apps CLI (`pac`) for solution operations (for example export/unpack). `installdependencies.ps1` installs PAC automatically using the configured version.
 
 ```powershell
-pacCliVersion = '2.7.4'
+pacCliVersion = '2.13.1'
 ```
 
 **Version Specifications:**
 
 - Empty string (`''`): Installs the latest stable version
 - `'prerelease'`: Installs the latest prerelease version
-- Specific version (for example `'2.7.4'`): Installs that exact version
+- Specific version (for example `'2.13.1'`): Installs that exact version
 
 For reproducible builds/deployments, pin an explicit version.
 

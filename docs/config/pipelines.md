@@ -162,7 +162,7 @@ Use PowerShell 7 with Git and a .NET SDK compatible with the selected PAC tool, 
 
 | Script | Parameters | Working directory and effect |
 | --- | --- | --- |
-| [installdependencies.ps1](../../pipelines/scripts/installdependencies.ps1) | None | Application or artifact root; installs/imports configured modules and PAC, honoring `scriptDependencies.lock.json` when present. |
+| [installdependencies.ps1](../../pipelines/scripts/installdependencies.ps1) | `ForBuild` (switch, off by default) | Application or artifact root; installs/imports configured modules and PAC, honoring `scriptDependencies.lock.json` when present. Pass `-ForBuild` before BUILD or IMPORT; it ensures configured Node.js only when a solution has `codeApps`. |
 | [connect.ps1](../../pipelines/scripts/connect.ps1) | `Url` (required string) | Authenticates to the supplied Dataverse URL using the process's Azure identity. |
 | [build.ps1](../../pipelines/scripts/build.ps1) | `SourceDirectory`, `ArtifactStagingDirectory` (required strings) | Application root; packs both solution types, runs checker/build hooks, copies assets, snapshots scripts, writes dependency lock. No validation-environment deployment on its own. |
 | [export.ps1](../../pipelines/scripts/export.ps1) | `SourceDirectory`, `ArtifactStagingDirectory`, `BranchName` (required); `TempDirectory`; `EnvironmentName` (default `Unknown`); `DefaultBranchName` (optional); `PassThru` (switch, off) | Application root; exports and updates source and Dataverse versions. `BranchName` is the exact source branch; `DefaultBranchName` identifies the repository default branch for the default-version warning and otherwise resolves from `origin/HEAD`. Always pass a real writable temporary directory. `EnvironmentName` is a label, not authentication. `PassThru` additionally returns elapsed seconds and package timings; it does not disable source or version updates. |
@@ -178,7 +178,7 @@ $sourceRoot = (Get-Location).Path
 $artifactRoot = Join-Path ([IO.Path]::GetTempPath()) 'contoso-artifacts'
 New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
 
-& "$almRoot/pipelines/scripts/installdependencies.ps1"
+& "$almRoot/pipelines/scripts/installdependencies.ps1" -ForBuild
 & "$almRoot/pipelines/scripts/build.ps1" -SourceDirectory $sourceRoot -ArtifactStagingDirectory $artifactRoot
 ```
 

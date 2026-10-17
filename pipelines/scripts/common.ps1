@@ -278,6 +278,395 @@ function Get-AlmConfig {
     return $config
 }
 
+function Get-SolutionCodeAppPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Solution,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BaseDirectory
+    )
+
+    if (-not $Solution.ContainsKey('codeApps') -or $null -eq $Solution.codeApps) {
+        return @()
+    }
+
+    $configuredPaths = $Solution.codeApps
+    if ($configuredPaths -is [string]) {
+        $configuredPaths = @($configuredPaths)
+    }
+    elseif ($configuredPaths -isnot [array]) {
+        throw "Solution '$($Solution.name)' codeApps must be a path or an array of paths."
+    }
+
+    $basePath = [System.IO.Path]::GetFullPath($BaseDirectory)
+    $basePrefix = $basePath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $resolvedPaths = @()
+
+    foreach ($configuredPath in $configuredPaths) {
+        if ($configuredPath -isnot [string] -or [string]::IsNullOrWhiteSpace($configuredPath)) {
+            throw "Solution '$($Solution.name)' codeApps entries must be non-empty relative paths."
+        }
+        if ([System.IO.Path]::IsPathRooted($configuredPath) -or $configuredPath -split '[/\\]' -contains '..') {
+            throw "Solution '$($Solution.name)' codeApps path '$configuredPath' must stay within the repository."
+        }
+
+        $resolvedPath = [System.IO.Path]::GetFullPath((Join-Path $basePath $configuredPath))
+        if (-not $resolvedPath.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Solution '$($Solution.name)' codeApps path '$configuredPath' must stay within the repository."
+        }
+        if (-not (Test-Path -LiteralPath $resolvedPath -PathType Container)) {
+            throw "Code app directory '$configuredPath' for solution '$($Solution.name)' does not exist under '$basePath'."
+        }
+
+        $resolvedPaths += $resolvedPath
+    }
+
+    return $resolvedPaths
+}
+
+function Update-SolutionCodeAppPackage {
+    <#
+    .SYNOPSIS
+        Replaces an existing solution Code App package with the configured build output.
+    .DESCRIPTION
+        Matches the code app by its configured appDisplayName and requires a matching
+        CanvasApp root component in the solution. The solution archive is replaced only
+        after the updated archive has been written successfully. Supports -WhatIf; when
+        the operation is declined, the solution archive is left unchanged.
+    .PARAMETER SolutionFile
+        Path to the managed or unmanaged solution ZIP to patch.
+    .PARAMETER CodeAppPath
+        Path to the built code app project containing power.config.json and build output.
+    .PARAMETER SolutionName
+        Solution unique name, used to identify the package in errors and logs.
+    .OUTPUTS
+        None. Updates SolutionFile in place; errors if the app or its build output is missing.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionFile,
+
+        [Parameter(Mandatory = $true)]
+        [string]$CodeAppPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionName
+    )
+
+    $solutionFilePath = [System.IO.Path]::GetFullPath($SolutionFile)
+    if (-not (Test-Path -LiteralPath $solutionFilePath -PathType Leaf)) {
+        throw "Solution package '$solutionFilePath' was not found."
+    }
+
+    $codeAppRoot = [System.IO.Path]::GetFullPath($CodeAppPath)
+    $powerConfigPath = Join-Path $codeAppRoot 'power.config.json'
+    if (-not (Test-Path -LiteralPath $powerConfigPath -PathType Leaf)) {
+        throw "Code app '$CodeAppPath' must contain power.config.json."
+    }
+
+    $powerConfig = Get-Content -LiteralPath $powerConfigPath -Raw | ConvertFrom-Json -AsHashtable
+    $appDisplayName = [string]$powerConfig.appDisplayName
+    if ([string]::IsNullOrWhiteSpace($appDisplayName)) {
+        throw "Code app '$CodeAppPath' must define appDisplayName in power.config.json."
+    }
+
+    $buildPath = 'dist'
+    if ($powerConfig.ContainsKey('buildPath') -and
+        -not [string]::IsNullOrWhiteSpace([string]$powerConfig.buildPath)) {
+        $buildPath = [string]$powerConfig.buildPath
+    }
+    if ([System.IO.Path]::IsPathRooted($buildPath) -or $buildPath -split '[/\\]' -contains '..') {
+        throw "Code app '$appDisplayName' buildPath '$buildPath' must stay within its project directory."
+    }
+
+    $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $codeAppRoot $buildPath))
+    $codeAppPrefix = $codeAppRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
+        [System.IO.Path]::DirectorySeparatorChar
+    if (-not $buildRoot.StartsWith($codeAppPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $buildRoot -PathType Container)) {
+        throw "Code app '$appDisplayName' buildPath '$buildPath' does not resolve to a directory inside the project."
+    }
+
+    $buildEntryPoint = 'index.html'
+    if ($powerConfig.ContainsKey('buildEntryPoint') -and
+        -not [string]::IsNullOrWhiteSpace([string]$powerConfig.buildEntryPoint)) {
+        $buildEntryPoint = [string]$powerConfig.buildEntryPoint
+    }
+    if ([System.IO.Path]::IsPathRooted($buildEntryPoint) -or $buildEntryPoint -split '[/\\]' -contains '..') {
+        throw "Code app '$appDisplayName' buildEntryPoint '$buildEntryPoint' must stay within buildPath."
+    }
+    $buildEntryPointPath = [System.IO.Path]::GetFullPath((Join-Path $buildRoot $buildEntryPoint))
+    $buildRootPrefix = $buildRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
+        [System.IO.Path]::DirectorySeparatorChar
+    if (-not $buildEntryPointPath.StartsWith($buildRootPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $buildEntryPointPath -PathType Leaf)) {
+        throw "Code app '$appDisplayName' buildEntryPoint '$buildEntryPoint' was not found under '$buildRoot'."
+    }
+
+    $buildFiles = @(Get-ChildItem -LiteralPath $buildRoot -File -Recurse -Force | Sort-Object FullName)
+    if ($buildFiles.Count -eq 0) {
+        throw "Code app '$appDisplayName' build output '$buildRoot' contains no files."
+    }
+
+    $filePlan = @(
+        foreach ($file in $buildFiles) {
+            if (($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Code app '$appDisplayName' build output contains a linked file '$($file.FullName)'."
+            }
+
+            $relativePath = [System.IO.Path]::GetRelativePath($buildRoot, $file.FullName)
+            if ([System.IO.Path]::IsPathRooted($relativePath) -or $relativePath -split '[/\\]' -contains '..') {
+                throw "Code app '$appDisplayName' build file '$($file.FullName)' is outside buildPath."
+            }
+            $archiveRelativePath = $relativePath -replace '\\', '/'
+            $contentType = switch ([System.IO.Path]::GetExtension($relativePath).ToLowerInvariant()) {
+                '.css' { 'text/css' }
+                '.eot' { 'application/vnd.ms-fontobject' }
+                '.gif' { 'image/gif' }
+                '.htm' { 'text/html' }
+                '.html' { 'text/html' }
+                '.ico' { 'image/vnd.microsoft.icon' }
+                '.jpeg' { 'image/jpeg' }
+                '.jpg' { 'image/jpeg' }
+                '.js' { 'application/javascript' }
+                '.json' { 'application/json' }
+                '.map' { 'application/json' }
+                '.mjs' { 'application/javascript' }
+                '.otf' { 'font/otf' }
+                '.pdf' { 'application/pdf' }
+                '.png' { 'image/png' }
+                '.svg' { 'image/svg+xml' }
+                '.svgz' { 'image/svg+xml' }
+                '.txt' { 'text/plain' }
+                '.ttf' { 'font/ttf' }
+                '.wasm' { 'application/wasm' }
+                '.webp' { 'image/webp' }
+                '.woff' { 'font/woff' }
+                '.woff2' { 'font/woff2' }
+                '.xml' { 'application/xml' }
+                default { 'application/octet-stream' }
+            }
+            [pscustomobject]@{
+                FilePath = $file.FullName
+                ArchivePath = $archiveRelativePath
+                ContentType = $contentType
+            }
+        }
+    )
+    $entryPointRelativePath = ([System.IO.Path]::GetRelativePath($buildRoot, $buildEntryPointPath) -replace '\\', '/')
+    if ($filePlan.ArchivePath -notcontains $entryPointRelativePath) {
+        throw "Code app '$appDisplayName' buildEntryPoint '$buildEntryPoint' is not included in the build output."
+    }
+
+    if (-not $PSCmdlet.ShouldProcess(
+        $solutionFilePath,
+        "Patch Code App '$appDisplayName' into solution '$SolutionName'"
+    )) {
+        return
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    $sourceArchive = [System.IO.Compression.ZipFile]::OpenRead($solutionFilePath)
+    $temporaryArchivePath = Join-Path (Split-Path -Parent $solutionFilePath) ".$([guid]::NewGuid().ToString('N')).codeapp.zip"
+    $outputArchive = $null
+    $outputStream = $null
+    try {
+        $customizationsEntry = $sourceArchive.GetEntry('customizations.xml')
+        $solutionEntry = $sourceArchive.GetEntry('solution.xml')
+        if ($null -eq $customizationsEntry -or $null -eq $solutionEntry) {
+            throw "Solution package '$solutionFilePath' is missing customizations.xml or solution.xml."
+        }
+
+        $customizationsStream = $customizationsEntry.Open()
+        try {
+            $customizationsReader = [System.IO.StreamReader]::new($customizationsStream, [System.Text.Encoding]::UTF8, $true)
+            try {
+                $customizationsText = $customizationsReader.ReadToEnd()
+            }
+            finally {
+                $customizationsReader.Dispose()
+            }
+        }
+        finally {
+            $customizationsStream.Dispose()
+        }
+        $solutionStream = $solutionEntry.Open()
+        try {
+            $solutionReader = [System.IO.StreamReader]::new($solutionStream, [System.Text.Encoding]::UTF8, $true)
+            try {
+                $solutionText = $solutionReader.ReadToEnd()
+            }
+            finally {
+                $solutionReader.Dispose()
+            }
+        }
+        finally {
+            $solutionStream.Dispose()
+        }
+
+        $customizations = [System.Xml.XmlDocument]::new()
+        $customizations.PreserveWhitespace = $true
+        $customizations.LoadXml($customizationsText)
+        $canvasAppNodes = @($customizations.SelectNodes("//*[local-name()='CanvasApp']"))
+        $matchingCanvasApps = @(
+            foreach ($canvasAppNode in $canvasAppNodes) {
+                $displayNameNode = $canvasAppNode.SelectSingleNode("./*[local-name()='DisplayName']")
+                if ($null -ne $displayNameNode -and [string]::Equals(
+                    $displayNameNode.InnerText,
+                    $appDisplayName,
+                    [System.StringComparison]::Ordinal
+                )) {
+                    $canvasAppNode
+                }
+            }
+        )
+        if ($matchingCanvasApps.Count -eq 0) {
+            throw "Configured code app '$appDisplayName' is not present in solution '$SolutionName'. Add and export the app into the solution before configuring it in codeApps."
+        }
+        if ($matchingCanvasApps.Count -ne 1) {
+            throw "Configured code app display name '$appDisplayName' matches multiple CanvasApp components in solution '$SolutionName'."
+        }
+
+        $canvasAppNode = $matchingCanvasApps[0]
+        $nameNode = $canvasAppNode.SelectSingleNode("./*[local-name()='Name']")
+        $typeNode = $canvasAppNode.SelectSingleNode("./*[local-name()='CanvasAppType']")
+        $packageUrisNode = $canvasAppNode.SelectSingleNode("./*[local-name()='CodeAppPackageUris']")
+        if ($null -eq $nameNode -or [string]::IsNullOrWhiteSpace($nameNode.InnerText) -or
+            $null -eq $typeNode -or $typeNode.InnerText -ne '4' -or $null -eq $packageUrisNode) {
+            throw "CanvasApp '$appDisplayName' in solution '$SolutionName' is not a complete Code App component."
+        }
+
+        $componentName = $nameNode.InnerText
+        if ([System.IO.Path]::GetFileName($componentName) -ne $componentName -or $componentName -match '[/\\]') {
+            throw "CanvasApp '$appDisplayName' in solution '$SolutionName' has an invalid component name '$componentName'."
+        }
+        [xml]$solutionMetadata = $solutionText
+        $hasRootComponent = @(
+            $solutionMetadata.SelectNodes("//*[local-name()='RootComponent']") |
+                Where-Object {
+                    $_.GetAttribute('type') -eq '300' -and
+                    [string]::Equals($_.GetAttribute('schemaName'), $componentName, [System.StringComparison]::OrdinalIgnoreCase)
+                }
+        ).Count -gt 0
+        if (-not $hasRootComponent) {
+            throw "Code App '$appDisplayName' is not a root component of solution '$SolutionName'."
+        }
+
+        $packageDirectory = "CanvasApps/${componentName}_CodeAppPackages"
+        $packagePrefix = "$packageDirectory/"
+        foreach ($packageUriNode in $packageUrisNode.SelectNodes("./*[local-name()='CodeAppPackageUri']")) {
+            if (-not $packageUriNode.InnerText.StartsWith("/$packagePrefix", [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Code App '$appDisplayName' in solution '$SolutionName' has an unsupported package URI '$($packageUriNode.InnerText)'."
+            }
+        }
+
+        foreach ($packageUriNode in @($packageUrisNode.SelectNodes("./*[local-name()='CodeAppPackageUri']"))) {
+            $null = $packageUrisNode.RemoveChild($packageUriNode)
+        }
+        $packageUrisPrefix = "/$packagePrefix"
+        foreach ($file in $filePlan) {
+            $uriNode = $customizations.CreateElement(
+                $packageUrisNode.Prefix,
+                'CodeAppPackageUri',
+                $packageUrisNode.NamespaceURI
+            )
+            $uriNode.InnerText = "$packageUrisPrefix$($file.ArchivePath)_ContentType_$($file.ContentType)"
+            $null = $packageUrisNode.AppendChild($uriNode)
+        }
+
+        $manifestStream = [System.IO.MemoryStream]::new()
+        try {
+            $customizations.Save($manifestStream)
+            $manifestBytes = $manifestStream.ToArray()
+        }
+        finally {
+            $manifestStream.Dispose()
+        }
+
+        $outputStream = [System.IO.File]::Open(
+            $temporaryArchivePath,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+        $outputArchive = [System.IO.Compression.ZipArchive]::new(
+            $outputStream,
+            [System.IO.Compression.ZipArchiveMode]::Create,
+            $false
+        )
+        foreach ($entry in $sourceArchive.Entries) {
+            $normalizedEntryName = $entry.FullName -replace '\\', '/'
+            if ($normalizedEntryName.StartsWith($packagePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            $newEntry = $outputArchive.CreateEntry($entry.FullName, [System.IO.Compression.CompressionLevel]::Optimal)
+            $newEntry.LastWriteTime = $entry.LastWriteTime
+            $newEntry.ExternalAttributes = $entry.ExternalAttributes
+            $destinationStream = $newEntry.Open()
+            try {
+                if ($normalizedEntryName -eq 'customizations.xml') {
+                    $destinationStream.Write($manifestBytes, 0, $manifestBytes.Length)
+                }
+                else {
+                    $sourceStream = $entry.Open()
+                    try {
+                        $sourceStream.CopyTo($destinationStream)
+                    }
+                    finally {
+                        $sourceStream.Dispose()
+                    }
+                }
+            }
+            finally {
+                $destinationStream.Dispose()
+            }
+        }
+
+        foreach ($file in $filePlan) {
+            $entryPath = "$packagePrefix$($file.ArchivePath)"
+            $newEntry = $outputArchive.CreateEntry($entryPath, [System.IO.Compression.CompressionLevel]::Optimal)
+            $newEntry.LastWriteTime = (Get-Item -LiteralPath $file.FilePath).LastWriteTime
+            $destinationStream = $newEntry.Open()
+            try {
+                $sourceStream = [System.IO.File]::OpenRead($file.FilePath)
+                try {
+                    $sourceStream.CopyTo($destinationStream)
+                }
+                finally {
+                    $sourceStream.Dispose()
+                }
+            }
+            finally {
+                $destinationStream.Dispose()
+            }
+        }
+
+        $outputArchive.Dispose()
+        $outputArchive = $null
+        $outputStream = $null
+        $sourceArchive.Dispose()
+        $sourceArchive = $null
+        [System.IO.File]::Move($temporaryArchivePath, $solutionFilePath, $true)
+        Write-Host "Patched Code App '$appDisplayName' into solution '$SolutionName'."
+    }
+    finally {
+        if ($null -ne $outputArchive) {
+            $outputArchive.Dispose()
+        }
+        if ($null -ne $outputStream) {
+            $outputStream.Dispose()
+        }
+        if ($null -ne $sourceArchive) {
+            $sourceArchive.Dispose()
+        }
+        if (Test-Path -LiteralPath $temporaryArchivePath -PathType Leaf) {
+            Remove-Item -LiteralPath $temporaryArchivePath -Force
+        }
+    }
+}
+
 function Resolve-AlmBranchBaseVersion {
     <#
     .SYNOPSIS
@@ -677,13 +1066,17 @@ function Write-AlmBuildVersionInfo {
             Creates or selects a PAC profile using the existing Azure identity context.
         .DESCRIPTION
             Requires PAC on PATH and a non-interactive Azure sign-in context.
+            When Url is provided, creates the profile for that environment and selects it as active.
             If profile creation fails, tries selection before validating auth who.
             Throws when neither setup path succeeds or identity validation fails.
+        .PARAMETER Url
+            Optional Dataverse environment URL to associate with and select in the PAC profile.
         .PARAMETER Quiet
             Suppresses auth who output, not group markers or authentication errors.
         #>
         param(
             [string]$ProfileName = 'ALM4Dataverse-SolutionCheck',
+            [string]$Url = '',
             [switch]$Quiet
         )
 
@@ -697,6 +1090,9 @@ function Write-AlmBuildVersionInfo {
         Write-Host "##[group]Authenticating Power Apps CLI using managed identity / Azure identity context"
 
         $createArgs = @('auth', 'create', '--managedIdentity', '--name', $ProfileName)
+        if (-not [string]::IsNullOrWhiteSpace($Url)) {
+            $createArgs += @('--environment', $Url)
+        }
         $createOutput = @(& $pacPath @createArgs 2>&1)
         $createExitCode = $LASTEXITCODE
 
@@ -715,6 +1111,14 @@ function Write-AlmBuildVersionInfo {
                     "pac auth select output:",
                     $selectText
                 ) -join "`n"
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($Url)) {
+            $environmentOutput = @(& $pacPath env select --environment $Url 2>&1)
+            if ($LASTEXITCODE -ne 0) {
+                $environmentText = ($environmentOutput | ForEach-Object { [string]$_ }) -join "`n"
+                throw "PAC environment selection failed for '$Url'.`n$environmentText"
             }
         }
 

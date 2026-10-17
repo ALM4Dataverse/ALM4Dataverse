@@ -73,7 +73,7 @@ stages:
                 PowerPlatformSPN: ${{ parameters.buildEnvironmentName }}
 
           - pwsh: |
-              & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
+              & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1" -ForBuild
 
               $environmentUrl = '$(ALM4DataverseSetConnectionVariables.EnvironmentUrl)'
               if ([string]::IsNullOrWhiteSpace($environmentUrl) -or $environmentUrl -match '^\$\(.+\)$') {
@@ -140,7 +140,7 @@ stages:
 
         - ${{ if eq(parameters.buildEnvironmentName, '') }}:
           - pwsh: |
-              & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1"
+              & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1" -ForBuild
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/build.ps1" `
                 -SourceDirectory "$(Pipeline.Workspace)/self" `
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)"

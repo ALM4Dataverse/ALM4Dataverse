@@ -796,6 +796,41 @@ if ($mappedSolutions.Count -gt 0 -and -not $packSupportsMappingFile) {
     throw "Solution mappings require a version of Rnwood.Dataverse.Data.PowerShell that supports -MappingFile. Update scriptDependencies in alm-config.psd1 to the compatible module version."
 }
 
+$builtCodeApps = @{}
+foreach ($solution in $config.solutions) {
+    foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
+        if ($builtCodeApps.ContainsKey($codeAppPath)) {
+            continue
+        }
+        $builtCodeApps[$codeAppPath] = $true
+
+        $packageJsonPath = Join-Path $codeAppPath 'package.json'
+        if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
+            throw "Code app '$codeAppPath' must contain package.json to run its build."
+        }
+        if (-not (Test-Path -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -PathType Leaf) -and
+            -not (Test-Path -LiteralPath (Join-Path $codeAppPath 'npm-shrinkwrap.json') -PathType Leaf)) {
+            throw "Code app '$codeAppPath' must contain package-lock.json or npm-shrinkwrap.json so its dependencies can be installed reproducibly."
+        }
+
+        $npm = Get-Command npm -ErrorAction SilentlyContinue
+        if (-not $npm) {
+            throw "npm is required to build code app '$codeAppPath'. Run installdependencies.ps1 -ForBuild to install the configured Node.js version."
+        }
+
+        Write-Host "##[group]Building code app: $codeAppPath"
+        Push-Location -LiteralPath $codeAppPath
+        try {
+            Invoke-CheckedNativeCommand -Command $npm.Source -Arguments @('ci')
+            Invoke-CheckedNativeCommand -Command $npm.Source -Arguments @('run', 'build')
+        }
+        finally {
+            Pop-Location
+            Write-Host "##[endgroup]"
+        }
+    }
+}
+
 $buildCommandPlans = @(Get-SolutionBuildCommandPlan -MappingPlans $mappingPlans -SourceDirectory $SourceDirectory)
 if ($buildCommandPlans.Count -gt 0) {
     # Consecutive flag groups, rather than a global parallel/sequential partition,
@@ -1016,6 +1051,33 @@ if ($config.ContainsKey('assets') -and $config.assets -and $config.assets.Count 
     }
     Write-Host "##[endgroup]"
 }
+
+Write-Host "##[group]Copying code apps"
+foreach ($solution in $config.solutions) {
+    foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
+        $relativePath = [System.IO.Path]::GetRelativePath([System.IO.Path]::GetFullPath($SourceDirectory), $codeAppPath)
+        $destinationPath = Join-Path $ArtifactStagingDirectory $relativePath
+        if (-not (Test-Path -LiteralPath $destinationPath -PathType Container)) {
+            Write-Host "Copying code app for solution '$($solution.name)': $relativePath"
+            $destinationParent = Split-Path -Parent $destinationPath
+            New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+        }
+
+        $codeAppFiles = Get-ChildItem -LiteralPath $codeAppPath -File -Recurse -Force | Where-Object {
+            $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $_.FullName)
+            $segments = $fileRelativePath -split '[/\\]'
+            $segments -notcontains 'node_modules' -and $segments -notcontains '.git'
+        }
+        foreach ($file in $codeAppFiles) {
+            $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $file.FullName)
+            $artifactFilePath = Join-Path $destinationPath $fileRelativePath
+            $artifactFileDirectory = Split-Path -Parent $artifactFilePath
+            New-Item -ItemType Directory -Path $artifactFileDirectory -Force | Out-Null
+            Copy-Item -LiteralPath $file.FullName -Destination $artifactFilePath -Force
+        }
+    }
+}
+Write-Host "##[endgroup]"
 
 Write-Host "##[group]Copying deployment scripts"
 Copy-Item $PSScriptRoot/../.. -Destination "$ArtifactStagingDirectory/alm" -Recurse -Force -Verbose

@@ -23,6 +23,9 @@
     Service-account UPN comes from the configured environment-variable key (default
     DataverseServiceAccountUpn); missing users/values fail after any earlier imports.
     Deployment is not transactional and does not roll back earlier side effects.
+    Code apps are patched into existing solution components by default before imports.
+    Setting codeAppPublishMethod to 'pac' retains the PAC push path and its Power
+    Platform API RBAC requirements.
 .EXAMPLE
     .\pipelines\scripts\deploy.ps1 -ArtifactsPath .\artifacts
 #>
@@ -68,13 +71,38 @@ foreach ($solutionConfig in $solutionsConfig.solutions) {
         $serviceAccountUpnKey = $solutionConfig.serviceAccountUpnConfigKey
     }
 
+    $codeAppPublishMethod = 'solution'
+    if ($solutionConfig.ContainsKey('codeAppPublishMethod') -and
+        -not [string]::IsNullOrWhiteSpace([string]$solutionConfig.codeAppPublishMethod)) {
+        $codeAppPublishMethod = ([string]$solutionConfig.codeAppPublishMethod).Trim().ToLowerInvariant()
+    }
+    if ($codeAppPublishMethod -notin @('solution', 'pac')) {
+        throw "Solution '$($solutionConfig.name)' codeAppPublishMethod '$codeAppPublishMethod' is invalid. Use 'solution' or 'pac'."
+    }
+
     $solutions += @{
         Name = $solutionConfig.name
         File = Join-Path -Path $ArtifactsPath -ChildPath solutions -AdditionalChildPath $fileName
         DeployUnmanaged = $deployUnmanaged
         ServiceAccountUpnConfigKey = $serviceAccountUpnKey
+        CodeApps = @(Get-SolutionCodeAppPath -Solution $solutionConfig -BaseDirectory $ArtifactsPath)
+        CodeAppPublishMethod = $codeAppPublishMethod
     }
 }
+
+Write-Host "##[section]Preparing Code App solution packages"
+foreach ($solution in $solutions) {
+    if ($solution.CodeAppPublishMethod -ne 'solution') {
+        continue
+    }
+    foreach ($codeAppPath in $solution.CodeApps) {
+        Update-SolutionCodeAppPackage `
+            -SolutionFile $solution.File `
+            -CodeAppPath $codeAppPath `
+            -SolutionName $solution.Name
+    }
+}
+
 $connectionReferences = @{}
 
 # Find all env vars prefixed with "DataverseConnRef_" to set as connection references
@@ -217,6 +245,47 @@ Write-Host "##[endgroup]"
 # Publish all customizations
 Write-Host "##[section]Publishing Customizations"
 Publish-DataverseCustomizations
+
+foreach ($solution in $solutions) {
+    if ($solution.CodeAppPublishMethod -ne 'pac' -or $solution.CodeApps.Count -eq 0) {
+        continue
+    }
+    foreach ($codeAppPath in $solution.CodeApps) {
+        if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
+            throw "DATAVERSE_URL is required to push code apps for solution '$($solution.Name)'. Connect to the target environment before deployment."
+        }
+
+        $pac = Get-Command pac -ErrorAction SilentlyContinue
+        if (-not $pac) {
+            throw 'Power Apps CLI (pac) was not found on PATH.'
+        }
+
+        Write-Host "##[group]Pushing code app for solution '$($solution.Name)' from '$codeAppPath'"
+        $pacArgs = @('code', 'push', '--environment', $env:DATAVERSE_URL, '--solutionName', $solution.Name)
+        Push-Location -LiteralPath $codeAppPath
+        try {
+            $pacOutput = @(& $pac.Source @pacArgs 2>&1)
+            $pacExitCode = $LASTEXITCODE
+            $pacOutputText = ($pacOutput | ForEach-Object { [string]$_ }) -join "`n"
+            $apiRequestFailed = $pacOutputText -match '(?im)HTTP error status:\s*[45]\d{2}\s+for\s+(GET|POST|PUT|PATCH|DELETE)\s+https?://\S*/powerapps/'
+            if ($pacExitCode -ne 0 -or $apiRequestFailed) {
+                $failureMessage = "PAC code push failed for solution '$($solution.Name)' with exit code $pacExitCode."
+                if ($apiRequestFailed -and $pacExitCode -eq 0) {
+                    $failureMessage += ' PAC reported an API request failure despite returning success.'
+                }
+                $failureMessage += "`nPAC output:`n$pacOutputText"
+                throw $failureMessage
+            }
+            foreach ($line in $pacOutput) {
+                Write-Host ([string]$line)
+            }
+        }
+        finally {
+            Pop-Location
+            Write-Host "##[endgroup]"
+        }
+    }
+}
 
 Invoke-Hook -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
