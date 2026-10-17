@@ -77,6 +77,8 @@ Suites live under `tests/`, grouped by the behaviour they own:
 - Pipeline build, connection, deployment/import, export, and shared helpers:
     `PipelineBuild`, `PipelineConnection`, `PipelineDeployment`, `PipelineExport`,
     and `PipelineCommon`.
+    Code App solution ZIP rewriting and missing-component behavior are covered by
+    `PipelineCodeAppPackage`.
     Build/export cases also cover ordered inline mappings, generated mapping-file
     lifetime, build-command staging and preservation of mapped source changes.
 - Export configuration, logging, concurrency limits, worker failures and cleanup:
