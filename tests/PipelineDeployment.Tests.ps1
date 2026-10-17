@@ -36,6 +36,9 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $Operation)
     }
+    function Invoke-DeploymentTestPac {
+        $global:LASTEXITCODE = 0
+    }
 
     # Settings is literal solution-entry syntax, allowing missing/null/false keys to remain distinct.
     # Disable parallel packing so the IMPORT case can use the same in-runspace command mocks.
@@ -102,6 +105,49 @@ Describe 'Deployment options' {
             $InFile -like '*Example.zip' -and $Mode -eq 'NoUpgrade'
         }
         Should -Invoke Invoke-DataverseSolutionUpgrade -Times 0 -Exactly
+    }
+
+    It 'pushes configured code apps to the target environment and solution' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{}'
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal')"
+        $savedDataverseUrl = $env:DATAVERSE_URL
+        $env:DATAVERSE_URL = 'https://example.crm.dynamics.com'
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestPac' } } -ParameterFilter { $Name -eq 'pac' }
+        Mock Invoke-DeploymentTestPac { $global:LASTEXITCODE = 0 }
+
+        try {
+            & $script:deployScript -ArtifactsPath $TestDrive
+
+            Should -Invoke Invoke-DeploymentTestPac -Times 1 -Exactly -ParameterFilter {
+                $args -contains 'code' -and
+                $args -contains 'push' -and
+                $args -contains '--environment' -and
+                $args -contains 'https://example.crm.dynamics.com' -and
+                $args -contains '--solutionName' -and
+                $args -contains 'Example'
+            }
+        }
+        finally {
+            $env:DATAVERSE_URL = $savedDataverseUrl
+        }
+    }
+
+    It 'fails code app pushes when the target environment URL is missing' {
+        $codeAppPath = Join-Path $TestDrive 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Write-DeploymentConfig -Settings "codeApps = @('apps/Portal')"
+        $savedDataverseUrl = $env:DATAVERSE_URL
+        Remove-Item Env:DATAVERSE_URL -ErrorAction SilentlyContinue
+
+        try {
+            { & $script:deployScript -ArtifactsPath $TestDrive } |
+                Should -Throw '*DATAVERSE_URL is required*'
+        }
+        finally {
+            $env:DATAVERSE_URL = $savedDataverseUrl
+        }
     }
 
     It 'selects package and service-account defaults for <Label>' -ForEach @(

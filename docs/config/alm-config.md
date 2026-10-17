@@ -106,6 +106,7 @@ solutions = @(
         name                      = 'MySolution'
         deployUnmanaged           = $false  # Optional
         serviceAccountUpnConfigKey = 'MySolutionServiceAccountUpn'  # Optional
+        codeApps                  = @('code-apps/customer-portal')  # Optional
     }
 )
 ```
@@ -115,10 +116,17 @@ solutions = @(
 - `name` (required): Dataverse unique solution name, not display name; must match `solutions/<name>` in source control.
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
+- `codeApps` (optional): One or more code app project directories, relative to the repository root, to build and publish after this solution is deployed. Each project must contain `package.json`, `package-lock.json` (or `npm-shrinkwrap.json`), and `power.config.json`. BUILD and IMPORT run `npm ci` followed by `npm run build`, then include the project and built output in the artifacts. Node.js LTS/npm must be available on the agent. Do not also list code app directories in `assets`.
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
 - `mappings` (optional): Ordered SolutionPackager mapping entries used during BUILD and EXPORT; each entry may include the build command that produces its source during BUILD; see [Build Processing](#build-processing).
 
 `BUILD` packs both managed and unmanaged packages. `DEPLOY` selects the package using `deployUnmanaged`; `IMPORT` always selects unmanaged packages for every solution. Use managed deployment for controlled downstream environments unless you have a specific reason to retain unmanaged customizations.
+
+BUILD and IMPORT install locked dependencies and run each configured app's
+`npm run build` script before packaging it. DEPLOY uses that built output from the
+selected artifact. After publishing Dataverse customizations, deployment runs
+`pac code push` for each configured app, targeting the current environment and its owning
+solution. PAC uses the authentication established by the normal `connect.ps1` step.
 
 The service account is a real Dataverse user used to own and activate processes, not the
 application user used to authenticate.

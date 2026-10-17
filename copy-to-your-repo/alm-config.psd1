@@ -26,12 +26,15 @@
     # - serviceAccountUpnConfigKey: (optional) name of the environment configuration key containing
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'
+    # - codeApps: (optional) code app project paths relative to the repository root;
+    #   each project is built using npm ci / npm run build and pushed after deployment.
     # - solutionCheck: (optional) per-solution PAC checker settings merged with global solutionCheck
     #   settings below. Use enabled = $false to skip checker for a specific solution.
     solutions = @(
         # Example:
         # @{
         #   name = 'ContosoCore'
+        #   codeApps = @('code-apps/customer-portal')
         #   mappings = @(
         #     @{
         #       type = 'FileToFile'

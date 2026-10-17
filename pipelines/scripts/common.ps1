@@ -278,6 +278,53 @@ function Get-AlmConfig {
     return $config
 }
 
+function Get-SolutionCodeAppPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Solution,
+
+        [Parameter(Mandatory = $true)]
+        [string]$BaseDirectory
+    )
+
+    if (-not $Solution.ContainsKey('codeApps') -or $null -eq $Solution.codeApps) {
+        return @()
+    }
+
+    $configuredPaths = $Solution.codeApps
+    if ($configuredPaths -is [string]) {
+        $configuredPaths = @($configuredPaths)
+    }
+    elseif ($configuredPaths -isnot [array]) {
+        throw "Solution '$($Solution.name)' codeApps must be a path or an array of paths."
+    }
+
+    $basePath = [System.IO.Path]::GetFullPath($BaseDirectory)
+    $basePrefix = $basePath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+    $resolvedPaths = @()
+
+    foreach ($configuredPath in $configuredPaths) {
+        if ($configuredPath -isnot [string] -or [string]::IsNullOrWhiteSpace($configuredPath)) {
+            throw "Solution '$($Solution.name)' codeApps entries must be non-empty relative paths."
+        }
+        if ([System.IO.Path]::IsPathRooted($configuredPath) -or $configuredPath -split '[/\\]' -contains '..') {
+            throw "Solution '$($Solution.name)' codeApps path '$configuredPath' must stay within the repository."
+        }
+
+        $resolvedPath = [System.IO.Path]::GetFullPath((Join-Path $basePath $configuredPath))
+        if (-not $resolvedPath.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Solution '$($Solution.name)' codeApps path '$configuredPath' must stay within the repository."
+        }
+        if (-not (Test-Path -LiteralPath $resolvedPath -PathType Container)) {
+            throw "Code app directory '$configuredPath' for solution '$($Solution.name)' does not exist under '$basePath'."
+        }
+
+        $resolvedPaths += $resolvedPath
+    }
+
+    return $resolvedPaths
+}
+
 function Resolve-AlmBranchBaseVersion {
     <#
     .SYNOPSIS

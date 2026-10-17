@@ -25,6 +25,9 @@ public static class AlmBuildMappingTestCapture
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($Verb, $Operation, [Parameter(ValueFromRemainingArguments = $true)][string[]]$RemainingArguments)
     }
+    function Invoke-CodeAppTestNpm {
+        $global:LASTEXITCODE = 0
+    }
 }
 
 Describe 'Build artifacts and solution-check helpers' {
@@ -128,6 +131,48 @@ Describe 'Build artifacts and solution-check helpers' {
     It 'rejects a missing extra asset' {
         Remove-Item (Join-Path $script:sourceDirectory 'data') -Recurse -Force
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } | Should -Throw '*Asset path not found*'
+    }
+
+    It 'copies configured code apps into the build artifacts' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist'), (Join-Path $codeAppPath 'node_modules/example') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'node_modules/example/index.js') -Value 'dependency'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal') })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
+        Mock Invoke-CodeAppTestNpm { $global:LASTEXITCODE = 0 }
+
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/power.config.json') | Should -BeTrue
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/dist/index.html') | Should -BeTrue
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/node_modules') | Should -BeFalse
+        Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter { $args -contains 'ci' }
+        Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter {
+            $args -contains 'run' -and $args -contains 'build'
+        }
+    }
+
+    It 'rejects code app paths outside the repository' {
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('../outside') })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+
+        { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } |
+            Should -Throw '*must stay within the repository*'
     }
 
     It 'fails when a required module is not loaded' {

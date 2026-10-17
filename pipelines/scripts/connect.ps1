@@ -26,6 +26,8 @@ param(
 
 Initialize-PacAuthentication
 
+$env:DATAVERSE_URL = $url
+
 Write-Host "##[group] Connecting to Dataverse environment with URL: $url"
 Get-DataverseConnection -setasdefault -DefaultAzureCredential -Url $url | out-null
 Write-Host "Validating connection using WhoAmI..."

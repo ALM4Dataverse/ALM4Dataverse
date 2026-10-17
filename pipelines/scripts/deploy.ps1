@@ -73,6 +73,7 @@ foreach ($solutionConfig in $solutionsConfig.solutions) {
         File = Join-Path -Path $ArtifactsPath -ChildPath solutions -AdditionalChildPath $fileName
         DeployUnmanaged = $deployUnmanaged
         ServiceAccountUpnConfigKey = $serviceAccountUpnKey
+        CodeApps = @(Get-SolutionCodeAppPath -Solution $solutionConfig -BaseDirectory $ArtifactsPath)
     }
 }
 $connectionReferences = @{}
@@ -217,6 +218,34 @@ Write-Host "##[endgroup]"
 # Publish all customizations
 Write-Host "##[section]Publishing Customizations"
 Publish-DataverseCustomizations
+
+foreach ($solution in $solutions) {
+    foreach ($codeAppPath in $solution.CodeApps) {
+        if ([string]::IsNullOrWhiteSpace($env:DATAVERSE_URL)) {
+            throw "DATAVERSE_URL is required to push code apps for solution '$($solution.Name)'. Connect to the target environment before deployment."
+        }
+
+        $pac = Get-Command pac -ErrorAction SilentlyContinue
+        if (-not $pac) {
+            throw 'Power Apps CLI (pac) was not found on PATH.'
+        }
+
+        Write-Host "##[group]Pushing code app for solution '$($solution.Name)' from '$codeAppPath'"
+        $pacArgs = @('code', 'push', '--environment', $env:DATAVERSE_URL, '--solutionName', $solution.Name)
+        Push-Location -LiteralPath $codeAppPath
+        try {
+            & $pac.Source @pacArgs
+            $pacExitCode = $LASTEXITCODE
+            if ($pacExitCode -ne 0) {
+                throw "PAC code push failed for solution '$($solution.Name)' with exit code $pacExitCode."
+            }
+        }
+        finally {
+            Pop-Location
+            Write-Host "##[endgroup]"
+        }
+    }
+}
 
 Invoke-Hook -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath
