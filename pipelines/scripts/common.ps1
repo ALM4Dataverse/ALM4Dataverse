@@ -586,6 +586,8 @@ function Invoke-PowerPlatformSettingMap {
     $null = Invoke-RestMethod -Uri $uri -Method Patch -Headers @{
         Authorization = "Bearer $accessToken"
     } -ContentType 'application/json' -Body $body -ErrorAction Stop
+}
+
 function Get-SolutionCodeAppPath {
     param(
         [Parameter(Mandatory = $true)]
