@@ -27,17 +27,34 @@ jobs:
   validate-powershell:
     # Linux owns external YAML/schema checks; both platforms exercise PowerShell.
     # Windows additionally syntax-checks generated installers with PowerShell 5.1.
-    name: PowerShell Tests (${{ matrix.os }})
+    name: PowerShell Tests (${{ matrix.os }}, ${{ matrix.powershell_channel }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            powershell_channel: stable
+            prerelease: false
+          - os: ubuntu-latest
+            powershell_channel: prerelease
+            prerelease: true
+          - os: windows-latest
+            powershell_channel: stable
+            prerelease: false
+          - os: windows-latest
+            powershell_channel: prerelease
+            prerelease: true
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
+      - name: Install latest PowerShell ${{ matrix.powershell_channel }}
+        uses: PSModule/install-powershell@159c2929fac34e3c7fc55d75e8997fb27fc7f75a
+        with:
+          Version: latest
+          Prerelease: ${{ matrix.prerelease }}
       - name: Set up Go for generated workflow validation
         if: runner.os == 'Linux'
         uses: actions/setup-go@v5
@@ -111,7 +128,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: validation-results-${{ matrix.os }}
+          name: validation-results-${{ matrix.os }}-${{ matrix.powershell_channel }}
           path: TestResults/
           if-no-files-found: ignore
           retention-days: 14

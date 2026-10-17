@@ -259,7 +259,7 @@ helpers use tested `ShouldProcess` guards.
 
 The Repository Validation workflow runs on pull requests, pushes to `main`, version
 tags, and manual dispatch. It runs the local validator on Windows and Linux using
-PowerShell 7, checks checked-in and setup-generated GitHub workflows with
+the latest stable and latest prerelease PowerShell releases, checks checked-in and setup-generated GitHub workflows with
 `actionlint`, and validates checked-in and setup-generated Azure DevOps pipelines
 against Microsoft's Azure Pipelines schema. Windows additionally parses the
 generated installers with Windows PowerShell 5.1. This is a syntax check, not a
