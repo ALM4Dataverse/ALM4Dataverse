@@ -56,6 +56,7 @@ Describe 'Dependency installation' {
             LOCALAPPDATA = $env:LOCALAPPDATA
             TEST_NODE_SOURCE = $env:TEST_NODE_SOURCE
             TEST_NPM_SOURCE = $env:TEST_NPM_SOURCE
+            TEST_TAR_SOURCE = $env:TEST_TAR_SOURCE
         }
         $script:savedHome = $HOME
         $script:savedExitCode = $global:LASTEXITCODE
@@ -67,6 +68,7 @@ Describe 'Dependency installation' {
         $env:TEST_PAC_BAD_VERSION = 'false'
         $env:TEST_NODE_SOURCE = ''
         $env:TEST_NPM_SOURCE = ''
+        $env:TEST_TAR_SOURCE = $script:availableNodeRuntime.TarPath
         $env:PAC_TEST_ARGS = Join-Path $TestDrive 'pac-arguments.txt'
         Mock Invoke-WebRequest {}
         if ($IsWindows) {
@@ -137,7 +139,7 @@ fi
                         return [pscustomobject]@{ Source = $env:TEST_NPM_SOURCE }
                     }
                 }
-                'tar' { return [pscustomobject]@{ Source = $script:availableNodeRuntime.TarPath } }
+                'tar' { return [pscustomobject]@{ Source = $env:TEST_TAR_SOURCE } }
             }
             return $null
         }
@@ -322,7 +324,7 @@ fi
             Compress-Archive -Path (Join-Path $archiveSourceDirectory $archiveDirectoryName) -DestinationPath $script:nodeArchivePath -Force
         }
         else {
-            $tarExecutable = $script:availableNodeRuntime.TarPath
+            $tarExecutable = $env:TEST_TAR_SOURCE
             & $tarExecutable -cJf $script:nodeArchivePath -C $archiveSourceDirectory $archiveDirectoryName
             if ($LASTEXITCODE -ne 0) {
                 throw 'Failed to create the test Node.js archive.'
