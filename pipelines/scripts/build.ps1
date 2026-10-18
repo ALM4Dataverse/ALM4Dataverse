@@ -51,12 +51,30 @@ $ErrorActionPreference = "Stop"
 Write-Host "##[section]Building Artifacts"
 
 function Get-PacCliInstalledPackageVersion {
-    # dotnet's package listing, not pac's display banner, supplies the lock-file version.
-    # Missing tools/path or an unmatched listing return ''; strip NuGet build metadata.
+    # Prefer the tool manifest for the .NET installation, then query the Windows MSI.
+    # Missing executables or unrecognized version output return ''.
     param(
-        [Parameter(Mandatory = $true)]
+        [string]$PacToolPath,
         [string]$PacPath
     )
+
+    if (-not [string]::IsNullOrWhiteSpace($PacToolPath) -and (Test-Path $PacToolPath)) {
+        $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+        if ($dotnet) {
+            $toolListOutput = @(& $dotnet.Source tool list --tool-path $PacToolPath 2>&1)
+            if ($LASTEXITCODE -eq 0) {
+                foreach ($line in $toolListOutput) {
+                    if ([string]$line -match '^\s*microsoft\.powerapps\.cli\.tool\s+(\S+)\s+') {
+                        return $Matches[1].Split('+')[0]
+                    }
+                }
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PacPath)) {
+        return ''
+    }
 
     if (-not (Test-Path $PacPath)) {
         return ''
@@ -789,6 +807,13 @@ foreach ($solution in $config.solutions) {
     }
 }
 Write-Host "##[debug]Loaded configuration from alm-config.psd1"
+$packageDeployerEnabled = $false
+if ($config.ContainsKey('buildPackageDeployer') -and $null -ne $config.buildPackageDeployer) {
+    if ($config.buildPackageDeployer -isnot [bool]) {
+        throw 'buildPackageDeployer must be a Boolean.'
+    }
+    $packageDeployerEnabled = $config.buildPackageDeployer
+}
 
 Invoke-Hook -HookType "preBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
     SourceDirectory = $SourceDirectory
@@ -1166,15 +1191,17 @@ foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     }
 }
 
-$pacCommand = Get-Command pac -ErrorAction SilentlyContinue
-if (-not $pacCommand) {
-    throw "Unable to resolve PAC CLI executable from PATH. Ensure installdependencies.ps1 has installed PAC before build.ps1 runs."
+$pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+$resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
+if ([string]::IsNullOrWhiteSpace($resolvedPacVersion)) {
+    $pacCommand = Get-Command pac -ErrorAction SilentlyContinue
+    if ($pacCommand) {
+        $resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacPath $pacCommand.Source
+    }
 }
 
-$resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacPath $pacCommand.Source
-
 if ([string]::IsNullOrWhiteSpace($resolvedPacVersion)) {
-    throw "Unable to resolve installed PAC CLI version from pac output. Ensure installdependencies.ps1 has installed PAC before build.ps1 runs."
+    throw "Unable to resolve installed PAC CLI package version from the .NET tool list or pac output. Ensure installdependencies.ps1 has installed PAC before build.ps1 runs."
 }
 
 $lockConfig.pacCliVersion = $resolvedPacVersion
@@ -1184,31 +1211,27 @@ $lockConfig | ConvertTo-Json | Out-File $lockPath -Encoding UTF8
 
 Write-Host "##[endgroup]"
 
-# Save PS modules for self-contained/offline deployment (Package Deployer scenario)
-Write-Host "##[group]Saving PowerShell modules for offline deployment"
-$modulesDir = Join-Path $ArtifactStagingDirectory 'modules'
-foreach ($moduleName in $lockConfig.scriptDependencies.Keys) {
-    $version = $lockConfig.scriptDependencies[$moduleName]
-    Write-Host "Saving $moduleName $version to $modulesDir"
-    Save-Module -Name $moduleName -RequiredVersion $version -Path $modulesDir -Force -AllowPrerelease:($version.Contains("-"))
+if ($packageDeployerEnabled) {
+    Write-Host "##[group]Saving PowerShell modules for offline deployment"
+    $modulesDir = Join-Path $ArtifactStagingDirectory 'modules'
+    foreach ($moduleName in $lockConfig.scriptDependencies.Keys) {
+        $version = $lockConfig.scriptDependencies[$moduleName]
+        Write-Host "Saving $moduleName $version to $modulesDir"
+        Save-Module -Name $moduleName -RequiredVersion $version -Path $modulesDir -Force -AllowPrerelease:($version.Contains("-"))
+    }
+    Write-Host "##[endgroup]"
 }
-Write-Host "##[endgroup]"
 
 Write-Host "##[section]Build completed successfully!"
 
-Invoke-Hooks -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
+Invoke-Hook -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $config -AdditionalContext @{
     SourceDirectory = $SourceDirectory
     ArtifactStagingDirectory = $ArtifactStagingDirectory
 }
 
 # Build Package Deployer package when enabled and artifact is not already present
-$packageDeployerEnabled = $false
-if ($config.ContainsKey('buildPackageDeployer') -and $null -ne $config.buildPackageDeployer) {
-    $packageDeployerEnabled = [bool]$config.buildPackageDeployer
-}
-
 $pdpkgZip = Join-Path $ArtifactStagingDirectory "ALM4Dataverse.PackageDeployer.pdpkg.zip"
-$pdProjectPath = Join-Path $PSScriptRoot ".." ".." "ALM4Dataverse.PackageDeployer" "ALM4Dataverse.PackageDeployer.csproj"
+$pdProjectPath = Join-Path -Path $PSScriptRoot -ChildPath '..\..\ALM4Dataverse.PackageDeployer\ALM4Dataverse.PackageDeployer.csproj'
 if ($packageDeployerEnabled) {
     if (Test-Path $pdpkgZip) {
         Write-Host "##[section]Package Deployer package already exists: $pdpkgZip"
@@ -1263,8 +1286,134 @@ if ($packageDeployerEnabled) {
                     throw "Package Deployer package '$pdpkgZip' is missing PkgAssets/ImportConfig.xml."
                 }
 
+                $importConfigEntry = $packageZip.GetEntry('PkgAssets/ImportConfig.xml')
+                $importConfigStream = $importConfigEntry.Open()
+                $importConfigReader = [System.IO.StreamReader]::new($importConfigStream)
+                try {
+                    [xml]$importConfigDocument = $importConfigReader.ReadToEnd()
+                }
+                finally {
+                    $importConfigReader.Dispose()
+                }
+                $solutionImports = $importConfigDocument.DocumentElement.SelectNodes('solutions/configsolutionfile')
+                if ($solutionImports.Count -eq 0) {
+                    throw "Package Deployer package '$pdpkgZip' does not define any solution imports in PkgAssets/ImportConfig.xml."
+                }
+
                 if (-not ($zipEntryNames -contains 'PkgAssets/manifest.ppkg.json')) {
                     throw "Package Deployer package '$pdpkgZip' is missing PkgAssets/manifest.ppkg.json."
+                }
+            }
+            finally {
+                $packageZip.Dispose()
+            }
+
+            $packageZip = [System.IO.Compression.ZipFile]::Open($pdpkgZip, [System.IO.Compression.ZipArchiveMode]::Update)
+            try {
+                $moduleAssemblyEntries = @($packageZip.Entries | Where-Object {
+                    $_.FullName.StartsWith('PkgAssets/modules/', [System.StringComparison]::OrdinalIgnoreCase) -and
+                    $_.FullName.EndsWith('.dll', [System.StringComparison]::OrdinalIgnoreCase)
+                })
+                foreach ($moduleAssemblyEntry in $moduleAssemblyEntries) {
+                    $preservedEntryName = "$($moduleAssemblyEntry.FullName).bin"
+                    if ($null -ne $packageZip.GetEntry($preservedEntryName)) {
+                        throw "Package Deployer package '$pdpkgZip' already contains preserved module assembly '$preservedEntryName'."
+                    }
+
+                    $preservedEntry = $packageZip.CreateEntry($preservedEntryName, [System.IO.Compression.CompressionLevel]::Optimal)
+                    $moduleAssemblyStream = $moduleAssemblyEntry.Open()
+                    $preservedAssemblyStream = $preservedEntry.Open()
+                    try {
+                        $moduleAssemblyStream.CopyTo($preservedAssemblyStream)
+                    }
+                    finally {
+                        $moduleAssemblyStream.Dispose()
+                        $preservedAssemblyStream.Dispose()
+                    }
+                    $moduleAssemblyEntry.Delete()
+                }
+
+                if ($moduleAssemblyEntries.Count -gt 0) {
+                    $contentTypesEntry = $packageZip.GetEntry('[Content_Types].xml')
+                    $contentTypesStream = $contentTypesEntry.Open()
+                    $contentTypesReader = [System.IO.StreamReader]::new($contentTypesStream)
+                    try {
+                        [xml]$contentTypesDocument = $contentTypesReader.ReadToEnd()
+                    }
+                    finally {
+                        $contentTypesReader.Dispose()
+                    }
+
+                    $preservedAssetContentType = $contentTypesDocument.DocumentElement.ChildNodes |
+                        Where-Object { $_.LocalName -eq 'Default' -and $_.Extension -ieq 'bin' } |
+                        Select-Object -First 1
+                    if ($null -eq $preservedAssetContentType) {
+                        $preservedAssetContentType = $contentTypesDocument.CreateElement(
+                            'Default',
+                            $contentTypesDocument.DocumentElement.NamespaceURI
+                        )
+                        $preservedAssetContentType.SetAttribute('Extension', 'bin')
+                        $preservedAssetContentType.SetAttribute('ContentType', 'application/octet-stream')
+                        $null = $contentTypesDocument.DocumentElement.AppendChild($preservedAssetContentType)
+
+                        $contentTypesEntry.Delete()
+                        $contentTypesEntry = $packageZip.CreateEntry('[Content_Types].xml')
+                        $contentTypesStream = $contentTypesEntry.Open()
+                        $contentTypesWriter = [System.IO.StreamWriter]::new(
+                            $contentTypesStream,
+                            [System.Text.UTF8Encoding]::new($false)
+                        )
+                        try {
+                            $contentTypesDocument.Save($contentTypesWriter)
+                        }
+                        finally {
+                            $contentTypesWriter.Dispose()
+                        }
+                    }
+                }
+
+                if ($moduleAssemblyEntries.Count -gt 0) {
+                    Write-Host "Preserved $($moduleAssemblyEntries.Count) PowerShell module assemblies from Package Deployer cleanup."
+                }
+
+                $assetsImportConfigEntry = $packageZip.GetEntry('PkgAssets/ImportConfig.xml')
+                $rootImportConfigEntry = $packageZip.GetEntry('ImportConfig.xml')
+                if ($null -ne $rootImportConfigEntry) {
+                    $rootImportConfigEntry.Delete()
+                }
+                $rootImportConfigEntry = $packageZip.CreateEntry('ImportConfig.xml')
+                $assetsImportConfigStream = $assetsImportConfigEntry.Open()
+                $rootImportConfigStream = $rootImportConfigEntry.Open()
+                try {
+                    $assetsImportConfigStream.CopyTo($rootImportConfigStream)
+                }
+                finally {
+                    $assetsImportConfigStream.Dispose()
+                    $rootImportConfigStream.Dispose()
+                }
+            }
+            finally {
+                $packageZip.Dispose()
+            }
+
+            $packageZip = [System.IO.Compression.ZipFile]::OpenRead($pdpkgZip)
+            try {
+                $rootImportConfigEntry = $packageZip.GetEntry('ImportConfig.xml')
+                if ($null -eq $rootImportConfigEntry) {
+                    throw "Package Deployer package '$pdpkgZip' is missing ImportConfig.xml at the archive root."
+                }
+
+                $rootImportConfigStream = $rootImportConfigEntry.Open()
+                $rootImportConfigReader = [System.IO.StreamReader]::new($rootImportConfigStream)
+                try {
+                    [xml]$rootImportConfigDocument = $rootImportConfigReader.ReadToEnd()
+                }
+                finally {
+                    $rootImportConfigReader.Dispose()
+                }
+                $rootSolutionImports = $rootImportConfigDocument.DocumentElement.SelectNodes('solutions/configsolutionfile')
+                if ($rootSolutionImports.Count -eq 0) {
+                    throw "Package Deployer package '$pdpkgZip' does not define any solution imports in root ImportConfig.xml."
                 }
             }
             finally {

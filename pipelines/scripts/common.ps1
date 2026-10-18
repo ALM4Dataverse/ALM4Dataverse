@@ -268,7 +268,7 @@ function Get-AlmConfig {
         [bool]$LogConfig = $true
     )
 
-    $defaultConfigPath = Join-Path -Path $PSScriptRoot -ChildPath ".." -AdditionalChildPath "..", "alm-config-defaults.psd1" | Resolve-Path | Select-Object -ExpandProperty Path
+    $defaultConfigPath = Join-Path -Path (Join-Path -Path $PSScriptRoot -ChildPath "..\..") -ChildPath "alm-config-defaults.psd1" | Resolve-Path | Select-Object -ExpandProperty Path
 
     $config = @{}
 
@@ -445,6 +445,13 @@ function Get-DefaultAzureCredentialAccessToken {
     finally {
         $credential.Dispose()
     }
+}
+
+if (-not (Get-Variable -Name 'AlmOperatingSystemWindowsDetectorInitialized' -Scope Script -ErrorAction SilentlyContinue)) {
+    function Test-AlmOperatingSystemWindows {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    }
+    Set-Variable -Name 'AlmOperatingSystemWindowsDetectorInitialized' -Value $true -Scope Script
 }
 
 function Get-PowerPlatformApiAccessToken {
@@ -1684,7 +1691,7 @@ function Invoke-Hook {
             }
 
             # Replace [alm] placeholder with the absolute path of the ALM repo root
-            $almRootPath = Join-Path -Path $PSScriptRoot -ChildPath ".." -AdditionalChildPath ".." | Resolve-Path | Select-Object -ExpandProperty Path
+            $almRootPath = Join-Path -Path $PSScriptRoot -ChildPath "..\.." | Resolve-Path | Select-Object -ExpandProperty Path
             $hookPath = $hook -replace '\[alm\]', $almRootPath
 
             if (Test-Path $hookPath) {

@@ -10,6 +10,7 @@ BeforeAll {
             [switch]$OverwriteUnmanagedCustomizations, [switch]$SkipIfSameVersion,
             [switch]$UseUpdateIfVersionMajorMinorMatches)
     }
+
     function Invoke-DataverseSolutionUpgrade {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         [CmdletBinding()]
@@ -363,8 +364,21 @@ Describe 'Deployment options' {
         Mock Register-AlmSolutionContent { throw 'IMPORT must not claim a solution version.' }
         Mock Copy-Item { New-Item -ItemType Directory -Path $Destination -Force | Out-Null } -ParameterFilter { $Destination -match '[\\/]alm$' }
         Mock Get-Module { [pscustomobject]@{ Version = [version]'3.0.4'; PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } } } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
-        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
-        Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
+        Mock Get-Command {
+            if ($Name -eq 'dotnet') {
+                return [pscustomobject]@{ Source = 'Invoke-DeploymentTestDotnet' }
+            }
+            return [pscustomobject]@{ Name = $Name; Source = $Name; Parameters = @{} }
+        }
+        Mock Test-AlmOperatingSystemWindows { $false }
+        Mock Test-Path {
+            param($Path, $LiteralPath)
+            $testPath = if ($Path) { $Path } else { $LiteralPath }
+            if ($testPath -match '[\\/]\.alm4dataverse[\\/]tools$') {
+                return $true
+            }
+            [System.IO.File]::Exists($testPath) -or [System.IO.Directory]::Exists($testPath)
+        }
         Mock Invoke-DeploymentTestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.13.1 pac' }
         $savedExitCode = $global:LASTEXITCODE
         try {
@@ -375,5 +389,113 @@ Describe 'Deployment options' {
             Should -Invoke Invoke-DataverseSolutionUpgrade -Times 0 -Exactly
         }
         finally { $global:LASTEXITCODE = $savedExitCode }
+    }
+}
+
+Describe 'Package Deployer deployment path' {
+    BeforeEach {
+        $script:savedPackageDeployEnvironment = @{
+            DATAVERSE_URL = [Environment]::GetEnvironmentVariable('DATAVERSE_URL')
+            DataverseConnRef_Test = [Environment]::GetEnvironmentVariable('DataverseConnRef_Test')
+            DataverseEnvVar_Test = [Environment]::GetEnvironmentVariable('DataverseEnvVar_Test')
+            DataverseServiceAccountUpn = [Environment]::GetEnvironmentVariable('DataverseServiceAccountUpn')
+            ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS = [Environment]::GetEnvironmentVariable('ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS')
+            ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = [Environment]::GetEnvironmentVariable('ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND')
+        }
+        $env:DATAVERSE_URL = 'https://example.crm.dynamics.com'
+        $env:DataverseConnRef_Test = 'connection-id'
+        $env:DataverseEnvVar_Test = 'environment-value'
+        $env:DataverseServiceAccountUpn = 'service@example.com'
+        $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS = ''
+        $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = ''
+
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example' })
+    buildPackageDeployer = $true
+    hooks = @{}
+}
+'@
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $packageArchivePath = Join-Path $TestDrive 'ALM4Dataverse.PackageDeployer.pdpkg.zip'
+        if (Test-Path -LiteralPath $packageArchivePath) {
+            Remove-Item -LiteralPath $packageArchivePath -Force
+        }
+        $packageArchive = [System.IO.Compression.ZipFile]::Open($packageArchivePath, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $assemblyEntry = $packageArchive.CreateEntry('ALM4Dataverse.PackageDeployer.dll')
+            $assemblyEntryStream = $assemblyEntry.Open()
+            $assemblyEntryStream.Dispose()
+            $importConfigEntry = $packageArchive.CreateEntry('PkgAssets/ImportConfig.xml')
+            $importConfigWriter = [System.IO.StreamWriter]::new($importConfigEntry.Open())
+            try { $importConfigWriter.Write('<configdatastorage />') }
+            finally { $importConfigWriter.Dispose() }
+        }
+        finally { $packageArchive.Dispose() }
+
+        Mock Import-DataverseSolution {}
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestPac' } } -ParameterFilter { $Name -eq 'pac' }
+        Mock Invoke-DeploymentTestPac {
+            $global:LASTEXITCODE = 0
+            $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS = ConvertTo-Json -InputObject @($args) -Compress
+            $packageArgumentIndex = [Array]::IndexOf(@($args), '--package') + 1
+            $assetsPath = Join-Path (Split-Path ([string]$args[$packageArgumentIndex]) -Parent) 'PkgAssets/ImportConfig.xml'
+            $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = [string](Test-Path -LiteralPath $assetsPath -PathType Leaf)
+        }
+    }
+
+    AfterEach {
+        foreach ($name in $script:savedPackageDeployEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $script:savedPackageDeployEnvironment[$name])
+        }
+    }
+
+    It 'deploys the generated package to the explicit environment with configured runtime settings' {
+        & $script:deployScript -ArtifactsPath $TestDrive
+        $packageDeployArguments = @(ConvertFrom-Json -InputObject $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS)
+
+        $packageDeployArguments | Should -Contain 'package'
+        $packageDeployArguments | Should -Contain 'deploy'
+        $packageDeployArguments | Should -Contain '--package'
+        $packageDeployArguments | Should -Contain '--logConsole'
+        $packageDeployArguments | Should -Contain '--environment'
+        $packageDeployArguments | Should -Contain 'https://example.crm.dynamics.com'
+        $packageArgumentIndex = [Array]::IndexOf($packageDeployArguments, '--package') + 1
+        $packageDllPath = [string]$packageDeployArguments[$packageArgumentIndex]
+        $packageDllPath | Should -Match 'ALM4Dataverse\.PackageDeployer\.dll$'
+        $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND | Should -Be 'True'
+        Test-Path -LiteralPath $packageDllPath | Should -BeFalse
+        $settingsArgumentIndex = [Array]::IndexOf($packageDeployArguments, '--settings') + 1
+        $settingsArgumentIndex | Should -BeGreaterThan 0
+        $packageDeployArguments[$settingsArgumentIndex] | Should -Match 'DataverseConnRef_Test=connection-id'
+        $packageDeployArguments[$settingsArgumentIndex] | Should -Match 'DataverseEnvVar_Test=environment-value'
+        $packageDeployArguments[$settingsArgumentIndex] | Should -Match 'DataverseServiceAccountUpn=service@example.com'
+        Should -Invoke Import-DataverseSolution -Times 0 -Exactly
+    }
+
+    It 'fails before invoking PAC when the generated package is missing' {
+        Remove-Item -LiteralPath (Join-Path $TestDrive 'ALM4Dataverse.PackageDeployer.pdpkg.zip')
+
+        { & $script:deployScript -ArtifactsPath $TestDrive } |
+            Should -Throw '*buildPackageDeployer = `$true*package*was not found*'
+        Should -Invoke Invoke-DeploymentTestPac -Times 0 -Exactly
+    }
+
+    It 'requires an explicit target environment' {
+        Remove-Item Env:DATAVERSE_URL
+
+        { & $script:deployScript -ArtifactsPath $TestDrive } |
+            Should -Throw '*DATAVERSE_URL is required for package deployment*'
+        Should -Invoke Invoke-DeploymentTestPac -Times 0 -Exactly
+    }
+
+    It 'reports PAC failures and captured output' {
+        Mock Invoke-DeploymentTestPac {
+            $global:LASTEXITCODE = 42
+            'Package deployment failed'
+        }
+
+        { & $script:deployScript -ArtifactsPath $TestDrive } |
+            Should -Throw '*pac package deploy failed with exit code 42*Package deployment failed*'
     }
 }

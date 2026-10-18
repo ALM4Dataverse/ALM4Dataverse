@@ -15,7 +15,6 @@
     </PackageReference>
     <PackageReference Include="Microsoft.CrmSdk.XrmTooling.CoreAssembly" Version="9.1.*" PrivateAssets="all" />
     <PackageReference Include="Microsoft.CrmSdk.XrmTooling.PackageDeployment" Version="9.1.*" PrivateAssets="all" />
-    <PackageReference Include="Microsoft.PowerShell.5.ReferenceAssemblies" Version="1.1.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -45,6 +44,7 @@
     Example: dotnet publish -p:BuildArtifactsPath="$(Build.ArtifactStagingDirectory)"
   -->
   <ItemGroup Condition="'$(BuildArtifactsPath)' != ''">
+    <PdSolution Include="$(BuildArtifactsPath)\solutions\*_managed.zip" />
     <None Include="$(BuildArtifactsPath)\solutions\**\*" LinkBase="PkgAssets\solutions">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>

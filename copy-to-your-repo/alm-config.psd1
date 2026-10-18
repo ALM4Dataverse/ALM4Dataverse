@@ -271,7 +271,8 @@
         baselineRelease = ''
     }
 
-    # Build Package Deployer package during BUILD.
+    # Preview: build Package Deployer package during BUILD.
+    # Some ALM4Dataverse features or deployment scenarios may not work with this path.
     # When true, build.ps1 generates ALM4Dataverse.PackageDeployer.pdpkg.zip
     # if it is not already present in the artifact staging directory.
     # buildPackageDeployer = $true

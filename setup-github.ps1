@@ -3971,6 +3971,19 @@ function Update-DeployWorkflowInRepoClone {
         return
     }
 
+    $packageDeployerEnabled = $false
+    $configPath = Join-Path $RepoRoot 'alm-config.psd1'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $repositoryConfig = Import-PowerShellDataFile -LiteralPath $configPath
+        if ($repositoryConfig.ContainsKey('buildPackageDeployer') -and $null -ne $repositoryConfig.buildPackageDeployer) {
+            if ($repositoryConfig.buildPackageDeployer -isnot [bool]) {
+                throw 'buildPackageDeployer must be a Boolean.'
+            }
+            $packageDeployerEnabled = $repositoryConfig.buildPackageDeployer
+        }
+    }
+    $deployRunner = if ($packageDeployerEnabled) { 'windows-latest' } else { 'ubuntu-latest' }
+
     $usesRef = "$SharedWorkflowRepository/.github/actions/deploy@$SharedWorkflowRef"
 
     $lines = New-Object System.Collections.Generic.List[string]
@@ -4115,7 +4128,7 @@ function Update-DeployWorkflowInRepoClone {
             }
         }
 
-        $lines.Add('    runs-on: ubuntu-latest')
+        $lines.Add("    runs-on: $deployRunner")
         $lines.Add('    timeout-minutes: 360')
         $lines.Add("    environment: '$envNameEscaped'")
         $lines.Add('    concurrency:')

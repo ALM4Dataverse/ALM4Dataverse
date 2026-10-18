@@ -54,6 +54,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
 | `buildValidation.baselineRelease` | String | `''`; no baseline. |
+| `buildPackageDeployer` | Boolean | `$false`; Package Deployer preview is disabled. |
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
@@ -646,13 +647,22 @@ The baseline and candidate each use the deployment script and configuration
 packaged with their own build. If resolving, downloading, or deploying the
 baseline fails, BUILD fails and does not deploy the candidate.
 
-### Package Deployer Build
+### Package Deployer Build (Preview)
 
-Use `buildPackageDeployer` to control Package Deployer package generation during `BUILD`.
+`buildPackageDeployer` is a top-level setting that enables the Package Deployer
+preview for BUILD and deployment. It defaults to `$false`; set it to `$true` in
+the root `alm-config.psd1` to opt in:
 
 ```powershell
-buildPackageDeployer = $true
+@{
+    buildPackageDeployer = $true
+}
 ```
+
+> [!WARNING]
+> This integration is a preview feature. Some ALM4Dataverse features and deployment
+> scenarios may not work with it or may behave differently. Validate the workflows,
+> hooks, and settings you depend on in a non-production environment before adopting it.
 
 When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeployer.pdpkg.zip` exists in the artifact staging directory:
 
@@ -662,6 +672,7 @@ When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeploy
 
 When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
 
+- Package Deployer deployment requires a Windows runner because PAC's Dataverse package deployment command depends on .NET Framework. `setup-github.ps1` generates Windows deployment jobs when this setting is enabled; manually maintained workflows must use a Windows runner for deployment.
 - If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
 - Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).
 - Build artifacts are trimmed to the minimum required for package-based deployment: `alm/`, `alm-config.psd1`, `modules/`, `scriptDependencies.lock.json`, and `ALM4Dataverse.PackageDeployer.pdpkg.zip`.

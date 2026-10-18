@@ -114,7 +114,23 @@ separately with the same build identity.
   selected pipeline artifact.
 - **The name of the deployment job matches the release number.**
 - **Environment settings are read from the configuration associated with the environment** (Azure DevOps: variable group; GitHub Actions: GitHub environment values or repository variables, with optional environment prefixes; secrets are selected explicitly in `secrets-json`), matching with those required by each solution.
-- **Optional Package Deployer path**: when `buildPackageDeployer = $true`, deployment uses `ALM4Dataverse.PackageDeployer.pdpkg.zip` from build artifacts for the standard managed deployment path.
+- **Optional Package Deployer preview**: to opt in, set the top-level
+  `buildPackageDeployer = $true` in the root `alm-config.psd1` and run BUILD.
+  It defaults to `$false`. Deployment then uses
+  `ALM4Dataverse.PackageDeployer.pdpkg.zip` from the build artifacts for the
+  standard managed deployment path. See the
+  [Package Deployer configuration](../config/alm-config.md#package-deployer-build-preview)
+  for package generation and deployment details.
+  Package Deployer deployment requires a Windows runner; generated GitHub workflows
+  select `windows-latest` when this setting is enabled. The Package Deployer host also
+  requires PowerShell 7 (`pwsh.exe`) on `PATH` to run the packaged deployment scripts.
+
+> [!WARNING]
+> Package Deployer integration is a preview feature. Some ALM4Dataverse features or
+> deployment scenarios may not work with it or may behave differently. Test the
+> workflows, hooks, and settings you rely on in a non-production environment before
+> enabling it for production deployments.
+
 - **Solutions are deployed if needed in the configured dependency order**:
   - If the solution is already present with the same version, the import is skipped.
   - If the solution is not currently present in the environment, the 'Import' method is used

@@ -514,6 +514,16 @@ Describe 'Generated GitHub workflow files' {
         Test-Path (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') | Should -BeFalse
     }
 
+    It 'uses a Windows runner when Package Deployer deployment is enabled' {
+        Set-Content -LiteralPath (Join-Path $workingRoot 'alm-config.psd1') -Value '@{ buildPackageDeployer = $true }'
+        $environments = @([pscustomobject]@{ ShortName = 'TEST' })
+
+        Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments $environments -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+
+        $content = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw
+        $content | Should -Match 'runs-on: windows-latest'
+    }
+
     It 'preserves status-aware predecessor guards in <Mode> mode' -ForEach @(
         @{ Mode = 'manual-gate-tag' }
         @{ Mode = 'environment-approval' }

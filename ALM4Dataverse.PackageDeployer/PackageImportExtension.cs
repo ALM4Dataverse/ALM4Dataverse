@@ -1,14 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.ComponentModel.Composition;
+using System.Diagnostics;
 using System.IO;
-using System.Management.Automation;
 using System.Text;
 using Microsoft.Xrm.Tooling.PackageDeployment.CrmPackageExtentionBase;
 
 namespace ALM4Dataverse.PackageDeployer
 {
-    [Export(typeof(IImportExtensions2))]
+    [Export(typeof(IImportExtensions))]
     public class PackageImportExtension : ImportExtension
     {
         private Dictionary<string, string> _runtimeSettings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -34,7 +35,7 @@ namespace ALM4Dataverse.PackageDeployer
                 {
                     var value = setting.Value?.ToString() ?? "";
                     _runtimeSettings[setting.Key] = value;
-                    PackageLog.Log($"Runtime Setting: {setting.Key} = {value}");
+                    PackageLog.Log($"Runtime Setting received: {setting.Key}");
                 }
             }
         }
@@ -121,9 +122,9 @@ namespace ALM4Dataverse.PackageDeployer
                     env["DATAVERSE_ACCESS_TOKEN"] = token;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // CurrentAccessToken may not be available for all auth types
+                PackageLog.Log($"Package Deployer access token is unavailable; deployment will use the configured Azure credential. {ex.Message}");
             }
 
             return env;
@@ -153,62 +154,82 @@ namespace ALM4Dataverse.PackageDeployer
 
         private void RunPowerShell(string script, string workingDirectory, Dictionary<string, string> additionalEnvVars)
         {
-            // Set environment variables on the current process so the in-process
-            // PowerShell runspace can see them via $env:VAR_NAME.
-            var savedEnvVars = new Dictionary<string, string>(additionalEnvVars.Count, StringComparer.OrdinalIgnoreCase);
+            RestorePowerShellModuleAssemblies(workingDirectory);
+
+            var encodedScript = Convert.ToBase64String(Encoding.Unicode.GetBytes(script));
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = "pwsh.exe",
+                Arguments = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " + encodedScript,
+                WorkingDirectory = workingDirectory,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
             foreach (var kvp in additionalEnvVars)
-            {
-                savedEnvVars[kvp.Key] = Environment.GetEnvironmentVariable(kvp.Key);
-                Environment.SetEnvironmentVariable(kvp.Key, kvp.Value);
-            }
+                startInfo.EnvironmentVariables[kvp.Key] = kvp.Value;
 
-            try
+            using (var process = new Process { StartInfo = startInfo })
             {
-                using (var ps = PowerShell.Create())
+                try
                 {
-                    ps.AddCommand("Set-Location").AddParameter("Path", workingDirectory);
-                    ps.AddStatement();
-                    ps.AddScript(script);
+                    if (!process.Start())
+                        throw new InvalidOperationException("PowerShell 7 process failed to start.");
+                }
+                catch (Win32Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "PowerShell 7 (pwsh.exe) must be installed and available on PATH to run this package.", ex);
+                }
 
-                    ps.Streams.Information.DataAdded += (s, e) =>
-                        PackageLog.Log(ps.Streams.Information[e.Index].ToString());
-                    ps.Streams.Warning.DataAdded += (s, e) =>
-                        PackageLog.Log($"WARNING: {ps.Streams.Warning[e.Index]}");
-                    ps.Streams.Error.DataAdded += (s, e) =>
-                        PackageLog.Log($"ERROR: {ps.Streams.Error[e.Index]}");
-                    ps.Streams.Verbose.DataAdded += (s, e) =>
-                        PackageLog.Log($"VERBOSE: {ps.Streams.Verbose[e.Index]}");
+                var standardOutputTask = process.StandardOutput.ReadToEndAsync();
+                var standardErrorTask = process.StandardError.ReadToEndAsync();
+                process.WaitForExit();
 
-                    try
-                    {
-                        var results = ps.Invoke();
-                        foreach (var result in results)
-                        {
-                            if (result != null)
-                                PackageLog.Log(result.ToString());
-                        }
-                    }
-                    catch (RuntimeException ex)
-                    {
-                        throw new InvalidOperationException(
-                            $"PowerShell script error: {ex.ErrorRecord?.Exception?.Message ?? ex.Message}", ex);
-                    }
+                var standardOutput = standardOutputTask.GetAwaiter().GetResult();
+                var standardError = standardErrorTask.GetAwaiter().GetResult();
+                foreach (var line in standardOutput.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+                    PackageLog.Log(line);
+                foreach (var line in standardError.Split(new[] { "\r\n", "\n" }, StringSplitOptions.RemoveEmptyEntries))
+                    PackageLog.Log($"PowerShell stderr: {line}");
 
-                    if (ps.HadErrors)
-                    {
-                        var sb = new StringBuilder("PowerShell deployment script had errors:");
-                        foreach (var error in ps.Streams.Error)
-                            sb.AppendLine().Append("  ").Append(error);
-                        throw new InvalidOperationException(sb.ToString());
-                    }
+                if (process.ExitCode != 0)
+                {
+                    var message = new StringBuilder($"PowerShell deployment process failed with exit code {process.ExitCode}.");
+                    var details = !string.IsNullOrWhiteSpace(standardError) ? standardError : standardOutput;
+                    if (!string.IsNullOrWhiteSpace(details))
+                        message.AppendLine().Append(details.Trim());
+                    throw new InvalidOperationException(message.ToString());
                 }
             }
-            finally
+        }
+
+        private void RestorePowerShellModuleAssemblies(string packageAssetsDirectory)
+        {
+            var modulesDirectory = Path.Combine(packageAssetsDirectory, "modules");
+            if (!Directory.Exists(modulesDirectory))
+                return;
+
+            var preservedAssemblies = Directory.GetFiles(
+                modulesDirectory,
+                "*.dll.bin",
+                SearchOption.AllDirectories
+            );
+            foreach (var preservedAssembly in preservedAssemblies)
             {
-                // Restore previous environment variable values
-                foreach (var kvp in savedEnvVars)
-                    Environment.SetEnvironmentVariable(kvp.Key, kvp.Value);
+                var assemblyPath = preservedAssembly.Substring(
+                    0,
+                    preservedAssembly.Length - ".bin".Length
+                );
+                if (File.Exists(assemblyPath))
+                    throw new IOException($"Cannot restore packaged module assembly because '{assemblyPath}' already exists.");
+
+                File.Move(preservedAssembly, assemblyPath);
             }
+
+            if (preservedAssemblies.Length > 0)
+                PackageLog.Log($"Restored {preservedAssemblies.Length} packaged PowerShell module assemblies.");
         }
 
         private static string Escape(string value) => value.Replace("'", "''");

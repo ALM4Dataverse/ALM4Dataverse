@@ -108,7 +108,17 @@ Describe 'Build artifacts and solution-check helpers' {
         }
         Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.13.1+build pac' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-TestPac' } } -ParameterFilter { $Name -eq 'pac' }
-        Mock Invoke-TestPac { $global:LASTEXITCODE = 0; 'Critical: 0'; 'High: 1'; 'Low: 2' }
+        Mock Invoke-TestPac {
+            $global:LASTEXITCODE = 0
+            if ($args -contains '--version') {
+                'Version: 2.13.1'
+            }
+            else {
+                'Critical: 0'
+                'High: 1'
+                'Low: 2'
+            }
+        }
         # Most cases keep work in Pester's runspace so mocks remain visible. Both overlap cases
         # opt out and supply an importable pack module to exercise actual worker isolation.
         Mock ForEach-Object {
@@ -214,6 +224,7 @@ Describe 'Build artifacts and solution-check helpers' {
 
     It 'fails when PAC package version cannot be resolved' {
         Mock Invoke-TestDotnet { $global:LASTEXITCODE = 0; 'No tools installed' }
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq 'pac' }
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } | Should -Throw '*Unable to resolve installed PAC CLI package version*'
     }
 

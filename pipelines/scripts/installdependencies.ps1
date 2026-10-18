@@ -270,7 +270,8 @@ $usingBundledModules = $false
 if (Test-Path $bundledModulesDir) {
     $usingBundledModules = $true
     Write-Host "Using bundled modules from $bundledModulesDir"
-    $env:PSModulePath = "$bundledModulesDir;$env:PSModulePath"
+    $modulePathSeparator = [System.IO.Path]::PathSeparator
+    $env:PSModulePath = "$bundledModulesDir$modulePathSeparator$env:PSModulePath"
     foreach ($module in $config.scriptDependencies.Keys) {
         Import-Module $module -ErrorAction Stop
         $loadedModule = Get-Module -Name $module
@@ -427,7 +428,7 @@ function Test-IsWindowsMsiPacLauncher {
     return $false
 }
 
-function Get-PacCandidatePaths {
+function Get-PacCandidatePath {
     $candidates = New-Object System.Collections.Generic.List[string]
 
     $msiDefaultRoot = Join-Path $env:LOCALAPPDATA 'Microsoft\PowerAppsCLI'
@@ -481,7 +482,7 @@ function Get-PacCandidatePaths {
 }
 
 function Resolve-PacWindowsMsiExecutablePath {
-    foreach ($candidate in (Get-PacCandidatePaths)) {
+    foreach ($candidate in (Get-PacCandidatePath)) {
         if (Test-IsWindowsMsiPacLauncher -PacPath $candidate) {
             return $candidate
         }
@@ -502,7 +503,7 @@ if (-not (Test-Path $pacToolPath)) {
     New-Item -ItemType Directory -Path $pacToolPath -Force | Out-Null
 }
 
-$isWindowsOS = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+$isWindowsOS = Test-AlmOperatingSystemWindows
 
 if ($isWindowsOS) {
     Write-Host "Installing PAC CLI on Windows using MSI method with version specifier: '$pacCliVersion'"
@@ -518,7 +519,7 @@ if ($isWindowsOS) {
 
     $pacPath = Resolve-PacWindowsMsiExecutablePath
     if ([string]::IsNullOrWhiteSpace($pacPath)) {
-        $known = Get-PacCandidatePaths
+        $known = Get-PacCandidatePath
         $knownText = if ($known.Count -gt 0) { $known -join ', ' } else { '<none>' }
         throw "Power Platform CLI MSI installation completed but MSI launcher pac.exe could not be resolved. PAC candidates found: $knownText"
     }
