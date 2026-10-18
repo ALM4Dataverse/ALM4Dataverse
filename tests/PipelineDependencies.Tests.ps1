@@ -57,6 +57,7 @@ Describe 'Dependency installation' {
             TEST_NODE_SOURCE = $env:TEST_NODE_SOURCE
             TEST_NPM_SOURCE = $env:TEST_NPM_SOURCE
             TEST_TAR_SOURCE = $env:TEST_TAR_SOURCE
+            TEST_NODE_RELEASE_VERSION = $env:TEST_NODE_RELEASE_VERSION
         }
         $script:savedHome = $HOME
         $script:savedExitCode = $global:LASTEXITCODE
@@ -69,6 +70,7 @@ Describe 'Dependency installation' {
         $env:TEST_NODE_SOURCE = ''
         $env:TEST_NPM_SOURCE = ''
         $env:TEST_TAR_SOURCE = $script:availableNodeRuntime.TarPath
+        $env:TEST_NODE_RELEASE_VERSION = ''
         $env:PAC_TEST_ARGS = Join-Path $TestDrive 'pac-arguments.txt'
         Mock Invoke-WebRequest {}
         if ($IsWindows) {
@@ -286,7 +288,7 @@ fi
         Should -Invoke Invoke-WebRequest -Times 0 -Exactly
     }
 
-    It 'downloads and installs a verified Node archive' {
+    It 'resolves a major Node version and installs a verified archive' {
         $runtimeVersion = $script:availableNodeRuntime.Version.ToString()
         $platformArchitecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
             'X64' { 'x64' }
@@ -333,10 +335,15 @@ fi
         $script:nodeArchiveChecksum = (Get-FileHash -LiteralPath $script:nodeArchivePath -Algorithm SHA256).Hash
 
         New-Item -ItemType Directory -Path (Join-Path $script:dependencyDirectory 'apps/code') -Force | Out-Null
-        Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ nodeVersion = '$runtimeVersion'; solutions = @(@{ name = 'Contoso'; codeApps = @('apps/code') }) }"
+        Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ nodeVersion = '$($script:availableNodeRuntime.Version.Major)'; solutions = @(@{ name = 'Contoso'; codeApps = @('apps/code') }) }"
+        $env:TEST_NODE_RELEASE_VERSION = $runtimeVersion
         $env:TEST_NODE_ARCHIVE_PATH = $script:nodeArchivePath
         $env:TEST_NODE_ARCHIVE_CHECKSUM = $script:nodeArchiveChecksum
         $env:TEST_NODE_ARCHIVE_NAME = $script:nodeArchiveName
+        $env:TEST_NODE_SOURCE = 'pwsh'
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{ version = "v$env:TEST_NODE_RELEASE_VERSION" }
+        }
         Mock Invoke-WebRequest {
             if ($Uri -like '*SHASUMS256.txt') {
                 $checksumLine = "$env:TEST_NODE_ARCHIVE_CHECKSUM *$env:TEST_NODE_ARCHIVE_NAME"
@@ -357,6 +364,7 @@ fi
         Test-Path -LiteralPath $installedNpmPath | Should -BeTrue
         (Get-Content -LiteralPath $env:GITHUB_PATH -Raw) -split "`r?`n" |
             Should -Contain $(if ($IsWindows) { $installedNodeDirectory } else { Join-Path $installedNodeDirectory 'bin' })
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter { $Uri -eq 'https://nodejs.org/dist/index.json' }
         Should -Invoke Invoke-WebRequest -Times 2 -Exactly -ParameterFilter { $Uri -like 'https://nodejs.org/*' }
     }
 
