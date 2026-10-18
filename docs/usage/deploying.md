@@ -139,6 +139,9 @@ global unmanaged override and different import flags.
 
 ## Deployment Tags
 
+See the [Git tag catalog](../config/git-tags.md) for all tag namespaces and
+which workflows create or update them.
+
 | Tag | Meaning |
 | --- | --- |
 | Source build tag | Identifies the source commit used by a numbered build. Characters invalid in Git refs are sanitized. |

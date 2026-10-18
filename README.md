@@ -117,6 +117,7 @@ Dataverse components, have it read that file and the
 
 - [ALM configuration](docs/config/alm-config.md): every application/default setting, merge behavior, hook context, checker, and timeout.
 - [Pipelines, actions, and scripts](docs/config/pipelines.md): inputs, outputs, parameters, permissions, and direct PowerShell usage.
+- [Git tag catalog](docs/config/git-tags.md): solution reservations, build identities, deployment pointers, gates, and cleanup metadata.
 - [GitHub variables and secrets](docs/config/github-secrets.md): canonical credential, prefix, secret-selection, and OIDC reference.
 - [Azure DevOps variable groups](docs/config/azdo-environment-variable-group.md): process owner and target values.
 - [Azure DevOps service connections](docs/config/azdo-environment-service-connection.md): authentication and authorization.
