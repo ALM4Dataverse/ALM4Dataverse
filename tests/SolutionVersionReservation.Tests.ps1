@@ -43,6 +43,24 @@ Describe 'Solution version tag reservations' {
         $remoteTag | Should -Not -BeNullOrEmpty
     }
 
+    It 'allows a solution version to be reused for identical package content' {
+        $fingerprint = 'a' * 64
+
+        Register-AlmSolutionContent -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -Fingerprint $fingerprint
+        { Register-AlmSolutionContent -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -Fingerprint $fingerprint } | Should -Not -Throw
+
+        $remoteTag = & git -C $script:repositoryPath ls-remote --refs origin 'refs/tags/alm4dv/solution-content/example/1.0.0.1'
+        $LASTEXITCODE | Should -Be 0
+        $remoteTag | Should -Not -BeNullOrEmpty
+    }
+
+    It 'rejects different package content for an already claimed solution version' {
+        Register-AlmSolutionContent -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -Fingerprint ('a' * 64)
+
+        { Register-AlmSolutionContent -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -Fingerprint ('b' * 64) } |
+            Should -Throw '*already identifies different package content*'
+    }
+
     It 'increments additive candidates when another branch already reserved them' {
         $first = Register-AlmSolutionVersion -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -IsAdditive $true
         $second = Register-AlmSolutionVersion -RepositoryPath $script:repositoryPath -SolutionName Example -Version $first -IsAdditive $true
@@ -55,6 +73,32 @@ Describe 'Solution version tag reservations' {
         $second = Register-AlmSolutionVersion -RepositoryPath $script:repositoryPath -SolutionName Example -Version $first -IsAdditive $false
 
         $second.ToString() | Should -Be '1.2.0.0'
+    }
+
+    It 'fingerprints package contents without relying on ZIP metadata' {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $firstDirectory = Join-Path $script:repositoryPath 'first'
+        $secondDirectory = Join-Path $script:repositoryPath 'second'
+        $changedDirectory = Join-Path $script:repositoryPath 'changed'
+        New-Item -ItemType Directory -Path $firstDirectory, $secondDirectory, $changedDirectory | Out-Null
+        $firstPackage = Join-Path $firstDirectory 'solution.zip'
+        $secondPackage = Join-Path $secondDirectory 'solution.zip'
+        $changedPackage = Join-Path $changedDirectory 'solution.zip'
+        foreach ($packagePath in @($firstPackage, $secondPackage, $changedPackage)) {
+            $archive = [System.IO.Compression.ZipFile]::Open($packagePath, [System.IO.Compression.ZipArchiveMode]::Create)
+            try {
+                $entry = $archive.CreateEntry('solution/component.xml')
+                $writer = [System.IO.StreamWriter]::new($entry.Open())
+                try { $writer.Write($(if ($packagePath -eq $changedPackage) { '<changed/>' } else { '<component/>' })) }
+                finally { $writer.Dispose() }
+            }
+            finally { $archive.Dispose() }
+        }
+
+        (Get-AlmSolutionPackageFingerprint -PackagePaths @($firstPackage)) |
+            Should -Be (Get-AlmSolutionPackageFingerprint -PackagePaths @($secondPackage))
+        (Get-AlmSolutionPackageFingerprint -PackagePaths @($firstPackage)) |
+            Should -Not -Be (Get-AlmSolutionPackageFingerprint -PackagePaths @($changedPackage))
     }
 
     It 'retries when another export wins the reservation push race' {

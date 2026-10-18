@@ -109,7 +109,7 @@ function ConvertTo-SolutionPackagerMappingXml {
     $document = [System.Xml.XmlDocument]::new()
     $declaration = $document.CreateXmlDeclaration('1.0', 'utf-8', $null)
     [void]$document.AppendChild($declaration)
-    $root = $document.CreateElement('Mappings')
+    $root = $document.CreateElement('Mapping')
     [void]$document.AppendChild($root)
 
     foreach ($entry in $Entries) {
@@ -1270,6 +1270,189 @@ function Register-AlmSolutionVersion {
     }
 
     throw "Could not reserve a solution version for '$SolutionName' after $MaximumAttempts attempts."
+}
+
+function Get-AlmSolutionPackageFingerprint {
+    <#
+    .SYNOPSIS
+        Computes a stable fingerprint of one or more Dataverse solution ZIPs.
+    .DESCRIPTION
+        Hashes sorted archive entry paths, lengths and content hashes rather than
+        ZIP bytes, which can vary because of container metadata such as timestamps.
+        Throws when a package is missing, unreadable or contains duplicate paths.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string[]]$PackagePaths
+    )
+
+    $records = [System.Collections.Generic.List[string]]::new()
+    $sortedPackagePaths = [string[]]$PackagePaths
+    [Array]::Sort($sortedPackagePaths, [System.StringComparer]::Ordinal)
+    foreach ($packagePath in $sortedPackagePaths) {
+        if (-not (Test-Path -LiteralPath $packagePath -PathType Leaf)) {
+            throw "Solution package not found while checking version collisions: $packagePath"
+        }
+
+        $packageName = [System.IO.Path]::GetFileName($packagePath)
+        $packageType = if ($packageName -match '(?i)_managed\.zip$') { 'Managed' } else { 'Unmanaged' }
+        $archive = $null
+        try {
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($packagePath)
+            $entryNames = [System.Collections.Generic.List[string]]::new()
+            $entriesByName = [System.Collections.Generic.Dictionary[string, System.IO.Compression.ZipArchiveEntry]]::new([System.StringComparer]::Ordinal)
+            foreach ($entry in $archive.Entries) {
+                if ($entriesByName.ContainsKey($entry.FullName)) {
+                    throw "Solution package '$packagePath' contains duplicate entry '$($entry.FullName)'."
+                }
+                $entryNames.Add($entry.FullName)
+                $entriesByName.Add($entry.FullName, $entry)
+            }
+            $sortedEntryNames = $entryNames.ToArray()
+            [Array]::Sort($sortedEntryNames, [System.StringComparer]::Ordinal)
+            foreach ($entryName in $sortedEntryNames) {
+                $entry = $entriesByName[$entryName]
+                if ($entry.FullName.EndsWith('/')) { continue }
+
+                $entryStream = $null
+                try {
+                    $entryStream = $entry.Open()
+                    $entryHash = [System.Security.Cryptography.SHA256]::HashData($entryStream)
+                }
+                finally {
+                    if ($null -ne $entryStream) { $entryStream.Dispose() }
+                }
+                $records.Add("$packageType`0$($entry.FullName)`0$($entry.Length)`0$([Convert]::ToHexString($entryHash))")
+            }
+        }
+        catch {
+            throw "Could not fingerprint solution package '$packagePath'. $($_.Exception.Message)"
+        }
+        finally {
+            if ($null -ne $archive) { $archive.Dispose() }
+        }
+    }
+
+    if ($records.Count -eq 0) {
+        throw 'Cannot fingerprint an empty set of solution package files.'
+    }
+
+    $canonicalContent = ConvertTo-Json -InputObject @($records.ToArray()) -Depth 2 -Compress
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($canonicalContent)
+    return [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+}
+
+function Register-AlmSolutionContent {
+    <#
+    .SYNOPSIS
+        Claims a solution version for a package fingerprint using an annotated Git tag.
+    .DESCRIPTION
+        A remote tag push atomically records the first package fingerprint for a
+        solution/version pair. A later build may reuse that version only when its
+        fingerprint matches. Existing unrecognized tags and Git failures throw.
+    .PARAMETER MaximumAttempts
+        Maximum attempts to publish or verify the content claim (1-1000).
+    #>
+    [CmdletBinding()]
+    [OutputType([void])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepositoryPath,
+
+        [Parameter(Mandatory = $true)]
+        [string]$SolutionName,
+
+        [Parameter(Mandatory = $true)]
+        [version]$Version,
+
+        [Parameter(Mandatory = $true)]
+        [ValidatePattern('^[0-9a-f]{64}$')]
+        [string]$Fingerprint,
+
+        [ValidateRange(1, 1000)]
+        [int]$MaximumAttempts = 3
+    )
+
+    $tagName = "alm4dv/solution-content/$($SolutionName.ToLowerInvariant())/$Version"
+    $tagRef = "refs/tags/$tagName"
+    $formatResult = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('check-ref-format', $tagRef)
+    if ($formatResult.ExitCode -ne 0) {
+        throw "Solution '$SolutionName' produced an invalid content-claim tag '$tagName'. $($formatResult.Output)"
+    }
+
+    $message = "ALM4Dataverse-Solution-Content-SHA256: $Fingerprint"
+    for ($attempt = 1; $attempt -le $MaximumAttempts; $attempt++) {
+        $remoteTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('ls-remote', '--refs', 'origin', $tagRef)
+        if ($remoteTag.ExitCode -ne 0) {
+            throw "Failed to check solution content claim '$tagName' on origin. $($remoteTag.Output)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($remoteTag.Output)) {
+            $temporaryRef = "refs/alm4dv/content-check/$([guid]::NewGuid().ToString('N'))"
+            try {
+                $fetchTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('fetch', '--no-tags', 'origin', "${tagRef}:$temporaryRef")
+                if ($fetchTag.ExitCode -ne 0) {
+                    throw "Failed to fetch existing solution content claim '$tagName'. $($fetchTag.Output)"
+                }
+                $tagContents = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('cat-file', '-p', $temporaryRef)
+                if ($tagContents.ExitCode -ne 0) {
+                    throw "Failed to read existing solution content claim '$tagName'. $($tagContents.Output)"
+                }
+                $existingFingerprint = [regex]::Match($tagContents.Output, '(?m)^ALM4Dataverse-Solution-Content-SHA256: (?<hash>[0-9a-f]{64})$')
+                if (-not $existingFingerprint.Success) {
+                    throw "Existing tag '$tagName' does not contain a recognized solution content fingerprint. Resolve the tag manually before rebuilding."
+                }
+                if ($existingFingerprint.Groups['hash'].Value -cne $Fingerprint) {
+                    throw "Solution '$SolutionName' version $Version already identifies different package content (existing $($existingFingerprint.Groups['hash'].Value), current $Fingerprint). Increment the solution version before building."
+                }
+                Write-Host "[$SolutionName][Version] Version $Version is already associated with identical package content."
+                return
+            }
+            finally {
+                $deleteTemporaryRef = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('update-ref', '-d', $temporaryRef)
+                if ($deleteTemporaryRef.ExitCode -notin @(0, 1)) {
+                    throw "Failed to clean up temporary solution content ref '$temporaryRef'. $($deleteTemporaryRef.Output)"
+                }
+            }
+        }
+
+        $localTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('show-ref', '--verify', '--quiet', $tagRef)
+        if ($localTag.ExitCode -eq 0) {
+            throw "Local solution content tag '$tagName' exists but is not present on origin. Reconcile the local tag before building."
+        }
+        if ($localTag.ExitCode -ne 1) {
+            throw "Failed to check local solution content tag '$tagName'. $($localTag.Output)"
+        }
+
+        $createTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @(
+            '-c', 'user.name=ALM4Dataverse',
+            '-c', 'user.email=alm4dataverse@users.noreply.github.com',
+            'tag', '-a', $tagName, 'HEAD', '-m', $message
+        )
+        if ($createTag.ExitCode -ne 0) {
+            throw "Failed to create solution content tag '$tagName'. $($createTag.Output)"
+        }
+
+        $pushTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('push', 'origin', "${tagRef}:$tagRef")
+        if ($pushTag.ExitCode -eq 0) { return }
+
+        $deleteTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('tag', '-d', $tagName)
+        if ($deleteTag.ExitCode -ne 0) {
+            throw "Failed to remove local solution content tag '$tagName' after a rejected push. Push output: $($pushTag.Output). Cleanup output: $($deleteTag.Output)"
+        }
+
+        $remoteTag = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('ls-remote', '--refs', 'origin', $tagRef)
+        if ($remoteTag.ExitCode -ne 0) {
+            throw "Failed to verify solution content tag '$tagName' after a rejected push. Push output: $($pushTag.Output). Check output: $($remoteTag.Output)"
+        }
+        if ([string]::IsNullOrWhiteSpace($remoteTag.Output)) {
+            throw "Failed to push solution content tag '$tagName'. $($pushTag.Output)"
+        }
+    }
+
+    throw "Could not verify solution content for '$SolutionName' version $Version after $MaximumAttempts attempts."
 }
 
 function Resolve-AlmBuildVersion {

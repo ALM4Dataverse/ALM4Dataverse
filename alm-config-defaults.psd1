@@ -40,9 +40,11 @@
 
     # Build-command and packing stages each use this limit (1..8), independently
     # of checker concurrency. All build commands finish before packing starts.
+    # The content guard prevents different solution contents sharing one version.
     build = @{
         parallel = $true
         maxParallel = 2
+        versionCollisionGuard = $true
     }
 
     # PAC solution check configuration used during BUILD.

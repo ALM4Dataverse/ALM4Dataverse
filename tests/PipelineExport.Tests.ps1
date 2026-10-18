@@ -113,10 +113,10 @@ Describe 'Export and version changes' {
         & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
 
         Should -Invoke Export-DataverseSolution -Times 1 -Exactly -ParameterFilter { -not [string]::IsNullOrWhiteSpace($MappingFile) }
-        [AlmExportMappingTestCapture]::MappingXml | Should -Match '<Mappings>'
+        [AlmExportMappingTestCapture]::MappingXml | Should -Match '<Mapping>'
         $mappingXml = [xml][AlmExportMappingTestCapture]::MappingXml
-        $mappingXml.Mappings.FileToFile.GetAttribute('map') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:exportSource 'solutions/Example/PluginAssemblies/Example.dll')))
-        $mappingXml.Mappings.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:exportSource 'plugins/Example.dll')))
+        $mappingXml.Mapping.FileToFile.GetAttribute('map') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:exportSource 'solutions/Example/PluginAssemblies/Example.dll')))
+        $mappingXml.Mapping.FileToFile.GetAttribute('to') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:exportSource 'plugins/Example.dll')))
         Test-Path -LiteralPath ([AlmExportMappingTestCapture]::MappingPath) | Should -BeFalse
     }
 

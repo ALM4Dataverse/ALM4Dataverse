@@ -23,7 +23,9 @@
     parallel packing/checks. Checker failures write reports before throwing;
     missing assets or unresolved installed dependency versions also fail the build.
     Artifact contents include deployment scripts, configuration and exact dependency
-    versions; this script does not publish or tag the artifact.
+    versions. When build.versionCollisionGuard is enabled, each solution package
+    version is claimed against its content using a remote annotated Git tag; the
+    build identity then needs permission to create tags.
 .EXAMPLE
     .\pipelines\scripts\build.ps1 -SourceDirectory . -ArtifactStagingDirectory .\artifacts
 #>
@@ -74,17 +76,17 @@ function Get-AlmBuildSetting {
     .SYNOPSIS
         Returns validated packing settings without mutating Config.
     .DESCRIPTION
-        Defaults to parallel=true and maxParallel=2. Null or empty-string entries
-        retain defaults; explicit false is honored. Parallel must be Boolean and
-        maxParallel an integer from 1 to 8, even when sequential packing is selected.
+        Defaults to parallel=true, maxParallel=2 and versionCollisionGuard=true.
+        Null or empty-string entries retain defaults; explicit false is honored.
+        Both Boolean settings must be Boolean and maxParallel an integer from 1 to 8.
     #>
     [OutputType([hashtable])]
     param([Parameter(Mandatory)][hashtable]$Config)
 
-    $settings = @{ parallel = $true; maxParallel = 2 }
+    $settings = @{ parallel = $true; maxParallel = 2; versionCollisionGuard = $true }
     if ($Config.ContainsKey('build') -and $null -ne $Config.build) {
         if ($Config.build -isnot [hashtable]) { throw 'build must be a hashtable.' }
-        foreach ($name in @('parallel', 'maxParallel')) {
+        foreach ($name in @('parallel', 'maxParallel', 'versionCollisionGuard')) {
             if ($Config.build.ContainsKey($name)) {
                 $value = $Config.build[$name]
                 if ($null -ne $value -and -not ($value -is [string] -and $value -eq '')) { $settings[$name] = $value }
@@ -92,6 +94,7 @@ function Get-AlmBuildSetting {
         }
     }
     if ($settings.parallel -isnot [bool]) { throw 'build.parallel must be $true or $false.' }
+    if ($settings.versionCollisionGuard -isnot [bool]) { throw 'build.versionCollisionGuard must be $true or $false.' }
     if ($settings.maxParallel -isnot [int] -or $settings.maxParallel -lt 1 -or $settings.maxParallel -gt 8) {
         throw 'build.maxParallel must be an integer between 1 and 8.'
     }
@@ -1034,6 +1037,47 @@ finally {
 }
 
 Invoke-SolutionCheck -Config $config -SourceDirectory $SourceDirectory -ArtifactStagingDirectory $ArtifactStagingDirectory
+
+# A solution version may be reused only when every package with that solution
+# unique name has identical normalized ZIP contents. Claim after checks pass and
+# before publishing any artifact so parallel builds cannot publish conflicting
+# content under the same version.
+if ($buildSettings.versionCollisionGuard) {
+    foreach ($solution in $config.solutions) {
+        $solutionName = [string]$solution.name
+        $solutionXmlPath = Join-Path $SourceDirectory "solutions/$solutionName/Other/Solution.xml"
+        if (-not (Test-Path -LiteralPath $solutionXmlPath -PathType Leaf)) {
+            throw "Solution '$solutionName' has no Solution.xml for the BUILD version collision check: $solutionXmlPath"
+        }
+        [xml]$solutionXml = Get-Content -LiteralPath $solutionXmlPath
+        $solutionVersionText = [string]$solutionXml.ImportExportXml.SolutionManifest.Version
+        if ($solutionVersionText -notmatch '^\d+\.\d+\.\d+\.\d+$') {
+            throw "Solution '$solutionName' has an invalid four-part version '$solutionVersionText'; BUILD cannot check for version collisions."
+        }
+        $solutionVersion = [version]$solutionVersionText
+
+        $packageDirectory = Join-Path $ArtifactStagingDirectory 'solutions'
+        $packagePaths = @(
+            @(
+                (Join-Path $packageDirectory "$solutionName.zip"),
+                (Join-Path $packageDirectory "${solutionName}_managed.zip")
+            ) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+        )
+        if ($packagePaths.Count -eq 0) {
+            throw "BUILD produced no solution package for '$solutionName'; the version collision check cannot continue."
+        }
+
+        $fingerprint = Get-AlmSolutionPackageFingerprint -PackagePaths $packagePaths
+        Register-AlmSolutionContent `
+            -RepositoryPath $SourceDirectory `
+            -SolutionName $solutionName `
+            -Version $solutionVersion `
+            -Fingerprint $fingerprint
+    }
+}
+else {
+    Write-Warning 'BUILD solution version collision guard is disabled. Different package content may be published under the same solution version.'
+}
 
 if ($config.ContainsKey('assets') -and $config.assets -and $config.assets.Count -gt 0) {
     Write-Host "##[group]Copying extra asset files"

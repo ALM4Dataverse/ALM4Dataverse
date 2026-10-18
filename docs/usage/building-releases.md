@@ -240,6 +240,37 @@ What to do next:
 - GitHub DEPLOY prefers Release assets with Actions-artifact fallback; Azure DevOps DEPLOY uses the selected pipeline artifact. See [Deploying](deploying.md).
 - Failed GitHub builds may upload partial artifacts for diagnosis. Do not use them as successful release packages.
 
+### Solution version collision guard
+
+BUILD checks each solution package against its solution version to prevent
+different content from being published with the same version number. Identical
+rebuilds are allowed; on a content mismatch, BUILD fails and asks you to increment
+the solution version. The check is enabled by default and can be disabled with
+`build.versionCollisionGuard = $false`.
+
+> [!NOTE]
+> **Advanced: collision records and requirements.** After packing and solution
+> checks succeed, BUILD fingerprints the contents of each managed and unmanaged
+> solution package and records the fingerprint against that solution's four-part
+> version with an annotated Git tag:
+> `alm4dv/solution-content/<solution-unique-name>/<version>`. The tag push is an
+> atomic claim. This includes mapped outputs produced by BUILD commands, even
+> when those generated files are not tracked by Git.
+>
+> The guard requires the BUILD identity to fetch from `origin` and create tags.
+> GitHub BUILD already requests `contents: write`; Azure DevOps needs repository
+> tag-creation permission for its build identity. Do not delete or force-update
+> content-claim tags. A claim is created after solution checks and before
+> artifact publication; a later failure may leave a claim behind, which
+> intentionally favors a version gap over allowing the same version to identify
+> different content.
+>
+> Content claims are introduced prospectively. Before enabling concurrent builds
+> for an existing release line, verify that previously published artifacts do not
+> already reuse a solution version for different content; the guard cannot infer
+> historical package contents from existing EXPORT reservation tags. See
+> [Build Processing](../config/alm-config.md#build-processing) for configuration.
+
 ## GitHub Release cleanup
 
 The copied CLEANUP-RELEASES workflow runs on delete events, daily at **03:17 UTC**, and

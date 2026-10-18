@@ -51,13 +51,13 @@ BeforeAll {
     }
 
     # Settings is literal solution-entry syntax, allowing missing/null/false keys to remain distinct.
-    # Disable parallel packing so the IMPORT case can use the same in-runspace command mocks.
+    # Keep BUILD in-runspace and skip remote claims because these fixtures have no Git remote.
     function Write-DeploymentConfig {
         param([string]$Settings = '')
         Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @"
 @{
     solutions = @(@{ name = 'Example'; $Settings })
-    build = @{ parallel = `$false }
+    build = @{ parallel = `$false; versionCollisionGuard = `$false }
     hooks = @{}
 }
 "@
