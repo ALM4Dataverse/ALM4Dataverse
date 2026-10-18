@@ -360,6 +360,39 @@ fi
         Should -Invoke Invoke-WebRequest -Times 2 -Exactly -ParameterFilter { $Uri -like 'https://nodejs.org/*' }
     }
 
+    It 'rejects a downloaded Node archive with an invalid checksum' {
+        $runtimeVersion = $script:availableNodeRuntime.Version.ToString()
+        $platformArchitecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture) {
+            'X64' { 'x64' }
+            'Arm64' { 'arm64' }
+            'Arm' { 'armv7l' }
+            default { throw "Unsupported test architecture '$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)'." }
+        }
+        $platform = "$(if ($IsWindows) { 'win' } else { 'linux' })-$platformArchitecture"
+        $archiveExtension = if ($IsWindows) { 'zip' } else { 'tar.xz' }
+        $env:TEST_NODE_ARCHIVE_NAME = "node-v$runtimeVersion-$platform.$archiveExtension"
+        $env:TEST_NODE_ARCHIVE_PATH = Join-Path $script:dependencyDirectory 'invalid-node-archive'
+        $env:TEST_NODE_ARCHIVE_CHECKSUM = '0' * 64
+        [System.IO.File]::WriteAllText($env:TEST_NODE_ARCHIVE_PATH, 'invalid archive')
+        $env:TEST_NODE_SOURCE = 'pwsh'
+
+        New-Item -ItemType Directory -Path (Join-Path $script:dependencyDirectory 'apps/code') -Force | Out-Null
+        Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ nodeVersion = '$runtimeVersion'; solutions = @(@{ name = 'Contoso'; codeApps = @('apps/code') }) }"
+        Mock Invoke-WebRequest {
+            if ($Uri -like '*SHASUMS256.txt') {
+                $checksumLine = "$env:TEST_NODE_ARCHIVE_CHECKSUM *$env:TEST_NODE_ARCHIVE_NAME"
+                [System.IO.File]::WriteAllText($OutFile, $checksumLine, [System.Text.Encoding]::ASCII)
+            }
+            else {
+                Copy-Item -LiteralPath $env:TEST_NODE_ARCHIVE_PATH -Destination $OutFile
+            }
+        }
+
+        { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') -ForBuild } |
+            Should -Throw '*Node.js archive checksum verification failed*'
+        Should -Invoke Invoke-WebRequest -Times 2 -Exactly -ParameterFilter { $Uri -like 'https://nodejs.org/*' }
+    }
+
     It 'accepts PAC selector <Selector>' -ForEach @(
         @{ Selector = '' }
         @{ Selector = 'prerelease' }
