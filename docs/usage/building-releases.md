@@ -16,6 +16,10 @@ flowchart LR
 
 The `BUILD` pipeline collates a numbered release by extracting and building the assets required to deploy from source control. This can then be used later to deploy to any number of environments using the exact same, unchanged assets. When configured, BUILD also deploys its generated artifacts to a Dataverse validation environment, exercising the deployment process before promotion. BUILD can additionally run PAC Solution Checker against packed solutions.
 
+See the [Git tag catalog](../config/git-tags.md) for the source BUILD tag,
+solution content claims, deployment baseline pointers, and stable product
+release tags.
+
 ## SemVer BUILD versions
 
 The shared configuration defaults `buildVersion.default` to `1.0`. Override
