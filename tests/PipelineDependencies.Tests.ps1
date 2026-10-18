@@ -20,14 +20,22 @@ BeforeAll {
         if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -ne 1 -or $versionOutput[0] -notmatch '^v(\d+\.\d+\.\d+)$') {
             throw 'A working Node.js command is required for dependency tests.'
         }
+        $npmCommand = Get-Command npm -ErrorAction Stop
 
         [pscustomobject]@{
             Path = $nodeCommand.Source
             Version = [version]$Matches[1]
+            NpmPath = $npmCommand.Source
         }
     }
     $script:availableNodeRuntime = Get-TestNodeRuntime
-    $script:tarExecutable = if ($IsWindows) { $null } else { (Get-Command tar -CommandType Application -ErrorAction Stop).Source }
+    $script:tarExecutable = if ($IsWindows) {
+        $null
+    }
+    else {
+        Get-Command tar -CommandType Application -ErrorAction Stop |
+            Select-Object -First 1 -ExpandProperty Source
+    }
 }
 
 Describe 'Dependency installation' {
@@ -262,9 +270,11 @@ fi
         $platform = if ($IsWindows) { 'win-x64' } else { 'linux-x64' }
         $cachedDirectory = Join-Path $script:dependencyDirectory ".alm4dataverse/tools/node/v$($nodeRuntime.Version)-$platform"
         $cachedNodePath = Join-Path $cachedDirectory $(if ($IsWindows) { 'node.exe' } else { 'bin/node' })
+        $cachedNpmPath = Join-Path (Split-Path -Parent $cachedNodePath) $(if ($IsWindows) { 'npm.cmd' } else { 'npm' })
         Set-Variable -Name HOME -Value $script:dependencyDirectory -Scope Global -Force
         New-Item -ItemType Directory -Path (Join-Path $script:dependencyDirectory 'apps/code'), (Split-Path -Parent $cachedNodePath) -Force | Out-Null
         Get-TestNodeLink -Path $cachedNodePath -Target $nodeRuntime.Path
+        Get-TestNodeLink -Path $cachedNpmPath -Target $nodeRuntime.NpmPath
         Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ nodeVersion = '$($nodeRuntime.Version.Major)'; solutions = @(@{ name = 'Contoso'; codeApps = @('apps/code') }) }"
         $env:TEST_NODE_SOURCE = 'pwsh'
         { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') -ForBuild } | Should -Not -Throw
@@ -380,7 +390,7 @@ fi
             { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Throw '*installed version could not be resolved from pac output*'
         }
         else {
-            { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Throw '*installed package version could not be resolved*'
+            { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Throw '*installed version could not be resolved from pac output*'
         }
     }
 
