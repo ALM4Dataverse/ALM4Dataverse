@@ -21,21 +21,22 @@ BeforeAll {
             throw 'A working Node.js command is required for dependency tests.'
         }
         $npmCommand = Get-Command npm -ErrorAction Stop
+        $tarPath = if ($IsWindows) {
+            $null
+        }
+        else {
+            Get-Command tar -CommandType Application -ErrorAction Stop |
+                Select-Object -First 1 -ExpandProperty Source
+        }
 
         [pscustomobject]@{
             Path = $nodeCommand.Source
             Version = [version]$Matches[1]
             NpmPath = $npmCommand.Source
+            TarPath = $tarPath
         }
     }
     $script:availableNodeRuntime = Get-TestNodeRuntime
-    $script:tarExecutable = if ($IsWindows) {
-        $null
-    }
-    else {
-        Get-Command tar -CommandType Application -ErrorAction Stop |
-            Select-Object -First 1 -ExpandProperty Source
-    }
 }
 
 Describe 'Dependency installation' {
@@ -136,7 +137,7 @@ fi
                         return [pscustomobject]@{ Source = $env:TEST_NPM_SOURCE }
                     }
                 }
-                'tar' { return [pscustomobject]@{ Source = $script:tarExecutable } }
+                'tar' { return [pscustomobject]@{ Source = $script:availableNodeRuntime.TarPath } }
             }
             return $null
         }
@@ -321,7 +322,8 @@ fi
             Compress-Archive -Path (Join-Path $archiveSourceDirectory $archiveDirectoryName) -DestinationPath $script:nodeArchivePath -Force
         }
         else {
-            & $script:tarExecutable -cJf $script:nodeArchivePath -C $archiveSourceDirectory $archiveDirectoryName
+            $tarExecutable = $script:availableNodeRuntime.TarPath
+            & $tarExecutable -cJf $script:nodeArchivePath -C $archiveSourceDirectory $archiveDirectoryName
             if ($LASTEXITCODE -ne 0) {
                 throw 'Failed to create the test Node.js archive.'
             }
