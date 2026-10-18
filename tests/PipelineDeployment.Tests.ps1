@@ -423,10 +423,12 @@ Describe 'Package Deployer deployment path' {
             ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS = [Environment]::GetEnvironmentVariable('ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS')
             ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = [Environment]::GetEnvironmentVariable('ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND')
         }
+        $script:savedUppercaseServiceAccountEnvironment = [Environment]::GetEnvironmentVariable('DATAVERSESERVICEACCOUNTUPN')
         $env:DATAVERSE_URL = 'https://example.crm.dynamics.com'
         $env:DataverseConnRef_Test = 'connection-id'
         $env:DataverseEnvVar_Test = 'environment-value'
         $env:DataverseServiceAccountUpn = 'service@example.com'
+        $env:DATAVERSESERVICEACCOUNTUPN = 'service@example.com'
         $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS = ''
         $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = ''
 
@@ -480,6 +482,7 @@ Describe 'Package Deployer deployment path' {
         foreach ($name in $script:savedPackageDeployEnvironment.Keys) {
             [Environment]::SetEnvironmentVariable($name, $script:savedPackageDeployEnvironment[$name])
         }
+        [Environment]::SetEnvironmentVariable('DATAVERSESERVICEACCOUNTUPN', $script:savedUppercaseServiceAccountEnvironment)
     }
 
     It 'deploys the generated package to the explicit environment with configured runtime settings' {
