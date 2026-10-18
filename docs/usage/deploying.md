@@ -124,6 +124,9 @@ separately with the same build identity.
   Package Deployer deployment requires a Windows runner; generated GitHub workflows
   select `windows-latest` when this setting is enabled. The Package Deployer host also
   requires PowerShell 7 (`pwsh.exe`) on `PATH` to run the packaged deployment scripts.
+  After enabling the setting, rerun `setup-github.ps1` to regenerate existing GitHub
+  DEPLOY workflows with the Windows runner. Manually maintained workflows must be
+  updated to use a Windows runner.
 
 > [!WARNING]
 > Package Deployer integration is a preview feature. Some ALM4Dataverse features or

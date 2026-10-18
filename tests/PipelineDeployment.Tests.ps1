@@ -242,6 +242,27 @@ Describe 'Deployment options' {
         Should -Invoke Invoke-DataverseSolutionUpgrade -Times 0 -Exactly
     }
 
+    It 'runs pre-deploy hooks without importing solutions in the pre-import phase' {
+        $hookPath = Join-Path $TestDrive 'predeploy.ps1'
+        $markerPath = Join-Path $TestDrive 'predeploy-marker'
+        Set-Content -LiteralPath $hookPath -Value @'
+param($Context)
+Set-Content -LiteralPath (Join-Path $Context.BaseDirectory 'predeploy-marker') -Value $Context.HookType
+'@
+        $escapedHookPath = $hookPath.Replace("'", "''")
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @"
+@{
+    solutions = @(@{ name = 'Example' })
+    hooks = @{ preDeploy = '$escapedHookPath' }
+}
+"@
+
+        & $script:deployScript -ArtifactsPath $TestDrive -PreImportOnly
+
+        (Get-Content -LiteralPath $markerPath -Raw).Trim() | Should -Be 'preDeploy'
+        Should -Invoke Import-DataverseSolution -Times 0 -Exactly
+    }
+
     It 'patches configured code apps into solution packages before importing by default' {
         $codeAppPath = Join-Path $TestDrive 'apps/Portal'
         New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
@@ -434,13 +455,24 @@ Describe 'Package Deployer deployment path' {
         finally { $packageArchive.Dispose() }
 
         Mock Import-DataverseSolution {}
+        Mock Get-DataverseRecord {
+            if ($TableName -eq 'systemuser') {
+                return @{ fullname = 'Service Account'; Id = 'user-id' }
+            }
+            return @()
+        }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestPac' } } -ParameterFilter { $Name -eq 'pac' }
         Mock Invoke-DeploymentTestPac {
             $global:LASTEXITCODE = 0
             $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ARGS = ConvertTo-Json -InputObject @($args) -Compress
             $packageArgumentIndex = [Array]::IndexOf(@($args), '--package') + 1
-            $assetsPath = Join-Path (Split-Path ([string]$args[$packageArgumentIndex]) -Parent) 'PkgAssets/ImportConfig.xml'
-            $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = [string](Test-Path -LiteralPath $assetsPath -PathType Leaf)
+            $packageArchive = [System.IO.Compression.ZipFile]::OpenRead([string]$args[$packageArgumentIndex])
+            try {
+                $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND = [string]($null -ne $packageArchive.GetEntry('PkgAssets/ImportConfig.xml'))
+            }
+            finally {
+                $packageArchive.Dispose()
+            }
         }
     }
 
@@ -461,10 +493,10 @@ Describe 'Package Deployer deployment path' {
         $packageDeployArguments | Should -Contain '--environment'
         $packageDeployArguments | Should -Contain 'https://example.crm.dynamics.com'
         $packageArgumentIndex = [Array]::IndexOf($packageDeployArguments, '--package') + 1
-        $packageDllPath = [string]$packageDeployArguments[$packageArgumentIndex]
-        $packageDllPath | Should -Match 'ALM4Dataverse\.PackageDeployer\.dll$'
+        $packageArchivePath = [string]$packageDeployArguments[$packageArgumentIndex]
+        $packageArchivePath | Should -Be (Join-Path $TestDrive 'ALM4Dataverse.PackageDeployer.pdpkg.zip')
+        Test-Path -LiteralPath $packageArchivePath -PathType Leaf | Should -BeTrue
         $env:ALM4DATAVERSE_PACKAGE_DEPLOY_ASSETS_FOUND | Should -Be 'True'
-        Test-Path -LiteralPath $packageDllPath | Should -BeFalse
         $settingsArgumentIndex = [Array]::IndexOf($packageDeployArguments, '--settings') + 1
         $settingsArgumentIndex | Should -BeGreaterThan 0
         $packageDeployArguments[$settingsArgumentIndex] | Should -Match 'DataverseConnRef_Test=connection-id'
@@ -473,11 +505,41 @@ Describe 'Package Deployer deployment path' {
         Should -Invoke Import-DataverseSolution -Times 0 -Exactly
     }
 
+    It 'falls back to script deployment when a solution requests unmanaged deployment' {
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; deployUnmanaged = $true })
+    buildPackageDeployer = $true
+    hooks = @{}
+}
+'@
+
+        & $script:deployScript -ArtifactsPath $TestDrive
+
+        Should -Invoke Invoke-DeploymentTestPac -Times 0 -Exactly
+        Should -Invoke Import-DataverseSolution -Times 1 -Exactly -ParameterFilter {
+            $InFile -like '*Example.zip' -and $Mode -eq 'NoUpgrade'
+        }
+    }
+
     It 'fails before invoking PAC when the generated package is missing' {
         Remove-Item -LiteralPath (Join-Path $TestDrive 'ALM4Dataverse.PackageDeployer.pdpkg.zip')
 
         { & $script:deployScript -ArtifactsPath $TestDrive } |
             Should -Throw '*buildPackageDeployer = `$true*package*was not found*'
+        Should -Invoke Invoke-DeploymentTestPac -Times 0 -Exactly
+    }
+
+    It 'rejects a non-Boolean Package Deployer setting' {
+        Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example' })
+    buildPackageDeployer = 'true'
+    hooks = @{}
+}
+'@
+
+        { & $script:deployScript -ArtifactsPath $TestDrive } | Should -Throw '*buildPackageDeployer must be a Boolean*'
         Should -Invoke Invoke-DeploymentTestPac -Times 0 -Exactly
     }
 

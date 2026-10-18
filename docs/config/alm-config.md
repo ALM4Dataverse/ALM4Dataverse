@@ -673,9 +673,11 @@ When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeploy
 When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
 
 - Package Deployer deployment requires a Windows runner because PAC's Dataverse package deployment command depends on .NET Framework. `setup-github.ps1` generates Windows deployment jobs when this setting is enabled; manually maintained workflows must use a Windows runner for deployment.
+- After enabling the setting, rerun `setup-github.ps1` to regenerate existing GitHub DEPLOY workflows with the required Windows runner.
 - If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
+- Per-solution `deployUnmanaged = $true` also uses the script-based deployment flow.
 - Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).
-- Build artifacts are trimmed to the minimum required for package-based deployment: `alm/`, `alm-config.psd1`, `modules/`, `scriptDependencies.lock.json`, and `ALM4Dataverse.PackageDeployer.pdpkg.zip`.
+- Build artifacts retain their solution archives, assets, and code apps so IMPORT and per-solution unmanaged fallbacks can use the script-based deployment flow.
 
 On Windows runners, `installdependencies.ps1` uses the official Power Platform CLI MSI install/update method and then applies the configured `pacCliVersion` using `pac install`.
 

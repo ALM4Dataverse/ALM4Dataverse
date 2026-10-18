@@ -189,6 +189,54 @@ Describe 'Build artifacts and solution-check helpers' {
         }
     }
 
+    It 'adds configured code apps to a Package Deployer archive and retains script fallback assets' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist'), (Join-Path $codeAppPath 'node_modules/example') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'node_modules/example/index.js') -Value 'dependency'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal') })
+    assets = @('data')
+    buildPackageDeployer = $true
+    hooks = @{}
+}
+'@
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $packageArchivePath = Join-Path $script:artifactDirectory 'ALM4Dataverse.PackageDeployer.pdpkg.zip'
+        $packageArchive = [System.IO.Compression.ZipFile]::Open($packageArchivePath, [System.IO.Compression.ZipArchiveMode]::Create)
+        try {
+            $null = $packageArchive.CreateEntry('PkgAssets/manifest.ppkg.json')
+        }
+        finally {
+            $packageArchive.Dispose()
+        }
+        Mock Save-Module {}
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
+        Mock Invoke-CodeAppTestNpm { $global:LASTEXITCODE = 0 }
+
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+        $packageArchive = [System.IO.Compression.ZipFile]::OpenRead($packageArchivePath)
+        try {
+            $entryNames = @($packageArchive.Entries | ForEach-Object { $_.FullName })
+            $entryNames | Should -Contain 'PkgAssets/apps/Portal/power.config.json'
+            $entryNames | Should -Contain 'PkgAssets/apps/Portal/dist/index.html'
+            $entryNames | Should -Not -Contain 'PkgAssets/apps/Portal/node_modules/example/index.js'
+        }
+        finally {
+            $packageArchive.Dispose()
+        }
+
+        Test-Path (Join-Path $script:artifactDirectory 'solutions/Example.zip') | Should -BeTrue
+        Test-Path (Join-Path $script:artifactDirectory 'data/example.txt') | Should -BeTrue
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/power.config.json') | Should -BeTrue
+        Should -Invoke Save-Module -Times 1 -Exactly
+    }
+
     It 'rejects code app paths outside the repository' {
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{

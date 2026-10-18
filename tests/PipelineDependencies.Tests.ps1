@@ -427,6 +427,16 @@ fi
         { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Throw '*dotnet command not found*'
     }
 
+    It 'adds the Unix PAC tool directory to PATH' -Skip:$IsWindows {
+        Set-Content -LiteralPath 'alm-config.psd1' -Value '@{}'
+
+        & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1')
+
+        $pacToolPath = Join-Path (Join-Path $HOME '.alm4dataverse') 'tools'
+        ($env:PATH -split [regex]::Escape([string][System.IO.Path]::PathSeparator)) | Should -Contain $pacToolPath
+        (Get-Content -LiteralPath $env:GITHUB_PATH -Raw) -split "`r?`n" | Should -Contain $pacToolPath
+    }
+
     It 'fails when the installed CLI version cannot be resolved' {
         Mock dotnet { $global:LASTEXITCODE = 0; 'No matching package' }
         $env:TEST_PAC_BAD_VERSION = 'true'

@@ -558,7 +558,7 @@ if ($isWindowsOS) {
     Write-Host "Installed PAC CLI version $pacVersion"
 }
 else {
-    $pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+    $pacToolPath = Join-Path (Join-Path $HOME '.alm4dataverse') 'tools'
     if (-not (Test-Path $pacToolPath)) {
         New-Item -ItemType Directory -Path $pacToolPath -Force | Out-Null
     }

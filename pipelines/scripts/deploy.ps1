@@ -41,7 +41,11 @@ param(
 
     # This switch indicates whether to deploy unmanaged solutions.
     # Used for the IMPORT scenario.
-    [switch]$UseUnmanagedSolutions
+    [switch]$UseUnmanagedSolutions,
+
+    [switch]$PreImportOnly,
+
+    [switch]$SkipPreDeployHook
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,23 +59,17 @@ Write-Host "##[section]Deploying "
 $solutionsConfig = Get-AlmConfig -BaseDirectory $ArtifactsPath
 Write-Host "##[debug]Loaded configuration"
 
-$organizationSettingsContext = @{
-    HookType = 'preDeploy'
-    BaseDirectory = $ArtifactsPath
-    Config = $solutionsConfig
-    ArtifactsPath = $ArtifactsPath
-    UseUnmanagedSolutions = $UseUnmanagedSolutions
-}
-
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -SettingMapName 'organizationSettings' -Context $organizationSettingsContext
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -SettingMapName 'orgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
-$powerPlatformEnvironmentContext = @{}
-Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
-
 $packageDeployerEnabled = $false
 if ($solutionsConfig.ContainsKey('buildPackageDeployer') -and $null -ne $solutionsConfig.buildPackageDeployer) {
-    $packageDeployerEnabled = [bool]$solutionsConfig.buildPackageDeployer
+    if ($solutionsConfig.buildPackageDeployer -isnot [bool]) {
+        throw 'buildPackageDeployer must be a Boolean.'
+    }
+    $packageDeployerEnabled = $solutionsConfig.buildPackageDeployer
 }
+
+$hasUnmanagedSolution = @($solutionsConfig.solutions | Where-Object {
+    $_.ContainsKey('deployUnmanaged') -and $_.deployUnmanaged -eq $true
+}).Count -gt 0
 
 $insidePackageDeployer = $false
 if (-not [string]::IsNullOrWhiteSpace($env:ALM4DATAVERSE_IN_PACKAGE_DEPLOY)) {
@@ -79,8 +77,27 @@ if (-not [string]::IsNullOrWhiteSpace($env:ALM4DATAVERSE_IN_PACKAGE_DEPLOY)) {
 }
 
 $packagePath = Join-Path $ArtifactsPath 'ALM4Dataverse.PackageDeployer.pdpkg.zip'
+$usePackageDeployment = $packageDeployerEnabled -and
+    -not $UseUnmanagedSolutions -and
+    -not $hasUnmanagedSolution -and
+    -not $insidePackageDeployer
 
-if ($packageDeployerEnabled -and -not $UseUnmanagedSolutions -and -not $insidePackageDeployer) {
+$organizationSettingsContext = @{
+    HookType = 'preDeploy'
+    BaseDirectory = $ArtifactsPath
+    Config = $solutionsConfig
+    ArtifactsPath = $ArtifactsPath
+    UseUnmanagedSolutions = $UseUnmanagedSolutions
+}
+$powerPlatformEnvironmentContext = @{}
+
+if (-not $usePackageDeployment -or $PreImportOnly) {
+    Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -SettingMapName 'organizationSettings' -Context $organizationSettingsContext
+    Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -SettingMapName 'orgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
+    Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
+}
+
+if ($usePackageDeployment) {
     if (-not (Test-Path $packagePath -PathType Leaf)) {
         throw "Package Deployer deploy path is enabled (buildPackageDeployer = `$true), but package '$packagePath' was not found in build artifacts. Ensure build.ps1 generated it before deployment."
     }
@@ -119,59 +136,50 @@ if ($packageDeployerEnabled -and -not $UseUnmanagedSolutions -and -not $insidePa
         }
     }
 
-    $packageExtractionDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("alm4dataverse-package-deploy-" + [guid]::NewGuid().ToString('N'))
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        [System.IO.Compression.ZipFile]::ExtractToDirectory($packagePath, $packageExtractionDirectory)
-        $packageAssemblyPath = Join-Path $packageExtractionDirectory 'ALM4Dataverse.PackageDeployer.dll'
-        if (-not (Test-Path -LiteralPath $packageAssemblyPath -PathType Leaf)) {
-            throw "Package Deployer archive '$packagePath' does not contain ALM4Dataverse.PackageDeployer.dll at its root."
-        }
-        Write-Host "##[debug]Package assembly path: $packageAssemblyPath"
-
-        $pacArguments = @('package', 'deploy', '--package', $packageAssemblyPath, '--environment', $targetEnvironment, '--logConsole')
-        if ($settingsEntries.Count -gt 0) {
-            $pacArguments += @('--settings', ($settingsEntries -join '|'))
-        }
-
-        Write-Host "##[section]Deploying via Package Deployer package: $packagePath"
-        Write-Host "##[debug]Package deploy environment: $targetEnvironment"
-        $packageDeployOutput = @(& $pac.Source @pacArguments 2>&1)
-        $packageDeployExitCode = $LASTEXITCODE
-        foreach ($line in $packageDeployOutput) {
-            Write-Host $line
-        }
-        $packageDeployText = ($packageDeployOutput | ForEach-Object { [string]$_ }) -join "`n"
-
-        if ($packageDeployExitCode -ne 0) {
-            throw "pac package deploy failed with exit code $packageDeployExitCode`n$packageDeployText"
-        }
-
-        if ($packageDeployText -match '(?im)^\s*error\s*:') {
-            throw "pac package deploy reported an error in output despite zero exit code.`n$packageDeployText"
-        }
-
-        Write-Host "##[section]Deployment completed successfully via Package Deployer package."
+    $pacArguments = @('package', 'deploy', '--package', $packagePath, '--environment', $targetEnvironment, '--logConsole')
+    if ($settingsEntries.Count -gt 0) {
+        $pacArguments += @('--settings', ($settingsEntries -join '|'))
     }
-    finally {
-        if (Test-Path -LiteralPath $packageExtractionDirectory -PathType Container) {
-            Remove-Item -LiteralPath $packageExtractionDirectory -Recurse -Force
-        }
+
+    Write-Host "##[section]Deploying via Package Deployer package: $packagePath"
+    Write-Host "##[debug]Package deploy environment: $targetEnvironment"
+    $packageDeployOutput = @(& $pac.Source @pacArguments 2>&1)
+    $packageDeployExitCode = $LASTEXITCODE
+    foreach ($line in $packageDeployOutput) {
+        Write-Host $line
     }
+    $packageDeployText = ($packageDeployOutput | ForEach-Object { [string]$_ }) -join "`n"
+
+    if ($packageDeployExitCode -ne 0) {
+        throw "pac package deploy failed with exit code $packageDeployExitCode`n$packageDeployText"
+    }
+
+    if ($packageDeployText -match '(?im)^\s*error\s*:') {
+        throw "pac package deploy reported an error in output despite zero exit code.`n$packageDeployText"
+    }
+
+    Write-Host "##[section]Deployment completed successfully via Package Deployer package."
     return
 }
 
-if ($packageDeployerEnabled -and $UseUnmanagedSolutions) {
-    Write-Host "##[section]Package Deployer deployment is enabled, but UseUnmanagedSolutions was requested. Falling back to script-based unmanaged deployment."
+if ($packageDeployerEnabled -and ($UseUnmanagedSolutions -or $hasUnmanagedSolution)) {
+    Write-Host "##[section]Package Deployer deployment is enabled, but unmanaged deployment was requested. Falling back to script-based deployment."
 }
 
 if ($packageDeployerEnabled -and $insidePackageDeployer) {
     Write-Host "##[debug]Detected in-package deployment context. Running script-based deployment steps inside deployment package."
 }
 
-Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
-    ArtifactsPath = $ArtifactsPath
-    UseUnmanagedSolutions = $UseUnmanagedSolutions
+if (-not $SkipPreDeployHook) {
+    Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
+        ArtifactsPath = $ArtifactsPath
+        UseUnmanagedSolutions = $UseUnmanagedSolutions
+    }
+}
+
+if ($PreImportOnly) {
+    Write-Host "##[section]Pre-import deployment steps completed."
+    return
 }
 
 # Define solutions to deploy

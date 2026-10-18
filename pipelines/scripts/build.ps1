@@ -1191,7 +1191,7 @@ foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     }
 }
 
-$pacToolPath = Join-Path $HOME '.alm4dataverse\tools'
+$pacToolPath = Join-Path (Join-Path $HOME '.alm4dataverse') 'tools'
 $resolvedPacVersion = Get-PacCliInstalledPackageVersion -PacToolPath $pacToolPath
 if ([string]::IsNullOrWhiteSpace($resolvedPacVersion)) {
     $pacCommand = Get-Command pac -ErrorAction SilentlyContinue
@@ -1231,8 +1231,18 @@ Invoke-Hook -HookType "postBuild" -BaseDirectory $SourceDirectory -Config $confi
 
 # Build Package Deployer package when enabled and artifact is not already present
 $pdpkgZip = Join-Path $ArtifactStagingDirectory "ALM4Dataverse.PackageDeployer.pdpkg.zip"
-$pdProjectPath = Join-Path -Path $PSScriptRoot -ChildPath '..\..\ALM4Dataverse.PackageDeployer\ALM4Dataverse.PackageDeployer.csproj'
+$pdProjectDirectory = Join-Path (Join-Path $PSScriptRoot '..') '..'
+$pdProjectDirectory = Join-Path $pdProjectDirectory 'ALM4Dataverse.PackageDeployer'
+$pdProjectPath = Join-Path $pdProjectDirectory 'ALM4Dataverse.PackageDeployer.csproj'
 if ($packageDeployerEnabled) {
+    $packageCodeAppPaths = @(
+        @(
+            foreach ($solution in $config.solutions) {
+                Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $ArtifactStagingDirectory
+            }
+        ) | Sort-Object -Unique
+    )
+
     if (Test-Path $pdpkgZip) {
         Write-Host "##[section]Package Deployer package already exists: $pdpkgZip"
     }
@@ -1429,24 +1439,46 @@ if ($packageDeployerEnabled) {
         }
     }
 
-    Write-Host "##[group]Trimming artifacts for package-based deployment"
-    $requiredArtifactItems = @(
-        'alm',
-        'alm-config.psd1',
-        'modules',
-        'scriptDependencies.lock.json',
-        'ALM4Dataverse.PackageDeployer.pdpkg.zip'
-    )
+    if ($packageCodeAppPaths.Count -gt 0) {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $packageZip = [System.IO.Compression.ZipFile]::Open($pdpkgZip, [System.IO.Compression.ZipArchiveMode]::Update)
+        try {
+            foreach ($codeAppPath in $packageCodeAppPaths) {
+                $relativePath = [System.IO.Path]::GetRelativePath(
+                    [System.IO.Path]::GetFullPath($ArtifactStagingDirectory),
+                    [System.IO.Path]::GetFullPath($codeAppPath)
+                )
+                if ([System.IO.Path]::IsPathRooted($relativePath) -or $relativePath -eq '..' -or $relativePath.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)")) {
+                    throw "Code app path '$codeAppPath' is outside the build artifacts directory."
+                }
 
-    Get-ChildItem -Path $ArtifactStagingDirectory -Force | ForEach-Object {
-        if ($requiredArtifactItems -contains $_.Name) {
-            return
+                $entryPrefix = "PkgAssets/$($relativePath.Replace('\', '/'))/"
+                $existingEntries = @($packageZip.Entries | Where-Object { $_.FullName.StartsWith($entryPrefix, [System.StringComparison]::OrdinalIgnoreCase) })
+                foreach ($existingEntry in $existingEntries) {
+                    $existingEntry.Delete()
+                }
+
+                foreach ($file in (Get-ChildItem -LiteralPath $codeAppPath -File -Recurse -Force)) {
+                    $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $file.FullName).Replace('\', '/')
+                    $packageEntry = $packageZip.CreateEntry("$entryPrefix$fileRelativePath", [System.IO.Compression.CompressionLevel]::Optimal)
+                    $sourceStream = [System.IO.File]::OpenRead($file.FullName)
+                    $packageEntryStream = $packageEntry.Open()
+                    try {
+                        $sourceStream.CopyTo($packageEntryStream)
+                    }
+                    finally {
+                        $sourceStream.Dispose()
+                        $packageEntryStream.Dispose()
+                    }
+                }
+            }
         }
-
-        Write-Host "Removing non-essential artifact item: $($_.FullName)"
-        Remove-Item -Path $_.FullName -Recurse -Force
+        finally {
+            $packageZip.Dispose()
+        }
     }
-    Write-Host "##[endgroup]"
+
+    Write-Host "Package Deployer mode retains script-based deployment assets for unmanaged IMPORT and per-solution unmanaged fallbacks."
 }
 else {
     Write-Host "##[section]Package Deployer build skipped (buildPackageDeployer is false)."

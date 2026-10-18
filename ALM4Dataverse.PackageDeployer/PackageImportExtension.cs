@@ -42,13 +42,18 @@ namespace ALM4Dataverse.PackageDeployer
 
         public override bool BeforeImportStage()
         {
-            return true;
+            PackageLog.Log("Running ALM4Dataverse pre-import deployment steps...");
+            return RunDeploymentScript(preImportOnly: true);
         }
 
         public override bool AfterPrimaryImport()
         {
             PackageLog.Log("Starting ALM4Dataverse deployment via PowerShell scripts...");
+            return RunDeploymentScript(preImportOnly: false);
+        }
 
+        private bool RunDeploymentScript(bool preImportOnly)
+        {
             try
             {
                 var pkgDir = GetPkgAssetsPath();
@@ -68,13 +73,17 @@ namespace ALM4Dataverse.PackageDeployer
                     "} else {",
                     $"  & '{Escape(Path.Combine(scriptsDir, "connect.ps1"))}' -Url '{Escape(envUrl)}'",
                     "}",
-                    $"& '{Escape(Path.Combine(scriptsDir, "deploy.ps1"))}' -ArtifactsPath '{Escape(pkgDir)}'"
+                    preImportOnly
+                        ? $"& '{Escape(Path.Combine(scriptsDir, "deploy.ps1"))}' -ArtifactsPath '{Escape(pkgDir)}' -PreImportOnly"
+                        : $"& '{Escape(Path.Combine(scriptsDir, "deploy.ps1"))}' -ArtifactsPath '{Escape(pkgDir)}' -SkipPreDeployHook"
                 );
 
                 var environmentVariables = BuildEnvironmentVariables();
                 RunPowerShell(script, pkgDir, environmentVariables);
 
-                PackageLog.Log("ALM4Dataverse deployment completed successfully.");
+                PackageLog.Log(preImportOnly
+                    ? "ALM4Dataverse pre-import deployment steps completed successfully."
+                    : "ALM4Dataverse deployment completed successfully.");
                 return true;
             }
             catch (Exception ex)
