@@ -61,6 +61,23 @@ Describe 'Solution version tag reservations' {
             Should -Throw '*already identifies different package content*'
     }
 
+    It 'rejects lightweight content claim tags even when the commit message contains a fingerprint' {
+        $fingerprint = 'a' * 64
+        $tagName = 'alm4dv/solution-content/example/1.0.0.1'
+        & git -C $script:repositoryPath commit --allow-empty --quiet -m "ALM4Dataverse-Solution-Content-SHA256: $fingerprint"
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to create the fixture commit.' }
+        & git -C $script:repositoryPath push --quiet origin HEAD:refs/heads/main
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to push the fixture commit.' }
+        & git -C $script:repositoryPath tag $tagName HEAD
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to create the lightweight fixture tag.' }
+        & git -C $script:repositoryPath push --quiet origin "refs/tags/${tagName}:refs/tags/${tagName}"
+        if ($LASTEXITCODE -ne 0) { throw 'Failed to push the lightweight fixture tag.' }
+
+        {
+            Register-AlmSolutionContent -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -Fingerprint $fingerprint
+        } | Should -Throw '*not an annotated Git tag*'
+    }
+
     It 'increments additive candidates when another branch already reserved them' {
         $first = Register-AlmSolutionVersion -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -IsAdditive $true
         $second = Register-AlmSolutionVersion -RepositoryPath $script:repositoryPath -SolutionName Example -Version $first -IsAdditive $true

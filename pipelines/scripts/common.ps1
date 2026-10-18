@@ -1396,6 +1396,13 @@ function Register-AlmSolutionContent {
                 if ($fetchTag.ExitCode -ne 0) {
                     throw "Failed to fetch existing solution content claim '$tagName'. $($fetchTag.Output)"
                 }
+                $tagObjectType = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('cat-file', '-t', $temporaryRef)
+                if ($tagObjectType.ExitCode -ne 0) {
+                    throw "Failed to determine the object type for existing solution content claim '$tagName'. $($tagObjectType.Output)"
+                }
+                if ($tagObjectType.Output.Trim() -cne 'tag') {
+                    throw "Existing solution content claim '$tagName' is not an annotated Git tag. Resolve the tag manually before rebuilding."
+                }
                 $tagContents = Invoke-AlmGitCommand -RepositoryPath $RepositoryPath -Arguments @('cat-file', '-p', $temporaryRef)
                 if ($tagContents.ExitCode -ne 0) {
                     throw "Failed to read existing solution content claim '$tagName'. $($tagContents.Output)"

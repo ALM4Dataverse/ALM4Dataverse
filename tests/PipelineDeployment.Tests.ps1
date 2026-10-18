@@ -51,13 +51,17 @@ BeforeAll {
     }
 
     # Settings is literal solution-entry syntax, allowing missing/null/false keys to remain distinct.
-    # Keep BUILD in-runspace and skip remote claims because these fixtures have no Git remote.
+    # Keep BUILD in-runspace; default fixtures skip claims, with IMPORT testing its skip switch.
     function Write-DeploymentConfig {
-        param([string]$Settings = '')
+        param(
+            [string]$Settings = '',
+            [bool]$VersionCollisionGuard = $false
+        )
+        $versionCollisionGuardLiteral = if ($VersionCollisionGuard) { '$true' } else { '$false' }
         Set-Content -LiteralPath (Join-Path $TestDrive 'alm-config.psd1') -Value @"
 @{
     solutions = @(@{ name = 'Example'; $Settings })
-    build = @{ parallel = `$false; versionCollisionGuard = `$false }
+    build = @{ parallel = `$false; versionCollisionGuard = $versionCollisionGuardLiteral }
     hooks = @{}
 }
 "@
@@ -353,9 +357,10 @@ Describe 'Deployment options' {
     }
 
     It 'imports source by building artifacts and deploying unmanaged packages without upgrades' {
-        Write-DeploymentConfig
+        Write-DeploymentConfig -VersionCollisionGuard $true
         New-Item -ItemType Directory -Path (Join-Path $TestDrive 'data'), (Join-Path $TestDrive 'solutions/Example'), (Join-Path $TestDrive 'artifacts/solutions') -Force | Out-Null
         Mock Compress-DataverseSolutionFile { Set-Content -LiteralPath $OutputPath -Value 'packed' }
+        Mock Register-AlmSolutionContent { throw 'IMPORT must not claim a solution version.' }
         Mock Copy-Item { New-Item -ItemType Directory -Path $Destination -Force | Out-Null } -ParameterFilter { $Destination -match '[\\/]alm$' }
         Mock Get-Module { [pscustomobject]@{ Version = [version]'3.0.4'; PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } } } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
@@ -365,6 +370,7 @@ Describe 'Deployment options' {
         try {
             & (Join-Path $repoRoot 'pipelines/scripts/import.ps1') -SourceDirectory $TestDrive -ArtifactStagingDirectory (Join-Path $TestDrive 'artifacts')
             Should -Invoke Compress-DataverseSolutionFile -Times 1 -Exactly
+            Should -Invoke Register-AlmSolutionContent -Times 0 -Exactly
             Should -Invoke Import-DataverseSolution -Times 1 -Exactly -ParameterFilter { $InFile -like '*Example.zip' -and $Mode -eq 'NoUpgrade' }
             Should -Invoke Invoke-DataverseSolutionUpgrade -Times 0 -Exactly
         }

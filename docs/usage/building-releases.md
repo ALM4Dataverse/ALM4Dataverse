@@ -257,6 +257,10 @@ the solution version. The check is enabled by default and can be disabled with
 > atomic claim. This includes mapped outputs produced by BUILD commands, even
 > when those generated files are not tracked by Git.
 >
+> IMPORT also uses BUILD to pack a temporary unmanaged package, but skips the
+> content claim because that package is deployed directly rather than published
+> as a release artifact.
+>
 > The guard requires the BUILD identity to fetch from `origin` and create tags.
 > GitHub BUILD already requests `contents: write`; Azure DevOps needs repository
 > tag-creation permission for its build identity. Do not delete or force-update

@@ -18,6 +18,9 @@
     The root directory containing the solution folders and alm-config.psd1 file.
 .PARAMETER ArtifactStagingDirectory
     The directory where the built artifacts will be placed.
+.PARAMETER SkipVersionCollisionGuard
+    Skips the remote package-content claim for temporary packages, such as the
+    unmanaged package created by IMPORT. Normal BUILD runs should not use this.
 .NOTES
     Run installdependencies.ps1 first in this process. Requires PowerShell 7 for
     parallel packing/checks. Checker failures write reports before throwing;
@@ -25,7 +28,8 @@
     Artifact contents include deployment scripts, configuration and exact dependency
     versions. When build.versionCollisionGuard is enabled, each solution package
     version is claimed against its content using a remote annotated Git tag; the
-    build identity then needs permission to create tags.
+    build identity then needs permission to create tags. IMPORT skips this claim
+    because its temporary package is deployed directly rather than published.
 .EXAMPLE
     .\pipelines\scripts\build.ps1 -SourceDirectory . -ArtifactStagingDirectory .\artifacts
 #>
@@ -35,7 +39,9 @@ param(
     [string]$SourceDirectory,
 
     [Parameter(Mandatory=$true)]
-    [string]$ArtifactStagingDirectory
+    [string]$ArtifactStagingDirectory,
+
+    [switch]$SkipVersionCollisionGuard
 )
 
 $ErrorActionPreference = "Stop"
@@ -1042,7 +1048,7 @@ Invoke-SolutionCheck -Config $config -SourceDirectory $SourceDirectory -Artifact
 # unique name has identical normalized ZIP contents. Claim after checks pass and
 # before publishing any artifact so parallel builds cannot publish conflicting
 # content under the same version.
-if ($buildSettings.versionCollisionGuard) {
+if ($buildSettings.versionCollisionGuard -and -not $SkipVersionCollisionGuard) {
     foreach ($solution in $config.solutions) {
         $solutionName = [string]$solution.name
         $solutionXmlPath = Join-Path $SourceDirectory "solutions/$solutionName/Other/Solution.xml"
@@ -1075,7 +1081,7 @@ if ($buildSettings.versionCollisionGuard) {
             -Fingerprint $fingerprint
     }
 }
-else {
+elseif (-not $SkipVersionCollisionGuard) {
     Write-Warning 'BUILD solution version collision guard is disabled. Different package content may be published under the same solution version.'
 }
 

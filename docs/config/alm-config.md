@@ -402,6 +402,8 @@ After packing and solution checks, BUILD fingerprints the resulting managed and
 unmanaged package contents. A previously claimed version is accepted only when
 the package fingerprint matches, so generated mapped output is covered even when
 it is ignored or otherwise invisible to EXPORT's Git-based source-change check.
+IMPORT skips the claim for its temporary unmanaged package because it deploys that
+package directly rather than publishing a release artifact.
 On a mismatch, increment the solution version and rebuild. EXPORT does not run
 mapping `buildCommand` entries, so make sure version changes for generated
 solution content are made in source or are otherwise visible to EXPORT.
