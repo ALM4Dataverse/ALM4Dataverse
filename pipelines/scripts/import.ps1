@@ -12,7 +12,9 @@
     The directory where the built artifacts will be placed.
 .NOTES
     Requires installed build dependencies and a default Dataverse connection.
-    Runs the normal build (including enabled solution checks) before deployment.
+    Packs solutions and runs enabled solution checks before deployment, but skips
+    the remote solution-version content claim because the unmanaged package is
+    temporary and is deployed directly rather than published as a release artifact.
     Forces unmanaged imports, avoiding managed upgrade behavior, but still runs
     deployment hooks, process reassignment/activation and publishing.
 .EXAMPLE
@@ -37,7 +39,8 @@ Write-Host "##[section]Importing"
 Write-Host "##[group]Step 1: Packing solutions"
 & "$PSScriptRoot/build.ps1" `
     -SourceDirectory $SourceDirectory `
-    -ArtifactStagingDirectory $ArtifactStagingDirectory
+    -ArtifactStagingDirectory $ArtifactStagingDirectory `
+    -SkipVersionCollisionGuard
 
 if (-not $?) {
     Write-Host "##[error]Build/pack step failed"

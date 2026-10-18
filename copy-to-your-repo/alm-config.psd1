@@ -161,9 +161,12 @@
 
     # Build-command and packing stages each use maxParallel (1..8), independently
     # of solutionCheck.maxParallel. parallel = $false makes both stages sequential.
+    # The version guard prevents different solution contents sharing one version;
+    # set to $false only to disable that collision check.
     build = @{
         parallel = $true
         maxParallel = 2
+        versionCollisionGuard = $true
     }
 
     # Extra folders/files to include in build artifacts (copied verbatim).
