@@ -88,6 +88,30 @@ Describe 'Export and version changes' {
         $xml.ImportExportXml.SolutionManifest.Version | Should -Be '1.2.3.5'
     }
 
+    It 'increments the revision when only a configured code app changes' {
+        New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'apps/Portal') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'apps/Portal/main.js') -Value 'changed'
+        Set-Content -LiteralPath (Join-Path $script:exportSource 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal') })
+    hooks = @{}
+    export = @{ parallel = $false }
+    buildVersion = @{ default = '1.3'; branches = @{} }
+}
+'@
+        Mock git {
+            if ($RemainingArguments -contains 'apps/Portal') {
+                [AlmExportMappingTestCapture]::GitStatusArguments.AddRange($RemainingArguments)
+                ' M apps/Portal/main.js'
+            }
+        }
+
+        & $script:exportScript -SourceDirectory $script:exportSource -ArtifactStagingDirectory $script:exportArtifacts -TempDirectory $script:exportTemp -BranchName main -DefaultBranchName main
+
+        [AlmExportMappingTestCapture]::GitStatusArguments | Should -Contain 'apps/Portal'
+        Should -Invoke Set-DataverseSolution -Times 1 -Exactly -ParameterFilter { $Version -eq '1.2.3.5' }
+    }
+
     It 'uses inline mappings during sequential export without running build commands' {
         New-Item -ItemType Directory -Path (Join-Path $script:exportSource 'plugins') -Force | Out-Null
         Set-Content (Join-Path $script:exportSource 'plugins/Example.dll') -Value 'plugin'

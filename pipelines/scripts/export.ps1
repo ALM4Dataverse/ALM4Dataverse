@@ -255,6 +255,18 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
             $gitStatusPathspecs.Add($repositoryRelativePath.Replace('\', '/'))
         }
     }
+    # Code App projects are configured source inputs even though their built
+    # output is not unpacked into solutions/<name>. Include only repository-
+    # relative projects; Get-SolutionCodeAppPath rejects external paths.
+    foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
+        $codeAppRelativePath = [System.IO.Path]::GetRelativePath($repositoryRoot, $codeAppPath)
+        if (-not [System.IO.Path]::IsPathRooted($codeAppRelativePath) -and
+            $codeAppRelativePath -ne '.' -and
+            $codeAppRelativePath -ne '..' -and
+            -not $codeAppRelativePath.StartsWith("..$([System.IO.Path]::DirectorySeparatorChar)", [System.StringComparison]::Ordinal)) {
+            $gitStatusPathspecs.Add($codeAppRelativePath.Replace('\', '/'))
+        }
+    }
     $gitStatusArguments = @('-C', $SourceDirectory, 'status', '--porcelain', '--') + $gitStatusPathspecs.ToArray()
     $gitStatus = & git @gitStatusArguments
     if ([string]::IsNullOrEmpty($gitStatus)) {
