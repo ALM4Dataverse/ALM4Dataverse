@@ -1,6 +1,7 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:buildScript = Join-Path $repoRoot 'pipelines/scripts/build.ps1'
+    . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
     # Capture XML during packing: production removes the generated mapping file before
     # assertions run, so retaining its path alone cannot verify directives or escaping.
     if (-not ('AlmBuildMappingTestCapture' -as [type])) {
@@ -153,11 +154,16 @@ Describe 'Build artifacts and solution-check helpers' {
     It 'copies configured code apps into the build artifacts' {
         $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
         New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist'), (Join-Path $codeAppPath 'node_modules/example') -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'node_modules/example/index.js') -Value 'dependency'
+        Set-Content -LiteralPath (Join-Path $codeAppPath '.env') -Value 'SECRET=do-not-copy'
+        Set-Content -LiteralPath (Join-Path $codeAppPath '.npmrc') -Value '//registry.npmjs.org/:_authToken=do-not-copy'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'client-private.key') -Value 'do-not-copy'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'certificate.pfx') -Value 'do-not-copy'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'credentials.json') -Value 'do-not-copy'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal') })
@@ -172,11 +178,49 @@ Describe 'Build artifacts and solution-check helpers' {
 
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/power.config.json') | Should -BeTrue
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/dist/index.html') | Should -BeTrue
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/package.json') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/package-lock.json') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/.env') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/.npmrc') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/client-private.key') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/certificate.pfx') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/credentials.json') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/node_modules') | Should -BeFalse
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter { $args -contains 'ci' }
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter {
             $args -contains 'run' -and $args -contains 'build'
         }
+    }
+
+    It 'rejects unsafe files in Code App build output' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/client-private.key') -Value 'do-not-copy'
+
+        { Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath } | Should -Throw '*unsafe runtime file*'
+    }
+
+    It 'rejects reparse paths in Code App build output' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        $buildPath = Join-Path $codeAppPath 'dist'
+        New-Item -ItemType Directory -Path $buildPath -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
+        $normalItem = [pscustomobject]@{
+            Attributes = [System.IO.FileAttributes]::Normal
+            FullName = Join-Path $buildPath 'index.html'
+            PSIsContainer = $false
+        }
+        $reparseItem = [pscustomobject]@{
+            Attributes = [System.IO.FileAttributes]::ReparsePoint
+            FullName = Join-Path $buildPath 'linked.js'
+            PSIsContainer = $false
+        }
+        # Model the filesystem metadata so the regression does not require symlink privileges.
+        Mock Get-ChildItem { @($normalItem, $reparseItem) }
+
+        { Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath } | Should -Throw '*linked or reparse path*'
     }
 
     It 'rejects code app paths outside the repository' {

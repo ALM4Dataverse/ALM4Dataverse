@@ -246,6 +246,10 @@ repository-relative project path to the owning solution's `codeApps` setting:
 ```
 
 BUILD and IMPORT install dependencies and run each app's build before packaging it.
+The artifact contains only `power.config.json` and the configured `buildPath`
+output needed by deployment; project metadata, dependencies, secret/credential
+files, certificates, and linked paths are excluded. Unsafe files under the build
+output fail the build.
 By default, DEPLOY and IMPORT patch the built files into the app's existing component in
 the owning solution before importing it. The Code App must already be included as a root
 component in that solution; otherwise deployment fails before any solution is imported.

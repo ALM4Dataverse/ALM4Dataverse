@@ -1107,23 +1107,17 @@ foreach ($solution in $config.solutions) {
     foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
         $relativePath = [System.IO.Path]::GetRelativePath([System.IO.Path]::GetFullPath($SourceDirectory), $codeAppPath)
         $destinationPath = Join-Path $ArtifactStagingDirectory $relativePath
-        if (-not (Test-Path -LiteralPath $destinationPath -PathType Container)) {
-            Write-Host "Copying code app for solution '$($solution.name)': $relativePath"
-            $destinationParent = Split-Path -Parent $destinationPath
-            New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
-        }
-
-        $codeAppFiles = Get-ChildItem -LiteralPath $codeAppPath -File -Recurse -Force | Where-Object {
-            $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $_.FullName)
-            $segments = $fileRelativePath -split '[/\\]'
-            $segments -notcontains 'node_modules' -and $segments -notcontains '.git'
-        }
-        foreach ($file in $codeAppFiles) {
-            $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $file.FullName)
+        $runtimeManifest = Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath
+        Write-Host "Copying Code App runtime for solution '$($solution.name)': $relativePath"
+        New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
+        Copy-Item -LiteralPath $runtimeManifest.PowerConfigPath `
+            -Destination (Join-Path $destinationPath 'power.config.json') -Force
+        foreach ($file in $runtimeManifest.BuildFiles) {
+            $fileRelativePath = Join-Path $runtimeManifest.BuildPath $file.RelativePath
             $artifactFilePath = Join-Path $destinationPath $fileRelativePath
             $artifactFileDirectory = Split-Path -Parent $artifactFilePath
             New-Item -ItemType Directory -Path $artifactFileDirectory -Force | Out-Null
-            Copy-Item -LiteralPath $file.FullName -Destination $artifactFilePath -Force
+            Copy-Item -LiteralPath $file.FilePath -Destination $artifactFilePath -Force
         }
     }
 }
