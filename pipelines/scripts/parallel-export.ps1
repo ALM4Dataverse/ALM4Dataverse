@@ -223,9 +223,12 @@ function Start-AlmQueuedExport {
             # Cancellation can fail the wait before ownership is acquired; only
             # release a slot actually held, including when export itself throws.
             $acquired = $false
+            $defaultConnectionSet = $false
             try {
                 $Budget.Wait($Cancellation)
                 $acquired = $true
+                Set-DataverseConnectionAsDefault -Connection $Client
+                $defaultConnectionSet = $true
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message 'Started'
                 Export-DataverseSolution -SolutionName $Task.SolutionName -Managed:$Task.Managed -OutFile $Task.Path -Connection $Client
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Completed in $([math]::Round(([datetime]::UtcNow-$started).TotalSeconds,2))s"
@@ -233,6 +236,7 @@ function Start-AlmQueuedExport {
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Failed: $(($_ | Out-String).TrimEnd())"
                 throw
             } finally {
+                if ($defaultConnectionSet) { Set-DataverseConnectionAsDefault -Clear }
                 if ($acquired) { $Budget.Release() | Out-Null }
             }
             [pscustomobject]@{ Kind = 'Export'; SolutionName = $Task.SolutionName; Managed = $Task.Managed; Path = $Task.Path; Started = $started; Finished = [datetime]::UtcNow }
