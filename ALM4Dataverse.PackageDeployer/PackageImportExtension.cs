@@ -13,6 +13,7 @@ namespace ALM4Dataverse.PackageDeployer
     public class PackageImportExtension : ImportExtension
     {
         private Dictionary<string, string> _runtimeSettings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private bool _dependenciesInstalled;
 
         public override string GetImportPackageDataFolderName => "PkgAssets";
 
@@ -40,6 +41,23 @@ namespace ALM4Dataverse.PackageDeployer
             }
         }
 
+        public override UserRequestedImportAction OverrideSolutionImportDecision(
+            string solutionUniqueName,
+            Version organizationVersion,
+            Version packageSolutionVersion,
+            Version deployedSolutionVersion,
+            Version inboundSolutionVersion,
+            ImportAction systemSelectedImportAction)
+        {
+            if (systemSelectedImportAction != ImportAction.Import)
+            {
+                return UserRequestedImportAction.Default;
+            }
+
+            PackageLog.Log($"Skipping native import of '{solutionUniqueName}'; ALM4Dataverse scripts import solutions in configured order.");
+            return UserRequestedImportAction.Skip;
+        }
+
         public override bool BeforeImportStage()
         {
             PackageLog.Log("Running ALM4Dataverse pre-import deployment steps...");
@@ -63,10 +81,20 @@ namespace ALM4Dataverse.PackageDeployer
                 PackageLog.Log($"Environment URL: {envUrl}");
 
                 var scriptsDir = Path.Combine(pkgDir, "alm", "pipelines", "scripts");
-
-                var script = string.Join(Environment.NewLine,
-                    "$ErrorActionPreference = 'Stop'",
-                    $"& '{Escape(Path.Combine(scriptsDir, "installdependencies.ps1"))}'",
+                var scriptLines = new List<string>
+                {
+                    "$ErrorActionPreference = 'Stop'"
+                };
+                if (!_dependenciesInstalled)
+                {
+                    scriptLines.Add($"& '{Escape(Path.Combine(scriptsDir, "installdependencies.ps1"))}'");
+                }
+                else
+                {
+                    PackageLog.Log("Skipping dependency installation because it already completed for this package deployment.");
+                }
+                scriptLines.AddRange(new[]
+                {
                     // Use PD's access token if available; otherwise fall back to DefaultAzureCredential via connect.ps1
                     "if ($env:DATAVERSE_ACCESS_TOKEN) {",
                     $"  Get-DataverseConnection -SetAsDefault -Url '{Escape(envUrl)}' -AccessToken {{ $env:DATAVERSE_ACCESS_TOKEN }}",
@@ -76,10 +104,13 @@ namespace ALM4Dataverse.PackageDeployer
                     preImportOnly
                         ? $"& '{Escape(Path.Combine(scriptsDir, "deploy.ps1"))}' -ArtifactsPath '{Escape(pkgDir)}' -PreImportOnly"
                         : $"& '{Escape(Path.Combine(scriptsDir, "deploy.ps1"))}' -ArtifactsPath '{Escape(pkgDir)}' -SkipPreDeployHook"
-                );
+                });
+
+                var script = string.Join(Environment.NewLine, scriptLines);
 
                 var environmentVariables = BuildEnvironmentVariables(envUrl);
                 RunPowerShell(script, pkgDir, environmentVariables);
+                _dependenciesInstalled = true;
 
                 PackageLog.Log(preImportOnly
                     ? "ALM4Dataverse pre-import deployment steps completed successfully."

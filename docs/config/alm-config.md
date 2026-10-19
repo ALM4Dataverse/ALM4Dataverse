@@ -670,6 +670,8 @@ When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeploy
 - If the package zip is missing, it is auto-generated via `dotnet publish` from `ALM4Dataverse.PackageDeployer.csproj`.
 - If enabled but the Package Deployer project is missing, the build fails with a clear error.
 - Configured deployment hooks (`preDeploy`, `dataMigrations`, and `postDeploy`) are included in the package. Application-repository-relative hook paths retain their paths under `PkgAssets`; `[alm]/...` hooks are included under `PkgAssets/alm`. Missing hooks and paths outside their repository root fail the build.
+- Package Deployer's native solution imports are skipped when they would otherwise run; the packaged deployment scripts perform the imports in `solutions` dependency order. Existing Package Deployer skip decisions are preserved.
+- Packaged deployment installs its PowerShell/PAC dependencies once before the import lifecycle, rather than reinstalling them after the primary import.
 
 When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
 
