@@ -192,7 +192,8 @@ Describe 'Solution Code App package updates' {
     It 'rejects credential and key filenames without rejecting ordinary runtime names' {
         $unsafeNames = @(
             '.env', '.env.production', '.NPMRC', 'credentials.json',
-            'serviceAccount.json', 'id_rsa', 'id_rsa.pub', 'private-key.json',
+            'serviceAccount.json', 'id_rsa', 'id_rsa.pub', 'id_ecdsa',
+            'id_ecdsa.pub', 'id_ed25519', 'id_ed25519.key', 'private-key.json',
             'client_secret.json', 'bundle.p8', 'trust.jks', 'signing.cert',
             'signing.cer', 'signing.crt', 'signing.der', 'private.pem',
             'private.key', 'certificate.pfx', 'certificate.p12'

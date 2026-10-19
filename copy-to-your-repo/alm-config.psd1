@@ -31,7 +31,7 @@
     #   contain only power.config.json and the configured buildPath output; project
     #   metadata, dependencies, secrets, certificates and linked paths are excluded.
     #   Runtime files are filtered by filename: .env/.env.*, .npmrc, credentials.json,
-    #   serviceAccount.json, id_rsa variants, private-key/client-secret basenames,
+    #   serviceAccount.json, id_rsa/id_ecdsa/id_ed25519 variants, private-key/client-secret basenames,
     #   and .p8/.jks/.cert/.cer/.crt/.der/.pem/.key/.pfx/.p12 extensions are rejected.
     #   Unsafe filenames found inside buildPath fail the build. By default, built files
     #   replace the existing Code App component in this solution before import, so

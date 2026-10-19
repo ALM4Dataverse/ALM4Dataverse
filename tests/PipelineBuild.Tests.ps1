@@ -45,12 +45,14 @@ Describe 'Build artifacts and solution-check helpers' {
             ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND
             ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED
             ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE = $env:ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE
+            ALM_BUILD_TEST_PACKAGE_DIRECTORY = $env:ALM_BUILD_TEST_PACKAGE_DIRECTORY
         }
         $env:ALM_BUILD_TEST_REAL_PARALLEL = $null
         $env:ALM_BUILD_TEST_MODULE_PATH = $null
         $env:ALM_BUILD_TEST_REQUIRE_PACK_COMMAND = $null
         $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = $null
         $env:ALM_BUILD_TEST_PARALLEL_COMMAND_STAGE = $null
+        $env:ALM_BUILD_TEST_PACKAGE_DIRECTORY = $null
         $script:savedExitCode = $global:LASTEXITCODE
         $fixtureRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $script:sourceDirectory = Join-Path $fixtureRoot 'source'
@@ -190,6 +192,58 @@ Describe 'Build artifacts and solution-check helpers' {
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter {
             $args -contains 'run' -and $args -contains 'build'
         }
+    }
+
+    It 'patches solution-published code apps before claiming package content' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist/assets') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/assets/app.js') -Value 'runtime'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'solution' })
+    hooks = @{}
+}
+'@
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
+        Mock Invoke-CodeAppTestNpm { $global:LASTEXITCODE = 0 }
+        Mock Compress-DataverseSolutionFile {
+            $archive = [System.IO.Compression.ZipFile]::Open($OutputPath, [System.IO.Compression.ZipArchiveMode]::Create)
+            try {
+                $entries = @{
+                    'customizations.xml' = '<ImportExportXml><CanvasApps><CanvasApp><Name>contoso_portal</Name><DisplayName>Portal</DisplayName><CanvasAppType>4</CanvasAppType><CodeAppPackageUris><CodeAppPackageUri>/CanvasApps/contoso_portal_CodeAppPackages/old.js_ContentType_application/javascript</CodeAppPackageUri></CodeAppPackageUris></CanvasApp></CanvasApps></ImportExportXml>'
+                    'solution.xml' = '<ImportExportXml><SolutionManifest><RootComponents><RootComponent type="300" schemaName="contoso_portal" /></RootComponents></SolutionManifest></ImportExportXml>'
+                    'CanvasApps/contoso_portal_CodeAppPackages/old.js' = 'old app'
+                }
+                foreach ($entryData in $entries.GetEnumerator()) {
+                    $entry = $archive.CreateEntry($entryData.Key)
+                    $writer = [System.IO.StreamWriter]::new($entry.Open())
+                    try { $writer.Write($entryData.Value) }
+                    finally { $writer.Dispose() }
+                }
+            }
+            finally { $archive.Dispose() }
+            Copy-Item -LiteralPath $OutputPath -Destination ($OutputPath -replace '\.zip$', '_managed.zip') -Force
+        }
+        Mock Register-AlmSolutionContent {
+            foreach ($packageName in @('Example.zip', 'Example_managed.zip')) {
+                $packagePath = Join-Path $env:ALM_BUILD_TEST_PACKAGE_DIRECTORY $packageName
+                $archive = [System.IO.Compression.ZipFile]::OpenRead($packagePath)
+                try {
+                    $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/index.html') | Should -Not -BeNullOrEmpty
+                    $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/assets/app.js') | Should -Not -BeNullOrEmpty
+                }
+                finally { $archive.Dispose() }
+            }
+        }
+        $env:ALM_BUILD_TEST_PACKAGE_DIRECTORY = Join-Path $script:artifactDirectory 'solutions'
+
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+        Should -Invoke Register-AlmSolutionContent -Times 1 -Exactly
     }
 
     It 'rejects unsafe files in Code App build output' {

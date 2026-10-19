@@ -698,7 +698,7 @@ function Test-CodeAppRuntimeFileName {
         $leafName -in @('credentials.json', 'serviceaccount.json')) {
         return $true
     }
-    if ($leafName -match '^id_rsa(?:[._-].*)?$' -or
+    if ($leafName -match '^id_(?:rsa|ecdsa|ed25519)(?:[._-].*)?$' -or
         $stem -in @('private-key', 'private_key', 'privatekey', 'client-secret', 'client_secret', 'clientsecret')) {
         return $true
     }
