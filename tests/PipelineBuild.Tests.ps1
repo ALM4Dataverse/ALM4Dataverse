@@ -160,6 +160,8 @@ Describe 'Build artifacts and solution-check helpers' {
         Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist/assets') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/assets/app.js') -Value 'runtime'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'node_modules/example/index.js') -Value 'dependency'
         Set-Content -LiteralPath (Join-Path $codeAppPath '.env') -Value 'SECRET=do-not-copy'
         Set-Content -LiteralPath (Join-Path $codeAppPath '.npmrc') -Value '//registry.npmjs.org/:_authToken=do-not-copy'
@@ -168,13 +170,14 @@ Describe 'Build artifacts and solution-check helpers' {
         Set-Content -LiteralPath (Join-Path $codeAppPath 'credentials.json') -Value 'do-not-copy'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
-    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal') })
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac' })
     assets = @('data')
     hooks = @{}
 }
 '@
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
         Mock Invoke-CodeAppTestNpm { $global:LASTEXITCODE = 0 }
+        Mock Update-SolutionCodeAppPackage {}
 
         & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
 
@@ -188,6 +191,7 @@ Describe 'Build artifacts and solution-check helpers' {
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/certificate.pfx') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/credentials.json') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/node_modules') | Should -BeFalse
+        Should -Invoke Update-SolutionCodeAppPackage -Times 0 -Exactly
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter { $args -contains 'ci' }
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter {
             $args -contains 'run' -and $args -contains 'build'
@@ -205,6 +209,7 @@ Describe 'Build artifacts and solution-check helpers' {
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'solution' })
+    build = @{ parallel = $false }
     hooks = @{}
 }
 '@
@@ -233,8 +238,11 @@ Describe 'Build artifacts and solution-check helpers' {
                 $packagePath = Join-Path $env:ALM_BUILD_TEST_PACKAGE_DIRECTORY $packageName
                 $archive = [System.IO.Compression.ZipFile]::OpenRead($packagePath)
                 try {
-                    $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/index.html') | Should -Not -BeNullOrEmpty
-                    $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/assets/app.js') | Should -Not -BeNullOrEmpty
+                    if ($null -eq $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/index.html') -or
+                        $null -eq $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/assets/app.js')) {
+                        $entries = ($archive.Entries | ForEach-Object FullName) -join ', '
+                        throw "Solution content claim observed an unpatched $($packageName): $entries"
+                    }
                 }
                 finally { $archive.Dispose() }
             }

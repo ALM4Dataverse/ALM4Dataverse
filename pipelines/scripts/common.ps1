@@ -865,6 +865,23 @@ function Get-SolutionCodeAppPath {
     return $resolvedPaths
 }
 
+function Get-SolutionCodeAppPublishMethod {
+    param(
+        [Parameter(Mandatory = $true)]
+        [hashtable]$Solution
+    )
+
+    $method = 'solution'
+    if ($Solution.ContainsKey('codeAppPublishMethod') -and
+        -not [string]::IsNullOrWhiteSpace([string]$Solution.codeAppPublishMethod)) {
+        $method = ([string]$Solution.codeAppPublishMethod).Trim().ToLowerInvariant()
+    }
+    if ($method -notin @('solution', 'pac')) {
+        throw "Solution '$($Solution.name)' codeAppPublishMethod '$method' is invalid. Use 'solution' or 'pac'."
+    }
+    return $method
+}
+
 function Update-SolutionCodeAppPackage {
     <#
     .SYNOPSIS

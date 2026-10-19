@@ -1059,6 +1059,27 @@ finally {
     }
 }
 
+# Solution-published Code Apps are part of the solution package content. Patch
+# both package variants before checking or claiming their fingerprints; PAC mode
+# intentionally leaves the solution ZIP unchanged for the post-import push.
+foreach ($solution in $config.solutions) {
+    if ((Get-SolutionCodeAppPublishMethod -Solution $solution) -ne 'solution') {
+        continue
+    }
+    $solutionName = [string]$solution.name
+    foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
+        foreach ($packageName in @("$solutionName.zip", "${solutionName}_managed.zip")) {
+            $packagePath = Join-Path $ArtifactStagingDirectory "solutions/$packageName"
+            if (Test-Path -LiteralPath $packagePath -PathType Leaf) {
+                Update-SolutionCodeAppPackage `
+                    -SolutionFile $packagePath `
+                    -CodeAppPath $codeAppPath `
+                    -SolutionName $solutionName
+            }
+        }
+    }
+}
+
 Invoke-SolutionCheck -Config $config -SourceDirectory $SourceDirectory -ArtifactStagingDirectory $ArtifactStagingDirectory
 
 # A solution version may be reused only when every package with that solution
