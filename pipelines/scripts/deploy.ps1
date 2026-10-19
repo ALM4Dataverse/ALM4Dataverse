@@ -41,7 +41,11 @@ param(
 
     # This switch indicates whether to deploy unmanaged solutions.
     # Used for the IMPORT scenario.
-    [switch]$UseUnmanagedSolutions
+    [switch]$UseUnmanagedSolutions,
+
+    [switch]$PreImportOnly,
+
+    [switch]$SkipPreDeployHook
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,6 +59,29 @@ Write-Host "##[section]Deploying "
 $solutionsConfig = Get-AlmConfig -BaseDirectory $ArtifactsPath
 Write-Host "##[debug]Loaded configuration"
 
+$packageDeployerEnabled = $false
+if ($solutionsConfig.ContainsKey('buildPackageDeployer') -and $null -ne $solutionsConfig.buildPackageDeployer) {
+    if ($solutionsConfig.buildPackageDeployer -isnot [bool]) {
+        throw 'buildPackageDeployer must be a Boolean.'
+    }
+    $packageDeployerEnabled = $solutionsConfig.buildPackageDeployer
+}
+
+$hasUnmanagedSolution = @($solutionsConfig.solutions | Where-Object {
+    $_.ContainsKey('deployUnmanaged') -and $_.deployUnmanaged -eq $true
+}).Count -gt 0
+
+$insidePackageDeployer = $false
+if (-not [string]::IsNullOrWhiteSpace($env:ALM4DATAVERSE_IN_PACKAGE_DEPLOY)) {
+    $insidePackageDeployer = @('1', 'true', 'yes', 'on') -contains $env:ALM4DATAVERSE_IN_PACKAGE_DEPLOY.Trim().ToLowerInvariant()
+}
+
+$packagePath = Join-Path $ArtifactsPath 'ALM4Dataverse.PackageDeployer.pdpkg.zip'
+$usePackageDeployment = $packageDeployerEnabled -and
+    -not $UseUnmanagedSolutions -and
+    -not $hasUnmanagedSolution -and
+    -not $insidePackageDeployer
+
 $organizationSettingsContext = @{
     HookType = 'preDeploy'
     BaseDirectory = $ArtifactsPath
@@ -62,15 +89,97 @@ $organizationSettingsContext = @{
     ArtifactsPath = $ArtifactsPath
     UseUnmanagedSolutions = $UseUnmanagedSolutions
 }
-
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -SettingMapName 'organizationSettings' -Context $organizationSettingsContext
-Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -SettingMapName 'orgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
 $powerPlatformEnvironmentContext = @{}
-Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
 
-Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
-    ArtifactsPath = $ArtifactsPath
-    UseUnmanagedSolutions = $UseUnmanagedSolutions
+if (-not $usePackageDeployment -or $PreImportOnly) {
+    Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.organizationSettings -SettingMapName 'organizationSettings' -Context $organizationSettingsContext
+    Invoke-ConfiguredOrganizationSettingMap -Settings $solutionsConfig.orgDbOrgSettings -SettingMapName 'orgDbOrgSettings' -Context $organizationSettingsContext -OrgDbOrgSettings
+    Invoke-PowerPlatformSettingMap -Settings $solutionsConfig.powerPlatformSettings -SettingMapName 'powerPlatformSettings' -Context $organizationSettingsContext -EnvironmentContext $powerPlatformEnvironmentContext
+}
+
+if ($usePackageDeployment) {
+    if (-not (Test-Path $packagePath -PathType Leaf)) {
+        throw "Package Deployer deploy path is enabled (buildPackageDeployer = `$true), but package '$packagePath' was not found in build artifacts. Ensure build.ps1 generated it before deployment."
+    }
+
+    $pac = Get-Command pac -ErrorAction SilentlyContinue
+    if (-not $pac) {
+        throw 'Power Apps CLI (pac) was not found on PATH.'
+    }
+
+    $targetEnvironment = [string]$env:DATAVERSE_URL
+    if ([string]::IsNullOrWhiteSpace($targetEnvironment)) {
+        throw "DATAVERSE_URL is required for package deployment. pac package deploy needs an explicit --environment value to avoid relying on profile defaults."
+    }
+    $targetEnvironment = $targetEnvironment.Trim()
+
+    $settingsEntries = New-Object System.Collections.Generic.List[string]
+
+    Get-ChildItem Env: | Where-Object { $_.Name -like 'DataverseConnRef_*' -or $_.Name -like 'DataverseEnvVar_*' } | ForEach-Object {
+        if (-not [string]::IsNullOrWhiteSpace($_.Value)) {
+            $settingsEntries.Add("$($_.Name)=$($_.Value)")
+        }
+    }
+
+    $serviceAccountKeys = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $null = $serviceAccountKeys.Add('DataverseServiceAccountUpn')
+    foreach ($solutionConfig in $solutionsConfig.solutions) {
+        if ($solutionConfig.PSObject.Properties.Name -contains 'serviceAccountUpnConfigKey' -and -not [string]::IsNullOrWhiteSpace([string]$solutionConfig.serviceAccountUpnConfigKey)) {
+            $null = $serviceAccountKeys.Add(([string]$solutionConfig.serviceAccountUpnConfigKey))
+        }
+    }
+
+    foreach ($serviceAccountKey in $serviceAccountKeys) {
+        $serviceAccountValue = [System.Environment]::GetEnvironmentVariable($serviceAccountKey)
+        if (-not [string]::IsNullOrWhiteSpace($serviceAccountValue)) {
+            $settingsEntries.Add("$serviceAccountKey=$serviceAccountValue")
+        }
+    }
+
+    $pacArguments = @('package', 'deploy', '--package', $packagePath, '--environment', $targetEnvironment, '--logConsole')
+    if ($settingsEntries.Count -gt 0) {
+        $pacArguments += @('--settings', ($settingsEntries -join '|'))
+    }
+
+    Write-Host "##[section]Deploying via Package Deployer package: $packagePath"
+    Write-Host "##[debug]Package deploy environment: $targetEnvironment"
+    $packageDeployOutput = @(& $pac.Source @pacArguments 2>&1)
+    $packageDeployExitCode = $LASTEXITCODE
+    foreach ($line in $packageDeployOutput) {
+        Write-Host $line
+    }
+    $packageDeployText = ($packageDeployOutput | ForEach-Object { [string]$_ }) -join "`n"
+
+    if ($packageDeployExitCode -ne 0) {
+        throw "pac package deploy failed with exit code $packageDeployExitCode`n$packageDeployText"
+    }
+
+    if ($packageDeployText -match '(?im)^\s*error\s*:') {
+        throw "pac package deploy reported an error in output despite zero exit code.`n$packageDeployText"
+    }
+
+    Write-Host "##[section]Deployment completed successfully via Package Deployer package."
+    return
+}
+
+if ($packageDeployerEnabled -and ($UseUnmanagedSolutions -or $hasUnmanagedSolution)) {
+    Write-Host "##[section]Package Deployer deployment is enabled, but unmanaged deployment was requested. Falling back to script-based deployment."
+}
+
+if ($packageDeployerEnabled -and $insidePackageDeployer) {
+    Write-Host "##[debug]Detected in-package deployment context. Running script-based deployment steps inside deployment package."
+}
+
+if (-not $SkipPreDeployHook) {
+    Invoke-Hook -HookType "preDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
+        ArtifactsPath = $ArtifactsPath
+        UseUnmanagedSolutions = $UseUnmanagedSolutions
+    }
+}
+
+if ($PreImportOnly) {
+    Write-Host "##[section]Pre-import deployment steps completed."
+    return
 }
 
 # Define solutions to deploy
@@ -98,9 +207,10 @@ foreach ($solutionConfig in $solutionsConfig.solutions) {
         throw "Solution '$($solutionConfig.name)' codeAppPublishMethod '$codeAppPublishMethod' is invalid. Use 'solution' or 'pac'."
     }
 
+    $solutionsDirectory = Join-Path -Path $ArtifactsPath -ChildPath 'solutions'
     $solutions += @{
         Name = $solutionConfig.name
-        File = Join-Path -Path $ArtifactsPath -ChildPath solutions -AdditionalChildPath $fileName
+        File = Join-Path -Path $solutionsDirectory -ChildPath $fileName
         DeployUnmanaged = $deployUnmanaged
         ServiceAccountUpnConfigKey = $serviceAccountUpnKey
         CodeApps = @(Get-SolutionCodeAppPath -Solution $solutionConfig -BaseDirectory $ArtifactsPath)

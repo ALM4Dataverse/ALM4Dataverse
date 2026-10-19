@@ -54,6 +54,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
 | `buildValidation.baselineRelease` | String | `''`; no baseline. |
+| `buildPackageDeployer` | Boolean | `$false`; Package Deployer preview is disabled. |
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
@@ -567,6 +568,9 @@ pacCliVersion = '2.13.1'
 - `'prerelease'`: Installs the latest prerelease version
 - Specific version (for example `'2.13.1'`): Installs that exact version
 
+> On Windows runners, ALM4Dataverse uses the PAC MSI install/update path. In that case,
+> prefer `''` or an exact full-framework CLI version (for example `1.50.1`).
+
 For reproducible builds/deployments, pin an explicit version.
 
 > [!NOTE]
@@ -642,6 +646,45 @@ Accepted values:
 The baseline and candidate each use the deployment script and configuration
 packaged with their own build. If resolving, downloading, or deploying the
 baseline fails, BUILD fails and does not deploy the candidate.
+
+### Package Deployer Build (Preview)
+
+`buildPackageDeployer` is a top-level setting that enables the Package Deployer
+preview for BUILD and deployment. It defaults to `$false`; set it to `$true` in
+the root `alm-config.psd1` to opt in:
+
+```powershell
+@{
+    buildPackageDeployer = $true
+}
+```
+
+> [!WARNING]
+> This integration is a preview feature. Some ALM4Dataverse features and deployment
+> scenarios may not work with it or may behave differently. Validate the workflows,
+> hooks, and settings you depend on in a non-production environment before adopting it.
+
+When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeployer.pdpkg.zip` exists in the artifact staging directory:
+
+- If the package zip already exists, it is reused.
+- If the package zip is missing, it is auto-generated via `dotnet publish` from `ALM4Dataverse.PackageDeployer.csproj`.
+- If enabled but the Package Deployer project is missing, the build fails with a clear error.
+- Configured deployment hooks (`preDeploy`, `dataMigrations`, and `postDeploy`) are included in the package. Application-repository-relative hook paths retain their paths under `PkgAssets`; `[alm]/...` hooks are included under `PkgAssets/alm`. Missing hooks and paths outside their repository root fail the build.
+- Package Deployer's native solution imports are skipped when they would otherwise run; the packaged deployment scripts perform the imports in `solutions` dependency order. Existing Package Deployer skip decisions are preserved.
+- Packaged deployment installs its PowerShell/PAC dependencies once before the import lifecycle, rather than reinstalling them after the primary import.
+
+When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
+
+- Package Deployer BUILD and deployment require a Windows runner: the package project targets .NET Framework 4.7.2, and PAC's Dataverse package deployment command also depends on .NET Framework. `setup-github.ps1` generates Windows BUILD and DEPLOY jobs when this setting is enabled. Manually maintained GitHub workflows and Azure DevOps pipelines must use Windows agents for both stages.
+- After enabling the setting, rerun `setup-github.ps1` to regenerate existing GitHub BUILD and DEPLOY workflows with the required Windows runners.
+- If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
+- Per-solution `deployUnmanaged = $true` also uses the script-based deployment flow.
+- Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).
+- Build artifacts retain their solution archives, assets, and code apps so IMPORT and per-solution unmanaged fallbacks can use the script-based deployment flow.
+
+On Windows runners, `installdependencies.ps1` uses the official Power Platform CLI MSI install/update method and then applies the configured `pacCliVersion` using `pac install`.
+
+Default: `$false`.
 
 ### Solution Check (PAC `solution check`)
 

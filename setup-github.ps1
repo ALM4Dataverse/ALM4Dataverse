@@ -3825,6 +3825,19 @@ function Update-BuildWorkflowInRepoClone {
     if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update GitHub BUILD workflow')) { return $false }
 
     $buildWorkflowPath = Join-Path $RepoRoot '.github/workflows/BUILD.yml'
+    $packageDeployerEnabled = $false
+    $configPath = Join-Path $RepoRoot 'alm-config.psd1'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $repositoryConfig = Import-PowerShellDataFile -LiteralPath $configPath
+        if ($repositoryConfig.ContainsKey('buildPackageDeployer') -and $null -ne $repositoryConfig.buildPackageDeployer) {
+            if ($repositoryConfig.buildPackageDeployer -isnot [bool]) {
+                throw 'buildPackageDeployer must be a Boolean.'
+            }
+            $packageDeployerEnabled = $repositoryConfig.buildPackageDeployer
+        }
+    }
+    $buildRunner = if ($packageDeployerEnabled) { 'windows-latest' } else { 'ubuntu-latest' }
+
     $existingContent = if (Test-Path -LiteralPath $buildWorkflowPath) {
         [System.IO.File]::ReadAllText($buildWorkflowPath)
     }
@@ -3897,7 +3910,7 @@ on:
 
 jobs:
     build:
-        runs-on: ubuntu-latest
+        runs-on: $buildRunner
         timeout-minutes: 360
 $environmentBlock        permissions:
             contents: write
@@ -3970,6 +3983,19 @@ function Update-DeployWorkflowInRepoClone {
 
         return
     }
+
+    $packageDeployerEnabled = $false
+    $configPath = Join-Path $RepoRoot 'alm-config.psd1'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $repositoryConfig = Import-PowerShellDataFile -LiteralPath $configPath
+        if ($repositoryConfig.ContainsKey('buildPackageDeployer') -and $null -ne $repositoryConfig.buildPackageDeployer) {
+            if ($repositoryConfig.buildPackageDeployer -isnot [bool]) {
+                throw 'buildPackageDeployer must be a Boolean.'
+            }
+            $packageDeployerEnabled = $repositoryConfig.buildPackageDeployer
+        }
+    }
+    $deployRunner = if ($packageDeployerEnabled) { 'windows-latest' } else { 'ubuntu-latest' }
 
     $usesRef = "$SharedWorkflowRepository/.github/actions/deploy@$SharedWorkflowRef"
 
@@ -4115,7 +4141,7 @@ function Update-DeployWorkflowInRepoClone {
             }
         }
 
-        $lines.Add('    runs-on: ubuntu-latest')
+        $lines.Add("    runs-on: $deployRunner")
         $lines.Add('    timeout-minutes: 360')
         $lines.Add("    environment: '$envNameEscaped'")
         $lines.Add('    concurrency:')
@@ -4387,7 +4413,7 @@ function Publish-GitHubBranchSetupChange {
             -RepoRoot $RepoRoot `
             -SharedWorkflowRepository $SharedWorkflowRepository `
             -SharedWorkflowReference $SharedWorkflowReference `
-            -BuildEnvironmentName $buildEnvironmentName `
+            -BuildEnvironmentName:$buildEnvironmentName `
             -BuildValidationEnabled $BuildValidationEnabled
 
         if (-not $SkipDeployWorkflow) {

@@ -268,7 +268,8 @@ function Get-AlmConfig {
         [bool]$LogConfig = $true
     )
 
-    $defaultConfigPath = Join-Path -Path $PSScriptRoot -ChildPath ".." -AdditionalChildPath "..", "alm-config-defaults.psd1" | Resolve-Path | Select-Object -ExpandProperty Path
+    $almRootPath = Join-Path (Join-Path $PSScriptRoot '..') '..' | Resolve-Path | Select-Object -ExpandProperty Path
+    $defaultConfigPath = Join-Path $almRootPath 'alm-config-defaults.psd1'
 
     $config = @{}
 
@@ -445,6 +446,13 @@ function Get-DefaultAzureCredentialAccessToken {
     finally {
         $credential.Dispose()
     }
+}
+
+if (-not (Get-Variable -Name 'AlmOperatingSystemWindowsDetectorInitialized' -Scope Script -ErrorAction SilentlyContinue)) {
+    function Test-AlmOperatingSystemWindows {
+        return [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    }
+    Set-Variable -Name 'AlmOperatingSystemWindowsDetectorInitialized' -Value $true -Scope Script
 }
 
 function Get-PowerPlatformApiAccessToken {
@@ -1590,7 +1598,6 @@ function Write-AlmBuildVersionInfo {
         if (-not $pacCommand) {
             throw "Power Apps CLI (pac) is not available on PATH. Ensure installdependencies.ps1 has run in this job before calling scripts that require PAC authentication."
         }
-
         $pacPath = $pacCommand.Source
 
         Write-Host "##[group]Authenticating Power Apps CLI using managed identity / Azure identity context"
@@ -1685,7 +1692,7 @@ function Invoke-Hook {
             }
 
             # Replace [alm] placeholder with the absolute path of the ALM repo root
-            $almRootPath = Join-Path -Path $PSScriptRoot -ChildPath ".." -AdditionalChildPath ".." | Resolve-Path | Select-Object -ExpandProperty Path
+            $almRootPath = Join-Path (Join-Path $PSScriptRoot '..') '..' | Resolve-Path | Select-Object -ExpandProperty Path
             $hookPath = $hook -replace '\[alm\]', $almRootPath
 
             if (Test-Path $hookPath) {
