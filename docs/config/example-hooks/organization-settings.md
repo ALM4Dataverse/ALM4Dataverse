@@ -83,6 +83,53 @@ is not transactional: if a later import or hook fails, earlier setting changes
 remain applied. Use settings appropriate to every target and test them in a
 non-production environment first.
 
+### Custom Hook Alternative
+
 Keep hook scripts for custom actions that can't be expressed as setting values.
 Hooks reuse the pipeline's Dataverse connection; don't embed credentials or connect
 to a hard-coded target. See [hook context and ordering](../alm-config.md#hooks).
+
+Use a deployment hook for environment-wide operations that require custom logic.
+The hook runs during DEPLOY, IMPORT, and BUILD deployment validation. Choose settings
+appropriate to every target using this configuration and review their environment-wide
+impact before enabling them. Add the script to both the hook list and the assets list
+without removing other hooks or data assets:
+
+```powershell
+hooks = @{
+    preDeploy = @('deploy-orgsettings.ps1')
+}
+assets = @('deploy-orgsettings.ps1')
+```
+
+> [!TIP]
+> If you're not sure which settings are used or the values you need, use your browser F12 Network tools to see the request the standard PPAC/other settings UI sends.
+
+Create `deploy-orgsettings.ps1` in your application repository:
+
+```powershell
+param([hashtable]$Context)
+
+$ErrorActionPreference = 'Stop'
+
+Set-DataverseOrganizationSettings -Verbose -Confirm:$false -InputObject ([PSCustomObject]@{
+  advancedfilteringenabled=$true
+  multicolumnsortenabled=1
+})
+
+Set-DataverseOrganizationSettings -OrgDbOrgSettings -Verbose -Confirm:$false -InputObject ([PSCustomObject]@{
+  SkipSuffixOnKBArticles=$true
+  SendEmailSynchronously=$false
+})
+```
+
+When this executes, it will log out settings that were or were not changed:
+
+```text
+VERBOSE: Column 'advancedfilteringenabled': No change (value is 'True')
+VERBOSE: Column 'multicolumnsortenabled': Changing from '0' to '1'
+VERBOSE: Performing the operation "Update organization settings" on target "Organization record 9bf94c2a-1ee5-ee11-9048-0022481a23a4".
+VERBOSE: Updated 1 attribute(s) in organization record 9bf94c2a-1ee5-ee11-9048-0022481a23a4
+```
+
+The hook reuses the connection established by the pipeline. Do not embed credentials or connect to a hard-coded target inside the script. For target-specific choices, read explicitly configured runner environment variables. See [hook context and ordering](../alm-config.md#hooks).
