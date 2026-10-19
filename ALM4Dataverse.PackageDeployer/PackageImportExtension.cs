@@ -78,7 +78,7 @@ namespace ALM4Dataverse.PackageDeployer
                         : $"& '{Escape(Path.Combine(scriptsDir, "deploy.ps1"))}' -ArtifactsPath '{Escape(pkgDir)}' -SkipPreDeployHook"
                 );
 
-                var environmentVariables = BuildEnvironmentVariables();
+                var environmentVariables = BuildEnvironmentVariables(envUrl);
                 RunPowerShell(script, pkgDir, environmentVariables);
 
                 PackageLog.Log(preImportOnly
@@ -100,9 +100,10 @@ namespace ALM4Dataverse.PackageDeployer
         /// can read them (e.g. DataverseConnRef_*, DataverseEnvVar_*, DataverseServiceAccountUpn).
         /// Authentication context from CrmSvc is also forwarded where possible.
         /// </summary>
-        private Dictionary<string, string> BuildEnvironmentVariables()
+        private Dictionary<string, string> BuildEnvironmentVariables(string environmentUrl)
         {
             var env = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            env["DATAVERSE_URL"] = environmentUrl;
 
             // Map all runtime settings as environment variables.
             // This allows callers to pass deployment config via:
