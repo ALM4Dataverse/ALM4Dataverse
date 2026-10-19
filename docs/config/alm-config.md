@@ -669,11 +669,12 @@ When enabled, `pipelines/scripts/build.ps1` ensures `ALM4Dataverse.PackageDeploy
 - If the package zip already exists, it is reused.
 - If the package zip is missing, it is auto-generated via `dotnet publish` from `ALM4Dataverse.PackageDeployer.csproj`.
 - If enabled but the Package Deployer project is missing, the build fails with a clear error.
+- Configured deployment hooks (`preDeploy`, `dataMigrations`, and `postDeploy`) are included in the package. Application-repository-relative hook paths retain their paths under `PkgAssets`; `[alm]/...` hooks are included under `PkgAssets/alm`. Missing hooks and paths outside their repository root fail the build.
 
 When this setting is enabled, `pipelines/scripts/deploy.ps1` also deploys using that package from build artifacts (via `pac package deploy`) for the standard managed deployment path.
 
-- Package Deployer deployment requires a Windows runner because PAC's Dataverse package deployment command depends on .NET Framework. `setup-github.ps1` generates Windows deployment jobs when this setting is enabled; manually maintained workflows must use a Windows runner for deployment.
-- After enabling the setting, rerun `setup-github.ps1` to regenerate existing GitHub DEPLOY workflows with the required Windows runner.
+- Package Deployer BUILD and deployment require a Windows runner: the package project targets .NET Framework 4.7.2, and PAC's Dataverse package deployment command also depends on .NET Framework. `setup-github.ps1` generates Windows BUILD and DEPLOY jobs when this setting is enabled. Manually maintained GitHub workflows and Azure DevOps pipelines must use Windows agents for both stages.
+- After enabling the setting, rerun `setup-github.ps1` to regenerate existing GitHub BUILD and DEPLOY workflows with the required Windows runners.
 - If `UseUnmanagedSolutions` is requested (IMPORT scenario), deployment falls back to the script-based unmanaged flow.
 - Per-solution `deployUnmanaged = $true` also uses the script-based deployment flow.
 - Inside the Package Deployer package itself, script-based deployment steps continue to run (no recursive package deploy).

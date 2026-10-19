@@ -1235,6 +1235,63 @@ $pdProjectDirectory = Join-Path (Join-Path $PSScriptRoot '..') '..'
 $pdProjectDirectory = Join-Path $pdProjectDirectory 'ALM4Dataverse.PackageDeployer'
 $pdProjectPath = Join-Path $pdProjectDirectory 'ALM4Dataverse.PackageDeployer.csproj'
 if ($packageDeployerEnabled) {
+    $packageHookFiles = @{}
+    $deploymentHookTypes = @('preDeploy', 'dataMigrations', 'postDeploy')
+    $almRootDirectory = Join-Path (Join-Path $PSScriptRoot '..') '..' | Resolve-Path | Select-Object -ExpandProperty Path
+    if ($config.ContainsKey('hooks') -and $config.hooks -is [System.Collections.IDictionary]) {
+        foreach ($hookType in $deploymentHookTypes) {
+            if (-not $config.hooks.Contains($hookType) -or -not $config.hooks[$hookType]) {
+                continue
+            }
+
+            $configuredHooks = $config.hooks[$hookType]
+            if ($configuredHooks -is [string]) {
+                $configuredHooks = @($configuredHooks)
+            }
+            elseif ($configuredHooks -isnot [array]) {
+                throw "Package Deployer hook '$hookType' must be a path or an array of paths."
+            }
+
+            foreach ($configuredHook in $configuredHooks) {
+                if ($configuredHook -isnot [string] -or [string]::IsNullOrWhiteSpace($configuredHook)) {
+                    throw "Package Deployer hook '$hookType' entries must be non-empty paths."
+                }
+
+                $hookRoot = $SourceDirectory
+                $hookRelativePath = $configuredHook
+                $packageRelativePath = $configuredHook
+                if ($configuredHook.StartsWith('[alm]', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    if ($configuredHook.Length -le 6 -or $configuredHook[5] -notin @('/', '\')) {
+                        throw "Package Deployer hook '$configuredHook' must place a path separator after the [alm] placeholder."
+                    }
+                    $hookRoot = $almRootDirectory
+                    $hookRelativePath = $configuredHook.Substring(6)
+                    $packageRelativePath = Join-Path 'alm' $hookRelativePath
+                }
+                elseif ($configuredHook -match '\[alm\]') {
+                    throw "Package Deployer hook '$configuredHook' must place the [alm] placeholder at the start of the path."
+                }
+
+                if ([System.IO.Path]::IsPathRooted($hookRelativePath) -or $hookRelativePath -split '[/\\]' -contains '..') {
+                    throw "Package Deployer hook '$configuredHook' must resolve to a file inside its repository root."
+                }
+
+                $normalizedHookPath = $hookRelativePath.Replace('\', [System.IO.Path]::DirectorySeparatorChar).Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+                $hookRootPath = [System.IO.Path]::GetFullPath($hookRoot)
+                $hookRootPrefix = $hookRootPath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+                $resolvedHookPath = [System.IO.Path]::GetFullPath((Join-Path $hookRootPath $normalizedHookPath))
+                if (-not $resolvedHookPath.StartsWith($hookRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    throw "Package Deployer hook '$configuredHook' must resolve to a file inside its repository root."
+                }
+                if (-not (Test-Path -LiteralPath $resolvedHookPath -PathType Leaf)) {
+                    throw "Package Deployer hook '$configuredHook' was not found at '$resolvedHookPath'."
+                }
+
+                $packageHookFiles[$packageRelativePath] = $resolvedHookPath
+            }
+        }
+    }
+
     $packageCodeAppPaths = @(
         @(
             foreach ($solution in $config.solutions) {
@@ -1439,7 +1496,7 @@ if ($packageDeployerEnabled) {
         }
     }
 
-    if ($packageCodeAppPaths.Count -gt 0) {
+    if ($packageCodeAppPaths.Count -gt 0 -or $packageHookFiles.Count -gt 0) {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $packageZip = [System.IO.Compression.ZipFile]::Open($pdpkgZip, [System.IO.Compression.ZipArchiveMode]::Update)
         try {
@@ -1470,6 +1527,26 @@ if ($packageDeployerEnabled) {
                         $sourceStream.Dispose()
                         $packageEntryStream.Dispose()
                     }
+                }
+
+            }
+
+            foreach ($hookEntry in $packageHookFiles.GetEnumerator()) {
+                $entryName = "PkgAssets/$($hookEntry.Key.Replace('\', '/'))"
+                $existingEntry = $packageZip.GetEntry($entryName)
+                if ($null -ne $existingEntry) {
+                    $existingEntry.Delete()
+                }
+
+                $packageEntry = $packageZip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+                $sourceStream = [System.IO.File]::OpenRead($hookEntry.Value)
+                $packageEntryStream = $packageEntry.Open()
+                try {
+                    $sourceStream.CopyTo($packageEntryStream)
+                }
+                finally {
+                    $sourceStream.Dispose()
+                    $packageEntryStream.Dispose()
                 }
             }
         }

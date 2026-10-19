@@ -121,12 +121,14 @@ separately with the same build identity.
   standard managed deployment path. See the
   [Package Deployer configuration](../config/alm-config.md#package-deployer-build-preview)
   for package generation and deployment details.
-  Package Deployer deployment requires a Windows runner; generated GitHub workflows
-  select `windows-latest` when this setting is enabled. The Package Deployer host also
-  requires PowerShell 7 (`pwsh.exe`) on `PATH` to run the packaged deployment scripts.
-  After enabling the setting, rerun `setup-github.ps1` to regenerate existing GitHub
-  DEPLOY workflows with the Windows runner. Manually maintained workflows must be
-  updated to use a Windows runner.
+  Package Deployer BUILD and deployment require Windows runners: the package project
+  targets .NET Framework 4.7.2, and deployment also depends on .NET Framework.
+  Generated GitHub workflows select `windows-latest` for both stages when this setting
+  is enabled. The Package Deployer host also requires PowerShell 7 (`pwsh.exe`) on
+  `PATH` to run the packaged deployment scripts. After enabling the setting, rerun
+  `setup-github.ps1` to regenerate existing GitHub BUILD and DEPLOY workflows.
+  Manually maintained workflows and Azure DevOps pipelines must use Windows agents for
+  both BUILD and deployment.
 
 > [!WARNING]
 > Package Deployer integration is a preview feature. Some ALM4Dataverse features or

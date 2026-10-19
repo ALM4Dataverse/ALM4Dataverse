@@ -3825,6 +3825,19 @@ function Update-BuildWorkflowInRepoClone {
     if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update GitHub BUILD workflow')) { return $false }
 
     $buildWorkflowPath = Join-Path $RepoRoot '.github/workflows/BUILD.yml'
+    $packageDeployerEnabled = $false
+    $configPath = Join-Path $RepoRoot 'alm-config.psd1'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        $repositoryConfig = Import-PowerShellDataFile -LiteralPath $configPath
+        if ($repositoryConfig.ContainsKey('buildPackageDeployer') -and $null -ne $repositoryConfig.buildPackageDeployer) {
+            if ($repositoryConfig.buildPackageDeployer -isnot [bool]) {
+                throw 'buildPackageDeployer must be a Boolean.'
+            }
+            $packageDeployerEnabled = $repositoryConfig.buildPackageDeployer
+        }
+    }
+    $buildRunner = if ($packageDeployerEnabled) { 'windows-latest' } else { 'ubuntu-latest' }
+
     $existingContent = if (Test-Path -LiteralPath $buildWorkflowPath) {
         [System.IO.File]::ReadAllText($buildWorkflowPath)
     }
@@ -3897,7 +3910,7 @@ on:
 
 jobs:
     build:
-        runs-on: ubuntu-latest
+        runs-on: $buildRunner
         timeout-minutes: 360
 $environmentBlock        permissions:
             contents: write

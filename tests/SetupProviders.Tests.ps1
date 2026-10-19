@@ -471,6 +471,7 @@ Describe 'Generated GitHub workflow files' {
         $content = Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw
         $null = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
         Assert-GeneratedWorkflowActionlint -Content $content
+        $content | Should -Match 'runs-on: ubuntu-latest'
         $content | Should -Match 'uses: owner/shared/.github/actions/build@stable'
         $content | Should -Match 'alm4dataverse-export-build'
         if ($Enabled) {
@@ -483,6 +484,17 @@ Describe 'Generated GitHub workflow files' {
         }
         Update-BuildWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowReference stable -BuildEnvironmentName "Build's" -BuildValidationEnabled $Enabled
         Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw | Should -Be $content
+    }
+
+    It 'uses a Windows runner when Package Deployer builds are enabled' {
+        Set-Content -LiteralPath (Join-Path $workingRoot 'alm-config.psd1') -Value '@{ buildPackageDeployer = $true }'
+
+        Update-BuildWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowReference stable -BuildEnvironmentName '' -BuildValidationEnabled $false
+
+        $content = Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw
+        $null = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
+        Assert-GeneratedWorkflowActionlint -Content $content
+        $content | Should -Match 'runs-on: windows-latest'
     }
 
     It 'chains deployment stages with stable unique job IDs in <Mode> mode' -ForEach @(

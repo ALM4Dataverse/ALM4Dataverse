@@ -44,23 +44,23 @@
     Example: dotnet publish -p:BuildArtifactsPath="$(Build.ArtifactStagingDirectory)"
   -->
   <ItemGroup Condition="'$(BuildArtifactsPath)' != ''">
-    <PdSolution Include="$(BuildArtifactsPath)\solutions\*_managed.zip" />
-    <None Include="$(BuildArtifactsPath)\solutions\**\*" LinkBase="PkgAssets\solutions">
+    <PdSolution Include="$(BuildArtifactsPath)/solutions/*_managed.zip" />
+    <None Include="$(BuildArtifactsPath)/solutions/**/*" LinkBase="PkgAssets/solutions">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="$(BuildArtifactsPath)\alm-config.psd1" Link="PkgAssets\alm-config.psd1">
+    <None Include="$(BuildArtifactsPath)/alm-config.psd1" Link="PkgAssets/alm-config.psd1">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="$(BuildArtifactsPath)\scriptDependencies.lock.json" Link="PkgAssets\scriptDependencies.lock.json"
-          Condition="Exists('$(BuildArtifactsPath)\scriptDependencies.lock.json')">
+    <None Include="$(BuildArtifactsPath)/scriptDependencies.lock.json" Link="PkgAssets/scriptDependencies.lock.json"
+          Condition="Exists('$(BuildArtifactsPath)/scriptDependencies.lock.json')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="$(BuildArtifactsPath)\data\**\*" LinkBase="PkgAssets\data"
-          Condition="Exists('$(BuildArtifactsPath)\data')">
+    <None Include="$(BuildArtifactsPath)/data/**/*" LinkBase="PkgAssets/data"
+          Condition="Exists('$(BuildArtifactsPath)/data')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="$(BuildArtifactsPath)\modules\**\*" LinkBase="PkgAssets\modules"
-          Condition="Exists('$(BuildArtifactsPath)\modules')">
+    <None Include="$(BuildArtifactsPath)/modules/**/*" LinkBase="PkgAssets/modules"
+          Condition="Exists('$(BuildArtifactsPath)/modules')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>
