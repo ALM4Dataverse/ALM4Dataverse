@@ -594,6 +594,117 @@ function Invoke-PowerPlatformSettingMap {
     } -ContentType 'application/json' -Body $body -ErrorAction Stop
 }
 
+function Assert-CodeAppPathHasNoReparsePoint {
+    <#
+    .SYNOPSIS
+        Rejects reparse points between a repository root and a code app path.
+    .DESCRIPTION
+        Checks every existing path component instead of only the final directory.
+        This prevents an intermediate junction or symbolic link from redirecting
+        BUILD or DEPLOY outside the configured repository tree.
+    .PARAMETER BaseDirectory
+        Trusted repository or code app root.
+    .PARAMETER Path
+        Existing path that must remain on ordinary filesystem directories.
+    .OUTPUTS
+        The normalized path when no reparse point is found.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$BaseDirectory,
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $basePath = [System.IO.Path]::GetFullPath($BaseDirectory)
+    $targetPath = [System.IO.Path]::GetFullPath($Path)
+    $basePrefix = $basePath.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
+        [System.IO.Path]::DirectorySeparatorChar
+    if (-not $targetPath.StartsWith($basePrefix, [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not $targetPath.Equals($basePath, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Code app path '$Path' must stay within '$BaseDirectory'."
+    }
+
+    $baseItem = Get-Item -LiteralPath $basePath -Force -ErrorAction Stop
+    if (($baseItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Code app path '$Path' uses a linked or reparse base directory '$basePath'."
+    }
+
+    $relativePath = [System.IO.Path]::GetRelativePath($basePath, $targetPath)
+    $currentPath = $basePath
+    foreach ($component in ($relativePath -split '[/\\]' | Where-Object { $_ -and $_ -ne '.' })) {
+        $currentPath = Join-Path $currentPath $component
+        if (Test-Path -LiteralPath $currentPath) {
+            $item = Get-Item -LiteralPath $currentPath -Force -ErrorAction Stop
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "Code app path '$Path' contains a linked or reparse path component '$currentPath'."
+            }
+        }
+    }
+
+    return $targetPath
+}
+
+function Get-CodeAppBuildRoot {
+    <#
+    .SYNOPSIS
+        Resolves and validates a code app build output directory.
+    .DESCRIPTION
+        Enforces lexical containment and rejects reparse points before BUILD
+        invokes npm or before runtime files are enumerated and packaged.
+    .PARAMETER CodeAppPath
+        Code app project directory.
+    .PARAMETER BuildPath
+        Relative build output path from the project directory.
+    #>
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CodeAppPath,
+        [Parameter(Mandatory = $true)]
+        [string]$BuildPath
+    )
+
+    $codeAppRoot = [System.IO.Path]::GetFullPath($CodeAppPath)
+    if ([System.IO.Path]::IsPathRooted($BuildPath) -or $BuildPath -split '[/\\]' -contains '..') {
+        throw "Code app buildPath '$BuildPath' must stay within its project directory."
+    }
+    $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $codeAppRoot $BuildPath))
+    $codeAppPrefix = $codeAppRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
+        [System.IO.Path]::DirectorySeparatorChar
+    if (-not $buildRoot.StartsWith($codeAppPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $buildRoot -PathType Container)) {
+        throw "Code app buildPath '$BuildPath' does not resolve to a directory inside the project."
+    }
+    return Assert-CodeAppPathHasNoReparsePoint -BaseDirectory $codeAppRoot -Path $buildRoot
+}
+
+function Test-CodeAppRuntimeFileName {
+    <#
+    .SYNOPSIS
+        Tests whether a runtime filename is excluded from Code App artifacts.
+    .DESCRIPTION
+        This is a filename policy only. It does not inspect arbitrary file
+        contents for secrets and therefore is not a substitute for secret scanning.
+    #>
+    [OutputType([bool])]
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $leafName = [System.IO.Path]::GetFileName($Name).ToLowerInvariant()
+    $stem = [System.IO.Path]::GetFileNameWithoutExtension($leafName)
+    $extension = [System.IO.Path]::GetExtension($leafName)
+    if ($leafName -eq '.env' -or $leafName -like '.env.*' -or $leafName -eq '.npmrc' -or
+        $leafName -in @('credentials.json', 'serviceaccount.json')) {
+        return $true
+    }
+    if ($leafName -match '^id_rsa(?:[._-].*)?$' -or
+        $stem -in @('private-key', 'private_key', 'privatekey', 'client-secret', 'client_secret', 'clientsecret')) {
+        return $true
+    }
+    return $extension -in @('.p8', '.jks', '.cert', '.cer', '.crt', '.der', '.pem', '.key', '.pfx', '.p12')
+}
+
 function Get-CodeAppRuntimeManifest {
     <#
     .SYNOPSIS
@@ -652,13 +763,7 @@ function Get-CodeAppRuntimeManifest {
         throw "Code app '$appDisplayName' buildPath '$buildPath' must stay within its project directory."
     }
 
-    $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $codeAppRoot $buildPath))
-    $codeAppPrefix = $codeAppRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
-        [System.IO.Path]::DirectorySeparatorChar
-    if (-not $buildRoot.StartsWith($codeAppPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
-        -not (Test-Path -LiteralPath $buildRoot -PathType Container)) {
-        throw "Code app '$appDisplayName' buildPath '$buildPath' does not resolve to a directory inside the project."
-    }
+    $buildRoot = Get-CodeAppBuildRoot -CodeAppPath $codeAppRoot -BuildPath $buildPath
 
     $buildItems = @(Get-ChildItem -LiteralPath $buildRoot -Recurse -Force)
     foreach ($item in $buildItems) {
@@ -666,7 +771,6 @@ function Get-CodeAppRuntimeManifest {
             throw "Code app '$appDisplayName' build output contains a linked or reparse path '$($item.FullName)'."
         }
     }
-    $unsafeNamePattern = '^(?:\.env(?:\..*)?|\.npmrc)$|(?:secret|credential|password|token|private[-_.]?key)|\.(?:pem|key|pfx|p12|cer|crt|der)$'
     $buildFiles = @(
         foreach ($file in ($buildItems | Where-Object { $_.PSIsContainer -eq $false })) {
             $relativePath = [System.IO.Path]::GetRelativePath($buildRoot, $file.FullName)
@@ -675,7 +779,7 @@ function Get-CodeAppRuntimeManifest {
             if ($segments -contains 'node_modules' -or $segments -contains '.git') {
                 throw "Code app '$appDisplayName' build output contains a dependency or Git path '$relativePath'."
             }
-            if ($leafName -match $unsafeNamePattern) {
+            if (Test-CodeAppRuntimeFileName -Name $leafName) {
                 throw "Code app '$appDisplayName' build output contains an unsafe runtime file '$relativePath'."
             }
             [pscustomobject]@{ FilePath = $file.FullName; RelativePath = $relativePath }
@@ -755,7 +859,7 @@ function Get-SolutionCodeAppPath {
             throw "Code app directory '$configuredPath' for solution '$($Solution.name)' does not exist under '$basePath'."
         }
 
-        $resolvedPaths += $resolvedPath
+        $resolvedPaths += Assert-CodeAppPathHasNoReparsePoint -BaseDirectory $basePath -Path $resolvedPath
     }
 
     return $resolvedPaths

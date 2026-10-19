@@ -817,6 +817,23 @@ foreach ($solution in $config.solutions) {
         if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
             throw "Code app '$codeAppPath' must contain package.json to run its build."
         }
+        $powerConfigPath = Join-Path $codeAppPath 'power.config.json'
+        if (-not (Test-Path -LiteralPath $powerConfigPath -PathType Leaf)) {
+            throw "Code app '$codeAppPath' must contain power.config.json before its build can run."
+        }
+        try {
+            $powerConfig = Get-Content -LiteralPath $powerConfigPath -Raw | ConvertFrom-Json -AsHashtable
+        }
+        catch {
+            throw "Code app '$codeAppPath' power.config.json is invalid JSON. $($_.Exception.Message)"
+        }
+        $configuredBuildPath = if ($powerConfig.ContainsKey('buildPath') -and
+            -not [string]::IsNullOrWhiteSpace([string]$powerConfig.buildPath)) {
+            [string]$powerConfig.buildPath
+        } else {
+            'dist'
+        }
+        $null = Get-CodeAppBuildRoot -CodeAppPath $codeAppPath -BuildPath $configuredBuildPath
         if (-not (Test-Path -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -PathType Leaf) -and
             -not (Test-Path -LiteralPath (Join-Path $codeAppPath 'npm-shrinkwrap.json') -PathType Leaf)) {
             throw "Code app '$codeAppPath' must contain package-lock.json or npm-shrinkwrap.json so its dependencies can be installed reproducibly."

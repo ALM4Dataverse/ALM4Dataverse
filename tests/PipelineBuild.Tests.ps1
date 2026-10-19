@@ -676,6 +676,42 @@ Export-ModuleMember -Function Compress-DataverseSolutionFile
         Should -Invoke ForEach-Object -Times 0 -Exactly -ParameterFilter { $null -ne $Parallel }
     }
 
+    It 'rejects intermediate and buildPath reparse points before code app work' {
+        $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+        $linkedParent = Join-Path $script:sourceDirectory 'linked-apps'
+        $realParent = Join-Path $TestDrive 'real-apps'
+        $realProject = Join-Path $realParent 'Portal'
+        New-Item -ItemType Directory -Path $realProject -Force | Out-Null
+        $linkCreated = $true
+        try {
+            New-Item -ItemType $linkType -Path $linkedParent -Target $realParent -Force | Out-Null
+        }
+        catch {
+            $linkCreated = $false
+            Set-ItResult -Skipped -Because "The test host refused $linkType fixture creation."
+        }
+        if (-not $linkCreated) {
+            return
+        }
+
+        {
+            Get-SolutionCodeAppPath -Solution @{ name = 'Example'; codeApps = @('linked-apps/Portal') } -BaseDirectory $script:sourceDirectory
+        } | Should -Throw '*reparse*'
+
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        $buildTarget = Join-Path $TestDrive 'real-build'
+        New-Item -ItemType Directory -Path $codeAppPath, $buildTarget -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"linked-build"}'
+        try {
+            New-Item -ItemType $linkType -Path (Join-Path $codeAppPath 'linked-build') -Target $buildTarget -Force | Out-Null
+        }
+        catch {
+            Set-ItResult -Skipped -Because "The test host refused $linkType buildPath fixture creation."
+            return
+        }
+        { Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath } | Should -Throw '*reparse*'
+    }
+
     It 'packs multiple solutions concurrently through real parallel runspaces' {
         $solutionRoot = Join-Path $script:sourceDirectory 'solutions'
         New-Item -ItemType Directory -Path (Join-Path $solutionRoot 'First'), (Join-Path $solutionRoot 'Second') -Force | Out-Null
