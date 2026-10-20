@@ -1,6 +1,7 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     $script:buildScript = Join-Path $repoRoot 'pipelines/scripts/build.ps1'
+    . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
     # Capture XML during packing: production removes the generated mapping file before
     # assertions run, so retaining its path alone cannot verify directives or escaping.
     if (-not ('AlmBuildMappingTestCapture' -as [type])) {
@@ -153,14 +154,14 @@ Describe 'Build artifacts and solution-check helpers' {
     It 'copies configured code apps into the build artifacts' {
         $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
         New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist'), (Join-Path $codeAppPath 'node_modules/example') -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'node_modules/example/index.js') -Value 'dependency'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
-    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal') })
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac' })
     assets = @('data')
     hooks = @{}
 }
@@ -176,6 +177,41 @@ Describe 'Build artifacts and solution-check helpers' {
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter { $args -contains 'ci' }
         Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter {
             $args -contains 'run' -and $args -contains 'build'
+        }
+    }
+
+    It 'patches solution-published code apps before claiming package content' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'solution' })
+    hooks = @{}
+}
+'@
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
+        Mock Invoke-CodeAppTestNpm { $global:LASTEXITCODE = 0 }
+        Mock Compress-DataverseSolutionFile {
+            $archive = [System.IO.Compression.ZipFile]::Open($OutputPath, [System.IO.Compression.ZipArchiveMode]::Create)
+            try { $archive.CreateEntry('solution.xml') | Out-Null }
+            finally { $archive.Dispose() }
+            Copy-Item -LiteralPath $OutputPath -Destination ($OutputPath -replace '\.zip$', '_managed.zip') -Force
+        }
+        $codeAppBuildOrder = [System.Collections.Generic.List[string]]::new()
+        Mock Update-SolutionCodeAppPackage -MockWith ({ $codeAppBuildOrder.Add('patch') }.GetNewClosure())
+        Mock Register-AlmSolutionContent -MockWith ({ $codeAppBuildOrder.Add('claim') }.GetNewClosure())
+
+        try {
+            & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+            $codeAppBuildOrder | Should -Be @('patch', 'patch', 'claim')
+        }
+        finally {
+            Remove-Variable codeAppBuildOrder -ErrorAction SilentlyContinue
         }
     }
 
