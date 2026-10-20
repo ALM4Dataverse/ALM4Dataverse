@@ -153,7 +153,7 @@ Describe 'Build artifacts and solution-check helpers' {
         { & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory } | Should -Throw '*Asset path not found*'
     }
 
-    It 'copies configured code apps into the build artifacts' {
+    It 'copies configured code apps into clean build artifacts' {
         $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
         New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist'), (Join-Path $codeAppPath 'node_modules/example') -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
@@ -168,6 +168,10 @@ Describe 'Build artifacts and solution-check helpers' {
         Set-Content -LiteralPath (Join-Path $codeAppPath 'client-private.key') -Value 'do-not-copy'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'certificate.pfx') -Value 'do-not-copy'
         Set-Content -LiteralPath (Join-Path $codeAppPath 'credentials.json') -Value 'do-not-copy'
+        $staleArtifactPath = Join-Path $script:artifactDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $staleArtifactPath 'dist') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $staleArtifactPath 'package.json') -Value 'stale project metadata'
+        Set-Content -LiteralPath (Join-Path $staleArtifactPath 'dist/removed-by-next-build.js') -Value 'stale runtime'
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
     solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac' })
@@ -185,6 +189,7 @@ Describe 'Build artifacts and solution-check helpers' {
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/dist/index.html') | Should -BeTrue
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/package.json') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/package-lock.json') | Should -BeFalse
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/dist/removed-by-next-build.js') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/.env') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/.npmrc') | Should -BeFalse
         Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/client-private.key') | Should -BeFalse

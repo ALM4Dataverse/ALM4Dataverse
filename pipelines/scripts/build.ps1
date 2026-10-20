@@ -1148,6 +1148,9 @@ foreach ($solution in $config.solutions) {
         $destinationPath = Join-Path $ArtifactStagingDirectory $relativePath
         $runtimeManifest = Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath
         Write-Host "Copying Code App runtime for solution '$($solution.name)': $relativePath"
+        if (Test-Path -LiteralPath $destinationPath) {
+            Remove-Item -LiteralPath $destinationPath -Recurse -Force
+        }
         New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
         Copy-Item -LiteralPath $runtimeManifest.PowerConfigPath `
             -Destination (Join-Path $destinationPath 'power.config.json') -Force
