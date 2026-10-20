@@ -316,6 +316,42 @@ Describe 'Build artifacts and solution-check helpers' {
         { Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath } | Should -Throw '*linked or reparse path*'
     }
 
+    It 'patches Code App packages before claiming solution content' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'dist/index.html') -Value 'built'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'solution' })
+    build = @{ parallel = $false }
+    hooks = @{}
+}
+'@
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
+        Mock Invoke-CodeAppTestNpm { $global:LASTEXITCODE = 0 }
+        Mock Compress-DataverseSolutionFile {
+            $archive = [System.IO.Compression.ZipFile]::Open($OutputPath, [System.IO.Compression.ZipArchiveMode]::Create)
+            try { $archive.CreateEntry('solution.xml') | Out-Null }
+            finally { $archive.Dispose() }
+            Copy-Item -LiteralPath $OutputPath -Destination ($OutputPath -replace '\.zip$', '_managed.zip') -Force
+        }
+        $codeAppBuildOrder = [System.Collections.Generic.List[string]]::new()
+        Mock Update-SolutionCodeAppPackage -MockWith ({ $codeAppBuildOrder.Add('patch') }.GetNewClosure())
+        Mock Register-AlmSolutionContent -MockWith ({ $codeAppBuildOrder.Add('claim') }.GetNewClosure())
+
+        try {
+            & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+            $codeAppBuildOrder | Should -Be @('patch', 'patch', 'claim')
+        }
+        finally {
+            Remove-Variable codeAppBuildOrder -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'rejects code app paths outside the repository' {
         Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
 @{
