@@ -8,8 +8,9 @@
     ArtifactStagingDirectory receives export diagnostics, not deployment packages.
 
     After exporting, it unpacks each solution into the source directory's solution folders.
-    If any changes are detected in the unpacked solutions compared to the existing source,
-    it increments the solution version in both the source and the environment.
+    If any changes are detected in the unpacked solutions or configured repository-relative
+    Code App source projects compared to the existing source, it increments the solution
+    version in both the source and the environment.
 
     Hooks defined in alm-config.psd1 are invoked at various stages of the export process
     to allow for custom pre- and post-export actions.
