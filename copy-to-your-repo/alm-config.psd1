@@ -27,7 +27,13 @@
     #   the service account UPN to use when activating processes in this solution.
     #   The default is 'DataverseServiceAccountUpn'
     # - codeApps: (optional) code app project paths relative to the repository root.
-    #   Each project is built using npm ci / npm run build. By default, built files
+    #   Each project is built using npm ci / npm run build. BUILD/IMPORT artifacts
+    #   contain only power.config.json and the configured buildPath output; project
+    #   metadata, dependencies, secrets, certificates and linked paths are excluded.
+    #   Runtime files are filtered by filename: .env/.env.*, .npmrc, credentials.json,
+    #   serviceAccount.json, id_rsa/id_ecdsa/id_ed25519 variants, private-key/client-secret basenames,
+    #   and .p8/.jks/.cert/.cer/.crt/.der/.pem/.key/.pfx/.p12 extensions are rejected.
+    #   Unsafe filenames found inside buildPath fail the build. By default, built files
     #   replace the existing Code App component in this solution before import, so
     #   the app must already be included in the solution package. This avoids the
     #   broader Power Platform API RBAC assignment required by PAC push.

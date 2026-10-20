@@ -817,6 +817,23 @@ foreach ($solution in $config.solutions) {
         if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
             throw "Code app '$codeAppPath' must contain package.json to run its build."
         }
+        $powerConfigPath = Join-Path $codeAppPath 'power.config.json'
+        if (-not (Test-Path -LiteralPath $powerConfigPath -PathType Leaf)) {
+            throw "Code app '$codeAppPath' must contain power.config.json before its build can run."
+        }
+        try {
+            $powerConfig = Get-Content -LiteralPath $powerConfigPath -Raw | ConvertFrom-Json -AsHashtable
+        }
+        catch {
+            throw "Code app '$codeAppPath' power.config.json is invalid JSON. $($_.Exception.Message)"
+        }
+        $configuredBuildPath = if ($powerConfig.ContainsKey('buildPath') -and
+            -not [string]::IsNullOrWhiteSpace([string]$powerConfig.buildPath)) {
+            [string]$powerConfig.buildPath
+        } else {
+            'dist'
+        }
+        $null = Get-CodeAppBuildRoot -CodeAppPath $codeAppPath -BuildPath $configuredBuildPath -AllowMissing
         if (-not (Test-Path -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -PathType Leaf) -and
             -not (Test-Path -LiteralPath (Join-Path $codeAppPath 'npm-shrinkwrap.json') -PathType Leaf)) {
             throw "Code app '$codeAppPath' must contain package-lock.json or npm-shrinkwrap.json so its dependencies can be installed reproducibly."
@@ -832,6 +849,7 @@ foreach ($solution in $config.solutions) {
         try {
             Invoke-CheckedNativeCommand -Command $npm.Source -Arguments @('ci')
             Invoke-CheckedNativeCommand -Command $npm.Source -Arguments @('run', 'build')
+            $null = Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath
         }
         finally {
             Pop-Location
@@ -1046,18 +1064,9 @@ finally {
 # both package variants before checking or claiming their fingerprints; PAC mode
 # intentionally leaves the solution ZIP unchanged for the post-import push.
 foreach ($solution in $config.solutions) {
-    $codeAppPublishMethod = 'solution'
-    if ($solution.ContainsKey('codeAppPublishMethod') -and
-        -not [string]::IsNullOrWhiteSpace([string]$solution.codeAppPublishMethod)) {
-        $codeAppPublishMethod = ([string]$solution.codeAppPublishMethod).Trim().ToLowerInvariant()
-    }
-    if ($codeAppPublishMethod -notin @('solution', 'pac')) {
-        throw "Solution '$($solution.name)' codeAppPublishMethod '$codeAppPublishMethod' is invalid. Use 'solution' or 'pac'."
-    }
-    if ($codeAppPublishMethod -ne 'solution') {
+    if ((Get-SolutionCodeAppPublishMethod -Solution $solution) -ne 'solution') {
         continue
     }
-
     $solutionName = [string]$solution.name
     foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
         foreach ($packageName in @("$solutionName.zip", "${solutionName}_managed.zip")) {
@@ -1137,23 +1146,20 @@ foreach ($solution in $config.solutions) {
     foreach ($codeAppPath in (Get-SolutionCodeAppPath -Solution $solution -BaseDirectory $SourceDirectory)) {
         $relativePath = [System.IO.Path]::GetRelativePath([System.IO.Path]::GetFullPath($SourceDirectory), $codeAppPath)
         $destinationPath = Join-Path $ArtifactStagingDirectory $relativePath
-        if (-not (Test-Path -LiteralPath $destinationPath -PathType Container)) {
-            Write-Host "Copying code app for solution '$($solution.name)': $relativePath"
-            $destinationParent = Split-Path -Parent $destinationPath
-            New-Item -ItemType Directory -Path $destinationParent -Force | Out-Null
+        $runtimeManifest = Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath
+        Write-Host "Copying Code App runtime for solution '$($solution.name)': $relativePath"
+        if (Test-Path -LiteralPath $destinationPath) {
+            Remove-Item -LiteralPath $destinationPath -Recurse -Force
         }
-
-        $codeAppFiles = Get-ChildItem -LiteralPath $codeAppPath -File -Recurse -Force | Where-Object {
-            $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $_.FullName)
-            $segments = $fileRelativePath -split '[/\\]'
-            $segments -notcontains 'node_modules' -and $segments -notcontains '.git'
-        }
-        foreach ($file in $codeAppFiles) {
-            $fileRelativePath = [System.IO.Path]::GetRelativePath($codeAppPath, $file.FullName)
+        New-Item -ItemType Directory -Path $destinationPath -Force | Out-Null
+        Copy-Item -LiteralPath $runtimeManifest.PowerConfigPath `
+            -Destination (Join-Path $destinationPath 'power.config.json') -Force
+        foreach ($file in $runtimeManifest.BuildFiles) {
+            $fileRelativePath = Join-Path $runtimeManifest.BuildPath $file.RelativePath
             $artifactFilePath = Join-Path $destinationPath $fileRelativePath
             $artifactFileDirectory = Split-Path -Parent $artifactFilePath
             New-Item -ItemType Directory -Path $artifactFileDirectory -Force | Out-Null
-            Copy-Item -LiteralPath $file.FullName -Destination $artifactFilePath -Force
+            Copy-Item -LiteralPath $file.FilePath -Destination $artifactFilePath -Force
         }
     }
 }

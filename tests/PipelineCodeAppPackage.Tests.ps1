@@ -133,6 +133,25 @@ Describe 'Solution Code App package updates' {
         }
     }
 
+    It 'patches both managed and unmanaged solution package contents' {
+        $projectPath = Join-Path $TestDrive 'Portal'
+        New-TestCodeAppProject -ProjectPath $projectPath
+        foreach ($packageName in @('Example.zip', 'Example_managed.zip')) {
+            $solutionFile = Join-Path $TestDrive $packageName
+            New-TestCodeAppSolutionPackage -SolutionFile $solutionFile -IncludeCanvasApp -IncludeRootComponent
+            Update-SolutionCodeAppPackage -SolutionFile $solutionFile -CodeAppPath $projectPath -SolutionName 'Example'
+
+            $archive = [System.IO.Compression.ZipFile]::OpenRead($solutionFile)
+            try {
+                $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/index.html') | Should -Not -BeNullOrEmpty
+                $archive.GetEntry('CanvasApps/contoso_portal_CodeAppPackages/assets/app.js') | Should -Not -BeNullOrEmpty
+            }
+            finally {
+                $archive.Dispose()
+            }
+        }
+    }
+
     It 'fails without modifying the package when the configured app is absent' {
         $solutionFile = Join-Path $TestDrive 'Example.zip'
         $projectPath = Join-Path $TestDrive 'Portal'
@@ -168,5 +187,29 @@ Describe 'Solution Code App package updates' {
         Update-SolutionCodeAppPackage -SolutionFile $solutionFile -CodeAppPath $projectPath -SolutionName 'Example' -WhatIf
 
         (Get-FileHash -LiteralPath $solutionFile -Algorithm SHA256).Hash | Should -Be $originalHash
+    }
+
+    It 'rejects credential and key filenames without rejecting ordinary runtime names' {
+        $unsafeNames = @(
+            '.env', '.env.production', '.NPMRC', 'credentials.json',
+            'serviceAccount.json', 'id_rsa', 'id_rsa.pub', 'id_ecdsa',
+            'id_ecdsa.pub', 'id_ed25519', 'id_ed25519.key', 'private-key.json',
+            'client_secret.json', 'bundle.p8', 'trust.jks', 'signing.cert',
+            'signing.cer', 'signing.crt', 'signing.der', 'private.pem',
+            'private.key', 'certificate.pfx', 'certificate.p12'
+        )
+        foreach ($name in $unsafeNames) {
+            $projectPath = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+            New-TestCodeAppProject -ProjectPath $projectPath
+            Set-Content -LiteralPath (Join-Path (Join-Path $projectPath 'dist') $name) -Value 'sensitive'
+            { Get-CodeAppRuntimeManifest -CodeAppPath $projectPath } |
+                Should -Throw '*unsafe runtime file*'
+        }
+
+        $allowedProjectPath = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-TestCodeAppProject -ProjectPath $allowedProjectPath
+        Set-Content -LiteralPath (Join-Path $allowedProjectPath 'dist/tokenizer.js') -Value 'runtime'
+        Set-Content -LiteralPath (Join-Path $allowedProjectPath 'dist/password-reset.js') -Value 'runtime'
+        { Get-CodeAppRuntimeManifest -CodeAppPath $allowedProjectPath } | Should -Not -Throw
     }
 }

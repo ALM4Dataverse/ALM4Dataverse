@@ -245,6 +245,14 @@ repository-relative project path to the owning solution's `codeApps` setting:
 ```
 
 BUILD and IMPORT install dependencies and run each app's build before packaging it.
+The artifact contains only `power.config.json` and the configured `buildPath`
+output needed by deployment; project metadata, dependencies, secret/credential
+files, and linked paths are excluded. Runtime filenames `.env`/`.env.*`, `.npmrc`,
+`credentials.json`, `serviceAccount.json`, `id_rsa` variants, exact
+`private-key`/`client-secret` basenames, and `.p8`, `.jks`, `.cert`, `.cer`,
+`.crt`, `.der`, `.pem`, `.key`, `.pfx`, or `.p12` extensions are rejected,
+case-insensitively. This filename policy does not detect arbitrary secret content.
+Unsafe filenames under the build output fail the build.
 By default, DEPLOY and IMPORT patch the built files into the app's existing component in
 the owning solution before importing it. The Code App must already be included as a root
 component in that solution; otherwise deployment fails before any solution is imported.
