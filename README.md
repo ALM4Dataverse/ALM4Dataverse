@@ -125,7 +125,6 @@ Dataverse components, have it read that file and the
 ### Example 'Hook' Extensions
 
 - [Data import and export](docs/config/example-hooks/data-import-export.md): configuration records, relationships, and deletion handling.
-- [Organization settings](docs/config/example-hooks/organization-settings.md): target configuration through deployment hooks.
 
 ### Further Reading
 

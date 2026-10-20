@@ -32,7 +32,6 @@ powerPlatformSettings = @{
 ```
 
 See the detailed [organization settings configuration](../config/alm-config.md#organization-settings)
-and its [setting references and examples](../config/example-hooks/organization-settings.md)
 before applying environment-wide changes. Power Platform API setting names have no
 complete public catalog; inspect the PPAC request in your browser's Network tab.
 
