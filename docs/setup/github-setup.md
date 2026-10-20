@@ -8,6 +8,8 @@ and small caller workflows. Shared composite actions run the build/export/import
 steps; a separate reusable workflow handles Release cleanup. You do not need a second
 GitHub repository unless you want to maintain a fork of the shared implementation.
 
+The generated `BUILD PR validation` job runs for pull requests and merge-queue candidates. It performs configured Dataverse validation and PAC Solution Checker, but omits build-tag pushes, GitHub Release publishing, and deployment dispatch. For fork PRs, configure **Settings > Actions > General > Approval for running fork pull request workflows from contributors** to require maintainer approval. The approval permits the job to start; it does not elevate `GITHUB_TOKEN`. Use the configured GitHub environment and OIDC trust for Azure access where possible. GitHub's fork secret policy is separate; allowing long-lived secrets to fork workflows can expose them to PR-controlled code.
+
 ## Prerequisites
 
 - A GitHub repository with Actions enabled and permission to configure its workflows, variables, secrets, and environments.

@@ -1,5 +1,7 @@
 # The caller owns job permissions: publishing tags/Releases and dispatching requires
 # contents:write; Azure OIDC also requires id-token:write when validation is enabled.
+# PR/merge-queue runs retain configured validation but skip publication and dispatch;
+# release-tag/release-url outputs are empty because those runs have no durable Release.
 name: Build
 description: Build, validate, optionally deploy a baseline and candidate to the validation environment, publish, and tag Dataverse solution artifacts.
 
@@ -224,10 +226,12 @@ runs:
         overwrite: true
         if-no-files-found: ignore
 
+    # PR/queue merge commits are validation candidates, not published BUILD identities.
     # Reruns may reuse a source tag only at the same commit; never move a published
     # BUILD identity to a different source commit.
     - name: Tag source with build version
       id: tag-source
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       shell: pwsh
       working-directory: ${{ github.workspace }}/self
       run: |
@@ -280,7 +284,7 @@ runs:
     # The checker archive is optional; the deployment archive is mandatory.
     - name: Download artifact archives for GitHub Release
       id: release-assets
-      if: success()
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       shell: pwsh
       env:
         GH_REPO: ${{ github.repository }}
@@ -327,7 +331,7 @@ runs:
     # Replace assets by name on rerun, and keep BUILD Releases marked prerelease.
     - name: Create GitHub Release
       id: create-release
-      if: success()
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       uses: actions/github-script@v7
       env:
         RELEASE_TAG: ${{ steps.tag-source.outputs.tag_name }}
@@ -389,6 +393,7 @@ runs:
     # Payload SHA/tag/run refer to the build just published, not the receiving
     # workflow's default-branch SHA. Native gh failure must fail this handoff.
     - name: Trigger DEPLOY via repository_dispatch
+      if: success() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
       shell: pwsh
       env:
         GH_REPO: ${{ github.repository }}

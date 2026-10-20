@@ -469,8 +469,16 @@ Describe 'Generated GitHub workflow files' {
     ) {
         Update-BuildWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowReference stable -BuildEnvironmentName "Build's" -BuildValidationEnabled $Enabled
         $content = Get-Content (Join-Path $workingRoot '.github/workflows/BUILD.yml') -Raw
-        $null = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
+        $workflow = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
         Assert-GeneratedWorkflowActionlint -Content $content
+        $workflow.on.Contains('pull_request') | Should -BeTrue
+        $workflow.on.Contains('merge_group') | Should -BeTrue
+        $workflow.jobs['build-pr'].name | Should -Be 'BUILD PR validation'
+        $workflow.jobs['build-pr'].permissions.contents | Should -Be 'read'
+        $workflow.jobs['build-pr'].permissions.actions | Should -Be 'read'
+        $workflow.jobs['build-pr'].permissions['id-token'] | Should -Be 'write'
+        $workflow.jobs.build.permissions.contents | Should -Be 'write'
+        $workflow.jobs['build-pr'].steps[0].with['source-ref'] | Should -Be '${{ github.sha }}'
         $content | Should -Match 'uses: owner/shared/.github/actions/build@stable'
         $content | Should -Match 'alm4dataverse-export-build'
         if ($Enabled) {
