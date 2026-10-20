@@ -198,6 +198,37 @@ Describe 'Build artifacts and solution-check helpers' {
         }
     }
 
+    It 'allows the build command to create a missing Code App output directory' {
+        $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
+        New-Item -ItemType Directory -Path $codeAppPath -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'power.config.json') -Value '{"appDisplayName":"Portal","buildPath":"dist"}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package.json') -Value '{"scripts":{"build":"vite build"}}'
+        Set-Content -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -Value '{"lockfileVersion":3,"packages":{}}'
+        Set-Content -LiteralPath (Join-Path $script:sourceDirectory 'alm-config.psd1') -Value @'
+@{
+    solutions = @(@{ name = 'Example'; codeApps = @('apps/Portal'); codeAppPublishMethod = 'pac' })
+    assets = @('data')
+    hooks = @{}
+}
+'@
+        Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-CodeAppTestNpm' } } -ParameterFilter { $Name -eq 'npm' }
+        Mock Invoke-CodeAppTestNpm {
+            if ($args -contains 'run' -and $args -contains 'build') {
+                New-Item -ItemType Directory -Path (Join-Path (Get-Location) 'dist') -Force | Out-Null
+                Set-Content -LiteralPath (Join-Path (Get-Location) 'dist/index.html') -Value 'built'
+            }
+            $global:LASTEXITCODE = 0
+        }
+        Mock Update-SolutionCodeAppPackage {}
+
+        & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
+
+        Test-Path (Join-Path $script:artifactDirectory 'apps/Portal/dist/index.html') | Should -BeTrue
+        Should -Invoke Invoke-CodeAppTestNpm -Times 1 -Exactly -ParameterFilter {
+            $args -contains 'run' -and $args -contains 'build'
+        }
+    }
+
     It 'patches solution-published code apps before claiming package content' {
         $codeAppPath = Join-Path $script:sourceDirectory 'apps/Portal'
         New-Item -ItemType Directory -Path (Join-Path $codeAppPath 'dist/assets') -Force | Out-Null

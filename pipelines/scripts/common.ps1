@@ -652,18 +652,24 @@ function Get-CodeAppBuildRoot {
         Resolves and validates a code app build output directory.
     .DESCRIPTION
         Enforces lexical containment and rejects reparse points before BUILD
-        invokes npm or before runtime files are enumerated and packaged.
+        invokes npm or before runtime files are enumerated and packaged. Use
+        -AllowMissing during the pre-build check when the build tool is expected
+        to create the output directory.
     .PARAMETER CodeAppPath
         Code app project directory.
     .PARAMETER BuildPath
         Relative build output path from the project directory.
+    .PARAMETER AllowMissing
+        Allows the output directory to be absent while still validating its
+        lexical location and all existing path components.
     #>
     [OutputType([string])]
     param(
         [Parameter(Mandatory = $true)]
         [string]$CodeAppPath,
         [Parameter(Mandatory = $true)]
-        [string]$BuildPath
+        [string]$BuildPath,
+        [switch]$AllowMissing
     )
 
     $codeAppRoot = [System.IO.Path]::GetFullPath($CodeAppPath)
@@ -673,11 +679,20 @@ function Get-CodeAppBuildRoot {
     $buildRoot = [System.IO.Path]::GetFullPath((Join-Path $codeAppRoot $BuildPath))
     $codeAppPrefix = $codeAppRoot.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
         [System.IO.Path]::DirectorySeparatorChar
-    if (-not $buildRoot.StartsWith($codeAppPrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
-        -not (Test-Path -LiteralPath $buildRoot -PathType Container)) {
+    if (-not $buildRoot.StartsWith($codeAppPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Code app buildPath '$BuildPath' does not resolve to a directory inside the project."
     }
-    return Assert-CodeAppPathHasNoReparsePoint -BaseDirectory $codeAppRoot -Path $buildRoot
+    $validatedBuildRoot = Assert-CodeAppPathHasNoReparsePoint -BaseDirectory $codeAppRoot -Path $buildRoot
+    if (-not (Test-Path -LiteralPath $buildRoot)) {
+        if ($AllowMissing) {
+            return $validatedBuildRoot
+        }
+        throw "Code app buildPath '$BuildPath' does not resolve to a directory inside the project."
+    }
+    if (-not (Test-Path -LiteralPath $buildRoot -PathType Container)) {
+        throw "Code app buildPath '$BuildPath' does not resolve to a directory inside the project."
+    }
+    return $validatedBuildRoot
 }
 
 function Test-CodeAppRuntimeFileName {

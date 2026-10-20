@@ -833,7 +833,7 @@ foreach ($solution in $config.solutions) {
         } else {
             'dist'
         }
-        $null = Get-CodeAppBuildRoot -CodeAppPath $codeAppPath -BuildPath $configuredBuildPath
+        $null = Get-CodeAppBuildRoot -CodeAppPath $codeAppPath -BuildPath $configuredBuildPath -AllowMissing
         if (-not (Test-Path -LiteralPath (Join-Path $codeAppPath 'package-lock.json') -PathType Leaf) -and
             -not (Test-Path -LiteralPath (Join-Path $codeAppPath 'npm-shrinkwrap.json') -PathType Leaf)) {
             throw "Code app '$codeAppPath' must contain package-lock.json or npm-shrinkwrap.json so its dependencies can be installed reproducibly."
@@ -849,6 +849,7 @@ foreach ($solution in $config.solutions) {
         try {
             Invoke-CheckedNativeCommand -Command $npm.Source -Arguments @('ci')
             Invoke-CheckedNativeCommand -Command $npm.Source -Arguments @('run', 'build')
+            $null = Get-CodeAppRuntimeManifest -CodeAppPath $codeAppPath
         }
         finally {
             Pop-Location
