@@ -201,17 +201,17 @@ Describe 'Build artifacts and solution-check helpers' {
             finally { $archive.Dispose() }
             Copy-Item -LiteralPath $OutputPath -Destination ($OutputPath -replace '\.zip$', '_managed.zip') -Force
         }
-        $global:codeAppBuildOrder = [System.Collections.Generic.List[string]]::new()
-        Mock Update-SolutionCodeAppPackage { $global:codeAppBuildOrder.Add('patch') }
-        Mock Register-AlmSolutionContent { $global:codeAppBuildOrder.Add('claim') }
+        $codeAppBuildOrder = [System.Collections.Generic.List[string]]::new()
+        Mock Update-SolutionCodeAppPackage -MockWith ({ $codeAppBuildOrder.Add('patch') }.GetNewClosure())
+        Mock Register-AlmSolutionContent -MockWith ({ $codeAppBuildOrder.Add('claim') }.GetNewClosure())
 
         try {
             & $script:buildScript -SourceDirectory $script:sourceDirectory -ArtifactStagingDirectory $script:artifactDirectory
 
-            $global:codeAppBuildOrder | Should -Be @('patch', 'patch', 'claim')
+            $codeAppBuildOrder | Should -Be @('patch', 'patch', 'claim')
         }
         finally {
-            Remove-Variable codeAppBuildOrder -Scope Global -ErrorAction SilentlyContinue
+            Remove-Variable codeAppBuildOrder -ErrorAction SilentlyContinue
         }
     }
 
