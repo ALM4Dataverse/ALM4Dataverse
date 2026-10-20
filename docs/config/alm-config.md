@@ -145,8 +145,8 @@ appropriate role to the identity used for the API call. See the [service-princip
 Organization settings are applied by `DEPLOY`, `IMPORT`, and BUILD deployment
 validation because all three use the standard deployment script. This can change the
 validation environment and must be considered when choosing settings and targets.
-See [Organization Settings](example-hooks/organization-settings.md) for examples and
-the scope of each setting type.
+The configuration examples above show the setting-map shapes and the scope of each
+setting type.
 
 ### BUILD SemVer
 
@@ -439,7 +439,6 @@ You can also include any other PowerShell module from the [PowerShell Gallery](h
 Example hooks:
 
 - [Data import and export](example-hooks/data-import-export.md) (for example config/system data)
-- [Organisation/environment settings](example-hooks/organization-settings.md) (for example enabling the 'PCF allowed' switch)
 
 ```powershell
 hooks = @{
