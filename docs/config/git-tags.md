@@ -3,9 +3,8 @@
 This catalog covers tags created or consumed in an application repository
 (`origin`) by its pipelines and workflows: solution version reservations,
 package-content claims, build identity, and deployment tracking. Shared
-ALM4Dataverse repository refs used to select the automation source, and tags
-used only by workflows running in that shared repository, are outside this
-catalog.
+ALM4Dataverse repository release tags are described in
+[Shared project release tags](#shared-project-release-tags).
 
 ## Tag inventory
 
@@ -108,6 +107,22 @@ deleted Release assets.
 Cleanup does not remove source BUILD tags, solution reservation/content
 claims, gate tags, or Actions artifacts. See [GitHub Release cleanup](../usage/building-releases.md#github-release-cleanup)
 for the retention rules and limitations.
+
+## Shared project release tags
+
+The ALM4Dataverse shared repository uses semantic-release for its own releases:
+
+| Tag pattern | Created by | Purpose and behavior |
+| --- | --- | --- |
+| `v<major>.<minor>.<patch>-main.<n>` | Successful `main` validation | Automatic prerelease containing setup installers pinned to that exact tag; does not move `stable`. |
+| `v<major>.<minor>.<patch>` | Stable Release workflow or an authorized maintainer | Stable product Release containing setup installers; after publication, moves the `stable` alias to the released commit. |
+| `v<major>.<minor>.<patch>.<revision>` | Authorized maintainer | Legacy stable-tag publishing compatibility only; not used as a semantic-release version baseline. |
+| `stable` | Stable Release publisher | Moving alias to the latest deliberately published stable commit. |
+
+Conventional Commit analysis and SemVer tag creation are handled by
+[`release.config.cjs`](../../release.config.cjs) and the standard semantic-release
+action. The repository-owned publisher shares setup asset generation, Release
+publication, and `stable` movement between automatic, dispatched, and direct-tag paths.
 
 ## Operational guidance
 
