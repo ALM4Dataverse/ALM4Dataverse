@@ -135,6 +135,13 @@ merge titles are analyzed as Conventional Commits: breaking changes produce MAJO
 valid Conventional Commit types do not cause a release. The generated setup installers
 embed the exact release tag.
 
+| Tag pattern | Created by | Purpose and behavior |
+| --- | --- | --- |
+| `v<major>.<minor>.<patch>-main.<n>` | Successful `main` validation | Automatic prerelease with setup installers pinned to that tag; does not move `stable`. |
+| `v<major>.<minor>.<patch>` | Stable Release workflow or authorized maintainer | Stable product release; after publication, moves the `stable` alias to the released commit. |
+| `v<major>.<minor>.<patch>.<revision>` | Authorized maintainer | Legacy stable-tag publishing compatibility only; not a semantic-release version baseline. |
+| `stable` | Stable Release publisher | Moving alias to the latest deliberately published stable commit. |
+
 The [Repository Validation workflow](../.github/workflows/validation.yml) publishes
 automatic `main` prereleases only after validation succeeds. These use tags such as
 `v1.3.0-main.1`, are marked prerelease, include both setup installers, and do not move
