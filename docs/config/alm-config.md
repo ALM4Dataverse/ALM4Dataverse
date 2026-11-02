@@ -49,7 +49,7 @@ The supplied template additionally includes the `data` asset and example data ho
 | `postDeployOrganizationSettings`, `postDeployOrgDbOrgSettings` | Hashtable of setting names to values | Empty; applied after the `postDeploy` hook. |
 | `powerPlatformSettings` | Hashtable of setting names to values | Empty; patched before deployment through the Power Platform API. |
 | `postDeployPowerPlatformSettings` | Hashtable of setting names to values | Empty; patched after the `postDeploy` hook. |
-| `scriptDependencies` | Hashtable of module names and versions | `Az.Accounts = '5.5.3'`; `Rnwood.Dataverse.Data.PowerShell = '3.2.1'`. |
+| `scriptDependencies` | Hashtable of module names and versions | `Az.Accounts = '5.5.3'`; `Rnwood.Dataverse.Data.PowerShell = '3.4.0'`. |
 | `pacCliVersion` | String | `'2.13.1'`. |
 | `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |

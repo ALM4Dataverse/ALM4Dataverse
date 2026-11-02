@@ -101,7 +101,7 @@ Describe 'Build artifacts and solution-check helpers' {
             [pscustomobject]@{
                 Path        = ''
                 Version     = [version]'5.5.3'
-                PrivateData = @{ PSData = @{ Prerelease = '' } }
+                PrivateData = @{ PSData = @{} }
             }
         } -ParameterFilter { $Name -eq 'Az.Accounts' }
         Mock Get-Command {

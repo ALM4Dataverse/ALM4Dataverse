@@ -178,6 +178,8 @@ function Start-AlmQueuedExport {
         Clones one client per package. ArgumentList passes live client, semaphore,
         cancellation and event references to thread jobs rather than serialized
         process-job copies. Declined ShouldProcess leaves the queue untouched.
+        Workers restore the original default connection, or clear the worker
+        default when none existed, before exit.
         Worker output contains one Kind=Export completion record plus diagnostics.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker explicitly binds its parameters through Start-ThreadJob ArgumentList, preserving shared client and semaphore references.')]
@@ -212,8 +214,8 @@ function Start-AlmQueuedExport {
         $client = $State.CloneMethod.Invoke($State.Connection, [object[]]@($null))
         if ($null -eq $client) { throw "[$($task.SolutionName)][Export] Connection cloning returned no client." }
         $State.Clients.Add($client)
-        $job = Start-ThreadJob -ThrottleLimit 32 -ArgumentList @($State.ModulePath, $client, $task, $State.OperationBudget, $State.Cancellation.Token, $State.LogEvents, $State.HelpersPath) -ScriptBlock {
-            param($ModulePath, $Client, $Task, $Budget, $Cancellation, $Events, $HelpersPath)
+        $job = Start-ThreadJob -ThrottleLimit 32 -ArgumentList @($State.ModulePath, $client, $State.Connection, $task, $State.OperationBudget, $State.Cancellation.Token, $State.LogEvents, $State.HelpersPath) -ScriptBlock {
+            param($ModulePath, $Client, $OriginalConnection, $Task, $Budget, $Cancellation, $Events, $HelpersPath)
             $ErrorActionPreference = 'Stop'
             $ProgressPreference = 'SilentlyContinue'
             $started = [datetime]::UtcNow
@@ -236,8 +238,14 @@ function Start-AlmQueuedExport {
                 Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Failed: $(($_ | Out-String).TrimEnd())"
                 throw
             } finally {
-                if ($defaultConnectionSet) { Set-DataverseConnectionAsDefault -Clear }
-                if ($acquired) { $Budget.Release() | Out-Null }
+                try {
+                    if ($defaultConnectionSet) {
+                        if ($null -ne $OriginalConnection) { Set-DataverseConnectionAsDefault -Connection $OriginalConnection }
+                        else { Set-DataverseConnectionAsDefault -Clear }
+                    }
+                } finally {
+                    if ($acquired) { $Budget.Release() | Out-Null }
+                }
             }
             [pscustomobject]@{ Kind = 'Export'; SolutionName = $Task.SolutionName; Managed = $Task.Managed; Path = $Task.Path; Started = $started; Finished = [datetime]::UtcNow }
         }
@@ -359,7 +367,8 @@ function Invoke-AlmQueuedSolutionHook {
     .DESCRIPTION
         Each hook runs in an isolated thread-job runspace and receives its cloned
         Dataverse connection as Context.Connection. The worker sets that client
-        as the runspace's default so existing Dataverse commands use the clone.
+        as the runspace's default so existing Dataverse commands use the clone,
+        then restores the original default or clears it if none existed.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseUsingScopeModifierInNewRunspaces', '', Justification = 'The worker receives the hook context and cloned Dataverse client explicitly through Start-ThreadJob ArgumentList.')]
     param([Parameter(Mandatory)][hashtable]$State)
@@ -377,9 +386,9 @@ function Invoke-AlmQueuedSolutionHook {
         $additionalContext.CancellationToken = $State.Cancellation.Token
         $task.AdditionalContext = $additionalContext
         $job = Start-ThreadJob -ThrottleLimit 32 -ArgumentList @(
-            $State.ModulePath, $State.HelpersPath, $State.CommonPath, $task, $State.LogEvents
+            $State.ModulePath, $State.HelpersPath, $State.CommonPath, $State.Connection, $task, $State.LogEvents
         ) -ScriptBlock {
-            param($ModulePath, $HelpersPath, $CommonPath, $Task, $Events)
+            param($ModulePath, $HelpersPath, $CommonPath, $OriginalConnection, $Task, $Events)
             $ErrorActionPreference = 'Stop'
             $ProgressPreference = 'SilentlyContinue'
             $started = [datetime]::UtcNow
@@ -394,7 +403,8 @@ function Invoke-AlmQueuedSolutionHook {
                     $results = @(Invoke-Hook -HookType $Task.HookType -BaseDirectory $Task.BaseDirectory -Config $Task.Config -AdditionalContext $Task.AdditionalContext -LogContext:$false)
                     Send-AlmExportEvent -Events $Events -SolutionName $Task.SolutionName -Phase $phase -Message "Completed in $([math]::Round(([datetime]::UtcNow-$started).TotalSeconds,2))s"
                 } finally {
-                    Set-DataverseConnectionAsDefault -Clear
+                    if ($null -ne $OriginalConnection) { Set-DataverseConnectionAsDefault -Connection $OriginalConnection }
+                    else { Set-DataverseConnectionAsDefault -Clear }
                 }
                 [pscustomobject]@{ Kind = 'SolutionHook'; HookType = $Task.HookType; SolutionName = $Task.SolutionName; Results = $results; Started = $started; Finished = [datetime]::UtcNow }
             } catch {

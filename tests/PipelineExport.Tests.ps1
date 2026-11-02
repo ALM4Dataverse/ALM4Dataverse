@@ -34,6 +34,11 @@ public static class AlmExportMappingTestCapture
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($UniqueName, $Version)
     }
+    function Get-DataverseConnection {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        [CmdletBinding()]
+        param([switch]$GetDefault)
+    }
     function Register-AlmSolutionVersion {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($RepositoryPath, $SolutionName, $Version, $IsAdditive)

@@ -34,6 +34,13 @@ Describe 'Solution version tag reservations' {
         Resolve-AlmDefaultBranchName -RepositoryPath $script:repositoryPath | Should -Be 'main'
     }
 
+    It 'resolves the default branch from origin when Git output uses Windows line endings' {
+        Mock Invoke-AlmGitCommand {
+            [pscustomobject]@{ ExitCode = 0; Output = "ref: refs/heads/main`tHEAD`r`nremote-sha`tHEAD`r`n" }
+        }
+        Resolve-AlmDefaultBranchName -RepositoryPath $script:repositoryPath | Should -Be 'main'
+    }
+
     It 'reserves the requested version as a remote tag' {
         $reserved = Register-AlmSolutionVersion -RepositoryPath $script:repositoryPath -SolutionName Example -Version ([version]'1.0.0.1') -IsAdditive $true
 

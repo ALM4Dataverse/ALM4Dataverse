@@ -37,8 +37,11 @@
     Emits Parallel, TotalSeconds and WorkerTimings after successful completion.
 .NOTES
     Requires installed dependencies, a default Dataverse connection and Git access
-    to push reservation tags to origin. Changed solutions reserve a version before
-    updating source XML and Dataverse. Failures do not roll back tags or source changes.
+    to push reservation tags to origin. The default connection is captured before
+    package workers start and restored after workers finish so main-runspace hooks
+    and Dataverse commands can continue using it.
+    Changed solutions reserve a version before updating source XML and Dataverse.
+    Failures do not roll back tags or source changes.
     Parallel worker resources are released in finally; diagnostics describe overall
     run status, not a per-solution transaction outcome.
 .EXAMPLE
@@ -76,6 +79,7 @@ Write-Host "##[section]Exporting Solutions from $EnvironmentName"
 # Read solutions configuration
 $solutionsConfig = Get-AlmConfig -BaseDirectory $SourceDirectory -LogConfig:$false
 $exportSettings = Get-AlmExportSetting -Config $solutionsConfig
+$exportConnection = Get-DataverseConnection -GetDefault
 $solutionNames = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
 foreach ($solution in $solutionsConfig.solutions) {
     $solutionName = [string]$solution.name
@@ -164,13 +168,17 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
     $solution = $solutionsConfig.solutions[$solutionIndex]
     $solutionName = $solution.name
     $exportZipPath = $null
-    if ($null -ne $exportPipeline) { $exportZipPath = Wait-AlmSolutionExport -State $exportPipeline -SolutionName $solutionName }
+    if ($null -ne $exportPipeline) {
+        $exportZipPath = Wait-AlmSolutionExport -State $exportPipeline -SolutionName $solutionName
+        if ($null -ne $exportConnection) { Set-DataverseConnectionAsDefault -Connection $exportConnection }
+        else { Set-DataverseConnectionAsDefault -Clear }
+    }
     elseif ($hasPreExportSolutionHooks -or $hasParallelExportSolutionHooks) {
         $preExportSolutionContext = $exportHookContext.Clone()
         $preExportSolutionContext.SolutionName = $solutionName
         $preExportSolutionContext.SolutionConfig = $solution
         $preExportSolutionContext.SolutionIndex = $solutionIndex
-        $preExportSolutionContext.Connection = Get-DataverseConnection -GetDefault
+        $preExportSolutionContext.Connection = $exportConnection
         if ($hasPreExportSolutionHooks) {
             $null = Invoke-Hook -HookType preExportSolution -BaseDirectory $SourceDirectory -Config $solutionsConfig -AdditionalContext $preExportSolutionContext -LogContext:$false
         }
@@ -352,7 +360,7 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
     if ($null -ne $exportPipeline) {
         Add-AlmPostExportSolutionHook -State $exportPipeline -SolutionConfig $solution -SolutionIndex $solutionIndex
     } elseif ($hasPostExportSolutionHooks) {
-        $postExportSolutionContext.Connection = Get-DataverseConnection -GetDefault
+        $postExportSolutionContext.Connection = $exportConnection
         $solutionHookResults[$solutionName] = @(Invoke-Hook -HookType postExportSolution -BaseDirectory $SourceDirectory -Config $solutionsConfig -AdditionalContext $postExportSolutionContext -LogContext:$false)
     } else {
         $solutionHookResults[$solutionName] = @()
@@ -361,6 +369,8 @@ for ($solutionIndex = 0; $solutionIndex -lt $solutionsConfig.solutions.Count; $s
 
 if ($null -ne $exportPipeline) {
     Complete-AlmSolutionHook -State $exportPipeline
+    if ($null -ne $exportConnection) { Set-DataverseConnectionAsDefault -Connection $exportConnection }
+    else { Set-DataverseConnectionAsDefault -Clear }
     $solutionHookResults = $exportPipeline.SolutionHookResults
     $parallelExportSolutionHookResults = $exportPipeline.ParallelExportSolutionHookResults
 }
@@ -375,7 +385,13 @@ $exportStatus = 'Succeeded'
     }
     # Mapping XML is consumed on the main thread, not by package-export workers.
     # Stop workers before summarizing so teardown can contribute terminal timings.
-    if ($null -ne $exportPipeline) { Stop-AlmExportPipeline -State $exportPipeline }
+    if ($null -ne $exportPipeline) {
+        try { Stop-AlmExportPipeline -State $exportPipeline }
+        finally {
+            if ($null -ne $exportConnection) { Set-DataverseConnectionAsDefault -Connection $exportConnection }
+            else { Set-DataverseConnectionAsDefault -Clear }
+        }
+    }
     New-Item -ItemType Directory -Path $exportLogDirectory -Force | Out-Null
     $summary = @(foreach ($solution in $solutionsConfig.solutions) {
         $name = $solution.name

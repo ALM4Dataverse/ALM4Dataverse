@@ -59,4 +59,14 @@ Describe 'Workflow and pipeline YAML validation' {
         $artifactCall |
             Should -BeLessThan $deploymentTemplate.IndexOf('deploy.ps1')
     }
+
+    It 'passes the export default branch through the environment and ignores unresolved macros' {
+        $exportTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/export.yml') -Raw
+
+        $exportTemplate | Should -Match ([regex]::Escape('DEFAULT_BRANCH_NAME: $(Build.Repository.DefaultBranch)'))
+        $exportTemplate | Should -Match ([regex]::Escape('$defaultBranchName = $env:DEFAULT_BRANCH_NAME'))
+        $exportTemplate | Should -Match ([regex]::Escape('$defaultBranchName -match ''^\$\(.+\)$'''))
+        $exportTemplate | Should -Match ([regex]::Escape('-DefaultBranchName $defaultBranchName'))
+        $exportTemplate | Should -Not -Match ([regex]::Escape('-DefaultBranchName "$(Build.Repository.DefaultBranch)"'))
+    }
 }

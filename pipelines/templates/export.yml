@@ -102,16 +102,22 @@ stages:
               }
 
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/connect.ps1" -Url $environmentUrl
+              # Keep the optional Azure macro out of PowerShell source: unresolved `$()` is executable syntax.
+              $defaultBranchName = $env:DEFAULT_BRANCH_NAME
+              if ($defaultBranchName -match '^\$\(.+\)$') {
+                $defaultBranchName = $null
+              }
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/export.ps1" `
                 -SourceDirectory "$(Pipeline.Workspace)/self" `
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)" `
                 -TempDirectory "$(Agent.TempDirectory)" `
                 -EnvironmentName "Dev-${{ variables['Build.SourceBranchName'] }}" `
                 -BranchName "$(Build.SourceBranch)" `
-                -DefaultBranchName "$(Build.Repository.DefaultBranch)"
+                -DefaultBranchName $defaultBranchName
           displayName: 'Connect and Export Solutions'
           workingDirectory: '$(Pipeline.Workspace)/self'
           env:
+            DEFAULT_BRANCH_NAME: $(Build.Repository.DefaultBranch)
             ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
               AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
             ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
