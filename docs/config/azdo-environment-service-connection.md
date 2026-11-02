@@ -23,6 +23,8 @@ methods use their corresponding service-connection credentials. The CLI login
 uses `--allow-no-subscriptions`, so an Azure subscription is not required.
 `useAlm4DataverseExtension: false` supports client-secret connections only and
 uses the Build Tools task's secret output for both Azure logins.
+DEPLOY checks that the selected build artifact contains the login helper; if it
+does not, the error instructs you to rebuild the artifact with the updated shared ref.
 
 For detailed steps on creating service principals and service connections, see the [Manual Setup Guide](../setup/azdo-manual-setup.md#4-service-principal-setup).
 

@@ -108,7 +108,11 @@ stages:
                       $env:AZURE_CLIENT_SECRET = $resolvedClientSecret
                     }
 
-                    & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect-az.ps1"
+                    $connectAzScript = "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect-az.ps1"
+                    if (-not (Test-Path -LiteralPath $connectAzScript -PathType Leaf)) {
+                      throw "The selected build artifact does not include pipelines/scripts/connect-az.ps1. Rebuild the artifact using the updated ALM4Dataverse shared ref, then deploy that new artifact."
+                    }
+                    & $connectAzScript
                     & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect.ps1" -Url $environmentUrl
                     
                     # Run the deployment script FROM THE ARTIFACTS

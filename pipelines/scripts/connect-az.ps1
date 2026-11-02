@@ -28,8 +28,9 @@ $azLoginArguments = @(
     'none'
 )
 
-if (-not [string]::IsNullOrWhiteSpace($env:AZURE_CLIENT_SECRET)) {
-    $secureClientSecret = ConvertTo-SecureString -String $env:AZURE_CLIENT_SECRET -AsPlainText -Force
+$clientSecret = $env:AZURE_CLIENT_SECRET
+if (-not [string]::IsNullOrWhiteSpace($clientSecret) -and $clientSecret -notmatch '^\$\(.+\)$') {
+    $secureClientSecret = ConvertTo-SecureString -String $clientSecret -AsPlainText -Force
     $servicePrincipalCredential = [System.Management.Automation.PSCredential]::new($clientId, $secureClientSecret)
     Connect-AzAccount `
         -ServicePrincipal `

@@ -97,6 +97,13 @@ Describe 'Build artifacts and solution-check helpers' {
                 PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } }
             }
         } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
+        Mock Get-Module {
+            [pscustomobject]@{
+                Path        = ''
+                Version     = [version]'5.5.3'
+                PrivateData = @{ PSData = @{ Prerelease = '' } }
+            }
+        } -ParameterFilter { $Name -eq 'Az.Accounts' }
         Mock Get-Command {
             $env:ALM_BUILD_TEST_PACK_COMMAND_RESOLVED = 'true'
             [pscustomobject]@{

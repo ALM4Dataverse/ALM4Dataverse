@@ -78,6 +78,13 @@
             Reason = 'The existing OAuth API supplies a plaintext access token; conversion adapts it to the downstream SecureString contract, not a hardcoded secret.'
         }
         @{
+            Path = 'pipelines/scripts/connect-az.ps1'
+            Rule = 'PSAvoidUsingConvertToSecureStringWithPlainText'
+            Function = '<script>'
+            Source = 'ConvertTo-SecureString -String $clientSecret -AsPlainText -Force'
+            Reason = 'The secret comes from the protected Azure DevOps service connection at runtime and must be converted to SecureString for Connect-AzAccount.'
+        }
+        @{
             Path = 'setup-common.ps1'
             Rule = 'PSUseShouldProcessForStateChangingFunctions'
             Function = 'New-SpectreTable'

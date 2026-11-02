@@ -31,6 +31,10 @@ solutions, data hooks, and authentication before rolling them out across applica
 > Updating the caller or shared repository does not patch old Release assets. Existing
 > artifacts still run their packaged deployment scripts. Rebuild to include a deployment-code
 > fix, and distinguish reverting automation source from recovering Dataverse solution/data state.
+>
+> A newer DEPLOY template may require a helper that an older artifact does not contain.
+> The template checks for the packaged helper and gives a rebuild instruction instead of
+> silently loading a helper from a different shared-code version.
 
 ### GitHub Actions
 

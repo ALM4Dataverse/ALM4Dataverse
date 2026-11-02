@@ -50,7 +50,13 @@ Describe 'Workflow and pipeline YAML validation' {
         $deploymentTemplate | Should -Match 'AZURE_CLIENT_ID: \$\(AZURE_CLIENT_ID\)'
         $deploymentTemplate | Should -Match 'AZURE_TENANT_ID: \$\(AZURE_TENANT_ID\)'
         $deploymentTemplate | Should -Match 'AZURE_FEDERATED_TOKEN_FILE: \$\(AZURE_FEDERATED_TOKEN_FILE\)'
-        $deploymentTemplate.IndexOf('connect-az.ps1') |
+        $artifactCheck = $deploymentTemplate.IndexOf('Test-Path -LiteralPath $connectAzScript -PathType Leaf')
+        $artifactCall = $deploymentTemplate.IndexOf('& $connectAzScript')
+        $artifactCheck | Should -BeGreaterThan -1
+        $deploymentTemplate | Should -Match 'Rebuild the artifact using the updated ALM4Dataverse shared ref'
+        $artifactCheck |
+            Should -BeLessThan $artifactCall
+        $artifactCall |
             Should -BeLessThan $deploymentTemplate.IndexOf('deploy.ps1')
     }
 }

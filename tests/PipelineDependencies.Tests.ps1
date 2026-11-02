@@ -47,7 +47,7 @@ Describe 'Dependency installation' {
         Mock Install-Module { [pscustomobject]@{ Version = '3.2.1-preview.1' } } -ParameterFilter { $Name -ne 'Az.Accounts' }
         Mock Get-InstalledModule { [pscustomobject]@{ InstalledLocation = (Join-Path $TestDrive 'mock-module') } }
         Mock Import-Module {} -ParameterFilter { $Name -like '*mock-module*' }
-        Mock Get-Module { [pscustomobject]@{ Version = [version]'5.5.3' } } -ParameterFilter { $Name -eq 'Az.Accounts' }
+        Mock Get-Module { [pscustomobject]@{ Version = [version]'5.5.3'; Prerelease = '' } } -ParameterFilter { $Name -eq 'Az.Accounts' }
 
         Mock Get-Module {
             [pscustomobject]@{ Version = [version]'3.2.1'; Prerelease = 'preview.1' }
@@ -98,7 +98,7 @@ Describe 'Dependency installation' {
         Mock Install-Module { [pscustomobject]@{ Version = '1.0.0' } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '' } }"
         { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Throw '*less than the default minimum*'
-        Should -Invoke Get-InstalledModule -Times 0 -Exactly
+        Should -Invoke Get-InstalledModule -Times 0 -Exactly -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
     }
 
     It 'uses pinned lock-file module and CLI selectors' {

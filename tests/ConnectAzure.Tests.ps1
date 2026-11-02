@@ -7,7 +7,7 @@ BeforeAll {
         param(
             [switch]$ServicePrincipal,
             $Tenant,
-            $Credential,
+            [PSCredential]$Credential,
             $ApplicationId,
             $FederatedToken,
             [switch]$AllowNoSubscriptions
@@ -76,6 +76,7 @@ Describe 'Azure DevOps Az PowerShell sign-in' {
         $tokenPath = Join-Path $TestDrive 'federated-token'
         Set-Content -LiteralPath $tokenPath -Value 'federated-token'
         $env:AZURE_FEDERATED_TOKEN_FILE = $tokenPath
+        $env:AZURE_CLIENT_SECRET = '$(AZURE_CLIENT_SECRET)'
 
         & $script:connectAzScript
 
