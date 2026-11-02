@@ -43,9 +43,12 @@ Describe 'Dependency installation' {
         New-Item -ItemType Directory -Path $script:dependencyDirectory -Force | Out-Null
         $env:GITHUB_PATH = Join-Path $script:dependencyDirectory 'github-path.txt'
         $env:TF_BUILD = 'True'
-        Mock Install-Module { [pscustomobject]@{ Version = '3.2.1-preview.1' } }
+        Mock Install-Module { [pscustomobject]@{ Version = '5.5.3' } } -ParameterFilter { $Name -eq 'Az.Accounts' }
+        Mock Install-Module { [pscustomobject]@{ Version = '3.2.1-preview.1' } } -ParameterFilter { $Name -ne 'Az.Accounts' }
         Mock Get-InstalledModule { [pscustomobject]@{ InstalledLocation = (Join-Path $TestDrive 'mock-module') } }
         Mock Import-Module {} -ParameterFilter { $Name -like '*mock-module*' }
+        Mock Get-Module { [pscustomobject]@{ Version = [version]'5.5.3' } } -ParameterFilter { $Name -eq 'Az.Accounts' }
+
         Mock Get-Module {
             [pscustomobject]@{ Version = [version]'3.2.1'; Prerelease = 'preview.1' }
         } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
@@ -92,7 +95,7 @@ Describe 'Dependency installation' {
     }
 
     It 'rejects a resolved version below the default minimum even for floating selectors' {
-        Mock Install-Module { [pscustomobject]@{ Version = '1.0.0' } }
+        Mock Install-Module { [pscustomobject]@{ Version = '1.0.0' } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '' } }"
         { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Throw '*less than the default minimum*'
         Should -Invoke Get-InstalledModule -Times 0 -Exactly
