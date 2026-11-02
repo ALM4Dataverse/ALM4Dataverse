@@ -108,6 +108,7 @@ stages:
                       $env:AZURE_CLIENT_SECRET = $resolvedClientSecret
                     }
 
+                    & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect-az.ps1"
                     & "$(Pipeline.Workspace)/build/artifacts/alm/pipelines/scripts/connect.ps1" -Url $environmentUrl
                     
                     # Run the deployment script FROM THE ARTIFACTS
@@ -118,7 +119,10 @@ stages:
                   workingDirectory: '$(Pipeline.Workspace)/build/artifacts'
                   env:
                     ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
+                      AZURE_CLIENT_ID: $(AZURE_CLIENT_ID)
+                      AZURE_TENANT_ID: $(AZURE_TENANT_ID)
                       AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
+                      AZURE_FEDERATED_TOKEN_FILE: $(AZURE_FEDERATED_TOKEN_FILE)
                     ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
                       AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
                       AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)

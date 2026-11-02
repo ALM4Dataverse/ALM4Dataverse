@@ -42,4 +42,15 @@ Describe 'Workflow and pipeline YAML validation' {
         $deploymentTemplate.IndexOf('$targetCommit -ine [string]$metadata.sourceCommit') |
             Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
     }
+
+    It 'signs in to Az PowerShell from the selected Azure DevOps service connection before DEPLOY' {
+        $deploymentTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/stages/deploy-environment.yml') -Raw
+
+        $deploymentTemplate | Should -Match 'connect-az\.ps1'
+        $deploymentTemplate | Should -Match 'AZURE_CLIENT_ID: \$\(AZURE_CLIENT_ID\)'
+        $deploymentTemplate | Should -Match 'AZURE_TENANT_ID: \$\(AZURE_TENANT_ID\)'
+        $deploymentTemplate | Should -Match 'AZURE_FEDERATED_TOKEN_FILE: \$\(AZURE_FEDERATED_TOKEN_FILE\)'
+        $deploymentTemplate.IndexOf('connect-az.ps1') |
+            Should -BeLessThan $deploymentTemplate.IndexOf('deploy.ps1')
+    }
 }
