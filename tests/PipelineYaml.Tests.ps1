@@ -42,4 +42,31 @@ Describe 'Workflow and pipeline YAML validation' {
         $deploymentTemplate.IndexOf('$targetCommit -ine [string]$metadata.sourceCommit') |
             Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
     }
+
+    It 'signs in to Az PowerShell from the selected Azure DevOps service connection before DEPLOY' {
+        $deploymentTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/stages/deploy-environment.yml') -Raw
+
+        $deploymentTemplate | Should -Match 'connect-az\.ps1'
+        $deploymentTemplate | Should -Match 'AZURE_CLIENT_ID: \$\(AZURE_CLIENT_ID\)'
+        $deploymentTemplate | Should -Match 'AZURE_TENANT_ID: \$\(AZURE_TENANT_ID\)'
+        $deploymentTemplate | Should -Match 'AZURE_FEDERATED_TOKEN_FILE: \$\(AZURE_FEDERATED_TOKEN_FILE\)'
+        $artifactCheck = $deploymentTemplate.IndexOf('Test-Path -LiteralPath $connectAzScript -PathType Leaf')
+        $artifactCall = $deploymentTemplate.IndexOf('& $connectAzScript')
+        $artifactCheck | Should -BeGreaterThan -1
+        $deploymentTemplate | Should -Match 'Rebuild the artifact using the updated ALM4Dataverse shared ref'
+        $artifactCheck |
+            Should -BeLessThan $artifactCall
+        $artifactCall |
+            Should -BeLessThan $deploymentTemplate.IndexOf('deploy.ps1')
+    }
+
+    It 'passes the export default branch through the environment and ignores unresolved macros' {
+        $exportTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/export.yml') -Raw
+
+        $exportTemplate | Should -Match ([regex]::Escape('DEFAULT_BRANCH_NAME: $(Build.Repository.DefaultBranch)'))
+        $exportTemplate | Should -Match ([regex]::Escape('$defaultBranchName = $env:DEFAULT_BRANCH_NAME'))
+        $exportTemplate | Should -Match ([regex]::Escape('$defaultBranchName -match ''^\$\(.+\)$'''))
+        $exportTemplate | Should -Match ([regex]::Escape('-DefaultBranchName $defaultBranchName'))
+        $exportTemplate | Should -Not -Match ([regex]::Escape('-DefaultBranchName "$(Build.Repository.DefaultBranch)"'))
+    }
 }

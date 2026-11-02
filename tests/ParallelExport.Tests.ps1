@@ -87,8 +87,10 @@ public sealed class AlmExportTestClient : System.IDisposable
     public static int Active { get { return active; } }
     public static int VersionUpdates { get; set; }
     public static bool HookDefaultCleared { get; set; }
+    public static bool HookDefaultRestored { get; set; }
     public static bool ExportDefaultMatched { get; set; }
     public static bool ExportDefaultCleared { get; set; }
+    public static bool ExportDefaultRestored { get; set; }
     public static System.Threading.CountdownEvent Started { get; private set; }
     public static System.Threading.ManualResetEventSlim Release { get; private set; }
     public bool DetailsRead { get; private set; }
@@ -115,7 +117,7 @@ public sealed class AlmExportTestClient : System.IDisposable
     {
         Started?.Dispose();
         Release?.Dispose();
-        started = 0; active = 0; Peak = 0; VersionUpdates = 0; HookDefaultCleared = false; ExportDefaultMatched = false; ExportDefaultCleared = false; expectedStarts = count;
+        started = 0; active = 0; Peak = 0; VersionUpdates = 0; HookDefaultCleared = false; HookDefaultRestored = false; ExportDefaultMatched = false; ExportDefaultCleared = false; ExportDefaultRestored = false; expectedStarts = count;
         Started = new System.Threading.CountdownEvent(count);
         Release = new System.Threading.ManualResetEventSlim(false);
         Default = new AlmExportTestClient();
@@ -140,7 +142,7 @@ public sealed class AlmExportTestClient : System.IDisposable
         # Its export waits on the shared client barrier; pack/unpack only create comparison inputs.
         $script:exportModuleSource = @'
 $script:DefaultConnection = $null
-function Set-DataverseConnectionAsDefault { param($Connection, [switch]$Clear); if ($Clear) { [AlmExportTestClient]::HookDefaultCleared = ($null -ne $script:DefaultConnection); [AlmExportTestClient]::ExportDefaultCleared = ($null -ne $script:DefaultConnection) -or [AlmExportTestClient]::ExportDefaultCleared; $script:DefaultConnection = $null } else { $script:DefaultConnection = $Connection } }
+function Set-DataverseConnectionAsDefault { param($Connection, [switch]$Clear); if ($Clear) { [AlmExportTestClient]::HookDefaultCleared = ($null -ne $script:DefaultConnection); [AlmExportTestClient]::ExportDefaultCleared = ($null -ne $script:DefaultConnection) -or [AlmExportTestClient]::ExportDefaultCleared; $script:DefaultConnection = $null } else { $script:DefaultConnection = $Connection; if ([object]::ReferenceEquals($Connection, [AlmExportTestClient]::Default)) { [AlmExportTestClient]::HookDefaultRestored = $true; [AlmExportTestClient]::ExportDefaultRestored = $true } } }
 function Get-DataverseConnection { param([switch]$GetDefault); if ($null -ne $script:DefaultConnection) { return $script:DefaultConnection }; [AlmExportTestClient]::Default }
 function Write-TestSolution {
     param($OutputPath)
@@ -241,14 +243,15 @@ function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connecti
         @(Get-ChildItem $state.LogDirectory -Filter '*.log').Count | Should -Be 4
     }
 
-    It 'sets and clears the cloned connection as the export worker default' {
+    It 'sets the cloned connection as the export worker default and restores the original' {
         $script:workerState = Start-AlmExportPipeline -Config @{ solutions = @(@{ name = 'First' }) } -TempDirectory $script:workerRoot -MaxParallel 1
         [AlmExportTestClient]::Release.Set()
 
         Wait-AlmSolutionExport -State $script:workerState -SolutionName First | Should -Exist
 
         [AlmExportTestClient]::ExportDefaultMatched | Should -BeTrue
-        [AlmExportTestClient]::ExportDefaultCleared | Should -BeTrue
+        [AlmExportTestClient]::ExportDefaultRestored | Should -BeTrue
+        [AlmExportTestClient]::ExportDefaultCleared | Should -BeFalse
     }
 
     It 'propagates worker failure and preserves details without leaking operation slots' {
@@ -282,7 +285,8 @@ function Invoke-DataverseSQL { param($Connection, $Sql); if ($null -eq $Connecti
         $result.HasConnection | Should -BeTrue
         $result.QueryUsedContextConnection | Should -BeTrue
         $result.DefaultMatchesContext | Should -BeTrue
-        [AlmExportTestClient]::HookDefaultCleared | Should -BeTrue
+        [AlmExportTestClient]::HookDefaultRestored | Should -BeTrue
+        [AlmExportTestClient]::HookDefaultCleared | Should -BeFalse
         [AlmExportTestClient]::Release.Set()
         Wait-AlmSolutionExport -State $script:workerState -SolutionName First | Should -Exist
         Wait-AlmSolutionExport -State $script:workerState -SolutionName Second | Should -Exist

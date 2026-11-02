@@ -2,7 +2,9 @@
     # Consumer configuration overrides scalars, recursively merges hashtables and
     # appends arrays. Keep shared defaults here rather than in copied repositories.
     scriptDependencies = @{
-        "Rnwood.Dataverse.Data.PowerShell" = "3.2.1"
+        # 3.4.0 fixes connection handling in the export comparison cmdlets.
+        "Rnwood.Dataverse.Data.PowerShell" = "3.4.0"
+        "Az.Accounts" = "5.5.3"
     }
 
     # Power Apps CLI version used by pipeline scripts.

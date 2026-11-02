@@ -15,6 +15,17 @@ When `useAlm4DataverseExtension: false`, pipelines still use Power Platform serv
 
 WIF is preferred when available because it avoids a long-lived client secret. Both methods require an Entra app registration and a Dataverse application user with permission to perform the solution operations. The separate service-account UPN used for process ownership belongs in the [variable group](azdo-environment-variable-group.md).
 
+For DEPLOY with the ALM4Dataverse extension, the Set Connection Variables task
+provides the client-secret or WIF token-file values. The deployment template uses
+those values to log in to both Azure CLI and Az PowerShell before running the
+deployment script and its `postDeploy` hook. The client-secret and WIF login
+methods use their corresponding service-connection credentials. The CLI login
+uses `--allow-no-subscriptions`, so an Azure subscription is not required.
+`useAlm4DataverseExtension: false` supports client-secret connections only and
+uses the Build Tools task's secret output for both Azure logins.
+DEPLOY checks that the selected build artifact contains the login helper; if it
+does not, the error instructs you to rebuild the artifact with the updated shared ref.
+
 For detailed steps on creating service principals and service connections, see the [Manual Setup Guide](../setup/azdo-manual-setup.md#4-service-principal-setup).
 
 ## Service Connection Type

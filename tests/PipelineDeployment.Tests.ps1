@@ -363,6 +363,7 @@ Describe 'Deployment options' {
         Mock Register-AlmSolutionContent { throw 'IMPORT must not claim a solution version.' }
         Mock Copy-Item { New-Item -ItemType Directory -Path $Destination -Force | Out-Null } -ParameterFilter { $Destination -match '[\\/]alm$' }
         Mock Get-Module { [pscustomobject]@{ Version = [version]'3.0.4'; PrivateData = @{ PSData = @{ Prerelease = 'preview.1' } } } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
+        Mock Get-Module { [pscustomobject]@{ Version = [version]'5.5.3'; PrivateData = @{ PSData = @{ Prerelease = '' } } } } -ParameterFilter { $Name -eq 'Az.Accounts' }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
         Mock Invoke-DeploymentTestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.13.1 pac' }

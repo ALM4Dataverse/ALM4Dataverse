@@ -1179,8 +1179,15 @@ foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     $module = Get-Module -Name $moduleName
     if ($module) {
         $version = $module.Version.ToString()
-        if ($module.PrivateData -and $module.PrivateData.PSData -and $module.PrivateData.PSData.Prerelease) {
-            $version += "-$($module.PrivateData.PSData.Prerelease)"
+        # Stable module manifests may omit PSData.Prerelease; use dictionary lookup under strict mode.
+        $modulePSData = if ($module.PrivateData -is [System.Collections.IDictionary]) {
+            $module.PrivateData['PSData']
+        }
+        $prerelease = if ($modulePSData -is [System.Collections.IDictionary]) {
+            $modulePSData['Prerelease']
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$prerelease)) {
+            $version += "-$prerelease"
         }
         $lockConfig.scriptDependencies[$moduleName] = $version
     } else {

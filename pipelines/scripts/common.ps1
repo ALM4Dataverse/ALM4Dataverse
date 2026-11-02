@@ -1339,7 +1339,8 @@ function Resolve-AlmDefaultBranchName {
         throw "Could not determine the repository default branch from origin/HEAD. $($result.Output)"
     }
 
-    $match = [regex]::Match($result.Output, '(?m)^ref:\s+refs/heads/(?<name>.+)\s+HEAD$')
+    # Keep the symref parser line-oriented and accept Git's CRLF output on Windows.
+    $match = [regex]::Match($result.Output, '(?m)^ref:[ \t]+refs/heads/(?<name>[^\t\r\n]+)[ \t]+HEAD\r?$')
     if (-not $match.Success) {
         throw "Could not determine the repository default branch from origin/HEAD. Output: $($result.Output)"
     }
