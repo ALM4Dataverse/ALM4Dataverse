@@ -195,6 +195,7 @@ runs:
         tenant-id: ${{ env.AZURE_CLIENT_SECRET == '' && env.AZURE_TENANT_ID || '' }}
         creds: ${{ env.ALM_AZURE_CREDENTIALS || '' }}
         allow-no-subscriptions: true
+        enable-AzPSSession: true
 
     # Package-bundled scripts and the default Dataverse connection share one process.
     # Expand connection-reference JSON into the variable names deploy.ps1 consumes.

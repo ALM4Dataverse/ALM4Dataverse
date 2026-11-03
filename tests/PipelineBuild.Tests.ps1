@@ -100,7 +100,7 @@ Describe 'Build artifacts and solution-check helpers' {
         Mock Get-Module {
             [pscustomobject]@{
                 Path        = ''
-                Version     = [version]'5.5.3'
+                Version     = [version]'5.5.0'
                 PrivateData = @{ PSData = @{} }
             }
         } -ParameterFilter { $Name -eq 'Az.Accounts' }
@@ -152,6 +152,7 @@ Describe 'Build artifacts and solution-check helpers' {
         Test-Path (Join-Path $script:artifactDirectory 'alm-config.psd1') | Should -BeTrue
         $lock = Get-Content (Join-Path $script:artifactDirectory 'scriptDependencies.lock.json') -Raw | ConvertFrom-Json -AsHashtable
         $lock.scriptDependencies['Rnwood.Dataverse.Data.PowerShell'] | Should -Be '3.0.4-preview.1'
+        $lock.scriptDependencies['Az.Accounts'] | Should -Be '5.5.0'
         $lock.pacCliVersion | Should -Be '2.13.1'
     }
 

@@ -19,8 +19,10 @@ For DEPLOY with the ALM4Dataverse extension, the Set Connection Variables task
 provides the client-secret or WIF token-file values. The deployment template uses
 those values to log in to both Azure CLI and Az PowerShell before running the
 deployment script and its `postDeploy` hook. The client-secret and WIF login
-methods use their corresponding service-connection credentials. The CLI login
-uses `--allow-no-subscriptions`, so an Azure subscription is not required.
+methods use their corresponding service-connection credentials. Az PowerShell
+skips automatic subscription-context population; hooks that need subscription-
+scoped cmdlets must select a subscription explicitly. The CLI login uses
+`--allow-no-subscriptions`, so an Azure subscription is not required for login.
 `useAlm4DataverseExtension: false` supports client-secret connections only and
 uses the Build Tools task's secret output for both Azure logins.
 DEPLOY checks that the selected build artifact contains the login helper; if it

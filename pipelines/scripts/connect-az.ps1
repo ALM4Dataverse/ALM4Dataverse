@@ -5,7 +5,11 @@
     Uses the client-secret credentials or federated token file supplied by the
     ALM4Dataverse Set Connection Variables task. Fails if neither auth type is
     fully configured or either login fails. Does not read credentials from
-    configuration files.
+    configuration files. Az PowerShell skips subscription-context population;
+    hooks that need a subscription must select one explicitly. Azure CLI uses its
+    own allow-no-subscriptions option. An unresolved Azure DevOps client-secret
+    macro is treated as absent so downstream authentication can use the
+    federated token file.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -29,6 +33,11 @@ $azLoginArguments = @(
 )
 
 $clientSecret = $env:AZURE_CLIENT_SECRET
+if ($clientSecret -match '^\$\(.+\)$') {
+    $clientSecret = $null
+    $env:AZURE_CLIENT_SECRET = $null
+}
+
 if (-not [string]::IsNullOrWhiteSpace($clientSecret) -and $clientSecret -notmatch '^\$\(.+\)$') {
     $secureClientSecret = ConvertTo-SecureString -String $clientSecret -AsPlainText -Force
     $servicePrincipalCredential = [System.Management.Automation.PSCredential]::new($clientId, $secureClientSecret)
@@ -36,7 +45,7 @@ if (-not [string]::IsNullOrWhiteSpace($clientSecret) -and $clientSecret -notmatc
         -ServicePrincipal `
         -Tenant $tenantId `
         -Credential $servicePrincipalCredential `
-        -AllowNoSubscriptions `
+        -SkipContextPopulation `
         -ErrorAction Stop | Out-Null
     $azLoginArguments += "--password=$($env:AZURE_CLIENT_SECRET)"
 }
@@ -59,7 +68,7 @@ else {
         -Tenant $tenantId `
         -ApplicationId $clientId `
         -FederatedToken $federatedToken `
-        -AllowNoSubscriptions `
+        -SkipContextPopulation `
         -ErrorAction Stop | Out-Null
     $azLoginArguments += @('--federated-token', $federatedToken)
 }
