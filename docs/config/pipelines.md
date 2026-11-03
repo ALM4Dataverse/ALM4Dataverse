@@ -90,6 +90,21 @@ No action outputs. Build selection comes from the caller's `build-run-name` and 
 
 The selector accepts a Release tag, exact BUILD name, or numeric BUILD run ID; blank selects the latest successful BUILD from the selected branch. It validates branch/build identity, prefers Release assets, and can fall back to retained Actions artifacts. See [deployment modes and recovery](../usage/deploying.md).
 
+### Release Publisher
+
+Source: [release publisher action](../../.github/actions/publish-release/action.yml). The stable-release and repository-validation workflows use this internal action to prepare setup installers and create or update a GitHub Release.
+
+| Input | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `source-directory` | Yes | None | Checked-out source tree used to prepare installers and, when requested, move the stable tag. |
+| `release-tag` | Yes | None | Immutable version tag for the published Release and installer downloads. |
+| `target-sha` | Yes | None | Commit identified by the release tag; used when creating the Release and moving the stable tag. |
+| `prerelease` | Yes | None | `'true'` marks the GitHub Release as a prerelease; otherwise it is stable. |
+| `move-stable` | Yes | None | `'true'` force-updates the remote `stable` tag to `target-sha` after the Release assets are published. |
+| `release-notes` | No | `''` | Optional semantic-release notes; when empty, the action attempts to generate notes from GitHub. |
+
+The action replaces the `setup-azdo.ps1` and `setup-github.ps1` assets on an existing Release. Its caller needs `contents: write`; stable-tag updates happen only after successful Release publication.
+
 ### Caller Settings And Permissions
 
 | Caller | Trigger | Declared token permissions |

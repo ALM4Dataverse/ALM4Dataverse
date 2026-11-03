@@ -18,15 +18,43 @@ Describe 'Release packaging' {
         }
     }
 
-    It 'publishes shared setup assets and updates stable only for version-tag releases' {
+    It 'uses semantic-release for stable releases and publishes pushed stable tags' {
         $workflowPath = Join-Path $repoRoot '.github/workflows/stable-release.yml'
         $workflow = Get-Content -LiteralPath $workflowPath -Raw
 
-        $workflow.Contains("- 'v[0-9]+.[0-9]+.[0-9]+'") | Should -BeTrue
-        $workflow.Contains("- 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'") | Should -BeTrue
-        $workflow | Should -Match 'prepare-release\.ps1'
-        $workflow | Should -Match 'git tag -f stable'
-        $workflow.Contains("name: 'setup-azdo.ps1'") | Should -BeTrue
-        $workflow.Contains("name: 'setup-github.ps1'") | Should -BeTrue
+        $workflow | Should -Match 'workflow_dispatch:'
+        $workflow | Should -Match "v\[0-9\]\*\.\[0-9\]\*\.\[0-9\]\*\.\[0-9\]\*"
+        $workflow | Should -Match 'codfish/semantic-release-action@v5\.0\.0'
+        $workflow | Should -Match '\.github/actions/publish-release'
+        $workflow | Should -Match 'move-stable: ''true'''
+        $workflow | Should -Match 'working-directory: source'
+        $workflow | Should -Match 'branches: \$\{\{ format'
+        $workflow | Should -Match 'GIT_CONFIG_VALUE_0: /github/workspace/source'
+    }
+
+    It 'shares semantic versioning and release asset behavior across automatic and stable releases' {
+        $releaseConfig = Get-Content -LiteralPath (Join-Path $repoRoot 'release.config.cjs') -Raw
+        $publishAction = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/publish-release/action.yml') -Raw
+        $validationWorkflow = Get-Content -LiteralPath (Join-Path $repoRoot '.github/workflows/validation.yml') -Raw
+
+        $releaseConfig | Should -Match '@semantic-release/commit-analyzer'
+        $releaseConfig | Should -Match '@semantic-release/release-notes-generator'
+        $releaseConfig | Should -Match '@semantic-release/github'
+        $publishAction | Should -Match 'setup-azdo\.ps1'
+        $publishAction | Should -Match 'setup-github\.ps1'
+        $publishAction | Should -Match 'IS_PRERELEASE'
+        $validationWorkflow | Should -Match 'publish-main-prerelease:'
+        $validationWorkflow | Should -Match 'needs: \[required-validation\]'
+        $validationWorkflow | Should -Match 'codfish/semantic-release-action@v5\.0\.0'
+        $validationWorkflow | Should -Match 'move-stable: ''false'''
+    }
+
+    It 'validates pull request titles with Conventional Commits syntax' {
+        $workflowPath = Join-Path $repoRoot '.github/workflows/pr-title.yml'
+        $workflow = Get-Content -LiteralPath $workflowPath -Raw
+
+        $workflow | Should -Match 'pull_request_target:'
+        $workflow | Should -Match 'synchronize'
+        $workflow | Should -Match 'amannn/action-semantic-pull-request@v6'
     }
 }

@@ -127,19 +127,40 @@ $outputDirectory = Join-Path ([IO.Path]::GetTempPath()) ('alm-release-' + [guid]
 
 ## Publish A Shared Release
 
-The [stable-release workflow](../.github/workflows/stable-release.yml) responds to pushed
-version tags in the configured three/four-part `v` formats, such as `v1.2.3` or `v1.2.3.4`.
-This publishes the shared ALM4Dataverse code and standalone setup scripts; it is separate
-from branch-suffixed BUILD prereleases and does not promote a BUILD artifact.
-Releasing is a deliberate remote operation:
+The shared repository uses the canonical semantic-release analyzer and release-notes
+generator through [`codfish/semantic-release-action`](https://github.com/SwordfishLabs/codfish-semantic-release-action),
+configured in [`release.config.cjs`](../release.config.cjs). Squash
+merge titles are analyzed as Conventional Commits: breaking changes produce MAJOR,
+`feat` produces MINOR, and `fix`, `perf`, and `revert` produce PATCH releases. Other
+valid Conventional Commit types do not cause a release. The generated setup installers
+embed the exact release tag.
 
-1. Review the intended source commit, docs, compatibility changes, local checks, and non-production hosted/Dataverse test results.
-2. Create and push the intended version tag through the maintainer's authorized release process.
-3. The workflow prepares standalone setup scripts and force-moves `stable` to that version commit.
-4. It creates/updates a non-draft, non-prerelease GitHub Release, generates setup links/notes, and uploads/replaces both setup-script assets.
-5. Verify the version Release, assets, `stable` ref, and onboarding links. Communicate required caller/configuration changes.
+| Tag pattern | Created by | Purpose and behavior |
+| --- | --- | --- |
+| `v<major>.<minor>.<patch>-main.<n>` | Successful `main` validation | Automatic prerelease with setup installers pinned to that tag; does not move `stable`. |
+| `v<major>.<minor>.<patch>` | Stable Release workflow or authorized maintainer | Stable product release; after publication, moves the `stable` alias to the released commit. |
+| `v<major>.<minor>.<patch>.<revision>` | Authorized maintainer | Legacy stable-tag publishing compatibility only; not a semantic-release version baseline. |
+| `stable` | Stable Release publisher | Moving alias to the latest deliberately published stable commit. |
 
-The workflow requires `contents: write` and permission to move `stable`.
+The [Repository Validation workflow](../.github/workflows/validation.yml) publishes
+automatic `main` prereleases only after validation succeeds. These use tags such as
+`v1.3.0-main.1`, are marked prerelease, include both setup installers, and do not move
+`stable`.
+
+To publish a stable release, run **Actions > Stable Release > Run workflow** and select
+the branch to release. Semantic-release calculates the next stable version and creates
+the version tag; the shared publisher uploads both setup installers, then moves
+`stable` to that commit. If there are no version-impacting commits, no tag or Release is
+created. Alternatively, an authorized maintainer may push a three- or legacy
+four-component stable version tag directly; the tag-triggered workflow publishes it.
+Four-component tags remain publish-only compatibility tags, not semantic-release
+version baselines.
+
+The [PR title workflow](../.github/workflows/pr-title.yml) validates Conventional Commit
+titles, including non-release types such as `docs`, `chore`, and `test`. Configure the
+repository to use the PR title as the squash commit title, and require both
+**Validate Conventional Commit title** and **Validation Required** in the branch ruleset.
+The release workflows require `contents: write`.
 
 > [!CAUTION]
 > Release publication moves `stable`, so consumers following it can pick up changed

@@ -132,3 +132,44 @@ jobs:
         run: |
           test "$POWERSHELL_RESULT" = success
           test "$GITHUB_ACTIONS_RESULT" = success
+
+  publish-main-prerelease:
+    name: Publish main prerelease
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.required-validation.result == 'success'
+    needs: [required-validation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Preview semantic release
+        id: preview
+        uses: codfish/semantic-release-action@v5.0.0
+        with:
+          branches: |
+            [{"name":"main","prerelease":"main"}]
+          dry-run: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Create immutable prerelease tag
+        id: semantic-release
+        uses: codfish/semantic-release-action@v5.0.0
+        if: steps.preview.outputs.new-release-published == 'true'
+        with:
+          branches: |
+            [{"name":"main","prerelease":"main"}]
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Publish prerelease and setup installers
+        if: steps.semantic-release.outputs.new-release-published == 'true'
+        uses: ./.github/actions/publish-release
+        with:
+          source-directory: .
+          release-tag: ${{ steps.semantic-release.outputs.git-tag }}
+          target-sha: ${{ steps.semantic-release.outputs.git-head }}
+          prerelease: 'true'
+          move-stable: 'false'
+          release-notes: ${{ steps.semantic-release.outputs.release-notes }}

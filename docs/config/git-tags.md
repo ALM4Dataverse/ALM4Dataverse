@@ -2,10 +2,7 @@
 
 This catalog covers tags created or consumed in an application repository
 (`origin`) by its pipelines and workflows: solution version reservations,
-package-content claims, build identity, and deployment tracking. Shared
-ALM4Dataverse repository refs used to select the automation source, and tags
-used only by workflows running in that shared repository, are outside this
-catalog.
+package-content claims, build identity, and deployment tracking.
 
 ## Tag inventory
 

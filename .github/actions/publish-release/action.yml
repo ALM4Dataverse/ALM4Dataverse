@@ -1,0 +1,178 @@
+name: Publish ALM4Dataverse Release
+description: Prepare and publish setup installers for one immutable ALM4Dataverse release tag.
+
+inputs:
+  source-directory:
+    description: Checked-out source tree for the release target.
+    required: true
+  release-tag:
+    description: Immutable release tag to publish.
+    required: true
+  target-sha:
+    description: Commit the release tag identifies.
+    required: true
+  prerelease:
+    description: Mark the GitHub Release as a prerelease.
+    required: true
+  move-stable:
+    description: Move the stable tag to the target commit after publishing assets.
+    required: true
+  release-notes:
+    description: Release notes produced by semantic-release, when available.
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare setup installers
+      id: prepare
+      shell: pwsh
+      env:
+        SOURCE_DIRECTORY: ${{ inputs.source-directory }}
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        REPOSITORY_URL: https://github.com/${{ github.repository }}.git
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $sourceDirectory = [System.IO.Path]::GetFullPath($env:SOURCE_DIRECTORY)
+        $outputDirectory = Join-Path $sourceDirectory 'release'
+        & (Join-Path $sourceDirectory 'prepare-release.ps1') `
+          -TagName $env:RELEASE_TAG `
+          -OutputDir $outputDirectory `
+          -UpstreamRepo $env:REPOSITORY_URL
+        if ($LASTEXITCODE -ne 0) { throw 'Release setup preparation failed.' }
+        "azdo_path=$(Join-Path $outputDirectory 'setup-azdo.ps1')" >> $env:GITHUB_OUTPUT
+        "github_path=$(Join-Path $outputDirectory 'setup-github.ps1')" >> $env:GITHUB_OUTPUT
+
+    - name: Create or update GitHub Release and upload installers
+      uses: actions/github-script@v7
+      env:
+        RELEASE_TAG: ${{ inputs.release-tag }}
+        TARGET_SHA: ${{ inputs.target-sha }}
+        IS_PRERELEASE: ${{ inputs.prerelease }}
+        RELEASE_NOTES: ${{ inputs.release-notes }}
+        AZDO_SETUP_PATH: ${{ steps.prepare.outputs.azdo_path }}
+        GITHUB_SETUP_PATH: ${{ steps.prepare.outputs.github_path }}
+      with:
+        script: |
+          const fs = require('fs');
+          const tagName = process.env.RELEASE_TAG;
+          const targetSha = process.env.TARGET_SHA;
+          const prerelease = process.env.IS_PRERELEASE === 'true';
+          const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}`;
+          let generatedNotes = process.env.RELEASE_NOTES || '';
+          if (!generatedNotes) {
+            try {
+              const response = await github.rest.repos.generateReleaseNotes({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag_name: tagName,
+              });
+              generatedNotes = response.data.body || '';
+            } catch (error) {
+              console.warn('Could not generate release notes automatically:', error.message);
+            }
+          }
+          const customNotes = [
+            prerelease ? '## Automatic prerelease' : '## Stable release',
+            prerelease ? 'This version is an automatically published prerelease.' : '',
+            '## Getting Started',
+            '### Azure DevOps — Automated Setup (Recommended)',
+            'Run this command in Windows PowerShell to set up ALM4Dataverse with Azure DevOps:',
+            '```powershell',
+            `iwr ${repoUrl}/releases/download/${tagName}/setup-azdo.ps1 | iex`,
+            '```',
+            '### GitHub Actions — Automated Setup',
+            'Run this command in Windows PowerShell to set up ALM4Dataverse with GitHub Actions:',
+            '```powershell',
+            `iwr ${repoUrl}/releases/download/${tagName}/setup-github.ps1 | iex`,
+            '```',
+            '📚 **Documentation:**',
+            `- [GitHub Actions Setup Guide](${repoUrl}/blob/${tagName}/docs/setup/github-setup.md)`,
+            `- [Azure DevOps Automated Setup Guide](${repoUrl}/blob/${tagName}/docs/setup/azdo-automated-setup.md)`,
+            `- [Azure DevOps Manual Setup Guide](${repoUrl}/blob/${tagName}/docs/setup/azdo-manual-setup.md)`,
+            `- [Getting Started](${repoUrl}/blob/${tagName}/README.md#getting-started)`
+          ].filter(Boolean).join('\n');
+          const body = generatedNotes ? `${customNotes}\n\n${generatedNotes}` : customNotes;
+
+          let release;
+          try {
+            const response = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag: tagName,
+            });
+            release = response.data;
+            release = (await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: tagName,
+              body,
+              draft: false,
+              prerelease,
+            })).data;
+          } catch (error) {
+            if (error.status !== 404) throw error;
+            release = (await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tagName,
+              target_commitish: targetSha,
+              name: tagName,
+              body,
+              draft: false,
+              prerelease,
+            })).data;
+          }
+
+          const setupFiles = [
+            { path: process.env.AZDO_SETUP_PATH, name: 'setup-azdo.ps1' },
+            { path: process.env.GITHUB_SETUP_PATH, name: 'setup-github.ps1' },
+          ];
+          const existingAssets = await github.paginate(github.rest.repos.listReleaseAssets, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: release.id,
+            per_page: 100,
+          });
+          for (const setup of setupFiles) {
+            const oldAsset = existingAssets.find(asset => asset.name === setup.name);
+            if (oldAsset) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: oldAsset.id,
+              });
+            }
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: setup.name,
+              data: fs.readFileSync(setup.path),
+            });
+          }
+          core.notice(`Published ${prerelease ? 'prerelease' : 'stable release'} ${tagName} with both setup installers.`);
+
+    - name: Move stable tag after successful stable publication
+      if: inputs.move-stable == 'true'
+      shell: pwsh
+      env:
+        SOURCE_DIRECTORY: ${{ inputs.source-directory }}
+        TARGET_SHA: ${{ inputs.target-sha }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $sourceDirectory = [System.IO.Path]::GetFullPath($env:SOURCE_DIRECTORY)
+        $targetCommit = [string](& git -C $sourceDirectory rev-parse --verify "$($env:TARGET_SHA)^{commit}")
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($targetCommit)) {
+          throw "Could not resolve release target '$($env:TARGET_SHA)' to a commit."
+        }
+        & git -C $sourceDirectory config user.name 'github-actions[bot]'
+        if ($LASTEXITCODE -ne 0) { throw 'Could not configure Git author name.' }
+        & git -C $sourceDirectory config user.email 'github-actions[bot]@users.noreply.github.com'
+        if ($LASTEXITCODE -ne 0) { throw 'Could not configure Git author email.' }
+        & git -C $sourceDirectory tag -f stable $targetCommit
+        if ($LASTEXITCODE -ne 0) { throw 'Could not update the local stable tag.' }
+        & git -C $sourceDirectory push --force origin refs/tags/stable
+        if ($LASTEXITCODE -ne 0) { throw 'Could not move the remote stable tag.' }

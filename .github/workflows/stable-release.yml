@@ -1,198 +1,125 @@
 name: Stable Release
 
-run-name: Release ${{ github.ref_name }}
+run-name: Stable release ${{ github.ref_name }}
 
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-      - 'v[0-9]+.[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]*.[0-9]*.[0-9]*'
+      - 'v[0-9]*.[0-9]*.[0-9]*.[0-9]*'
+      - '!v[0-9]*.[0-9]*.[0-9]*-*'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  # This workflow does not wait on Repository Validation. Release-tag publication
-  # must be governed by maintainer policy; a tag trigger alone is not a test gate.
-  create-stable-release:
+  publish-pushed-tag:
+    name: Publish pushed stable tag
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout release source
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
+          path: source
           fetch-depth: 0
 
-      - name: Get tag name
-        id: get_tag
-        run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare setup scripts for release
-        id: prepare_setup
-        run: |
-          TAG_NAME="${{ steps.get_tag.outputs.TAG_NAME }}"
-          UPSTREAM_REPO="https://github.com/${{ github.repository }}.git"
-          
-          # Use the prepare-release.ps1 script (produces release/setup-azdo.ps1 and release/setup-github.ps1)
-          pwsh -File prepare-release.ps1 -TagName "$TAG_NAME" -OutputDir release -UpstreamRepo "$UPSTREAM_REPO"
-          
-          echo "SETUP_AZDO_FILE=release/setup-azdo.ps1" >> "$GITHUB_OUTPUT"
-          echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> "$GITHUB_OUTPUT"
-
-      - name: Update stable tag
-        # Unlike immutable version tags, stable is an intentionally moving pointer.
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          # Create or update the stable tag to point to the current commit
-          git tag -f stable
-          git push -f origin stable
-          
-          echo "Updated stable tag to point to ${{ steps.get_tag.outputs.TAG_NAME }}"
-
-      - name: Generate release notes body
-        id: release_notes
-        run: |
-          TAG_NAME="${{ steps.get_tag.outputs.TAG_NAME }}"
-          
-          # Create release notes with automated setup command and links
-          cat << EOF > release_notes.md
-          ## Getting Started
-          
-          ### Azure DevOps — Automated Setup (Recommended)
-          
-          Run this command in Windows PowerShell to set up ALM4Dataverse with Azure DevOps:
-          
-          \`\`\`powershell
-          iwr https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/setup-azdo.ps1 | iex
-          \`\`\`
-          
-          ### GitHub Actions — Automated Setup
-          
-          Run this command in Windows PowerShell to set up ALM4Dataverse with GitHub Actions:
-          
-          \`\`\`powershell
-          iwr https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/setup-github.ps1 | iex
-          \`\`\`
-          
-          📚 **Documentation:**
-          - [GitHub Actions Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/github-setup.md) - GitHub Actions setup
-          - [Azure DevOps Automated Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/azdo-automated-setup.md) - Azure DevOps quick setup
-          - [Azure DevOps Manual Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/azdo-manual-setup.md) - Step-by-step manual configuration
-          - [Getting Started](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/README.md#getting-started) - Overview and documentation
-          EOF
-          
-          echo "RELEASE_NOTES_FILE=release_notes.md" >> "$GITHUB_OUTPUT"
-
-      - name: Create GitHub Release
-        uses: actions/github-script@v7
+      - name: Checkout shared release implementation
+        uses: actions/checkout@v4
         with:
-          script: |
-            const fs = require('fs');
-            const tagName = '${{ steps.get_tag.outputs.TAG_NAME }}';
-            const releaseNotesFile = '${{ steps.release_notes.outputs.RELEASE_NOTES_FILE }}';
-            const customNotes = fs.readFileSync(releaseNotesFile, 'utf8');
-            
-            // Generated notes are optional enrichment; the authored setup instructions
-            // remain the release body when GitHub cannot generate comparison notes.
-            let generatedNotes = '';
-            try {
-              const notesResponse = await github.rest.repos.generateReleaseNotes({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag_name: tagName,
-              });
-              generatedNotes = notesResponse.data.body;
-            } catch (error) {
-              console.warn('Could not generate release notes automatically:', error.message);
-            }
-            
-            // Combine custom notes with generated notes
-            const body = generatedNotes 
-              ? customNotes + '\n\n' + generatedNotes
-              : customNotes;
-            
-            // Preserve the current retry behavior: any lookup/update failure enters
-            // creation, whose errors propagate. This catch is not limited to 404.
-            let releaseId;
-            try {
-              // Try to get existing release
-              const { data: existingRelease } = await github.rest.repos.getReleaseByTag({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag: tagName,
-              });
-              
-              // Update existing release
-              await github.rest.repos.updateRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: existingRelease.id,
-                body: body,
-              });
-              
-              releaseId = existingRelease.id;
-              console.log('Updated existing release');
-            } catch (error) {
-              // Create new release
-              const { data: newRelease } = await github.rest.repos.createRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                tag_name: tagName,
-                name: tagName,
-                body: body,
-                draft: false,
-                prerelease: false,
-              });
-              
-              releaseId = newRelease.id;
-              console.log('Created new release');
-            }
-            
-            // Upload setup scripts as release assets
-            const setupFiles = [
-              { path: '${{ steps.prepare_setup.outputs.SETUP_AZDO_FILE }}',   name: 'setup-azdo.ps1' },
-              { path: '${{ steps.prepare_setup.outputs.SETUP_GITHUB_FILE }}', name: 'setup-github.ps1' },
-            ];
+          ref: ${{ github.event.repository.default_branch }}
+          path: release-tools
+          fetch-depth: 1
 
-            // Listing/deletion failures are warned; a later upload can still fail.
-            // Do not describe these best-effort cleanup paths as guaranteed replacement.
-            let existingAssets = [];
-            try {
-              const { data: assets } = await github.rest.repos.listReleaseAssets({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: releaseId,
-              });
-              existingAssets = assets;
-            } catch (error) {
-              console.warn('Could not list existing assets:', error.message);
-            }
+      - name: Validate stable tag
+        id: tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_TAG -notmatch '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$') {
+            throw "Tag '$($env:RELEASE_TAG)' is not a supported stable version tag."
+          }
+          "tag_name=$($env:RELEASE_TAG)" >> $env:GITHUB_OUTPUT
 
-            for (const { path: filePath, name: assetName } of setupFiles) {
-              // Delete any existing asset with the same name
-              const existingAsset = existingAssets.find(a => a.name === assetName);
-              if (existingAsset) {
-                try {
-                  await github.rest.repos.deleteReleaseAsset({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    asset_id: existingAsset.id,
-                  });
-                  console.log(`Deleted existing ${assetName} asset`);
-                } catch (error) {
-                  console.warn(`Could not delete existing ${assetName} asset:`, error.message);
-                }
-              }
+      - name: Publish stable release and move stable tag
+        uses: ./release-tools/.github/actions/publish-release
+        with:
+          source-directory: source
+          release-tag: ${{ steps.tag.outputs.tag_name }}
+          target-sha: ${{ github.sha }}
+          prerelease: 'false'
+          move-stable: 'true'
 
-              // Upload new asset
-              const fileContent = fs.readFileSync(filePath);
-              await github.rest.repos.uploadReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                release_id: releaseId,
-                name: assetName,
-                data: fileContent,
-              });
-              console.log(`Uploaded ${assetName} as release asset`);
-            }
+  publish-dispatched-stable:
+    name: Calculate and publish stable release
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout selected release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: source
+          fetch-depth: 0
+
+      - name: Checkout shared release implementation
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: release-tools
+          fetch-depth: 1
+
+      - name: Require a branch selection
+        shell: pwsh
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if ($env:REF_TYPE -ne 'branch') {
+            throw 'Run this workflow from a selected branch, not a tag or commit ref.'
+          }
+
+      - name: Add current release configuration to selected source
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath release-tools/release.config.cjs -Destination source/release.config.cjs -Force
+
+      - name: Preview stable semantic release
+        id: preview
+        uses: codfish/semantic-release-action@v5.0.0
+        with:
+          working-directory: source
+          branches: ${{ format('[{0}]', toJson(github.ref_name)) }}
+          dry-run: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: /github/workspace/source
+
+      - name: Create stable version tag
+        id: semantic-release
+        if: steps.preview.outputs.new-release-published == 'true'
+        uses: codfish/semantic-release-action@v5.0.0
+        with:
+          working-directory: source
+          branches: ${{ format('[{0}]', toJson(github.ref_name)) }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: 1
+          GIT_CONFIG_KEY_0: safe.directory
+          GIT_CONFIG_VALUE_0: /github/workspace/source
+
+      - name: Publish stable release and move stable tag
+        if: steps.semantic-release.outputs.new-release-published == 'true'
+        uses: ./release-tools/.github/actions/publish-release
+        with:
+          source-directory: source
+          release-tag: ${{ steps.semantic-release.outputs.git-tag }}
+          target-sha: ${{ steps.semantic-release.outputs.git-head }}
+          prerelease: 'false'
+          move-stable: 'true'
+          release-notes: ${{ steps.semantic-release.outputs.release-notes }}
