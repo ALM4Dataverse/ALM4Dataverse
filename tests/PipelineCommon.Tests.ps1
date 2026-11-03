@@ -23,6 +23,11 @@ Describe 'ALM configuration loading' {
         $config.buildVersion.default | Should -Be '1.0'
         $config.buildVersion.branches | Should -BeOfType [hashtable]
     }
+
+    It 'pins Az.Accounts to a Dataverse-compatible version' {
+        $defaults = Import-PowerShellDataFile (Join-Path $repoRoot 'alm-config-defaults.psd1')
+        $defaults.scriptDependencies['Az.Accounts'] | Should -Be '5.5.0'
+    }
 }
 
 Describe 'Configured setting maps' {

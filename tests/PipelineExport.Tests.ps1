@@ -73,6 +73,7 @@ Describe 'Export and version changes' {
             Set-Content -LiteralPath $OutputPath -Value 'packed'
         }
         Mock Compare-DataverseSolutionComponents { $true }
+        Mock Get-DataverseConnection { $null }
         Mock Set-DataverseSolution {}
         Mock Register-AlmSolutionVersion { $Version }
         Mock git { ' M solutions/Example/Other/Solution.xml' }

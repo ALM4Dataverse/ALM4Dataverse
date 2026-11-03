@@ -264,19 +264,33 @@ if (Test-Path $lockFile) {
     Write-Host "Using pinned versions from lock file"
 }
 
-foreach ($module in $config.scriptDependencies.Keys) {
+# Load Az modules first so Dataverse dependencies cannot pre-load conflicting Azure assemblies.
+$dependencyModuleNames = @($config.scriptDependencies.Keys)
+$dependencyModules = @(
+    $dependencyModuleNames | Where-Object { $_ -eq 'Az.Accounts' }
+    $dependencyModuleNames | Where-Object { $_ -like 'Az.*' -and $_ -ne 'Az.Accounts' }
+    $dependencyModuleNames | Where-Object { $_ -notlike 'Az.*' }
+)
+
+foreach ($module in $dependencyModules) {
 
     $version = $config.scriptDependencies[$module]
 
     Write-Host "Installing $module module with version specifier: '$version'"
     if ($version -eq '') {
-        $installedModule = Install-Module -Name $module -Scope CurrentUser -Force -PassThru
+        $installedModules = @(Install-Module -Name $module -Scope CurrentUser -Force -PassThru)
     }
     elseif ($version -eq 'prerelease') {
-        $installedModule = Install-Module -Name $module -Scope CurrentUser -Force -AllowPrerelease -PassThru
+        $installedModules = @(Install-Module -Name $module -Scope CurrentUser -Force -AllowPrerelease -PassThru)
     }
     else {
-        $installedModule = Install-Module -Name $module -Scope CurrentUser -Force -RequiredVersion $version -AllowPrerelease:($version.Contains("-")) -PassThru
+        $installedModules = @(Install-Module -Name $module -Scope CurrentUser -Force -RequiredVersion $version -AllowPrerelease:($version.Contains("-")) -PassThru)
+    }
+
+    # Install-Module can also return modules installed as dependencies.
+    $installedModule = $installedModules | Where-Object { $_.Name -eq $module } | Select-Object -First 1
+    if ($null -eq $installedModule) {
+        throw "Install-Module did not return the requested module $module."
     }
     Write-Host "Installed $module version $($installedModule.Version)"
 

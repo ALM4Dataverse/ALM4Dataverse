@@ -4,6 +4,7 @@ BeforeAll {
     $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
     Import-Module powershell-yaml -RequiredVersion $policy.Tools['powershell-yaml']
     $deployAction = Get-Content (Join-Path $repoRoot '.github/actions/deploy/action.yml') -Raw | ConvertFrom-Yaml
+    $script:azureLoginStep = $deployAction.runs.steps | Where-Object { $_.uses -like 'azure/login@*' }
     $script:deploymentTagStep = $deployAction.runs.steps | Where-Object { $_.name -eq 'Push deployment tags' }
     function gh {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Arguments', Justification = 'Mock command signature; Pester inspects these arguments.')]
@@ -31,6 +32,12 @@ BeforeAll {
             event = @{ client_payload = $payload }
         } | ConvertTo-Json -Depth 10
         $env:INPUT_CALLER_INPUTS_JSON = @{ 'build-run-name' = $Selector; 'build-run-id' = ''; 'target-environment' = 'TEST' } | ConvertTo-Json
+    }
+}
+
+Describe 'GitHub deployment Azure session' {
+    It 'enables an Az PowerShell session for deployment hooks' {
+        $script:azureLoginStep.with['enable-AzPSSession'] | Should -BeTrue
     }
 }
 

@@ -10,7 +10,7 @@ BeforeAll {
             [PSCredential]$Credential,
             $ApplicationId,
             $FederatedToken,
-            [switch]$AllowNoSubscriptions
+            [switch]$SkipContextPopulation
         )
     }
     function az {
@@ -56,7 +56,7 @@ Describe 'Azure DevOps Az PowerShell sign-in' {
             $ServicePrincipal -and $Tenant -eq 'tenant-id' -and
             $Credential.UserName -eq 'application-id' -and
             $Credential.GetNetworkCredential().Password -eq 'client-secret' -and
-            $AllowNoSubscriptions
+            $SkipContextPopulation
         }
         Should -Invoke az -Times 1 -Exactly -ParameterFilter {
             $Arguments -contains 'login' -and
@@ -83,8 +83,9 @@ Describe 'Azure DevOps Az PowerShell sign-in' {
         Should -Invoke Connect-AzAccount -Times 1 -Exactly -ParameterFilter {
             $ServicePrincipal -and $Tenant -eq 'tenant-id' -and
             $ApplicationId -eq 'application-id' -and
-            $FederatedToken -eq 'federated-token' -and $AllowNoSubscriptions
+            $FederatedToken -eq 'federated-token' -and $SkipContextPopulation
         }
+        $env:AZURE_CLIENT_SECRET | Should -BeNullOrEmpty
         Should -Invoke az -Times 1 -Exactly -ParameterFilter {
             $Arguments -contains '--federated-token' -and
             $Arguments -contains 'federated-token'

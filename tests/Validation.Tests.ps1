@@ -1,6 +1,41 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
+
+    function Get-AnalyzerFindingKey {
+        param(
+            [Parameter(Mandatory)]
+            [System.Management.Automation.Language.Ast]$Ast,
+            [Parameter(Mandatory)]
+            $Diagnostic,
+            [Parameter(Mandatory)]
+            [string]$Path
+        )
+
+        $node = $null
+        $source = ''
+        if ($null -ne $Diagnostic.Extent) {
+            $source = $Diagnostic.Extent.Text
+            $node = $Ast.Find({
+                param($candidate)
+                $candidate.Extent.StartOffset -eq $Diagnostic.Extent.StartOffset -and
+                    $candidate.Extent.EndOffset -eq $Diagnostic.Extent.EndOffset
+            }, $true)
+            if ($null -eq $node) {
+                $node = $Ast.FindAll({
+                    param($candidate)
+                    $candidate -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                        $candidate.Extent.StartOffset -le $Diagnostic.Extent.StartOffset -and
+                        $candidate.Extent.EndOffset -ge $Diagnostic.Extent.EndOffset
+                }, $true) | Sort-Object { $_.Extent.StartOffset } -Descending | Select-Object -First 1
+            }
+        }
+        while ($null -ne $node -and $node -isnot [System.Management.Automation.Language.FunctionDefinitionAst]) {
+            $node = $node.Parent
+        }
+        $functionName = if ($null -ne $node) { $node.Name } else { '<script>' }
+        '{0}|{1}|{2}|{3}' -f $Path.Replace('\', '/'), $Diagnostic.RuleName, $functionName, $source
+    }
 }
 
 Describe 'Validation orchestration and coverage enforcement' {
@@ -130,12 +165,29 @@ Describe 'Validation orchestration and coverage enforcement' {
 Describe 'Repository analyzer policy' {
     It 'has no unused-parameter, naming, or output-type findings' {
         $policy = Import-PowerShellDataFile (Join-Path $repoRoot 'scripts/powershell-validation.psd1')
+        $reviewedExceptionKeys = @{}
+        foreach ($exception in $policy.Exceptions) {
+            $reviewedExceptionKeys[('{0}|{1}|{2}|{3}' -f
+                    $exception.Path.Replace('\', '/'),
+                    $exception.Rule,
+                    $exception.Function,
+                    $exception.Source)] = $true
+        }
         $paths = @(& git -C $repoRoot ls-files --cached --others --exclude-standard |
-            Where-Object { $_ -match '\.(ps1|psm1|psd1)$' } | Sort-Object -Unique)
+            Where-Object { $_ -match '\.(ps1|psm1|psd1)$' -and (Test-Path (Join-Path $repoRoot $_)) } | Sort-Object -Unique)
         $findings = @(
             foreach ($path in $paths) {
-                Invoke-ScriptAnalyzer -Path (Join-Path $repoRoot $path) -Settings $policy.AnalyzerSettings |
-                    Where-Object { $_.RuleName -in @('PSReviewUnusedParameter','PSUseSingularNouns','PSUseApprovedVerbs','PSUseOutputTypeCorrectly') }
+                $fullPath = Join-Path $repoRoot $path
+                $tokens = $null
+                $parseErrors = $null
+                $ast = [System.Management.Automation.Language.Parser]::ParseFile($fullPath, [ref]$tokens, [ref]$parseErrors)
+                foreach ($diagnostic in @(Invoke-ScriptAnalyzer -Path $fullPath -Settings $policy.AnalyzerSettings |
+                            Where-Object { $_.RuleName -in @('PSReviewUnusedParameter','PSUseSingularNouns','PSUseApprovedVerbs','PSUseOutputTypeCorrectly') })) {
+                    $key = Get-AnalyzerFindingKey -Ast $ast -Diagnostic $diagnostic -Path $path
+                    if (-not $reviewedExceptionKeys.ContainsKey($key)) {
+                        $diagnostic
+                    }
+                }
             }
         )
         $findings | Should -BeNullOrEmpty
@@ -207,7 +259,7 @@ Describe 'Validation gate enforcement' {
         # Inject regressions into a disposable source copy. A child validator must fail before
         # reaching Pester, avoiding recursive execution of this validation suite.
         $sourcePaths = @(& git -C $repoRoot ls-files --cached --others --exclude-standard) |
-            Where-Object { $_ -match '\.(ps1|psm1|psd1|psrc|pssc|ps1xml|cdxml)$' } | Sort-Object -Unique
+            Where-Object { $_ -match '\.(ps1|psm1|psd1|psrc|pssc|ps1xml|cdxml)$' -and (Test-Path (Join-Path $repoRoot $_)) } | Sort-Object -Unique
         foreach ($relativePath in $sourcePaths) {
             $destinationPath = Join-Path $fixtureRoot $relativePath
             New-Item -ItemType Directory -Path (Split-Path $destinationPath -Parent) -Force | Out-Null
