@@ -3908,7 +3908,8 @@ function Invoke-WithErrorHandling {
         Returns operation output or null when skipped. Retry invokes the operation
         again without rollback, so partial side effects must be handled by callers.
         Back/cancellation exceptions bypass the error menu. Abort or a cancelled
-        menu throws a setup-aborted error.
+        menu throws a setup-aborted error. When a .NET callback wraps a PowerShell
+        failure, the innermost error and its source location are shown when available.
     .PARAMETER StatusMessage
         Nonblank enables Invoke-WithSpectreStatus and its callback/output semantics;
         blank invokes ScriptBlock directly with no positional arguments.
@@ -3946,6 +3947,34 @@ function Invoke-WithErrorHandling {
                 "[yellow]Error Type:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.Exception.GetType().Name)",
                 "[yellow]Error Message:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.Exception.Message)"
             )
+
+            $innerException = $_.Exception.InnerException
+            while ($null -ne $innerException -and $null -ne $innerException.InnerException) {
+                $innerException = $innerException.InnerException
+            }
+            if ($innerException) {
+                $errorLines += "[yellow]Inner Error Type:[/] $(ConvertTo-SpectreMarkupLiteral -Text $innerException.GetType().Name)"
+                $errorLines += "[yellow]Inner Error Message:[/] $(ConvertTo-SpectreMarkupLiteral -Text $innerException.Message)"
+
+                $innerInvocationInfo = $null
+                $innerStackTrace = $null
+                if ($innerException -is [System.Management.Automation.RuntimeException]) {
+                    $innerErrorRecord = $innerException.ErrorRecord
+                    if ($innerErrorRecord) {
+                        $innerInvocationInfo = $innerErrorRecord.InvocationInfo
+                        $innerStackTrace = $innerErrorRecord.ScriptStackTrace
+                    }
+                }
+                if ($innerInvocationInfo -and $innerInvocationInfo.PositionMessage) {
+                    $errorLines += "[grey]Inner Location:[/] $(ConvertTo-SpectreMarkupLiteral -Text $innerInvocationInfo.PositionMessage.Trim())"
+                }
+                if (-not $innerStackTrace) {
+                    $innerStackTrace = $innerException.StackTrace
+                }
+                if ($innerStackTrace) {
+                    $errorLines += "[grey]Inner Stack Trace:[/] $(ConvertTo-SpectreMarkupLiteral -Text $innerStackTrace.Trim())"
+                }
+            }
 
             if ($_.InvocationInfo.PositionMessage) {
                 $errorLines += "[grey]Location:[/] $(ConvertTo-SpectreMarkupLiteral -Text $_.InvocationInfo.PositionMessage.Trim())"

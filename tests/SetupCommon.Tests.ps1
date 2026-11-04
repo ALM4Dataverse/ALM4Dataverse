@@ -261,6 +261,34 @@ namespace Spectre.Console.Rendering { public interface IRenderable {} }
         $executionState.Count | Should -Be 1
         $result.Value | Should -Be 42
     }
+
+    It 'shows the inner PowerShell error location for a wrapped status callback failure' {
+        Mock Initialize-SpectreConsole {}
+        Mock Select-FromMenu { 1 }
+        [Spectre.Console.AnsiConsole]::Clear()
+
+        $innerException = $null
+        try {
+            $null.ToString()
+        }
+        catch {
+            $innerException = $_.Exception
+        }
+        $script:statusCallbackException = [System.Reflection.TargetInvocationException]::new('Status callback failed', $innerException)
+
+        {
+            Invoke-WithErrorHandling -OperationName 'Test callback' -StatusMessage 'Running test callback' -CaptureOutputInPanel -ScriptBlock {
+                throw $script:statusCallbackException
+            }
+        } | Should -Throw '*Setup aborted by user after error in Test callback*'
+
+        $output = [Spectre.Console.AnsiConsole]::Output -join [Environment]::NewLine
+        $output | Should -Match 'Inner Error Type'
+        $output | Should -Match 'You cannot call a method on a null-valued expression'
+        $output | Should -Match 'Inner Location'
+        $output | Should -Match 'SetupCommon.Tests.ps1'
+        $output | Should -Match 'Inner Stack Trace'
+    }
 }
 
 Describe 'Setup selector state transitions' {
