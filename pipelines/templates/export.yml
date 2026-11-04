@@ -7,6 +7,11 @@ parameters:
 - name: useAlm4DataverseExtension
   type: boolean
   default: true
+# Secret names from the caller-attached development variable group to expose
+# to export scripts and hooks under the same name.
+- name: secretVariables
+  type: object
+  default: []
 
 stages:
   - stage: Export
@@ -124,6 +129,8 @@ stages:
               AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
               AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
               AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
+            ${{ each secretVariable in parameters.secretVariables }}:
+              ${{ secretVariable }}: $(${{ secretVariable }})
 
         # Push to the explicit source ref because pipeline checkout may be detached.
         # The existing exit-code policy treats commit exit 1 as no changes.

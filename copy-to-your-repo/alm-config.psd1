@@ -30,10 +30,8 @@
     #   Each project is built using npm ci / npm run build. BUILD/IMPORT artifacts
     #   contain only power.config.json and the configured buildPath output; project
     #   metadata, dependencies, secrets, certificates and linked paths are excluded.
-    #   Runtime files are filtered by filename: .env/.env.*, .npmrc, credentials.json,
-    #   serviceAccount.json, id_rsa/id_ecdsa/id_ed25519 variants, private-key/client-secret basenames,
-    #   and .p8/.jks/.cert/.cer/.crt/.der/.pem/.key/.pfx/.p12 extensions are rejected.
-    #   Unsafe filenames found inside buildPath fail the build. By default, built files
+    #   Files inside buildPath with secret- or key-like names fail the build; the
+    #   codeApps entry in docs/config/alm-config.md lists them. By default, built files
     #   replace the existing Code App component in this solution before import, so
     #   the app must already be included in the solution package. This avoids the
     #   broader Power Platform API RBAC assignment required by PAC push.
@@ -141,8 +139,8 @@
     # An exact version (for example '22.14.0') pins the release.
     # nodeVersion = '22'
 
-    # BUILD SemVer settings. PATCH is the CI run number; the branch/provider
-    # prerelease suffix is removed when the successful build is promoted.
+    # BUILD SemVer settings. PATCH is the CI run number and every build keeps its
+    # normalized branch name as a prerelease suffix (for example 1.0.42-main).
     # MAJOR.MINOR also maps to solution Major.Build; solution Minor tracks upgrades.
     buildVersion = @{
         # MAJOR.MINOR used for branches without a specific entry.
@@ -203,11 +201,14 @@
     #   - TempDirectory: path to temporary directory for export operations
     #   - EnvironmentName: name of the Dataverse environment being exported from
     #
-    # preExportSolution, postExportSolution:
+    # preExportSolution, parallelExportSolution, postExportSolution:
     #   - SourceDirectory, ArtifactStagingDirectory, TempDirectory, EnvironmentName
     #   - SolutionName, SolutionConfig, SolutionIndex
     #   - Connection: the cloned Dataverse connection for this hook; it is the default in parallel workers
     #   - OperationBudget and CancellationToken: available for parallel exports
+    #
+    # postExport additionally receives SolutionHookResults and
+    # ParallelExportSolutionHookResults, keyed by solution name.
     #
     # preDeploy, dataMigrations, postDeploy:
     #   - ArtifactsPath: path to the artifacts directory
@@ -219,6 +220,10 @@
 
         # Called before each solution's export begins.
         preExportSolution = @()
+
+        # Started alongside each solution's package exports; EXPORT waits for it
+        # before unpacking that solution. Runs synchronously when export is sequential.
+        parallelExportSolution = @()
 
         # Called after each solution is unpacked and compared. In parallel export mode,
         # hooks for different solutions run concurrently with the remaining exports.

@@ -7,6 +7,11 @@ parameters:
   - name: timeoutInMinutes
     type: number
     default: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
+  # Azure Pipelines never exposes secret variables to scripts implicitly. Each
+  # listed name is mapped from the stage's variable group under the same name.
+  - name: secretVariables
+    type: object
+    default: []
 
 # Stage identifiers cannot contain the same characters as environment display
 # names. Keep the original name for approvals, service connections and variables.
@@ -131,6 +136,8 @@ stages:
                       AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
                       AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
                       AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
+                    ${{ each secretVariable in parameters.secretVariables }}:
+                      ${{ secretVariable }}: $(${{ secretVariable }})
 
                 # Move the environment pointer only after deployment succeeds.
                 # Metadata binds the selected run to its source; older artifacts

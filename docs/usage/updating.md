@@ -21,7 +21,7 @@ solutions, data hooks, and authentication before rolling them out across applica
 ## Update An Application
 
 1. Record the current shared ref, successful production build identities, target settings, and required backups. Retain artifacts needed for recovery/baseline validation.
-2. Review upstream release notes and compare changed caller files, default settings, action/template inputs, and hook behavior.
+2. Review the [upgrade notes](upgrade-notes.md) and upstream [release notes](https://github.com/ALM4Dataverse/ALM4Dataverse/releases), and compare changed caller files, default settings, action/template inputs, and hook behavior.
 3. Update shared references and any required caller/configuration changes on a reviewable application branch.
 4. Run EXPORT/IMPORT only against intended development targets. BUILD a new package and exercise checker/baseline validation where configured.
 5. Deploy the exact new build to a representative non-production target. Verify upgrades, data changes, connections, ownership, and a repeated deployment.
@@ -64,10 +64,23 @@ and approval checks are not replaced by updating Git files.
 Use a reviewed released setup script. Select existing resources deliberately, review
 generated diffs, and keep custom hooks/settings under source control.
 
+Setup copies the scaffold again when it re-runs. It keeps these application files and
+settings:
+
+- `alm-config.psd1`, which is merged with your solution selection rather than replaced.
+- `AGENTS.md` and everything under `data/`, which are created only when missing.
+- On GitHub: the existing `DEPLOY-<branch>` workflow (only its environment jobs are
+  updated) and `secrets-json` mappings in every workflow.
+- On Azure DevOps: `secretVariables` lists in BUILD, EXPORT and IMPORT, and extra stage
+  parameters for DEPLOY environments that remain selected.
+
+Other scaffold files that differ from the release are replaced. That includes BUILD,
+which setup regenerates on both platforms, and any other edits to EXPORT, IMPORT or
+CLEANUP-RELEASES callers.
+
 > [!CAUTION]
-> Setup may preserve some mappings/checks while regenerating callers; it is not a generic
-> merge tool for arbitrary customization. If interrupted, inspect resources and commits
-> already created before retrying.
+> Setup is not a generic merge tool for arbitrary customization. If interrupted, inspect
+> resources and commits already created before retrying.
 
 ## Choose The Smallest Extension Point
 
@@ -77,11 +90,11 @@ generated diffs, and keep custom hooks/settings under source control.
 - **Shared fork:** change reusable behavior only when configuration/hooks are insufficient, and regression-test all affected consumers.
 
 > [!NOTE]
-> **Advanced: shared fork defaults.** Edit [alm-config-defaults.psd1](../../alm-config-defaults.psd1).
-> Application scalars override defaults; nested hashtables merge, arrays append, and
-> `$null` retains defaults. There is no automatically loaded `fork-almconfig.psd1`.
-> Shared hook paths can start with `[alm]`; application hook paths are relative to the
-> operation's base directory. See the [merge and hook reference](../config/alm-config.md).
+> **Advanced: shared fork defaults.** A fork can set defaults for every consuming
+> application in [alm-config-defaults.psd1](../../alm-config-defaults.psd1), including
+> shared hooks referenced with `[alm]`. See
+> [fork configuration](../config/alm-config.md#advanced---fork-configuration) for the
+> merge rules.
 
 ## Rotate Credentials And Review Access
 

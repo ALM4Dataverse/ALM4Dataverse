@@ -69,4 +69,23 @@ Describe 'Workflow and pipeline YAML validation' {
         $exportTemplate | Should -Match ([regex]::Escape('-DefaultBranchName $defaultBranchName'))
         $exportTemplate | Should -Not -Match ([regex]::Escape('-DefaultBranchName "$(Build.Repository.DefaultBranch)"'))
     }
+
+    It 'maps caller-listed secret variables into every connected <Template> script step' -ForEach @(
+        @{ Template = 'build.yml'; ConnectedSteps = 2 }
+        @{ Template = 'export.yml'; ConnectedSteps = 1 }
+        @{ Template = 'import.yml'; ConnectedSteps = 1 }
+        @{ Template = 'stages/deploy-environment.yml'; ConnectedSteps = 1 }
+    ) {
+        $path = Join-Path $repoRoot "pipelines/templates/$Template"
+        $pipeline = Get-Content -LiteralPath $path -Raw | ConvertFrom-Yaml
+        $parameter = @($pipeline.parameters | Where-Object { $_.name -eq 'secretVariables' })
+        $parameter.Count | Should -Be 1
+        $parameter[0].type | Should -Be 'object'
+        @($parameter[0].default).Count | Should -Be 0
+
+        $text = Get-Content -LiteralPath $path -Raw
+        $mappings = [regex]::Matches($text, '\$\{\{ each secretVariable in parameters\.secretVariables \}\}:\s+\$\{\{ secretVariable \}\}: \$\(\$\{\{ secretVariable \}\}\)')
+        $mappings.Count | Should -Be $ConnectedSteps
+        [regex]::Matches($text, 'connect\.ps1').Count | Should -Be $ConnectedSteps
+    }
 }

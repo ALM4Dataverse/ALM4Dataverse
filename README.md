@@ -6,9 +6,9 @@ Source-controlled application lifecycle management for Microsoft Dataverse, usin
 **Azure DevOps** or **GitHub Actions (PREVIEW)**. Export maker changes, build a numbered
 deployment package, and promote that same package through your environments.
 
-This repository contains shared PowerShell automation, pipeline/action templates,
-setup tools, and the guides for operating and extending them. Basic Dataverse solution
-knowledge is assumed; start below for the repository and pipeline workflow.
+This repository contains the shared PowerShell automation, pipeline and action
+templates, setup scripts, and the guides for operating and extending them. Basic
+Dataverse solution knowledge is assumed.
 
 ## How It Works
 
@@ -28,13 +28,28 @@ flowchart LR
 | [DEPLOY](docs/usage/deploying.md) | Promote an existing successful build | Target settings applied during import, process ownership/activation, hooks, and deployment history. No rebuild. |
 | [IMPORT](docs/usage/importing-changes.md) | Synchronize a development environment | A build from source deployed unmanaged, including normal build/deployment hooks. |
 
-Your application repository owns solution source, configuration, data, and small caller
-files. Shared automation stays in this repository or your fork. Azure DevOps setup
-imports a shared repository into your project; GitHub callers can reference public
-actions directly. Each build snapshots its deployment code, while target credentials
-and environment-specific values are supplied at runtime.
+Each application gets its own repository holding solution source, configuration, data
+and small caller files; the shared automation stays here or in your fork. See the
+[application repository layout](docs/concepts/application-repository.md) and the
+[glossary](docs/concepts/glossary.md).
 
-## Features And Boundaries
+## Getting Started
+
+Pick a platform and follow its quickstart: it takes you from nothing to a first test
+deployment using automated setup.
+
+- [Quickstart: GitHub Actions](docs/getting-started/quickstart-github.md)
+- [Quickstart: Azure DevOps](docs/getting-started/quickstart-azdo.md)
+
+Not sure which platform? Read
+[Should I use Azure DevOps or GitHub?](docs/faqs.md#should-i-use-azure-devops-or-github)
+
+> [!IMPORTANT]
+> ALM4Dataverse doesn't create environments, test your application, or guarantee
+> rollback. Read [responsibilities and limits](docs/concepts/responsibilities.md) before
+> production depends on it.
+
+## Features
 
 - Zero, one, or multiple solutions per application, ordered by dependency; managed deployment by default with per-solution unmanaged options.
 - Version-aware solution installation, updates, and upgrades, plus connection references, Dataverse environment values, and process ownership/activation.
@@ -42,97 +57,56 @@ and environment-specific values are supplied at runtime.
 - Pinned module/PAC dependencies, cache-aware installation, and a per-build dependency lock.
 - Optional PAC Solution Checker and deployment validation, including a retained release or last-deployed environment baseline.
 - Branch-specific development and deployment workflows, with platform-specific approval, permission, and concurrency controls.
-- Branch-suffixed GitHub BUILD releases, deployment pointers, and branch-aware Release cleanup.
-
-> [!IMPORTANT]
-> ALM4Dataverse does not provision Dataverse environments, replace functional testing,
-> or guarantee rollback of solution/data changes. An artifact snapshots deployment
-> content, not the hosted runner or target state. Plan backups, access controls, retention,
-> and recovery alongside automation. GitHub plan/visibility restrictions also apply;
-> manual gate tags are not an independent reviewer approval system.
-
-## Getting Started
-
-Choose one platform, review its prerequisites, and run setup using a reviewed release
-script or follow the manual steps. Not sure which platform to choose? Read
-[Should I use Azure DevOps or GitHub?](docs/faqs.md#should-i-use-azure-devops-or-github)
-for a comparison of free limits, paid costs, and deployment approvals.
-
-> [!TIP]
-> Start with non-production targets and decide on a
-> [branching strategy](docs/usage/branching-strategies.md) before naming environments.
-
-### GitHub Actions
-
-Follow [GitHub setup](docs/setup/github-setup.md) for automated or manual installation,
-then complete the [environment checklist](docs/setup/github-variables.md). Check
-[plan limitations](docs/setup/github-setup.md#github-licence-limitations) before choosing
-authentication storage and promotion controls. GitHub support is in preview.
-
-### Azure DevOps
-
-Check [organization requirements](docs/setup/azdo-organisation-requirements.md), then
-use [automated setup](docs/setup/azdo-automated-setup.md) or the
-[manual setup guide](docs/setup/azdo-manual-setup.md). Arrange hosted-agent capacity,
-extensions, service connections, target settings, and pipeline resource permissions.
-
-### First Successful Run
-
-1. List solution unique names in dependency order and configure required assets/hooks.
-2. Verify the selected development target, application identity, process-owner user, connections, and environment-specific values.
-3. Run EXPORT and inspect its commit. Check the resulting BUILD, or start BUILD manually if no new commit was needed.
-4. Deploy that exact successful build to the first non-production target and verify application behavior.
-5. Promote the same build through later targets. Configure branch/PR policies separately if validation is required before merge.
-
-### AI-Assisted Application Changes
-
-New application repositories scaffolded from ALM4Dataverse include an
-[`AGENTS.md`](copy-to-your-repo/AGENTS.md) that tells coding agents which shared
-framework is in use and where its guides live. When asking an agent to add or update
-Dataverse components, have it read that file and the
-[guide to adding solutions, plug-ins, web resources, and Code Apps](docs/usage/adding-dataverse-components.md) first.
 
 ## Documentation
 
-### Initial Setup
+### Set Up
 
 | Platform | Guides |
 | --- | --- |
-| GitHub Actions | [Setup](docs/setup/github-setup.md), [environment checklist](docs/setup/github-variables.md) |
-| Azure DevOps | [Requirements](docs/setup/azdo-organisation-requirements.md), [automated setup](docs/setup/azdo-automated-setup.md), [manual setup](docs/setup/azdo-manual-setup.md) |
+| GitHub Actions | [Quickstart](docs/getting-started/quickstart-github.md), [full setup](docs/setup/github-setup.md), [environment checklist](docs/setup/github-variables.md) |
+| Azure DevOps | [Quickstart](docs/getting-started/quickstart-azdo.md), [requirements](docs/setup/azdo-organisation-requirements.md), [automated setup](docs/setup/azdo-automated-setup.md), [manual setup](docs/setup/azdo-manual-setup.md) |
 
-### Usage Instructions
+### Use It Day To Day
 
 - [Branching strategies](docs/usage/branching-strategies.md): choose development and promotion branches.
-- [Adding solutions, plug-ins, web resources, and Code Apps](docs/usage/adding-dataverse-components.md): add Dataverse components to configured solutions.
 - [Exporting changes](docs/usage/exporting-changes.md): capture maker changes and understand version increments.
-- [Building releases](docs/usage/building-releases.md): artifacts, checker reports, deployment validation, and retention.
+- [Building releases](docs/usage/building-releases.md): artifacts, checker reports, deployment validation, and GitHub Release cleanup.
 - [Deploying](docs/usage/deploying.md): select builds, promote, retry, redeploy, and plan recovery.
-- [Cleaning up GitHub Releases](docs/usage/building-releases.md#github-release-cleanup): retention and active-deployment protection.
 - [Importing changes](docs/usage/importing-changes.md): synchronize development from source.
 - [Troubleshooting](docs/usage/troubleshooting.md): diagnose authentication, triggers, packaging, imports, and missing artifacts.
-- [Updating and customizing](docs/usage/updating.md): shared-code upgrades, forks, credential rotation, and extension choices.
 
-### Configuration Reference
+### Extend And Customize
+
+- [Writing hooks](docs/usage/writing-hooks.md): run your own PowerShell during export, build and deployment.
+- [Data import and export example](docs/config/example-hooks/data-import-export.md): move configuration records between environments.
+- [Adding solutions, plug-ins, web resources, and Code Apps](docs/usage/adding-dataverse-components.md): build components from source into solutions.
+- [Updating and customizing](docs/usage/updating.md): shared-code upgrades, forks, re-running setup, and credential rotation.
+- [Upgrade notes](docs/usage/upgrade-notes.md): changes that need action when you move to a newer shared ref.
+
+### Reference
 
 - [ALM configuration](docs/config/alm-config.md): every application/default setting, merge behavior, hook context, checker, and timeout.
 - [Pipelines, actions, and scripts](docs/config/pipelines.md): inputs, outputs, parameters, permissions, and direct PowerShell usage.
 - [Git tag catalog](docs/config/git-tags.md): solution reservations, build identities, deployment pointers, gates, and cleanup metadata.
-- [GitHub variables and secrets](docs/config/github-secrets.md): canonical credential, prefix, secret-selection, and OIDC reference.
-- [Azure DevOps variable groups](docs/config/azdo-environment-variable-group.md): process owner and target values.
+- [GitHub variables and secrets](docs/config/github-secrets.md): credentials, prefixes, secret selection, and OIDC.
+- [Azure DevOps variable groups](docs/config/azdo-environment-variable-group.md): process owner, target values, and secrets.
 - [Azure DevOps service connections](docs/config/azdo-environment-service-connection.md): authentication and authorization.
-
-### Example 'Hook' Extensions
-
-- [Data import and export](docs/config/example-hooks/data-import-export.md): configuration records, relationships, and deletion handling.
-
-### Further Reading
-
 - [Frequently asked questions](docs/faqs.md)
-- [Maintainer guide](docs/maintainers.md): tests, dependency updates, and shared releases.
+
+### AI Agents
+
+Application repositories created by setup include an
+[`AGENTS.md`](copy-to-your-repo/AGENTS.md) that tells coding agents which shared
+framework is in use, which files they may change, and where the guides for the pinned
+version live. Ask an agent to read it before it changes Dataverse components or ALM
+configuration. Agents working on this repository should start with the root
+[`AGENTS.md`](AGENTS.md).
+
+## Contributing And Support
+
+- [Contributing](CONTRIBUTING.md): how to propose changes, run checks, and write documentation.
+- [Security policy](SECURITY.md): how to report a vulnerability privately.
+- [Maintainer guide](docs/maintainers.md): source map, tests, dependency updates, and shared releases.
+- [PowerShell development](docs/development/powershell.md): local checks, analyzer policy, and coverage.
 - [Maintainer scripts and checks](.github/scripts/README.md)
-
-## Contributing
-
-See [PowerShell Development](docs/development/powershell.md) for local checks,
-regression tests, analyzer policy, and the PowerShell CI workflow.

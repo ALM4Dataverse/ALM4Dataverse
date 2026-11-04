@@ -23,3 +23,6 @@ stages:
   parameters:
     commitMessage: ${{ parameters.commitMessage }}
     useAlm4DataverseExtension: true
+    # Secret variables in the group are hidden from scripts unless listed here.
+    # secretVariables:
+    #   - DataverseEnvVar_contoso_APIKey

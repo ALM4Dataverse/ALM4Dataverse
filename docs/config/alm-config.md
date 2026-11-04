@@ -40,9 +40,10 @@ The supplied template additionally includes the `data` asset and example data ho
 
 | Setting | Type | Default or template value |
 | --- | --- | --- |
-| `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. |
+| `solutions` | Array of hashtables | Empty in the template; list solutions in dependency order. Each entry can set `mappings`, `codeApps`, `deployUnmanaged` and other per-solution options. |
 | `buildVersion` | Hashtable | Shared default is `'1.0'`; optional MAJOR.MINOR override and full-branch overrides. |
 | `export` | Hashtable | Up to two concurrent package exports; a shared limit of four operations with version updates. |
+| `build` | Hashtable | Parallel build commands and packing (two at a time); version collision guard enabled. |
 | `assets` | Array of paths | `@('data')` in the template. |
 | `hooks` | Hashtable of script-path arrays | Empty except the template's `postExport` and `postDeploy` data hooks. |
 | `organizationSettings`, `orgDbOrgSettings` | Hashtable of setting names to values | Empty; applied before deployment. |
@@ -212,7 +213,7 @@ solutions = @(
 - `name` (required): Dataverse unique solution name, not display name; must match `solutions/<name>` in source control.
 - `deployUnmanaged` (optional, default: false): Boolean indicating whether to deploy the unmanaged version instead of managed
 - `serviceAccountUpnConfigKey` (optional, default: 'DataverseServiceAccountUpn'): Name of the environment configuration key containing the service account UPN to use when activating processes in this solution
-- `codeApps` (optional): One or more code app project directories, relative to the repository root, to build and publish with this solution. Each project must contain `package.json`, `package-lock.json` (or `npm-shrinkwrap.json`), and `power.config.json`. BUILD and IMPORT run `npm ci` followed by `npm run build`, then include only `power.config.json` and the configured `buildPath` output in the artifacts. Project metadata, dependencies, `.git`, and linked/reparse paths are not deployment inputs and are never copied. Runtime files whose names are `.env` or `.env.*`, `.npmrc`, `credentials.json`, `serviceAccount.json`, `id_rsa` variants, exact private-key/client-secret basenames, or use `.p8`, `.jks`, `.cert`, `.cer`, `.crt`, `.der`, `.pem`, `.key`, `.pfx`, or `.p12` extensions are rejected. This is a filename policy, not arbitrary secret-content detection. The dependency installer ensures the configured `nodeVersion` and npm are available only when BUILD/IMPORT has at least one code app. Do not also list code app directories in `assets`.
+- `codeApps` (optional): One or more code app project directories, relative to the repository root, to build and publish with this solution. Each project must contain `package.json`, `package-lock.json` (or `npm-shrinkwrap.json`), and `power.config.json`. BUILD and IMPORT run `npm ci` followed by `npm run build`, then include only `power.config.json` and the configured `buildPath` output in the artifacts. Project metadata, dependencies, `.git`, and linked/reparse paths are not deployment inputs and are never copied. Runtime files are rejected, case-insensitively, when their names are `.env` or `.env.*`, `.npmrc`, `credentials.json` or `serviceAccount.json`; start with `id_rsa`, `id_ecdsa` or `id_ed25519` (alone or followed by `.`, `_` or `-`); have a `private-key`, `private_key`, `privatekey`, `client-secret`, `client_secret` or `clientsecret` base name; or use the `.p8`, `.jks`, `.cert`, `.cer`, `.crt`, `.der`, `.pem`, `.key`, `.pfx` or `.p12` extension. This is a filename policy, not arbitrary secret-content detection. The dependency installer ensures the configured `nodeVersion` and npm are available only when BUILD/IMPORT has at least one code app. Do not also list code app directories in `assets`.
 - `codeAppPublishMethod` (optional, default: `'solution'`): `'solution'` patches each built app's files and package URIs into its existing Code App component in the solution ZIP before any solution is imported. The app must already be present as a root component in that solution, with a matching `appDisplayName` in its `power.config.json`; otherwise deployment fails before importing any solution. `'pac'` retains the `pac code push` method after import.
 - `solutionCheck` (optional): Per-solution PAC checker settings merged with global `solutionCheck` settings (see below). Set `solutionCheck.enabled = $false` to skip checking a specific solution.
 - `mappings` (optional): Ordered SolutionPackager mapping entries used during BUILD and EXPORT; each entry may include the build command that produces its source during BUILD; see [Build Processing](#build-processing).
@@ -457,18 +458,23 @@ hooks = @{
 
 **Available Hooks:**
 
-- **preExport**: Called before exporting solutions from a Dataverse environment
-- **preExportSolution**: Called before each solution's exports begin
-- **parallelExportSolution**: Started alongside each solution's export workers. EXPORT waits for this hook to finish before unpacking and comparing that solution. With sequential export, the hook runs synchronously before the solution is exported.
-- **postExportSolution**: Called after each solution is unpacked and compared. With parallel export enabled, hooks for different solutions can run concurrently with remaining exports.
-- **postExport**: Called after exporting and unpacking solutions
-- **preBuild**: Called before packing solutions during the build process
-- **postBuild**: Called after packing solutions and copying assets
-- **preDeploy**: Called before staging and importing solutions
-- **dataMigrations**: Called during deployment after solutions are staged but before upgrades. Use this for data migration scripts that need to relocate data before columns are removed
-- **postDeploy**: Called after publish customizations
+| Hook | Run by | When |
+| --- | --- | --- |
+| `preExport` | EXPORT | Before any solution is exported. |
+| `preExportSolution` | EXPORT | Before each solution's package exports begin. |
+| `parallelExportSolution` | EXPORT | Started alongside each solution's package exports. EXPORT waits for it before unpacking and comparing that solution. With sequential export, it runs synchronously before the solution is exported. |
+| `postExportSolution` | EXPORT | After each solution is unpacked and compared. With parallel export, hooks for different solutions can run concurrently with remaining exports. |
+| `postExport` | EXPORT | After all solutions are exported, unpacked and versioned, before the commit. |
+| `preBuild` | BUILD, IMPORT | Before solutions are packed. |
+| `postBuild` | BUILD, IMPORT | After solutions are packed and assets copied. |
+| `preDeploy` | DEPLOY, IMPORT, BUILD validation | Before solutions are staged or imported. |
+| `dataMigrations` | DEPLOY, IMPORT, BUILD validation | After solutions are staged, before upgrades are applied. Use it to relocate data before columns are removed. |
+| `postDeploy` | DEPLOY, IMPORT, BUILD validation | After customizations are published and processes activated. |
 
-Hooks run in their listed order, and a missing or failing hook fails the operation. `IMPORT` runs the build hooks and then the deployment hooks; it does not run export hooks. BUILD validation also runs the selected package's deployment hooks, including data migrations.
+Hooks run in their listed order, and a missing or failing hook fails the operation. `IMPORT` runs the build hooks and then the deployment hooks; it does not run export hooks. BUILD validation runs the selected package's deployment hooks, including data migrations, and also runs the baseline package's hooks when a baseline is configured.
+
+For a step-by-step guide to writing, testing and packaging a hook, including the
+authentication context available to it, see [Writing hooks](../usage/writing-hooks.md).
 
 > [!CAUTION]
 > **Advanced: migration timing.** Multi-solution managed deployments stage imports in
@@ -493,9 +499,14 @@ Each hook script receives a `$Context` parameter containing:
   - `parallelExportSolution` hook output is collected by solution in `ParallelExportSolutionHookResults` and passed to the `postExport` hook.
   - **preDeploy, dataMigrations, postDeploy**: `ArtifactsPath`, `UseUnmanagedSolutions`. The switch is true for IMPORT, which forces unmanaged packages; DEPLOY and BUILD validation leave it false, even when a solution is configured with `deployUnmanaged`.
 
-Start a hook with a parameter block. Resolve application-owned files from `$PSScriptRoot` or `$Context.BaseDirectory`, not from assumptions about the runner's working directory. Guard optional configuration keys when using strict mode:
+The context does not name the target environment or say whether a deployment hook is
+running for DEPLOY or BUILD validation. If a hook must behave differently per target,
+read a value you supply for that target, such as a `DataverseEnvVar_*` or custom variable;
+see [Writing hooks](../usage/writing-hooks.md#identify-the-target).
 
 Per-solution hooks for different solutions may run concurrently when `export.parallel` is enabled. `parallelExportSolution` also runs concurrently with package exports for the same solution; EXPORT waits for it before unpacking. Keep hook side effects solution-scoped and use the provided `OperationBudget` for Dataverse operations. Hooks listed for a single phase run in their configured order; solution-to-solution completion order is not guaranteed. With sequential exports, all per-solution hooks run synchronously.
+
+Start a hook with a parameter block. Resolve application-owned files from `$PSScriptRoot` or `$Context.BaseDirectory`, not from assumptions about the runner's working directory. Guard optional configuration keys when using strict mode:
 
 ```powershell
 param([hashtable]$Context)
@@ -504,8 +515,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if ($Context.Config.ContainsKey('customSettings')) {
-        $settings = $Context.Config.customSettings
-        Write-Host "Loaded $($settings.Count) custom settings."
+    $settings = $Context.Config.customSettings
+    Write-Host "Loaded $($settings.Count) custom settings."
 }
 ```
 
@@ -532,9 +543,9 @@ PowerShell modules required by the scripts, with optional version pinning.
 
 ```powershell
 scriptDependencies = @{
-    'Pnp.PowerShell' = '2.12.1'      # Specific version
-    'PSFramework'                       = ''           # Latest stable
-    'MyModule'                          = 'prerelease' # Latest prerelease
+    'PnP.PowerShell' = '2.12.1'     # Specific version
+    'PSFramework'    = ''           # Latest stable
+    'MyModule'       = 'prerelease' # Latest prerelease
 }
 ```
 
@@ -745,6 +756,8 @@ Fork configuration is merged with `alm-config.psd1` as follows:
 
 - **Hashtables**: Merged recursively; the application repository's values override your fork defaults.
 - **Arrays**: Default items first, followed by application items.
+- **Other values**: The application value wins, including `$false`, `0` and empty strings, and when the two types differ.
+- **`$null`**: A `$null` or missing value on either side keeps the other side's value, so an application can't clear a default by setting it to `$null`.
 - There is no separately loaded `fork-almconfig.psd1` file.
 
 This allows forks to add custom defaults that contribute custom config to each repo using the pipelines and without needing to make edits in each of those repos. For example, standard hook scripts can be added to extend ALM4Dataverse across every consuming repo. See the note above about `[alm]` placeholder allowing you to put the scripts in your fork of this repo.

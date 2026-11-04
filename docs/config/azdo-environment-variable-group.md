@@ -110,17 +110,26 @@ Variable Value: https://api.production.contoso.com
 Mark sensitive variables as secret using the lock control in the variable group.
 
 > [!IMPORTANT]
-> Azure DevOps does not automatically expose secret variables to scripts. Add an explicit
-> mapping to the `env` block of the relevant PowerShell build/import/deploy step, alongside
-> its existing authentication mappings.
+> Azure DevOps does not automatically expose secret variables to scripts. List each
+> secret's name in the `secretVariables` parameter of every caller or deployment stage
+> that needs it. Declaring a secret only in the group is not enough.
 
-Example mapping:
+For a deployment target, add the names to that stage entry in `DEPLOY-<branch>.yml`:
 
 ```yaml
-env: { DataverseEnvVar_contoso_APIKey: '$(DataverseEnvVar_contoso_APIKey)' }
+- template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
+  parameters:
+    environmentName: PROD
+    secretVariables:
+      - DataverseEnvVar_contoso_APIKey
 ```
 
-This is a customization to the shared template or a caller-owned equivalent step; declaring a secret only in the group is insufficient. Do not echo secrets or include them in a command line. Variable-group approvals protect access to the group; they are not a replacement for restricting who can edit the pipeline and its hooks.
+For the development environment, add the same parameter to the template invocation in
+`EXPORT.yml` and `IMPORT.yml`; for BUILD validation, add it in `BUILD.yml`. Each listed
+name is passed to the script and its hooks under the same name. See the
+[template parameter reference](pipelines.md#azure-devops-templates).
+
+Do not echo secrets or include them in a command line. Variable-group approvals protect access to the group; they are not a replacement for restricting who can edit the pipeline and its hooks.
 
 ## Example Variable Groups
 

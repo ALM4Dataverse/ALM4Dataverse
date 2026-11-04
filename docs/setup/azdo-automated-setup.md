@@ -69,8 +69,8 @@ Download and review the released script before executing it:
 Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1' -OutFile './setup-azdo.ps1'
 ```
 
-After review, run `.\setup-azdo.ps1`. To select a tenant, device authentication, or shared
-code ref, use the [setup parameters](../config/pipelines.md#setup-script-parameters).
+After review, run `.\setup-azdo.ps1`. To select a tenant or shared code ref, use the
+[setup parameters](../config/pipelines.md#setup-script-parameters).
 
 > [!NOTE]
 > **Advanced: running source scripts.** Released setup scripts embed their helpers and
@@ -138,9 +138,11 @@ The one-line bootstrap is also available after you have reviewed and trust the r
 ## Reconfigure An Existing Installation
 
 Re-run setup to select existing resources and review its proposed updates.
+[Re-running setup](../usage/updating.md#re-run-setup-carefully) lists which files and
+settings it keeps and which it replaces.
 
 > [!CAUTION]
-> Preserve and review custom callers/templates, hooks, secret mappings, and approval checks.
+> Review custom callers and approval checks in the resulting changes.
 > Do not run two setups concurrently against the same repository. If setup fails partway,
 > inspect resources already created before retrying; changes are not automatically rolled back.
 

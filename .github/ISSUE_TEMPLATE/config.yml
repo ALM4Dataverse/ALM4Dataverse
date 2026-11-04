@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or help
+    url: https://github.com/ALM4Dataverse/ALM4Dataverse/discussions
+    about: Ask how to configure or use ALM4Dataverse.
+  - name: Security vulnerability
+    url: https://github.com/ALM4Dataverse/ALM4Dataverse/security/advisories/new
+    about: Report security problems privately, not in a public issue.

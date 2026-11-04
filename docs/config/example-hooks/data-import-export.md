@@ -20,9 +20,9 @@ For further information about this approach see the following articles:
 - [Rob Wood - Versioning config data in D365/Power Apps - beyond the Configuration Migration Tool](https://rnwood.co.uk/posts/versioning-config-data-in-power-platform-beyond-the-cmt)
 - [Rob Wood - Versioning config data in D365/Power Apps - beyond the CMT - part 2](https://rnwood.co.uk/posts/versioning-config-data-in-power-platform-beyond-the-cmt-part2/)
 
-The following configuration is required to ensure the example scripts below are executed and that the resulting `data` folder is copied to build assets (so it's available to deploy from).
-
-Merge these entries into the existing application configuration:
+The following configuration runs the example scripts and copies the resulting `data`
+folder into the build so it is available at deployment. The supplied template already
+contains these entries; add them only if you removed them or started from a minimal file:
 
 ```powershell
 @{

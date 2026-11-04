@@ -1,0 +1,71 @@
+name: Bug report
+description: Something in ALM4Dataverse doesn't work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove secrets, tokens, tenant/environment/user identifiers and customer data
+        from everything you paste. Report security problems privately instead; see
+        SECURITY.md.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Azure DevOps
+        - GitHub Actions
+        - Both
+    validations:
+      required: true
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Operation
+      options:
+        - Setup script
+        - EXPORT
+        - BUILD
+        - BUILD validation
+        - DEPLOY
+        - IMPORT
+        - CLEANUP-RELEASES
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: ref
+    attributes:
+      label: Shared ref or release
+      description: The ref your callers use, for example the value after `@` in `uses:` or the pipeline repository resource `ref`, or the setup release you ran.
+      placeholder: v1.2.3, main, or a commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: First failing log lines
+      description: The failing step and the first error, redacted. Include the `Executing <HookType> hook` line if a hook was running.
+      render: text
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: The relevant parts of `alm-config.psd1` and the caller workflow or pipeline, redacted.
+      render: powershell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I checked the troubleshooting guide and the upgrade notes.
+          required: true
+        - label: I removed secrets and identifiers from this issue.
+          required: true
