@@ -61,6 +61,42 @@ BeforeAll {
     }
 }
 
+Describe 'Azure DevOps Git bootstrap' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-PortableGit'
+        }, $false)
+        Set-Item -Path 'Function:Install-PortableGit' -Value $definition.Body.GetScriptBlock()
+    }
+
+    It 'uses system Git without downloading a Windows executable on non-Windows systems' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        $script:systemGitCommand = [pscustomobject]@{ Source = Join-Path $TestDrive 'usr/bin/git' }
+        Mock Get-Command { $script:systemGitCommand }
+        Mock Invoke-WebRequest { throw 'Unexpected Windows Git download.' }
+        Mock Start-Process { throw 'Unexpected Windows Git extraction.' }
+
+        $gitBinDirectory = Install-PortableGit -Destination $TestDrive
+
+        $gitBinDirectory | Should -Be (Split-Path -Parent $script:systemGitCommand.Source)
+        Should -Invoke Get-Command -Times 1 -Exactly
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+        Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
+    It 'fails with an install instruction when system Git is unavailable on non-Windows systems' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
+        Mock Get-Command { $null }
+        Mock Invoke-WebRequest { throw 'Unexpected Windows Git download.' }
+
+        { Install-PortableGit -Destination $TestDrive } |
+            Should -Throw '*Git must be installed and available on PATH*'
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+}
+
 Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
     @{ ScriptName = 'setup-azdo.ps1' }
     @{ ScriptName = 'setup-github.ps1' }

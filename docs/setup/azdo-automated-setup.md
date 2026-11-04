@@ -29,13 +29,13 @@ to make these changes; pipeline execution later uses the configured application 
 
 Before you start, you need:
 
-- Windows PowerShell 5.1 or PowerShell 7 on Windows, plus network access to the required Microsoft services, GitHub, and package feeds.
+- Windows PowerShell 5.1 or PowerShell 7 on Windows, or PowerShell 7 on Linux with Git installed and available on `PATH`. All platforms need network access to the required Microsoft services, GitHub, and package feeds.
 - Existing Dataverse environments, the solutions to manage, and suitable process-owner user accounts.
 - Permission to create/configure Entra apps, Dataverse application users, and the relevant Azure DevOps resources, or administrators available to complete those steps.
 
-Setup downloads a temporary portable Git and its required PowerShell modules. Keep
-interactive authentication in the console/browser; do not put passwords or tokens into
-source files or command history.
+Windows setup downloads temporary portable Git; Linux setup uses system Git from `PATH`.
+Setup also downloads its required PowerShell modules. Keep interactive authentication in
+the console/browser; do not put passwords or tokens into source files or command history.
 
 ### 1) An Azure DevOps organisation
 
@@ -79,7 +79,7 @@ After review, run `.\setup-azdo.ps1`. To select a tenant or shared code ref, use
 
 The one-line bootstrap is also available after you have reviewed and trust the release:
 
-1) Open "Windows PowerShell" from the start menu (every Windows computer has this installed)
+1) Open Windows PowerShell or PowerShell 7. On Linux, start a `pwsh` terminal.
 
 2) Paste this in and press Enter.
 

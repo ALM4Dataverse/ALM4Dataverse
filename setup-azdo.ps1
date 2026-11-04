@@ -2,11 +2,12 @@
 .SYNOPSIS
 Interactively configures Azure DevOps repositories, pipelines and Dataverse environments.
 .DESCRIPTION
-Requires an interactive PowerShell session on Windows and identities allowed to administer
-the selected Azure DevOps project and Dataverse environments. Downloads pinned modules
-and portable Git, authenticates, then offers branch-aware setup and publication choices.
-Remote resource provisioning can occur before repository changes are published; cancelling
-publication does not roll back those resources.
+Requires an interactive Windows PowerShell 5.1 session on Windows or PowerShell 7 on
+Windows or Linux, and identities allowed to administer the selected Azure DevOps project
+and Dataverse environments. Downloads pinned modules and portable Git on Windows; on
+Linux, uses system Git from PATH. Authenticates, then offers branch-aware setup and
+publication choices. Remote resource provisioning can occur before repository changes
+are published; cancelling publication does not roll back those resources.
 .NOTES
 Selected mutation helpers support ShouldProcess; the interactive installer as a whole
 does not provide a dry run.
@@ -74,21 +75,35 @@ else {
 function Install-PortableGit {
     <#
     .SYNOPSIS
-    Returns the Git directory under Destination, downloading the pinned Windows archive if needed.
+    Returns the Git bin directory, using system Git off Windows or installing portable Git on Windows.
     .NOTES
-    An existing bin\git.exe is reused without version verification. Download, extraction
-    and missing-executable failures terminate setup; PATH is updated by the caller.
+    Non-Windows systems require Git on PATH. Windows reuses an existing bin\git.exe
+    without version verification; download, extraction and missing-executable failures
+    terminate setup. PATH is updated by the caller.
     #>
     param(
         [Parameter(Mandatory)][string]$Destination
     )
 
-    $gitDir = Join-Path $Destination "Git"
-    $gitExe = Join-Path $gitDir "bin\git.exe"
+    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
+        $gitCommand = Get-Command git -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $gitCommand) {
+            throw 'Git must be installed and available on PATH on non-Windows systems.'
+        }
 
-    if (Test-Path $gitExe) {
+        $gitBinDir = Split-Path -Parent $gitCommand.Source
+        Write-Host "Using system Git at: $($gitCommand.Source)"
+        return $gitBinDir
+    }
+
+    $gitDir = Join-Path $Destination "Git"
+    $gitBinDir = Join-Path $gitDir 'bin'
+    $gitExe = Join-Path $gitBinDir 'git.exe'
+
+    if (Test-Path -LiteralPath $gitExe -PathType Leaf) {
         Write-Host "Git already available at: $gitExe"
-        return $gitDir
+        return $gitBinDir
     }
 
     Write-Host "Downloading portable Git..." -ForegroundColor Yellow
@@ -126,12 +141,12 @@ function Install-PortableGit {
         # Clean up installer
         Remove-Item $gitInstaller -Force -ErrorAction SilentlyContinue
 
-        if (-not (Test-Path $gitExe)) {
+        if (-not (Test-Path -LiteralPath $gitExe -PathType Leaf)) {
             throw "Git extraction completed but git.exe not found at expected location"
         }
 
         Write-Host "Git extracted successfully to: $gitDir"
-        return $gitDir
+        return $gitBinDir
     }
     catch {
         Write-Host "Failed to install portable Git: $($_.Exception.Message)" -ForegroundColor Red
@@ -199,13 +214,12 @@ foreach ($modName in $requiredModules.Keys) {
     Import-RequiredModuleVersion -Name $modName -RequiredVersion $version -Destination $TempModuleRoot
 }
 
-# Download and install portable Git
-$gitInstallDir = Install-PortableGit -Destination $TempModuleRoot
-$gitBinDir = Join-Path $gitInstallDir "bin"
+# Install portable Git on Windows or use system Git on non-Windows systems.
+$gitBinDir = Install-PortableGit -Destination $TempModuleRoot
 
 # Add Git to PATH for this session
-if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $gitBinDir })) {
-    $env:PATH = "$gitBinDir;$env:PATH"
+if (-not ($env:PATH -split [Regex]::Escape($delim) | Where-Object { $_ -eq $gitBinDir })) {
+    $env:PATH = "$gitBinDir$delim$env:PATH"
 }
 
 # Verify Git is now available
@@ -884,7 +898,7 @@ function Initialize-AzDoProjectAndRepository {
                 Write-Host "Extension '$requiredExtension' not found. Installing..." -ForegroundColor Yellow
                 Write-Host "This may require organization administrative permissions." -ForegroundColor Yellow
 
-                Install-VSTeamExtension -PublisherId $publisherId -ExtensionId $extensionId
+                Add-VSTeamExtension -PublisherId $publisherId -ExtensionId $extensionId
 
                 $installedExtensions = Get-VSTeamExtension
                 $installed = $installedExtensions | Where-Object { $_.publisherId -eq $publisherId -and $_.extensionId -eq $extensionId }
@@ -937,7 +951,7 @@ function Initialize-AzDoProjectAndRepository {
                 throw "Could not determine remoteUrl for repository '$sharedRepoName'."
             }
 
-            $workRoot = Join-Path $env:TEMP ("ALM4Dataverse-Init-" + [guid]::NewGuid().ToString('n'))
+            $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Init-" + [guid]::NewGuid().ToString('n'))
             New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 
             try {
@@ -1004,7 +1018,7 @@ function Initialize-AzDoProjectAndRepository {
             throw "Could not determine remoteUrl for repository '$sharedRepoName'."
         }
 
-        $workRoot = Join-Path $env:TEMP ("ALM4Dataverse-Check-" + [guid]::NewGuid().ToString('n'))
+        $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Check-" + [guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
 
         try {
@@ -1563,6 +1577,40 @@ function Select-AzDoSharedRepository {
     }
 }
 
+function Get-AzDoCallerSecretVariableBlock {
+    <#
+    .SYNOPSIS
+    Returns the template-level secretVariables block from an existing caller pipeline.
+    .NOTES
+    Recognizes the generated caller layout: the key at four spaces under the single
+    template's parameters, followed by list items indented at four or more spaces.
+    Returns the lines joined by the platform newline, or an empty string when the file
+    or block is absent, so callers can append it to regenerated content verbatim.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+
+    $secretVariableLines = [System.Collections.Generic.List[string]]::new()
+    $inSecretVariables = $false
+    foreach ($existingLine in @(Get-Content -LiteralPath $Path)) {
+        if ($existingLine -match '^\s{4}secretVariables:') {
+            $inSecretVariables = $true
+            $secretVariableLines.Add($existingLine)
+        }
+        elseif ($inSecretVariables -and ($existingLine -match '^\s{5,}\S' -or $existingLine -match '^\s{4}-\s')) {
+            $secretVariableLines.Add($existingLine)
+        }
+        else {
+            $inSecretVariables = $false
+        }
+    }
+
+    return ($secretVariableLines -join [Environment]::NewLine)
+}
+
 function Sync-CopyToYourRepoIntoGitRepo {
     <#
     .SYNOPSIS
@@ -1729,7 +1777,7 @@ function New-AzDoRepoWorkingTree {
         throw "Could not determine remoteUrl for repository '$($TargetRepo.Name)'."
     }
 
-    $cloneRoot = Join-Path $env:TEMP ("ALM4Dataverse-MainRepo-" + [guid]::NewGuid().ToString('n'))
+    $cloneRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-MainRepo-" + [guid]::NewGuid().ToString('n'))
     if (Test-Path -LiteralPath $cloneRoot) {
         try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction Stop } catch { throw }
     }
@@ -3363,7 +3411,7 @@ Invoke-WithErrorHandling -OperationName "Preparing main repository working tree"
         $copyRoot = Join-Path $PSScriptRoot 'copy-to-your-repo'
     }
     else {
-        $sharedRepoClone = Join-Path $env:TEMP ("ALM4Dataverse-SharedRepo-" + [guid]::NewGuid().ToString('n'))
+        $sharedRepoClone = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-SharedRepo-" + [guid]::NewGuid().ToString('n'))
         New-Item -ItemType Directory -Path $sharedRepoClone -Force | Out-Null
 
         try {
@@ -3560,40 +3608,6 @@ function Update-AlmConfigInWorkingTree {
     }
 
     return $changed
-}
-
-function Get-AzDoCallerSecretVariableBlock {
-    <#
-    .SYNOPSIS
-    Returns the template-level secretVariables block from an existing caller pipeline.
-    .NOTES
-    Recognizes the generated caller layout: the key at four spaces under the single
-    template's parameters, followed by list items indented at four or more spaces.
-    Returns the lines joined by the platform newline, or an empty string when the file
-    or block is absent, so callers can append it to regenerated content verbatim.
-    #>
-    [CmdletBinding()]
-    [OutputType([string])]
-    param([Parameter(Mandatory)][string]$Path)
-
-    if (-not (Test-Path -LiteralPath $Path)) { return '' }
-
-    $secretVariableLines = [System.Collections.Generic.List[string]]::new()
-    $inSecretVariables = $false
-    foreach ($existingLine in @(Get-Content -LiteralPath $Path)) {
-        if ($existingLine -match '^\s{4}secretVariables:') {
-            $inSecretVariables = $true
-            $secretVariableLines.Add($existingLine)
-        }
-        elseif ($inSecretVariables -and ($existingLine -match '^\s{5,}\S' -or $existingLine -match '^\s{4}-\s')) {
-            $secretVariableLines.Add($existingLine)
-        }
-        else {
-            $inSecretVariables = $false
-        }
-    }
-
-    return ($secretVariableLines -join [Environment]::NewLine)
 }
 
 function Update-AzDoBuildPipelineInWorkingTree {
@@ -5707,7 +5721,7 @@ if ($PSScriptRoot) {
     $copyRoot = Join-Path $PSScriptRoot 'copy-to-your-repo'
 }
 else {
-    $sharedRepoClone = Join-Path $env:TEMP ("ALM4Dataverse-SharedRepo-" + [guid]::NewGuid().ToString('n'))
+    $sharedRepoClone = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-SharedRepo-" + [guid]::NewGuid().ToString('n'))
     New-Item -ItemType Directory -Path $sharedRepoClone -Force | Out-Null
 
     Invoke-WithErrorHandling -OperationName 'Cloning shared repository templates' -StatusMessage 'Cloning the shared repository to get template files...' -CaptureOutputInPanel -ScriptBlock {
