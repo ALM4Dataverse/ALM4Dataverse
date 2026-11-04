@@ -1150,26 +1150,6 @@ function Get-GitHubBuildEnvironmentNameFromWorkflowContent {
     return $value.Trim()
 }
 
-function Get-SolutionCheckEnabledFromConfigContent {
-    # Inspect the literal solutionCheck.enabled assignment without executing a data
-    # file. Missing/unrecognized content is false; this is not a full PSD1 parser.
-    [CmdletBinding()]
-    param(
-        [Parameter()][string]$ConfigContent
-    )
-
-    if ([string]::IsNullOrWhiteSpace($ConfigContent)) {
-        return $false
-    }
-
-    $match = [regex]::Match($ConfigContent, '(?mis)solutionCheck\s*=\s*@\{.*?\benabled\s*=\s*\$(true|false)')
-    if (-not $match.Success) {
-        return $false
-    }
-
-    return ($match.Groups[1].Value -ieq 'true')
-}
-
 function Get-GitHubBuildValidationEnabledFromRepoClone {
     # Existing setups may signal validation through either the BUILD environment
     # input or solutionCheck.enabled. Read committed branch content, not the worktree.

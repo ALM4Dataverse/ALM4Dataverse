@@ -261,6 +261,34 @@ namespace Spectre.Console.Rendering { public interface IRenderable {} }
         $executionState.Count | Should -Be 1
         $result.Value | Should -Be 42
     }
+
+    It 'shows the inner PowerShell error location for a wrapped status callback failure' {
+        Mock Initialize-SpectreConsole {}
+        Mock Select-FromMenu { 1 }
+        [Spectre.Console.AnsiConsole]::Clear()
+
+        $innerException = $null
+        try {
+            $null.ToString()
+        }
+        catch {
+            $innerException = $_.Exception
+        }
+        $script:statusCallbackException = [System.Reflection.TargetInvocationException]::new('Status callback failed', $innerException)
+
+        {
+            Invoke-WithErrorHandling -OperationName 'Test callback' -StatusMessage 'Running test callback' -CaptureOutputInPanel -ScriptBlock {
+                throw $script:statusCallbackException
+            }
+        } | Should -Throw '*Setup aborted by user after error in Test callback*'
+
+        $output = [Spectre.Console.AnsiConsole]::Output -join [Environment]::NewLine
+        $output | Should -Match 'Inner Error Type'
+        $output | Should -Match 'You cannot call a method on a null-valued expression'
+        $output | Should -Match 'Inner Location'
+        $output | Should -Match 'SetupCommon.Tests.ps1'
+        $output | Should -Match 'Inner Stack Trace'
+    }
 }
 
 Describe 'Setup selector state transitions' {
@@ -586,6 +614,30 @@ Describe 'Setup configuration and validation helpers' {
         (Import-PowerShellDataFile $configPath).solutionCheck.enabled | Should -BeFalse
         Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $false | Should -BeFalse
         (Import-PowerShellDataFile $configPath).assets | Should -Be @('data')
+    }
+
+    It 'detects active solution-check settings but ignores commented examples' {
+        $commentedConfig = @'
+@{
+    # solutionCheck = @{
+    #     enabled = $true
+    # }
+    solutions = @(
+        @{
+            name = 'Example'
+            # solutionCheck = @{
+            #     enabled = $true
+            # }
+        }
+    )
+}
+'@
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent $commentedConfig | Should -BeFalse
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutionCheck = @{ enabled = $true } }' | Should -BeTrue
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutions = @(@{ name = "Example"; solutionCheck = @{ enabled = $true } }) }' | Should -BeTrue
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutionCheck = @{ enabled = $false } }' | Should -BeFalse
+        { Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutionCheck = ' } |
+            Should -Throw '*Unable to inspect alm-config.psd1*'
     }
 
     It 'adds and updates baseline selectors without replacing other validation settings' -ForEach @(

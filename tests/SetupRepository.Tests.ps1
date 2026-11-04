@@ -7,7 +7,14 @@ BeforeAll {
     function gh { throw 'Unexpected live GitHub command' }
     function Get-VSTeamProject {}
     function Get-VSTeamExtension {}
-    function Install-VSTeamExtension {}
+    function Add-VSTeamExtension {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)][string]$PublisherId,
+            [Parameter(Mandatory)][string]$ExtensionId
+        )
+    }
     function Set-VSTeamDefaultProject {
         [CmdletBinding(SupportsShouldProcess = $true)]
         param($Project)
@@ -75,6 +82,27 @@ Describe 'Azure DevOps repository selection and working trees' {
         $env:TEMP = $script:workingTemp
         if ($script:workingExitCode) { $global:LASTEXITCODE = $script:workingExitCode.Value }
         else { Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
+    }
+
+    It 'declares the caller pipeline helper before preparing the main repository working tree' {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $helperDefinition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -eq 'Get-AzDoCallerSecretVariableBlock'
+        }, $true)
+        $setupStep = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.CommandAst] -and
+            $node.GetCommandName() -eq 'Invoke-WithErrorHandling' -and
+            $node.Extent.Text.Contains('Preparing main repository working tree')
+        }, $true)
+
+        $helperDefinition | Should -Not -BeNullOrEmpty
+        $setupStep | Should -Not -BeNullOrEmpty
+        $helperDefinition.Extent.StartOffset | Should -BeLessThan $setupStep.Extent.StartOffset
     }
 
     It 'selects the preferred shared repository while excluding the application repository' {
@@ -401,11 +429,13 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         Mock Read-YesNo { $Prompt -notlike 'Use ALM4Dataverse*' }
         $script:extensionsInstalled = $false
         Mock Get-VSTeamExtension { if ($script:extensionsInstalled) { [pscustomobject]@{ publisherId = 'microsoft-IsvExpTools'; extensionId = 'PowerPlatform-BuildTools'; version = '1' } } }
-        Mock Install-VSTeamExtension { $script:extensionsInstalled = $true }
+        Mock Add-VSTeamExtension { $script:extensionsInstalled = $true }
         $result = Initialize-AzDoProjectAndRepository
         $result.SelectedProject.Name | Should -Be shared
         Should -Invoke New-AzDoProject -Times 1 -Exactly -ParameterFilter { $ProjectName -eq 'shared' -and $Visibility -eq 'private' }
-        Should -Invoke Install-VSTeamExtension -Times 1 -Exactly
+        Should -Invoke Add-VSTeamExtension -Times 1 -Exactly -ParameterFilter {
+            $PublisherId -eq 'microsoft-IsvExpTools' -and $ExtensionId -eq 'PowerPlatform-BuildTools'
+        }
     }
 
     Context 'Branch publication with generated files' {
@@ -612,6 +642,37 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
             $result.BuildValidationEnvironmentName | Should -Be Build
         }
         $result.BuildValidationEnabled | Should -BeTrue
+    }
+
+    It 'ignores commented checker examples when inferring BUILD validation' {
+        $script:discoveryAlmConfig = @'
+@{
+    # solutionCheck = @{
+    #     enabled = $true
+    # }
+}
+'@
+        Mock Get-GitRepoFileContentFromRemoteBranch {
+            if ($RelativePath -eq 'alm-config.psd1') { $script:discoveryAlmConfig }
+            else { '' }
+        }
+
+        $enabled = if ($Provider -eq 'GitHub') {
+            Get-GitHubBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        else {
+            Get-AzDoBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        $enabled | Should -BeFalse
+
+        $script:discoveryAlmConfig = '@{ solutionCheck = @{ enabled = $true } }'
+        $enabled = if ($Provider -eq 'GitHub') {
+            Get-GitHubBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        else {
+            Get-AzDoBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        $enabled | Should -BeTrue
     }
 
     It 'retains the default branch when no deployment mapping exists' {
