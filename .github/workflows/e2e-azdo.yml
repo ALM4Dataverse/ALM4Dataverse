@@ -1,0 +1,86 @@
+name: E2E Azure DevOps
+
+# Pushes the commit under test to the Azure DevOps test project's shared repository,
+# regenerates its application repository, then runs the real EXPORT, BUILD and
+# DEPLOY pipelines against the shared E2E Dev and Test environments.
+# See docs/development/e2e-tests.md for the required resources and settings.
+
+run-name: ${{ format('E2E Azure DevOps {0}', github.event.pull_request.head.sha || github.sha) }}
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'pipelines/**'
+      - '.github/scripts/e2e/**'
+      - '.github/workflows/e2e-*.yml'
+      - 'alm-config-defaults.psd1'
+      - 'copy-to-your-repo/**'
+      - 'setup-*.ps1'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  e2e:
+    # Fork pull requests receive no environment secrets; skip them instead of failing.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    name: EXPORT, BUILD and DEPLOY
+    runs-on: windows-latest
+    timeout-minutes: 300
+    environment: e2e
+    # Both E2E workflows share one group because there is only one Dev and one Test
+    # environment. Never cancel a running cycle: it would leave Test half-deployed.
+    concurrency:
+      group: alm4dataverse-e2e-dataverse
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.E2E_GITHUB_TOKEN }}
+      E2E_AZDO_ORG_URL: ${{ vars.E2E_AZDO_ORG_URL }}
+      E2E_AZDO_PROJECT: ${{ vars.E2E_AZDO_PROJECT }}
+    steps:
+      # Full history is required to push the commit to the shared repository.
+      - name: Checkout commit under test
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Log in to Azure
+        uses: azure/login@v3
+        env:
+          AZURE_CORE_OUTPUT: none
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          allow-no-subscriptions: true
+
+      - name: Run E2E cycle
+        shell: pwsh
+        env:
+          E2E_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          E2E_AZDO_APP_REPO: ${{ vars.E2E_AZDO_APP_REPO }}
+          E2E_AZDO_USE_EXTENSION: ${{ vars.E2E_AZDO_USE_EXTENSION || 'true' }}
+          E2E_GITHUB_APP_REPO: ${{ vars.E2E_GITHUB_APP_REPO }}
+          E2E_DEV_URL: ${{ vars.E2E_DEV_URL }}
+          E2E_TEST_URL: ${{ vars.E2E_TEST_URL }}
+          E2E_RUN_LABEL: ${{ format('azdo-{0}-{1}', github.run_id, github.run_attempt) }}
+        run: |
+          ./.github/scripts/e2e/Invoke-AzDoE2E.ps1 `
+            -OrganizationUrl $env:E2E_AZDO_ORG_URL `
+            -Project $env:E2E_AZDO_PROJECT `
+            -AppRepositoryName $env:E2E_AZDO_APP_REPO `
+            -SharedRef $env:E2E_SHA `
+            -DevUrl $env:E2E_DEV_URL `
+            -TestUrl $env:E2E_TEST_URL `
+            -GitHubAppRepository $env:E2E_GITHUB_APP_REPO `
+            -UseAlm4DataverseExtension ($env:E2E_AZDO_USE_EXTENSION -eq 'true') `
+            -RunLabel $env:E2E_RUN_LABEL `
+            -WorkRoot $env:RUNNER_TEMP
+
+      # Release the shared lock only after the test project has no active builds.
+      - name: Stop test application runs
+        if: failure() || cancelled()
+        shell: pwsh
+        run: ./.github/scripts/e2e/Invoke-AzDoE2E.ps1 -OrganizationUrl $env:E2E_AZDO_ORG_URL -Project $env:E2E_AZDO_PROJECT -StopActiveRuns
