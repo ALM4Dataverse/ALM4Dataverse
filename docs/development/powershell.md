@@ -99,6 +99,9 @@ Suites live under `tests/`, grouped by the behaviour they own:
     `SetupProviders`.
 - Repository selection, synchronization, publication and cleanup: `SetupRepository`.
 - Branch-aware setup wizard decisions and editor callbacks: `SetupWizard`.
+- End-to-end orchestration: test application regeneration, the shared environment
+    lock, run matching and workflow guards: `E2E`. Live cycles are described in
+    [end-to-end tests](e2e-tests.md).
 
 Each suite is named `<Suite>.Tests.ps1`. Tests invoke the production scripts and
 helpers, assert resulting artifacts and decisions, and mock external service and

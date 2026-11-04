@@ -11,6 +11,7 @@ preparation/publication, test boundaries, and dependency-update operation.
 | [update-dependency-prs.ps1](update-dependency-prs.ps1) | Consume that file, update Git branches, and create/update remote PRs. Not an offline check. |
 | [test-dependency-workflow.ps1](test-dependency-workflow.ps1) | Offline dependency-data/update-pattern smoke checks. |
 | [test-documentation.ps1](test-documentation.ps1) | Local links/anchors, fenced example syntax, and reference-name coverage. |
+| [e2e](e2e) | Live EXPORT, BUILD and DEPLOY cycles in dedicated test applications. Changes real resources; see [end-to-end tests](../../docs/development/e2e-tests.md). |
 
 ## Automated Dependency Update Workflow
 
