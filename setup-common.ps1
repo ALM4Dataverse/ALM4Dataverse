@@ -9,6 +9,17 @@ function New-DirectoryIfMissing {
     }
 }
 
+function Test-ApplicationOwnedScaffoldPath {
+    # Scaffold files that applications are told to customize (agent instructions and
+    # example data hooks) are created when missing but never overwritten by a re-run.
+    # RelativePath uses forward slashes, relative to the copy-to-your-repo root.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param([Parameter(Mandatory)][string]$RelativePath)
+
+    return ($RelativePath -ieq 'AGENTS.md' -or $RelativePath -like 'data/*')
+}
+
 function Expand-SetupConsoleArchive {
     <#
     .SYNOPSIS

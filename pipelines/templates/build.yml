@@ -7,6 +7,11 @@ parameters:
 - name: buildEnvironmentName
   type: string
   default: ''
+# Secret names from the validation variable group to expose to connected build
+# and validation-deployment scripts. Ignored when buildEnvironmentName is empty.
+- name: secretVariables
+  type: object
+  default: []
 
 stages:
   - stage: Build
@@ -137,6 +142,8 @@ stages:
                 AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
                 AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
                 AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
+              ${{ each secretVariable in parameters.secretVariables }}:
+                ${{ secretVariable }}: $(${{ secretVariable }})
 
         - ${{ if eq(parameters.buildEnvironmentName, '') }}:
           - pwsh: |
@@ -266,6 +273,8 @@ stages:
                 AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
                 AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
                 AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
+              ${{ each secretVariable in parameters.secretVariables }}:
+                ${{ secretVariable }}: $(${{ secretVariable }})
 
         # Preserve checker diagnostics even when build/validation fails. Publishing
         # on failure does not make that artifact a successful deployable release.

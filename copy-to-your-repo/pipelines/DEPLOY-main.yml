@@ -26,3 +26,6 @@ stages:
   #   parameters:
   #     environmentName: Test-main
   #     useAlm4DataverseExtension: true
+  #     # Secret variables in Environment-<name> are hidden from scripts unless listed.
+  #     secretVariables:
+  #       - DataverseEnvVar_contoso_APIKey

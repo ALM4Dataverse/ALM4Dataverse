@@ -16,3 +16,6 @@ stages:
     useAlm4DataverseExtension: true
     # Leave empty for packaging only; selecting an environment enables deployment validation.
     buildEnvironmentName: ''
+    # With validation enabled, list secrets from its variable group that scripts need.
+    # secretVariables:
+    #   - DataverseEnvVar_contoso_APIKey

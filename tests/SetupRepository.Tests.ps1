@@ -539,3 +539,109 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
         $ErrorActionPreference | Should -Be $originalPreference
     }
 }
+
+Describe '<Provider> scaffold re-sync' -ForEach @(
+    @{ Provider = 'GitHub'; Script = 'setup-github.ps1' }
+    @{ Provider = 'AzDo'; Script = 'setup-azdo.ps1' }
+) {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $Script), [ref]$tokens, [ref]$parseErrors)
+        foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+            Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    BeforeEach {
+        Mock Write-Section {}
+        $script:scaffoldSource = Join-Path $TestDrive "source-$([guid]::NewGuid().ToString('N'))"
+        $script:scaffoldTarget = Join-Path $TestDrive "target-$([guid]::NewGuid().ToString('N'))"
+        foreach ($relativePath in @('AGENTS.md', 'data/system/import.ps1', 'pipelines/BUILD.yml', 'pipelines/DEPLOY-main.yml', 'README-scaffold.md')) {
+            $path = Join-Path $script:scaffoldSource $relativePath
+            New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+            Set-Content -LiteralPath $path -Value "scaffold $relativePath" -NoNewline
+        }
+        New-Item -ItemType Directory -Path $script:scaffoldTarget | Out-Null
+
+        $script:invokeScaffoldSync = {
+            if ($Provider -eq 'GitHub') {
+                Copy-WorkflowTemplatesToRepo -SourceRoot $script:scaffoldSource -TargetRoot $script:scaffoldTarget -Branch main -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+            }
+            else {
+                Sync-CopyToYourRepoIntoGitRepo -SourceRoot $script:scaffoldSource -TargetRoot $script:scaffoldTarget -RepositoryName app -SharedRepositoryName shared -Branch main
+            }
+        }
+    }
+
+    It 'creates application-owned files when missing' {
+        & $script:invokeScaffoldSync
+
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'AGENTS.md') -Raw | Should -Be 'scaffold AGENTS.md'
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'data/system/import.ps1') -Raw | Should -Be 'scaffold data/system/import.ps1'
+    }
+
+    It 'keeps customized application-owned files and still refreshes other scaffold files' {
+        foreach ($relativePath in @('AGENTS.md', 'data/system/import.ps1', 'README-scaffold.md')) {
+            $path = Join-Path $script:scaffoldTarget $relativePath
+            New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+            Set-Content -LiteralPath $path -Value 'customized' -NoNewline
+        }
+
+        & $script:invokeScaffoldSync
+
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'AGENTS.md') -Raw | Should -Be 'customized'
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'data/system/import.ps1') -Raw | Should -Be 'customized'
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'README-scaffold.md') -Raw | Should -Be 'scaffold README-scaffold.md'
+    }
+
+    It 'leaves existing Azure DevOps BUILD and DEPLOY callers for the pipeline updaters' {
+        if ($Provider -ne 'AzDo') { Set-ItResult -Skipped -Because 'GitHub callers live under .github/workflows and are covered by workflow generation tests'; return }
+        New-Item -ItemType Directory -Path (Join-Path $script:scaffoldTarget 'pipelines') | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/BUILD.yml') -Value 'customized build' -NoNewline
+        Set-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/DEPLOY-main.yml') -Value 'customized deploy' -NoNewline
+
+        & $script:invokeScaffoldSync
+
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/BUILD.yml') -Raw | Should -Be 'customized build'
+        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/DEPLOY-main.yml') -Raw | Should -Be 'customized deploy'
+    }
+
+    It 'refreshes the Azure DevOps EXPORT caller but keeps its secretVariables block' {
+        if ($Provider -ne 'AzDo') { Set-ItResult -Skipped -Because 'GitHub secret mappings are covered by secrets-json merge tests'; return }
+        Set-Content -LiteralPath (Join-Path $script:scaffoldSource 'pipelines/EXPORT.yml') -Value @"
+resources:
+  repositories:
+    - repository: ALM4Dataverse
+      name: ALM4Dataverse
+stages:
+- template: pipelines/templates/export.yml@ALM4Dataverse
+  parameters:
+    useAlm4DataverseExtension: true
+    # secretVariables:
+"@
+        New-Item -ItemType Directory -Path (Join-Path $script:scaffoldTarget 'pipelines') | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/EXPORT.yml') -Value @"
+stages:
+- template: pipelines/templates/export.yml@ALM4Dataverse
+  parameters:
+    useAlm4DataverseExtension: true
+    secretVariables:
+    - DataverseEnvVar_contoso_APIKey
+      # nested comment
+    - DataverseEnvVar_contoso_Other
+"@
+
+        & $script:invokeScaffoldSync
+
+        $content = Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/EXPORT.yml') -Raw
+        $content | Should -Match '(?m)^\s+name: shared\s*$'
+        $content | Should -Match '(?m)^    secretVariables:\r?\n    - DataverseEnvVar_contoso_APIKey\r?\n      # nested comment\r?\n    - DataverseEnvVar_contoso_Other\s*$'
+    }
+
+    It 'returns an empty secretVariables block for a missing caller or a caller without one' {
+        if ($Provider -ne 'AzDo') { Set-ItResult -Skipped -Because 'Azure DevOps helper only'; return }
+        Get-AzDoCallerSecretVariableBlock -Path (Join-Path $script:scaffoldTarget 'missing.yml') | Should -BeExactly ''
+        Get-AzDoCallerSecretVariableBlock -Path (Join-Path $script:scaffoldSource 'pipelines/BUILD.yml') | Should -BeExactly ''
+    }
+}

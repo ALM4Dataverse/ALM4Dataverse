@@ -76,6 +76,8 @@ jobs:
           \`\`\`
           
           📚 **Documentation:**
+          - [Quickstart: GitHub Actions](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/getting-started/quickstart-github.md) and [Quickstart: Azure DevOps](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/getting-started/quickstart-azdo.md) - First deployment, step by step
+          - [Upgrade Notes](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/usage/upgrade-notes.md) - Changes that need action when upgrading
           - [GitHub Actions Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/github-setup.md) - GitHub Actions setup
           - [Azure DevOps Automated Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/azdo-automated-setup.md) - Azure DevOps quick setup
           - [Azure DevOps Manual Setup Guide](https://github.com/${{ github.repository }}/blob/${TAG_NAME}/docs/setup/azdo-manual-setup.md) - Step-by-step manual configuration

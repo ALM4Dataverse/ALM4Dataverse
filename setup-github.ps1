@@ -3610,9 +3610,10 @@ function Copy-WorkflowTemplatesToRepo {
     .DESCRIPTION
         Rewrites shared action references and preserves custom secrets-json inputs.
         BUILD is generated separately; an existing branch-named DEPLOY and existing
-        alm-config.psd1 are retained for later targeted updates. Other differing files
-        are overwritten, not generally merged. Temporary patched copies are removed
-        after copying; a missing SourceRoot throws.
+        alm-config.psd1 are retained for later targeted updates. Existing
+        application-owned files (AGENTS.md and data/) are never overwritten. Other
+        differing files are overwritten, not generally merged. Temporary patched copies
+        are removed after copying; a missing SourceRoot throws.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRepository', Justification = 'Used by the nested workflow-update callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SharedWorkflowRef', Justification = 'Used by the nested workflow-update callback.')]
@@ -3663,6 +3664,11 @@ function Copy-WorkflowTemplatesToRepo {
             }
 
             Write-Host 'Preserving existing alm-config.psd1 so current solution defaults and extended config can be merged later.' -ForegroundColor DarkGray
+            continue
+        }
+
+        if ((Test-ApplicationOwnedScaffoldPath -RelativePath $normalizedRelativePath) -and (Test-Path -LiteralPath $destPath)) {
+            Write-Host "Preserving existing $normalizedRelativePath." -ForegroundColor DarkGray
             continue
         }
 

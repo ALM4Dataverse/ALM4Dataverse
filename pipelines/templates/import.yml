@@ -4,6 +4,11 @@ parameters:
 - name: useAlm4DataverseExtension
   type: boolean
   default: true
+# Secret names from the caller-attached development variable group to expose
+# to build/deployment scripts and hooks under the same name.
+- name: secretVariables
+  type: object
+  default: []
 
 stages:
   - stage: Import
@@ -110,3 +115,5 @@ stages:
               AZURE_CLIENT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.ApplicationId)
               AZURE_TENANT_ID: $(PowerPlatformSetConnectionVariables.BuildTools.TenantId)
               AZURE_CLIENT_SECRET: $(PowerPlatformSetConnectionVariables.BuildTools.ClientSecret)
+            ${{ each secretVariable in parameters.secretVariables }}:
+              ${{ secretVariable }}: $(${{ secretVariable }})

@@ -74,7 +74,7 @@ and [platform plan restrictions](../setup/github-setup.md#github-licence-limitat
 > - **Exclusive lock** — ensures only one deployment at a time can touch the environment.
 > - **Approval** — requires approvers to sign off before deployment starts.
 >
-> **GitHub Actions**: Each target requires [variables and secrets](../setup/github-variables.md). Secrets must be listed explicitly in each stage's `secrets-json` input. Required-reviewer availability depends on plan and visibility; private Pro/Team repositories do not have this rule. See [deployment gates](../setup/github-setup.md#deployment-gates-for-github-free) for the manual alternative.
+> **GitHub Actions**: Each target requires [variables and secrets](../setup/github-variables.md). Secrets must be listed explicitly in each stage's `secrets-json` input. Required-reviewer availability depends on plan and visibility; private Pro/Team repositories do not have this rule. See [manual gate-tag promotion](../setup/github-setup.md#manual-gate-tag-promotion) for the manual alternative.
 
 ## Monitor A Deployment
 

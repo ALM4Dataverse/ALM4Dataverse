@@ -1,5 +1,47 @@
 # Repository Guidelines
 
+This is the shared ALM4Dataverse implementation, not an application repository.
+Application repositories receive the files in `copy-to-your-repo/`, whose
+[`AGENTS.md`](copy-to-your-repo/AGENTS.md) is for agents working on applications.
+
+## Orientation
+
+- Read the [source map](docs/maintainers.md#source-map) to find where a behavior lives.
+- A user-visible contract usually spans the runtime script under `pipelines/scripts`,
+  the Azure DevOps template under `pipelines/templates`, the GitHub action under
+  `.github/actions`, the callers in `copy-to-your-repo`, the setup generators
+  (`setup-azdo.ps1`, `setup-github.ps1`, `setup-common.ps1`) and the reference in
+  `docs/config`. Change them together.
+- Builds snapshot `pipelines/scripts` and `alm-config-defaults.psd1` into the artifact.
+  Deployment code must work with what the artifact contains and fail with a rebuild
+  instruction when a newer helper is missing.
+- Never put credentials, tokens or real tenant, environment or user identifiers in
+  source, tests or examples.
+
+## Checks
+
+Run from the repository root in PowerShell 7.2 or newer, without platform credentials:
+
+- `./scripts/Test-PowerShell.ps1` runs syntax and analyzer checks, then every Pester
+  suite (including workflow and pipeline schema validation), then the coverage gate:
+  every added or modified `.ps1` or `.psm1` file needs at least 65% command coverage
+  across the whole file.
+- `./.github/scripts/test-documentation.ps1` checks Markdown links and anchors, fenced
+  PowerShell, YAML and JSON, and that every configuration key, hook, action input and
+  template parameter is documented in `docs/config`.
+- `git diff --check`.
+
+For a focused run, pass `-Path` to `Invoke-Pester` with the relevant `tests/*.Tests.ps1`
+files. See [local checks](docs/maintainers.md#local-checks) and
+[PowerShell development](docs/development/powershell.md).
+
+## Documentation
+
+Keep end-user guides task-focused and put exhaustive detail in the `docs/config`
+references; link rather than repeat facts. Preserve existing documentation file paths,
+because setup output and application `AGENTS.md` files link to them. Add user-visible
+changes that need action on upgrade to [upgrade notes](docs/usage/upgrade-notes.md).
+
 ## Comments and Help
 
 Follow the [commenting standard](docs/development/powershell.md#commenting-standard)

@@ -584,7 +584,7 @@ Describe 'Generated Azure DevOps pipeline files' {
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
-        foreach ($name in @('Update-AzDoBuildPipelineInWorkingTree', 'Update-DeployPipelineInWorkingTree')) {
+        foreach ($name in @('Get-AzDoCallerSecretVariableBlock', 'Update-AzDoBuildPipelineInWorkingTree', 'Update-DeployPipelineInWorkingTree')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -618,6 +618,47 @@ Describe 'Generated Azure DevOps pipeline files' {
         $deployContent | Should -Match 'environmentName: PROD'
         @([regex]::Matches($deployContent, '(?m)^\s+environmentName:')).Count | Should -Be 2
         Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeFalse
+    }
+
+    It 'preserves per-environment extra deployment parameters when regenerating stages' {
+        $deployPath = Join-Path $workingRoot 'pipelines/DEPLOY-main.yml'
+        $environments = @([pscustomobject]@{ ShortName = 'QA' }, [pscustomobject]@{ ShortName = 'PROD' })
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments | Should -BeTrue
+        $original = (Get-Content -LiteralPath $deployPath -Raw).Replace("`r`n", "`n")
+        $prodEntry = "      environmentName: PROD`n      useAlm4DataverseExtension: true`n"
+        $original | Should -Match ([regex]::Escape($prodEntry))
+        $customized = $original.Replace($prodEntry, $prodEntry + "      timeoutInMinutes: 120`n      secretVariables:`n        - DataverseEnvVar_contoso_APIKey`n")
+        Set-Content -LiteralPath $deployPath -Value $customized -NoNewline
+
+        $reordered = @([pscustomobject]@{ ShortName = 'UAT' }, [pscustomobject]@{ ShortName = 'PROD' })
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $reordered | Should -BeTrue
+        $content = Get-Content -LiteralPath $deployPath -Raw
+        $parsed = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
+        Assert-GeneratedAzurePipelineSchema -Path $deployPath
+
+        $stages = @($parsed.stages)
+        $stages.Count | Should -Be 2
+        $stages[0].parameters.environmentName | Should -Be 'UAT'
+        $stages[0].parameters.ContainsKey('secretVariables') | Should -BeFalse
+        $stages[1].parameters.environmentName | Should -Be 'PROD'
+        $stages[1].parameters.timeoutInMinutes | Should -Be 120
+        @($stages[1].parameters.secretVariables) | Should -Be @('DataverseEnvVar_contoso_APIKey')
+        $content | Should -Not -Match 'environmentName: QA'
+
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $reordered | Should -BeFalse
+    }
+
+    It 'preserves an existing BUILD secretVariables block when rewriting the caller' {
+        $buildPath = Join-Path $workingRoot 'pipelines/BUILD.yml'
+        Update-AzDoBuildPipelineInWorkingTree -RepoRoot $workingRoot -SharedRepositoryName shared -BuildEnvironmentName 'Build' -UseAlm4DataverseExtension $true
+        Add-Content -LiteralPath $buildPath -Value "`n    secretVariables:`n      - DataverseEnvVar_contoso_APIKey"
+
+        Update-AzDoBuildPipelineInWorkingTree -RepoRoot $workingRoot -SharedRepositoryName shared -BuildEnvironmentName 'Validation' -UseAlm4DataverseExtension $true
+        $parsed = Get-Content -LiteralPath $buildPath -Raw | ConvertFrom-Yaml -ErrorAction Stop
+        Assert-GeneratedAzurePipelineSchema -Path $buildPath
+        $parameters = @($parsed.stages)[0].parameters
+        $parameters.buildEnvironmentName | Should -Be 'Validation'
+        @($parameters.secretVariables) | Should -Be @('DataverseEnvVar_contoso_APIKey')
     }
 
     It 'rejects syntactically valid pipeline YAML that violates the Microsoft schema' {

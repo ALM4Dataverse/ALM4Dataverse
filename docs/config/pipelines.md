@@ -120,12 +120,32 @@ The [caller pipelines](../../copy-to-your-repo/pipelines) declare the shared rep
 | --- | --- | --- | --- | --- |
 | [build](../../pipelines/templates/build.yml) | `buildEnvironmentName` | String | `''` | Nonempty selects a validation service connection and `Environment-<name>` variable group. |
 | build | `useAlm4DataverseExtension` | Boolean | `true` | Use the ALM4Dataverse connection-variable task. |
+| build | `secretVariables` | List of names | `[]` | Secret variables from the validation group to expose to connected build and validation-deployment steps. Ignored without `buildEnvironmentName`. |
 | [export](../../pipelines/templates/export.yml) | `commitMessage` | String | Required | Commit message for exported changes. |
 | export | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
+| export | `secretVariables` | List of names | `[]` | Secret variables from the development group to expose to export scripts and hooks. |
 | [import](../../pipelines/templates/import.yml) | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
+| import | `secretVariables` | List of names | `[]` | Secret variables from the development group to expose to build/deployment scripts and hooks. |
 | [deploy stage](../../pipelines/templates/stages/deploy-environment.yml) | `environmentName` | String | Required | Service connection, Azure DevOps environment, and `Environment-<name>` variable group. |
 | deploy stage | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
 | deploy stage | `timeoutInMinutes` | Number | `360` | Deployment job timeout in minutes. |
+| deploy stage | `secretVariables` | List of names | `[]` | Secret variables from `Environment-<environmentName>` to expose to the deployment script and hooks. |
+
+Azure Pipelines never passes secret variables to scripts automatically. Each name in
+`secretVariables` is mapped from the attached variable group into the script
+environment under the same name, for example:
+
+```yaml
+- template: pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse
+  parameters:
+    environmentName: PROD
+    secretVariables:
+      - DataverseEnvVar_contoso_APIKey
+```
+
+Non-secret group variables need no entry. Re-running automated setup keeps existing
+`secretVariables` lists in BUILD, EXPORT and IMPORT, and keeps `secretVariables` and
+other extra stage parameters for DEPLOY environments that are still selected.
 
 With `useAlm4DataverseExtension: false`, the Microsoft Power Platform Build Tools task is used and **client-secret authentication is required**. WIF requires the ALM4Dataverse extension. Tool installation keeps `AddToolsToPath: false` so the configured PAC version is used.
 
@@ -139,14 +159,17 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `TenantId` | String | Interactive selection | Constrain setup's Microsoft sign-in to a tenant. |
-| `UseDeviceAuthentication` | Switch | Off | Request device-code authentication instead of the normal interactive sign-in. |
+| `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. |
 | `ALM4DataverseRef` | String | Embedded release ref | Choose the shared code ref used during setup. Repository-source scripts resolve the local branch/commit, falling back to `stable`. |
+
+`UseDeviceAuthentication` is still accepted so older invocations keep working, but it
+is ignored: setup always uses its normal interactive sign-in. On a machine without a
+browser, run setup from a workstation that has one.
 
 Download a released script to review it and pass parameters. For example, after reviewing the downloaded GitHub setup script:
 
 ```powershell
-.\setup-github.ps1 -TenantId '00000000-0000-0000-0000-000000000001' -UseDeviceAuthentication -ALM4DataverseRef 'stable'
+.\setup-github.ps1 -TenantId '00000000-0000-0000-0000-000000000001' -ALM4DataverseRef 'stable'
 ```
 
 The downloadable release scripts embed their helpers and dependency versions. Raw repository-source scripts require the adjacent shared helper and defaults files; downloading just the raw script is not equivalent to downloading a Release asset. Setup is interactive and makes changes to repositories and cloud configuration, not a dry run.

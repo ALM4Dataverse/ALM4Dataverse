@@ -130,11 +130,11 @@ and extension hooks. You configure those behaviors instead of maintaining copies
 each step. Review the [configuration](config/alm-config.md) and [pipeline contracts](config/pipelines.md)
 to decide whether the existing behavior fits; hooks and forks remain options where it does not.
 
-## Why do I need to set up 2 source control repos instead of just 1?
+## Do I Need A Second Repository For The Shared Code?
 
-The application repository owns solution source, configuration, data, and caller files.
-The shared repository owns reusable automation, so multiple applications can consume
-one tested implementation.
+On Azure DevOps, yes; on GitHub, no. The application repository owns solution source,
+configuration, data, and caller files. The shared repository owns reusable automation,
+so multiple applications can consume one tested implementation.
 
 - **Azure DevOps:** setup imports a shared repository into your project and callers reference it as `ALM4Dataverse`.
 - **GitHub:** callers can use the public shared actions directly; you do not need a second repository in your organization unless you maintain a fork.

@@ -1556,8 +1556,14 @@ function Sync-CopyToYourRepoIntoGitRepo {
     Copies the scaffold into a working tree, adapting branch, repository and extension references.
     .NOTES
     Overwrites differing scaffold files but preserves existing alm-config.psd1 for the
-    later merge. DEPLOY-main becomes DEPLOY-Branch; extension false selects the fallback.
-    Obsolete .template companions are removed for existing destinations. Does not commit.
+    later merge, existing application-owned files (AGENTS.md and data/), and existing
+    BUILD/DEPLOY-Branch callers, which the BUILD and DEPLOY updaters regenerate
+    afterwards without discarding their custom parameters. EXPORT and IMPORT are
+    refreshed from the scaffold but keep an existing template-level secretVariables
+    block. Every pipeline caller's repository resource is renamed to
+    SharedRepositoryName. DEPLOY-main becomes DEPLOY-Branch; extension false selects the
+    fallback. Obsolete .template companions are removed for existing destinations.
+    Does not commit.
     #>
     [CmdletBinding()]
     param(
@@ -1594,6 +1600,18 @@ function Sync-CopyToYourRepoIntoGitRepo {
             continue
         }
 
+        if ((Test-ApplicationOwnedScaffoldPath -RelativePath $normalizedRelativePath) -and (Test-Path -LiteralPath $destPath)) {
+            Write-Host "Preserving existing $normalizedRelativePath." -ForegroundColor DarkGray
+            continue
+        }
+
+        if ($normalizedRelativePath -eq 'pipelines/DEPLOY-main.yml') {
+            $destPath = Join-Path $TargetRoot "pipelines/DEPLOY-$Branch.yml"
+        }
+        if ($normalizedRelativePath -in @('pipelines/BUILD.yml', 'pipelines/DEPLOY-main.yml') -and (Test-Path -LiteralPath $destPath)) {
+            continue
+        }
+
         $destDir = Split-Path -Parent $destPath
         if (-not (Test-Path -LiteralPath $destDir)) {
             New-Item -ItemType Directory -Path $destDir -Force | Out-Null
@@ -1603,7 +1621,6 @@ function Sync-CopyToYourRepoIntoGitRepo {
         $isTempFile = $false
 
         if ($normalizedRelativePath -eq 'pipelines/DEPLOY-main.yml') {
-            $destPath = Join-Path $TargetRoot "pipelines/DEPLOY-$Branch.yml"
 
             $content = Get-Content -LiteralPath $file.FullName -Raw
             $content = $content -replace "source: 'BUILD'", "source: '$RepositoryName\BUILD'"
@@ -1618,10 +1635,16 @@ function Sync-CopyToYourRepoIntoGitRepo {
             $sourceFileToUse = $tempFile
             $isTempFile = $true
         }
-        elseif (-not $UseAlm4DataverseExtension -and $normalizedRelativePath -in @('pipelines/EXPORT.yml', 'pipelines/IMPORT.yml')) {
+        elseif ($normalizedRelativePath -in @('pipelines/EXPORT.yml', 'pipelines/IMPORT.yml')) {
             $content = Get-Content -LiteralPath $file.FullName -Raw
-            $content = $content -replace '(?m)^(\s*useAlm4DataverseExtension:\s*)true\s*$', '${1}false'
+            if (-not $UseAlm4DataverseExtension) {
+                $content = $content -replace '(?m)^(\s*useAlm4DataverseExtension:\s*)true\s*$', '${1}false'
+            }
             $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse\s*$', "`${1}$SharedRepositoryName"
+            $secretVariableBlock = Get-AzDoCallerSecretVariableBlock -Path $destPath
+            if ($secretVariableBlock) {
+                $content = $content.TrimEnd("`r", "`n") + [Environment]::NewLine + $secretVariableBlock + [Environment]::NewLine
+            }
 
             $tempFile = [System.IO.Path]::GetTempFileName()
             $content | Set-Content -LiteralPath $tempFile -NoNewline
@@ -3533,6 +3556,40 @@ function Update-AlmConfigInWorkingTree {
     return $changed
 }
 
+function Get-AzDoCallerSecretVariableBlock {
+    <#
+    .SYNOPSIS
+    Returns the template-level secretVariables block from an existing caller pipeline.
+    .NOTES
+    Recognizes the generated caller layout: the key at four spaces under the single
+    template's parameters, followed by list items indented at four or more spaces.
+    Returns the lines joined by the platform newline, or an empty string when the file
+    or block is absent, so callers can append it to regenerated content verbatim.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) { return '' }
+
+    $secretVariableLines = [System.Collections.Generic.List[string]]::new()
+    $inSecretVariables = $false
+    foreach ($existingLine in @(Get-Content -LiteralPath $Path)) {
+        if ($existingLine -match '^\s{4}secretVariables:') {
+            $inSecretVariables = $true
+            $secretVariableLines.Add($existingLine)
+        }
+        elseif ($inSecretVariables -and ($existingLine -match '^\s{5,}\S' -or $existingLine -match '^\s{4}-\s')) {
+            $secretVariableLines.Add($existingLine)
+        }
+        else {
+            $inSecretVariables = $false
+        }
+    }
+
+    return ($secretVariableLines -join [Environment]::NewLine)
+}
+
 function Update-AzDoBuildPipelineInWorkingTree {
     <#
     .SYNOPSIS
@@ -3540,7 +3597,9 @@ function Update-AzDoBuildPipelineInWorkingTree {
     .NOTES
     The generated CI trigger includes every branch. An empty BuildEnvironmentName leaves
     validation unassociated; single quotes in its YAML scalar are escaped. This is a
-    whole-file replacement, not a merge of custom YAML. WhatIf skips the write.
+    whole-file replacement, not a merge of custom YAML, except that an existing
+    template-level secretVariables parameter block is carried over unchanged.
+    WhatIf skips the write.
     #>
         [CmdletBinding(SupportsShouldProcess = $true)]
         param(
@@ -3560,6 +3619,9 @@ function Update-AzDoBuildPipelineInWorkingTree {
         $extensionLiteral = if ($UseAlm4DataverseExtension) { 'true' } else { 'false' }
         $escapedBuildEnvironmentName = ([string]$BuildEnvironmentName).Replace("'", "''")
 
+        $secretVariableBlock = Get-AzDoCallerSecretVariableBlock -Path $buildPipelinePath
+        if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
+
         $newContent = @"
 trigger:
   branches:
@@ -3576,7 +3638,7 @@ stages:
 - template: pipelines/templates/build.yml@ALM4Dataverse
   parameters:
     useAlm4DataverseExtension: $extensionLiteral
-    buildEnvironmentName: '$escapedBuildEnvironmentName'
+    buildEnvironmentName: '$escapedBuildEnvironmentName'$secretVariableBlock
 "@
 
         Set-Content -LiteralPath $buildPipelinePath -Value $newContent.TrimStart("`r", "`n") -NoNewline
@@ -4534,7 +4596,11 @@ function Update-DeployPipelineInWorkingTree {
     An empty target list removes the branch DEPLOY file; nonempty targets require the
     scaffold to exist. The line scanner recognizes the exact template and six-space
     parameter layout, not arbitrary YAML. Preserves other lines and appends entries
-    in promotion order. Returns whether content changed (false under WhatIf).
+    in promotion order. Parameters other than environmentName and
+    useAlm4DataverseExtension (for example secretVariables or timeoutInMinutes),
+    including their nested lines, are carried over to the regenerated entry for the
+    same environment name; entries for removed environments are dropped.
+    Returns whether content changed (false under WhatIf).
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -4567,6 +4633,7 @@ function Update-DeployPipelineInWorkingTree {
     $originalContent = Get-Content -LiteralPath $deployYamlPath -Raw
     $contentLines = Get-Content -LiteralPath $deployYamlPath
     $cleanedContent = @()
+    $preservedParameterLines = @{}
     $i = 0
     while ($i -lt $contentLines.Count) {
         $line = $contentLines[$i]
@@ -4574,8 +4641,30 @@ function Update-DeployPipelineInWorkingTree {
             $i++
             if ($i -lt $contentLines.Count -and $contentLines[$i].Trim() -eq 'parameters:') {
                 $i++
-                while ($i -lt $contentLines.Count -and $contentLines[$i] -match '^\s{6}\S') {
+                $existingEnvironmentName = $null
+                $extraLines = [System.Collections.Generic.List[string]]::new()
+                $inExtraParameter = $false
+                # Deeper lines belong to the preceding parameter, such as list items.
+                while ($i -lt $contentLines.Count -and $contentLines[$i] -match '^\s{6,}\S') {
+                    $parameterLine = $contentLines[$i]
+                    if ($parameterLine -match '^\s{6}environmentName:\s*(.*?)\s*$') {
+                        $existingEnvironmentName = $Matches[1].Trim("'", '"')
+                        $inExtraParameter = $false
+                    }
+                    elseif ($parameterLine -match '^\s{6}useAlm4DataverseExtension:') {
+                        $inExtraParameter = $false
+                    }
+                    elseif ($parameterLine -match '^\s{6}\S') {
+                        $inExtraParameter = $true
+                        $extraLines.Add($parameterLine)
+                    }
+                    elseif ($inExtraParameter) {
+                        $extraLines.Add($parameterLine)
+                    }
                     $i++
+                }
+                if (-not [string]::IsNullOrWhiteSpace($existingEnvironmentName) -and $extraLines.Count -gt 0) {
+                    $preservedParameterLines[$existingEnvironmentName] = @($extraLines)
                 }
             }
         }
@@ -4591,6 +4680,11 @@ function Update-DeployPipelineInWorkingTree {
         $newStages += "    parameters:`n"
         $newStages += "      environmentName: $($env.ShortName)`n"
         $newStages += "      useAlm4DataverseExtension: $($UseAlm4DataverseExtension.ToString().ToLowerInvariant())`n"
+        if ($preservedParameterLines.ContainsKey([string]$env.ShortName)) {
+            foreach ($preservedLine in $preservedParameterLines[[string]$env.ShortName]) {
+                $newStages += "$preservedLine`n"
+            }
+        }
     }
 
     $updatedContent = (($cleanedContent -join [Environment]::NewLine).TrimEnd() + $newStages).TrimEnd() + [Environment]::NewLine

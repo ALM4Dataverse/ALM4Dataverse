@@ -31,9 +31,10 @@ References: [Azure DevOps permissions](../setup/azdo-manual-setup.md#9-pipeline-
 > override existing runtime values; supported direct variables precede prefixed fallbacks.
 > Do not print entire variable/secret JSON documents for diagnosis.
 >
-> On Azure DevOps, secrets require explicit `env:` mapping into the relevant PowerShell
-> step. The runner normalizes nonsecret names; deployment resolves its supported settings
-> case-insensitively through uppercase names.
+> On Azure DevOps, secrets reach scripts only when their names are listed in the
+> template's `secretVariables` parameter for that caller or stage. The runner normalizes
+> nonsecret names; deployment resolves its supported settings case-insensitively through
+> uppercase names.
 
 References: [GitHub mapping and OIDC](../config/github-secrets.md),
 [Azure DevOps authentication](../config/azdo-environment-service-connection.md), and
@@ -73,7 +74,7 @@ custom callers with the supplied [deployment caller](../../copy-to-your-repo/.gi
 | Asset or deployment hook is missing | Include it in `assets`; a hook path alone does not copy it into the build. Use `$PSScriptRoot` or `Context.BaseDirectory` deliberately. |
 | Module/PAC installation fails | Check access to package feeds, requested versions, runner compatibility, and the artifact's dependency lock. A cache is an optimization, not an offline guarantee. |
 | Checker fails | Read `solution-check-report`, `summary.md`, per-solution logs, and the aggregate JSON. Check authentication, rule/region settings, exclusions, and `failThreshold`. |
-| A hook behaves differently in BUILD validation or IMPORT | Both run deployment hooks. Check `Context.HookType`, supplied operation context, target identity, and idempotence. |
+| A hook behaves differently in BUILD validation or IMPORT | Both run deployment hooks against their own target. `Context.UseUnmanagedSolutions` is true only for IMPORT; nothing in the context distinguishes BUILD validation from DEPLOY. Check the target's settings, its identity, and whether the hook is safe to repeat. See [identifying the target](writing-hooks.md#identify-the-target). |
 
 > [!IMPORTANT]
 > Fix source/configuration and build a new package. Do not silently alter an already
