@@ -3228,6 +3228,40 @@ function Get-DataverseServiceAccountUPN {
     }
 }
 
+function Get-AzDoVariableGroupByName {
+    <#
+    .SYNOPSIS
+    Retrieves a variable group by name without applying VSTeam's user type decoration.
+    .DESCRIPTION
+    VSTeam 7.15.2 dereferences createdBy and modifiedBy while decorating results, but
+    Azure DevOps can return either field as null. The raw request keeps the same lookup
+    and error behavior without depending on optional user metadata.
+    .PARAMETER ProjectName
+    Azure DevOps project containing the variable group.
+    .PARAMETER GroupName
+    Name of the variable group to retrieve.
+    .OUTPUTS
+    The raw variable group object, or no output when no group matches.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter(Mandatory)][string]$ProjectName,
+        [Parameter(Mandatory)][string]$GroupName
+    )
+
+    $response = Invoke-VSTeamRequest `
+        -Method GET `
+        -ProjectName $ProjectName `
+        -Area 'distributedtask' `
+        -Resource 'variablegroups' `
+        -Version '5.1-preview.1' `
+        -QueryString @{ groupName = $GroupName } `
+        -ErrorAction Stop
+
+    return $response.value
+}
+
 function Initialize-AzDoVariableGroup {
     <#
     .SYNOPSIS
@@ -3248,9 +3282,9 @@ function Initialize-AzDoVariableGroup {
 
     $group = $null
 
-    # Use VSTeam command to check for existing variable groups
+    # Query the raw REST response because VSTeam's typed getter assumes user metadata is present.
     try {
-        $existing = Get-VSTeamVariableGroup -ProjectName $Project -Name $GroupName -ErrorAction Stop
+        $existing = Get-AzDoVariableGroupByName -ProjectName $Project -GroupName $GroupName -ErrorAction Stop
         if ($existing) {
             Write-Host "Variable group '$GroupName' already exists (id: $($existing.id))."
             $group = $existing
@@ -3264,22 +3298,40 @@ function Initialize-AzDoVariableGroup {
     if (-not $group) {
         Write-Host "Creating variable group '$GroupName'..." -ForegroundColor Yellow
 
-        # Build variables payload in the format expected by Add-VSTeamVariableGroup
         $variablesPayload = @{}
         foreach ($k in $Variables.Keys) {
             $variablesPayload[$k] = @{ value = [string]$Variables[$k] }
         }
 
-        # Use VSTeam command to create variable group
-        $created = Add-VSTeamVariableGroup -ProjectName $Project -Name $GroupName -Type 'Vsts' -Variables $variablesPayload -Description 'ALM4Dataverse environment variable group (created by setup-azdo.ps1)'
+        $description = 'ALM4Dataverse environment variable group (created by setup-azdo.ps1)'
+        $createPayload = @{
+            name        = $GroupName
+            description = $description
+            type        = 'Vsts'
+            variables   = $variablesPayload
+        } | ConvertTo-Json -Depth 100
+
+        # VSTeam's add command follows the POST with a typed GET that assumes user metadata exists.
+        $created = Invoke-VSTeamRequest `
+            -Method POST `
+            -ProjectName $Project `
+            -Area 'distributedtask' `
+            -Resource 'variablegroups' `
+            -Body $createPayload `
+            -ContentType 'application/json' `
+            -Version '5.1-preview.1' `
+            -ErrorAction Stop
 
         if ($created -and $created.id) {
+            $group = Get-AzDoVariableGroupByName -ProjectName $Project -GroupName $GroupName -ErrorAction Stop
+            if (-not $group) {
+                throw "Variable group '$GroupName' was created but could not be retrieved."
+            }
+
             Write-Host "Created variable group '$GroupName' (id: $($created.id))."
-            $group = $created
         }
         else {
-            Write-Host "Created variable group '$GroupName'."
-            $group = $created
+            throw "Azure DevOps did not return an ID when creating variable group '$GroupName'."
         }
     }
 
@@ -3316,7 +3368,7 @@ function Update-AzDoVariableGroup {
     if (-not $PSCmdlet.ShouldProcess("$ProjectName/$GroupName", 'Update Azure DevOps variable group')) { return }
 
     try {
-        $group = Get-VSTeamVariableGroup -ProjectName $ProjectName -Name $GroupName -ErrorAction SilentlyContinue
+        $group = Get-AzDoVariableGroupByName -ProjectName $ProjectName -GroupName $GroupName -ErrorAction SilentlyContinue
         if (-not $group) {
             Write-Warning "Variable group '$GroupName' not found. Cannot update."
             return $null
@@ -3324,7 +3376,6 @@ function Update-AzDoVariableGroup {
 
         Write-Host "Updating variable group '$GroupName'..." -ForegroundColor DarkGray
 
-        # Build variables payload in the format expected by Update-VSTeamVariableGroup
         $variablesPayload = @{}
 
         # First, copy existing variables if the group has any
@@ -3339,8 +3390,24 @@ function Update-AzDoVariableGroup {
             $variablesPayload[$k] = @{ value = [string]$Variables[$k] }
         }
 
-        # Use VSTeam command to update variable group
-        Update-VSTeamVariableGroup -ProjectName $ProjectName -Id $group.id -Name $GroupName -Type 'Vsts' -Variables $variablesPayload -Description $group.description | Out-Null
+        $updatePayload = @{
+            name        = $GroupName
+            description = $group.description
+            type        = 'Vsts'
+            variables   = $variablesPayload
+        } | ConvertTo-Json -Depth 100
+
+        # VSTeam's update command also re-fetches and decorates the group after its PUT.
+        Invoke-VSTeamRequest `
+            -Method PUT `
+            -ProjectName $ProjectName `
+            -Area 'distributedtask' `
+            -Resource 'variablegroups' `
+            -Id ([string]$group.id) `
+            -Body $updatePayload `
+            -ContentType 'application/json' `
+            -Version '5.1-preview.1' `
+            -ErrorAction Stop | Out-Null
 
         Write-Host "Variable group '$GroupName' updated successfully."
         return $group
@@ -3822,7 +3889,7 @@ function Get-AzDoExistingEnvironmentServiceAccountUPN {
     )
 
     try {
-        $existingVarGroup = Get-VSTeamVariableGroup -ProjectName $ProjectName -Name "Environment-$EnvironmentName" -ErrorAction SilentlyContinue
+        $existingVarGroup = Get-AzDoVariableGroupByName -ProjectName $ProjectName -GroupName "Environment-$EnvironmentName" -ErrorAction SilentlyContinue
         if ($existingVarGroup -and $existingVarGroup.variables -and $existingVarGroup.variables.PSObject.Properties.Name -contains 'DataverseServiceAccountUPN') {
             return $existingVarGroup.variables.DataverseServiceAccountUPN.value
         }
@@ -4031,26 +4098,6 @@ function Get-AzDoBuildEnvironmentNameFromPipelineContent {
     }
 
     return $value.Trim()
-}
-
-function Get-SolutionCheckEnabledFromConfigContent {
-    # Detect the scaffold's literal solutionCheck.enabled; absent/unrecognized means false.
-    # This intentionally inspects text without executing/importing remote configuration.
-    [CmdletBinding()]
-    param(
-        [Parameter()][string]$ConfigContent
-    )
-
-    if ([string]::IsNullOrWhiteSpace($ConfigContent)) {
-        return $false
-    }
-
-    $match = [regex]::Match($ConfigContent, '(?mis)solutionCheck\s*=\s*@\{.*?\benabled\s*=\s*\$(true|false)')
-    if (-not $match.Success) {
-        return $false
-    }
-
-    return ($match.Groups[1].Value -ieq 'true')
 }
 
 function Get-AzDoBuildValidationEnabledFromRepoClone {

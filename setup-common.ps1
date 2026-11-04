@@ -2658,6 +2658,60 @@ function Set-AlmConfigSolutionsInFile {
     return $hasChanges
 }
 
+function Get-SolutionCheckEnabledFromConfigContent {
+    # Inspect the syntax tree without executing repository data; commented examples are excluded.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter()][AllowEmptyString()][string]$ConfigContent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ConfigContent)) {
+        return $false
+    }
+
+    $tokens = $null
+    $parseErrors = $null
+    $configAst = [System.Management.Automation.Language.Parser]::ParseInput($ConfigContent, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors.Count -gt 0) {
+        throw "Unable to inspect alm-config.psd1 for BUILD solution-check settings: $($parseErrors[0].Message)"
+    }
+
+    foreach ($configurationHashtable in $configAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.HashtableAst]
+    }, $true)) {
+        foreach ($configurationEntry in $configurationHashtable.KeyValuePairs) {
+            if (
+                $configurationEntry.Item1 -isnot [System.Management.Automation.Language.StringConstantExpressionAst] -or
+                $configurationEntry.Item1.Value -ine 'solutionCheck'
+            ) {
+                continue
+            }
+
+            $solutionCheckHashtable = $configurationEntry.Item2.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.HashtableAst]
+            }, $true)
+            if ($null -eq $solutionCheckHashtable) {
+                continue
+            }
+
+            foreach ($setting in $solutionCheckHashtable.KeyValuePairs) {
+                if (
+                    $setting.Item1 -is [System.Management.Automation.Language.StringConstantExpressionAst] -and
+                    $setting.Item1.Value -ieq 'enabled' -and
+                    $setting.Item2.Extent.Text.Trim() -ieq '$true'
+                ) {
+                    return $true
+                }
+            }
+        }
+    }
+
+    return $false
+}
+
 function Set-AlmConfigSolutionCheckEnabledInFile {
     <#
     .SYNOPSIS

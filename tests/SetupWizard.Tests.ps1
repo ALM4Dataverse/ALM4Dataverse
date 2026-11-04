@@ -82,16 +82,23 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $result.BranchStates[0].DevEnvironmentConfiguration.Url | Should -Be $script:dev.Url
         $result.SolutionSourceBranch | Should -Be main
         $result.BuildValidationEnabled | Should -BeFalse
+        Should -Invoke Read-YesNo -Times 1 -Exactly -ParameterFilter {
+            $Prompt -eq 'Enable Dataverse deployment validation during BUILD?' -and $DefaultNo
+        }
         Should -Invoke Get-DataverseSolutionsSelection -Times 1 -Exactly -ParameterFilter { $ExistingEnvironmentUrl -eq 'https://dev.example.com' }
         Should -Invoke Confirm-SetupReviewAction -Times 1 -Exactly
     }
 
     It 'configures a shared BUILD environment and a separate baseline' {
+        $script:existingState.BuildValidationEnabled = $true
         $script:validationEnabled = $true
         $result = & $Wizard @script:wizardParameters
         $result.BuildValidationEnabled | Should -BeTrue
         $result.BuildValidationEnvironmentConfiguration.ShortName | Should -Be Build
         $result.BuildValidationBaselineRelease | Should -Be '@TEST'
+        Should -Invoke Read-YesNo -Times 1 -Exactly -ParameterFilter {
+            $Prompt -eq 'Enable Dataverse deployment validation during BUILD?' -and -not $DefaultNo
+        }
         Should -Invoke Select-BuildValidationBaselineEnvironment -Times 1 -Exactly -ParameterFilter { $ExcludedEnvironmentUrl -eq 'https://build.example.com' }
     }
 

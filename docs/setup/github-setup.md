@@ -219,6 +219,10 @@ For deployment validation, uncomment the BUILD job's environment block, set its 
 and set the action's `environment-name` to that same value. Provide the target's URL,
 credentials, process-owner UPN, connections, and Dataverse values.
 
+The automated setup prompt defaults BUILD validation to No unless it detects an existing
+BUILD environment association or active `solutionCheck.enabled = $true` configuration
+on the default branch.
+
 > [!CAUTION]
 > Use a dedicated non-production Dataverse environment for BUILD validation. It is
 > updated in place, not reset, and builds from multiple branches can share it.

@@ -616,6 +616,30 @@ Describe 'Setup configuration and validation helpers' {
         (Import-PowerShellDataFile $configPath).assets | Should -Be @('data')
     }
 
+    It 'detects active solution-check settings but ignores commented examples' {
+        $commentedConfig = @'
+@{
+    # solutionCheck = @{
+    #     enabled = $true
+    # }
+    solutions = @(
+        @{
+            name = 'Example'
+            # solutionCheck = @{
+            #     enabled = $true
+            # }
+        }
+    )
+}
+'@
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent $commentedConfig | Should -BeFalse
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutionCheck = @{ enabled = $true } }' | Should -BeTrue
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutions = @(@{ name = "Example"; solutionCheck = @{ enabled = $true } }) }' | Should -BeTrue
+        Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutionCheck = @{ enabled = $false } }' | Should -BeFalse
+        { Get-SolutionCheckEnabledFromConfigContent -ConfigContent '@{ solutionCheck = ' } |
+            Should -Throw '*Unable to inspect alm-config.psd1*'
+    }
+
     It 'adds and updates baseline selectors without replacing other validation settings' -ForEach @(
         @{ Initial = '@{}'; HasPreserved = $false }
         @{ Initial = '@{ buildValidation = @{ other = 42 } }'; HasPreserved = $true }

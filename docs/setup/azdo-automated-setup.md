@@ -113,7 +113,7 @@ The one-line bootstrap is also available after you have reviewed and trust the r
      - **Workload Identity Federation**: Modern approach using federated credentials (no secrets required)
      - When ALM4Dataverse extension mode is disabled, only **Service Principal with Secret** is available.
 12) For both the dev environment and all deployment environments, prompts you to select the Service Account (user account) you want to use. This must be pre-existing as no option to create one is provided.
-13) Offers shared BUILD validation, configures its URL/authentication/service account, and lets you choose a separate deployment environment as the baseline source or choose no baseline.
+13) Offers shared BUILD validation, configures its URL/authentication/service account, and lets you choose a separate deployment environment as the baseline source or choose no baseline. It defaults to No unless the default branch already has an active BUILD environment association or `solutionCheck.enabled = $true` configuration.
 
 > [!NOTE]
 > **Advanced: BUILD validation.** Generated pipelines deploy an available baseline first,

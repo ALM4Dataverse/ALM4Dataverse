@@ -644,6 +644,37 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
         $result.BuildValidationEnabled | Should -BeTrue
     }
 
+    It 'ignores commented checker examples when inferring BUILD validation' {
+        $script:discoveryAlmConfig = @'
+@{
+    # solutionCheck = @{
+    #     enabled = $true
+    # }
+}
+'@
+        Mock Get-GitRepoFileContentFromRemoteBranch {
+            if ($RelativePath -eq 'alm-config.psd1') { $script:discoveryAlmConfig }
+            else { '' }
+        }
+
+        $enabled = if ($Provider -eq 'GitHub') {
+            Get-GitHubBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        else {
+            Get-AzDoBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        $enabled | Should -BeFalse
+
+        $script:discoveryAlmConfig = '@{ solutionCheck = @{ enabled = $true } }'
+        $enabled = if ($Provider -eq 'GitHub') {
+            Get-GitHubBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        else {
+            Get-AzDoBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
+        }
+        $enabled | Should -BeTrue
+    }
+
     It 'retains the default branch when no deployment mapping exists' {
         $script:discoveryEmpty = $true
         if ($Provider -eq 'GitHub') {

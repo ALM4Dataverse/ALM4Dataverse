@@ -10,14 +10,15 @@ BeforeAll {
         [CmdletBinding()]
         param($ProjectName)
     }
-    function Get-VSTeamVariableGroup {
-        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
-        [CmdletBinding()]
-        param($ProjectName, $Name)
-    }
     function Add-VSTeamVariableGroup {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($ProjectName, $Name, $Type, $Variables, $Description)
+    }
+    function Update-VSTeamVariableGroup {
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Test fallback always throws and cannot mutate provider state.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+        [CmdletBinding()]
+        param($ProjectName, $Id, $Name, $Type, $Variables, $Description)
     }
     function Initialize-AzDoVariableGroupExclusiveLock {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
@@ -39,8 +40,9 @@ BeforeAll {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Area', Justification = 'Pester mock command parameter.')]
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Pester mock command parameter.')]
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Id', Justification = 'Pester mock command parameter.')]
+        [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'QueryString', Justification = 'Pester mock command parameter.')]
         [CmdletBinding()]
-        param($Method, $Resource, $Body, $ContentType, $Version, $Area, $ProjectName, $Id)
+        param($Method, $Resource, $Body, $ContentType, $Version, $Area, $ProjectName, $Id, $QueryString)
         throw 'Unexpected live provider request.'
     }
     function Add-VSTeamServiceEndpoint {
@@ -169,7 +171,7 @@ Describe 'Azure DevOps lookup failure handling' {
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
-        foreach ($name in @('Get-PowerPlatformSCCredential', 'Initialize-AzDoVariableGroup')) {
+        foreach ($name in @('Get-PowerPlatformSCCredential', 'Get-AzDoVariableGroupByName', 'Initialize-AzDoVariableGroup', 'Update-AzDoVariableGroup')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -180,8 +182,8 @@ Describe 'Azure DevOps lookup failure handling' {
 
     BeforeEach {
         Mock Get-VSTeamServiceEndpoint { throw 'Service connection lookup denied' }
-        Mock Get-VSTeamVariableGroup { throw 'Variable group lookup denied' }
         Mock Add-VSTeamVariableGroup { [pscustomobject]@{ id = 7 } }
+        Mock Update-VSTeamVariableGroup { throw 'Unexpected VSTeam typed variable group update.' }
         Mock Initialize-AzDoVariableGroupExclusiveLock {}
         Mock Select-FromMenu { throw 'Unexpected interactive selection' }
     }
@@ -192,25 +194,141 @@ Describe 'Azure DevOps lookup failure handling' {
     }
 
     It 'does not create a variable group after an unclassified lookup failure' {
+        Mock Invoke-VSTeamRequest { throw 'Variable group lookup denied' } -ParameterFilter {
+            $Area -eq 'distributedtask' -and $Resource -eq 'variablegroups'
+        }
         { Initialize-AzDoVariableGroup -Organization org -Project project  -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false } | Should -Throw '*Variable group lookup denied*'
         Should -Invoke Add-VSTeamVariableGroup -Times 0 -Exactly
+        Should -Invoke Invoke-VSTeamRequest -Times 0 -Exactly -ParameterFilter { $Method -eq 'POST' }
     }
 
     It 'does not treat HTTP permission failure as a missing variable group' {
-        Mock Get-VSTeamVariableGroup {
+        Mock Invoke-VSTeamRequest {
             throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Permission denied', [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden))
+        } -ParameterFilter {
+            $Area -eq 'distributedtask' -and $Resource -eq 'variablegroups'
         }
         { Initialize-AzDoVariableGroup -Organization org -Project project  -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false } | Should -Throw '*Permission denied*'
         Should -Invoke Add-VSTeamVariableGroup -Times 0 -Exactly
+        Should -Invoke Invoke-VSTeamRequest -Times 0 -Exactly -ParameterFilter { $Method -eq 'POST' }
     }
 
     It 'creates a variable group only after a confirmed missing resource' {
-        Mock Get-VSTeamVariableGroup {
-            throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Not found', [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound))
+        $script:variableGroupGetCount = 0
+        $script:variableGroupCreateBody = $null
+        Mock Invoke-VSTeamRequest {
+            if ($Method -eq 'GET') {
+                $script:variableGroupGetCount++
+                if ($script:variableGroupGetCount -eq 1) {
+                    throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('Not found', [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::NotFound))
+                }
+
+                return [pscustomobject]@{
+                    value = @([pscustomobject]@{
+                        id = 7
+                        variables = [pscustomobject]@{}
+                    })
+                }
+            }
+
+            if ($Method -eq 'POST') {
+                $script:variableGroupCreateBody = $Body
+                return [pscustomobject]@{ id = 7 }
+            }
+        } -ParameterFilter {
+            $Area -eq 'distributedtask' -and $Resource -eq 'variablegroups'
         }
         $result = Initialize-AzDoVariableGroup -Organization org -Project project  -GroupName Environment-TEST -Variables @{} -RequireDeploymentApproval $false
         $result.id | Should -Be 7
-        Should -Invoke Add-VSTeamVariableGroup -Times 1 -Exactly
+        $createPayload = $script:variableGroupCreateBody | ConvertFrom-Json -AsHashtable
+        $createPayload.name | Should -Be Environment-TEST
+        $createPayload.type | Should -Be Vsts
+        Should -Invoke Invoke-VSTeamRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'POST' -and
+            $Area -eq 'distributedtask' -and
+            $Resource -eq 'variablegroups' -and
+            $Version -eq '5.1-preview.1' -and
+            $ContentType -eq 'application/json'
+        }
+        Should -Invoke Add-VSTeamVariableGroup -Times 0 -Exactly
+    }
+
+    It 'updates variable groups through raw REST without VSTeam user decoration' {
+        $script:variableGroupUpdateBody = $null
+        Mock Invoke-VSTeamRequest {
+            if ($Method -eq 'GET') {
+                return [pscustomobject]@{
+                    value = @([pscustomobject]@{
+                        id = 7
+                        description = 'existing group'
+                        createdBy = $null
+                        modifiedBy = $null
+                        variables = [pscustomobject]@{
+                            Keep = [pscustomobject]@{ value = 'keep'; isSecret = $true }
+                            Replace = [pscustomobject]@{ value = 'old' }
+                        }
+                    })
+                }
+            }
+
+            if ($Method -eq 'PUT') {
+                $script:variableGroupUpdateBody = $Body
+                return [pscustomobject]@{}
+            }
+        } -ParameterFilter {
+            $Area -eq 'distributedtask' -and $Resource -eq 'variablegroups'
+        }
+
+        $result = Update-AzDoVariableGroup -ProjectName project -GroupName Environment-TEST -Variables @{
+            Replace = 'new'
+            Added = 'value'
+        } -Confirm:$false
+
+        $result.id | Should -Be 7
+        $updatePayload = $script:variableGroupUpdateBody | ConvertFrom-Json -AsHashtable
+        $updatePayload.name | Should -Be Environment-TEST
+        $updatePayload.type | Should -Be Vsts
+        $updatePayload.variables.Keep.value | Should -Be keep
+        $updatePayload.variables.Keep.ContainsKey('isSecret') | Should -BeFalse
+        $updatePayload.variables.Replace.value | Should -Be new
+        $updatePayload.variables.Added.value | Should -Be value
+        Should -Invoke Invoke-VSTeamRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'PUT' -and
+            $Area -eq 'distributedtask' -and
+            $Resource -eq 'variablegroups' -and
+            $Id -eq '7' -and
+            $Version -eq '5.1-preview.1' -and
+            $ContentType -eq 'application/json'
+        }
+        Should -Invoke Update-VSTeamVariableGroup -Times 0 -Exactly
+    }
+
+    It 'retrieves variable groups without requiring non-null user metadata' {
+        Mock Invoke-VSTeamRequest {
+            [pscustomobject]@{
+                value = @([pscustomobject]@{
+                    id = 7
+                    createdBy = $null
+                    modifiedBy = $null
+                    variables = [pscustomobject]@{}
+                })
+            }
+        } -ParameterFilter {
+            $Area -eq 'distributedtask' -and $Resource -eq 'variablegroups'
+        }
+
+        $group = Get-AzDoVariableGroupByName -ProjectName project -GroupName Environment-TEST
+
+        $group.id | Should -Be 7
+        $group.createdBy | Should -BeNullOrEmpty
+        Should -Invoke Invoke-VSTeamRequest -Times 1 -Exactly -ParameterFilter {
+            $Method -eq 'GET' -and
+            $Area -eq 'distributedtask' -and
+            $Resource -eq 'variablegroups' -and
+            $ProjectName -eq 'project' -and
+            $Version -eq '5.1-preview.1' -and
+            $QueryString.groupName -eq 'Environment-TEST'
+        }
     }
 }
 
