@@ -1134,9 +1134,9 @@ function Get-DataverseEnvironmentCatalog {
     .SYNOPSIS
     Returns discovery environments, reusing the script cache unless ForceRefresh is specified.
     .NOTES
-    ShowStatus affects discovery presentation only. The token callback requests the
-    resource authority, falling back to global discovery when no resource is supplied.
-    An empty discovery result throws; it is not a valid initial catalog.
+    Acquires a Global Discovery token before calling the discovery cmdlet because
+    its token callback runs on a worker task. The callback only returns that token.
+    ShowStatus affects presentation only. An empty discovery result throws.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
@@ -1150,19 +1150,32 @@ function Get-DataverseEnvironmentCatalog {
         return @($script:dataverseEnvironmentCatalog)
     }
 
-    $fetchCatalog = {
-        @(Get-DataverseEnvironment -AccessToken {
-            param($resource)
-            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-            try {
-                $uri = [System.Uri]$resource
-                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-            }
-            catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
+    $discoveryResource = 'https://globaldisco.crm.dynamics.com'
+    if ($ShowStatus) {
+        Write-Host 'Authenticating to retrieve Dataverse environments...' -ForegroundColor DarkGray
+    }
 
-            $auth = Get-AuthToken -ResourceUrl $resource
-            return $auth.AccessToken
-        })
+    $discoveryAccessToken = Get-SetupAccessToken -ResourceUrl $discoveryResource
+    $accessTokenProvider = {
+        param($resource)
+        if (-not [string]::IsNullOrWhiteSpace($resource)) {
+            try {
+                $resourceAuthority = ([System.Uri]$resource).GetLeftPart([System.UriPartial]::Authority)
+            }
+            catch {
+                throw 'Dataverse environment discovery requested an invalid authentication resource.'
+            }
+
+            if ($resourceAuthority -ne $discoveryResource) {
+                throw 'Dataverse environment discovery requested a token for an unexpected resource.'
+            }
+        }
+
+        return $discoveryAccessToken
+    }.GetNewClosure()
+
+    $fetchCatalog = {
+        @(Get-DataverseEnvironment -AccessToken $accessTokenProvider)
     }
 
     if ($ShowStatus) {
@@ -3422,18 +3435,11 @@ function Get-DataverseSolutionsSelection {
         $devEnvUrl = ConvertTo-NormalizedEnvironmentUrl -Url $selectedEnv.Endpoints["WebApplication"]
         Write-Host "Selected environment: $($selectedEnv.FriendlyName) ($devEnvUrl)" -ForegroundColor Cyan
 
+        Write-Host 'Authenticating to the selected DEV environment...' -ForegroundColor DarkGray
+        $devAccessTokenCallback = Get-SetupAccessTokenCallback -ResourceUrl $devEnvUrl
         # Connect to the selected environment
         $connection = Invoke-WithSpectreStatus -Status 'Connecting to the selected DEV environment...' -ScriptBlock {
-            Get-DataverseConnection -Url $devEnvUrl -AccessToken {
-                param($resource)
-                if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-                try {
-                    $uri = [System.Uri]$resource
-                    $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-                } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
-                $auth = Get-AuthToken -ResourceUrl $resource
-                return $auth.AccessToken
-            }
+            Get-DataverseConnection -Url $devEnvUrl -AccessToken $devAccessTokenCallback
         }
 
         if (-not $connection) {
@@ -3652,7 +3658,6 @@ function Initialize-DataverseApplicationUser {
     # Ensure an app-ID systemuser and its root-business-unit System Administrator role.
     # Uses interactive tenant-scoped tokens, not the app's credentials; missing root BU,
     # role or connection throws. Existing user/role associations are retained.
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -3662,16 +3667,8 @@ function Initialize-DataverseApplicationUser {
 
     Write-Host "Ensuring application user '$ApplicationId' exists in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
-        param($resource)
-        if (-not $resource) { $resource = $EnvironmentUrl }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
-        $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-        return $auth.AccessToken
-    }
+    $accessTokenCallback = Get-SetupAccessTokenCallback -ResourceUrl $EnvironmentUrl -TenantId $TenantId
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken $accessTokenCallback
 
     if (-not $conn) {
         throw "Failed to connect to Dataverse."
@@ -3725,7 +3722,6 @@ function Initialize-DataverseApplicationUser {
 function Initialize-DataverseServiceAccountUser {
     # Resolve/create the UPN systemuser in the root BU and add System Administrator
     # if absent. This provisions Dataverse records/roles, not an Entra account or license.
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -3735,16 +3731,8 @@ function Initialize-DataverseServiceAccountUser {
 
     Write-Host "Ensuring service account '$ServiceAccountUPN' has System Administrator role in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
-        param($resource)
-        if (-not $resource) { $resource = $EnvironmentUrl }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
-        $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-        return $auth.AccessToken
-    }
+    $accessTokenCallback = Get-SetupAccessTokenCallback -ResourceUrl $EnvironmentUrl -TenantId $TenantId
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken $accessTokenCallback
 
     if (-not $conn) {
         throw "Failed to connect to Dataverse."
