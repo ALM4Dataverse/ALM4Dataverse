@@ -653,28 +653,85 @@ function Set-GitHubPrefixedEnvironmentCredential {
 function Get-GitHubRepoList {
     <#
     .SYNOPSIS
-        Returns up to 100 repositories from gh repo list for the authenticated account.
+        Returns up to 100 repositories accessible to the authenticated GitHub account.
     .DESCRIPTION
-        Returns nameWithOwner, name, owner and defaultBranchRef metadata. This query
-        does not request or validate write permissions. CLI failures throw.
+        Includes repositories owned by the account, shared by its organizations, or
+        accessible through collaborator access. Maps the REST response to
+        nameWithOwner, name, owner and defaultBranchRef metadata. Does not request or
+        validate write permissions. API failures throw.
     #>
     [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
     param()
+
+    $repos = Invoke-GhApi -Endpoint 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
+    if (-not $repos) {
+        return @()
+    }
+
+    return @(
+        foreach ($repo in @($repos)) {
+            [pscustomobject]@{
+                nameWithOwner = [string]$repo.full_name
+                name          = [string]$repo.name
+                owner         = $repo.owner
+                defaultBranchRef = if ($repo.default_branch) {
+                    [pscustomobject]@{ name = [string]$repo.default_branch }
+                }
+                else {
+                    $null
+                }
+            }
+        }
+    )
+}
+
+function Invoke-GitHubCloneBaseBranchCheckout {
+    <#
+    .SYNOPSIS
+        Checks out the selected repository's base branch in a clone.
+    .DESCRIPTION
+        Tries the local branch, then the fetched remote branch. When neither exists
+        and the repository has no commit, points HEAD at an unborn branch with the
+        requested name so setup can publish the repository's initial files. Other
+        checkout failures throw.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$DefaultBranch
+    )
 
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        $result = @(& gh repo list --json nameWithOwner,name,owner,defaultBranchRef --limit 100 2>&1)
-        $listExitCode = $LASTEXITCODE
+        $checkoutOutput = @(& git -C $RepoRoot checkout -f $DefaultBranch 2>&1)
+        $checkoutExitCode = $LASTEXITCODE
+
+        if ($checkoutExitCode -ne 0) {
+            $checkoutOutput = @(& git -C $RepoRoot checkout -B $DefaultBranch "origin/$DefaultBranch" 2>&1)
+            $checkoutExitCode = $LASTEXITCODE
+        }
+
+        if ($checkoutExitCode -ne 0) {
+            [void](& git -C $RepoRoot rev-parse --verify HEAD 2>&1)
+            $headExitCode = $LASTEXITCODE
+
+            if ($headExitCode -ne 0) {
+                $checkoutOutput = @(& git -C $RepoRoot symbolic-ref HEAD "refs/heads/$DefaultBranch" 2>&1)
+                $checkoutExitCode = $LASTEXITCODE
+            }
+        }
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
 
-    if ($listExitCode -ne 0) {
-        throw "Failed to list repositories: $($result -join "`n")"
+    if ($checkoutExitCode -ne 0) {
+        $checkoutErrorDetails = @($checkoutOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $checkoutErrorMessage = if ($checkoutErrorDetails.Count -gt 0) { $checkoutErrorDetails[-1] } else { "Exit code: $checkoutExitCode" }
+        throw "Failed to check out repository base branch '$DefaultBranch'. $checkoutErrorMessage"
     }
-    return (@($result) -join [Environment]::NewLine) | ConvertFrom-Json
 }
 
 function Get-GitHubRepo {
@@ -1538,24 +1595,20 @@ function New-GitHubBranchSetupState {
     }
 }
 
-function Get-GitHubOwnedReposForOwner {
+function Get-GitHubAccessibleRepository {
     <#
     .SYNOPSIS
-        Returns repositories owned by the specified GitHub account.
+        Returns repositories accessible to the authenticated GitHub account.
     .DESCRIPTION
-        Filters the first 100 authenticated-user owner-affiliated results to Owner;
-        this is not a paginated organization repository inventory. Returns unique,
+        Filters the first 100 repositories owned by the user, available through
+        organization membership, or accessible as a collaborator. Returns unique,
         sorted objects containing full_name only.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
-    param(
-        [Parameter(Mandatory)][string]$Owner
-    )
+    param()
 
-    # Use the authenticated-user endpoint so private repositories owned by the
-    # current gh account are included in the selection list.
-    $repos = Invoke-GhApi -Endpoint "user/repos?affiliation=owner&sort=updated&per_page=100"
+    $repos = Invoke-GhApi -Endpoint 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
     if (-not $repos) {
         return @()
     }
@@ -1576,10 +1629,6 @@ function Get-GitHubOwnedReposForOwner {
         }
 
         if ([string]::IsNullOrWhiteSpace($repoFullName)) {
-            continue
-        }
-
-        if ($repoFullName.Split('/')[0] -ine $Owner) {
             continue
         }
 
@@ -1904,31 +1953,30 @@ function Get-GitHubForkSyncState {
     }
 }
 
-function Get-GitHubForksOfRepositoryForOwner {
+function Get-GitHubAccessibleForksOfRepository {
     <#
     .SYNOPSIS
-        Lists repositories owned by a user that are forks of the specified upstream repository.
+        Lists accessible repositories that are forks of the specified upstream repository.
     .DESCRIPTION
-        Inspects the first 100 authenticated owner-affiliated repositories, resolving
-        missing parent metadata with individual detail requests. Filters by Owner
-        and immediate parent full name; returns full_name objects, not all fork metadata.
+        Inspects the first 100 authenticated-user repositories across owner,
+        organization-member and collaborator affiliations, resolving missing parent
+        metadata with individual detail requests. Matches the immediate parent full
+        name and returns full_name objects, not all fork metadata.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
-        [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$UpstreamFullName
     )
 
-    # The authenticated endpoint includes private forks as well as public ones.
-    $ownedRepos = Invoke-GhApi -Endpoint "user/repos?affiliation=owner&sort=updated&per_page=100"
-    if (-not $ownedRepos) {
+    $accessibleRepos = Invoke-GhApi -Endpoint 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
+    if (-not $accessibleRepos) {
         return @()
     }
 
     $matchingForks = @()
 
-    foreach ($repo in @($ownedRepos)) {
+    foreach ($repo in @($accessibleRepos)) {
         $isFork = $false
         if ($repo.PSObject.Properties.Name -contains 'fork') {
             $isFork = [bool]$repo.fork
@@ -1950,10 +1998,6 @@ function Get-GitHubForksOfRepositoryForOwner {
         }
 
         if ([string]::IsNullOrWhiteSpace($repoFullName)) {
-            continue
-        }
-
-        if ($repoFullName.Split('/')[0] -ine $Owner) {
             continue
         }
 
@@ -1989,9 +2033,10 @@ function Get-GitHubForksOfRepositoryForOwner {
 function Initialize-GitHubSharedWorkflowFork {
     <#
     .SYNOPSIS
-        Ensures the user has a shared workflow repository and optionally updates it from upstream.
+        Ensures an accessible shared workflow repository and optionally updates it from upstream.
     .DESCRIPTION
-        Offers owned repositories, public-fork creation or private-repository creation.
+        Offers accessible repositories, public-fork creation or private-repository
+        creation. The owner prompt for a new repository defaults to DefaultOwner.
         Newly created repositories and canonical-default matches are force-aligned
         with lease protection to Reference; other repositories follow ancestry-based
         update prompts. Returns repository details and removes its working clone in
@@ -2001,7 +2046,7 @@ function Initialize-GitHubSharedWorkflowFork {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$UpstreamFullName,
-        [Parameter(Mandatory)][string]$ForkOwner,
+        [Parameter(Mandatory)][string]$DefaultOwner,
         [Parameter(Mandatory)][string]$UpstreamGitSource,
         [Parameter(Mandatory)][string]$Reference,
         [Parameter()][string]$PreferredRepositoryFullName
@@ -2009,25 +2054,25 @@ function Initialize-GitHubSharedWorkflowFork {
 
     $sharedRepositoryOptions = Invoke-WithSpectreStatus -Status 'Retrieving shared workflow repository options...' -ScriptBlock {
         [pscustomobject]@{
-            ExistingForks = @(Get-GitHubForksOfRepositoryForOwner -Owner $ForkOwner -UpstreamFullName $UpstreamFullName)
-            OwnedRepos    = @(Get-GitHubOwnedReposForOwner -Owner $ForkOwner)
+            ExistingForks = @(Get-GitHubAccessibleForksOfRepository -UpstreamFullName $UpstreamFullName)
+            AccessibleRepos = @(Get-GitHubAccessibleRepository)
         }
     }
 
     $existingForks = @($sharedRepositoryOptions.ExistingForks)
-    $ownedRepos = @($sharedRepositoryOptions.OwnedRepos)
+    $accessibleRepos = @($sharedRepositoryOptions.AccessibleRepos)
 
     $menuItems = @()
     $menuActions = @()
 
     if (-not [string]::IsNullOrWhiteSpace($PreferredRepositoryFullName)) {
-        $preferredOwnedRepo = $ownedRepos | Where-Object { $_.full_name -ieq $PreferredRepositoryFullName } | Select-Object -First 1
-        if ($preferredOwnedRepo) {
-            $menuItems += "Use current shared workflow repository: $($preferredOwnedRepo.full_name)"
-            $menuActions += @{ Type = 'UseExisting'; FullName = $preferredOwnedRepo.full_name }
+        $preferredRepo = $accessibleRepos | Where-Object { $_.full_name -ieq $PreferredRepositoryFullName } | Select-Object -First 1
+        if ($preferredRepo) {
+            $menuItems += "Use current shared workflow repository: $($preferredRepo.full_name)"
+            $menuActions += @{ Type = 'UseExisting'; FullName = $preferredRepo.full_name }
 
-            $existingForks = @($existingForks | Where-Object { $_.full_name -ine $preferredOwnedRepo.full_name })
-            $ownedRepos = @($ownedRepos | Where-Object { $_.full_name -ine $preferredOwnedRepo.full_name })
+            $existingForks = @($existingForks | Where-Object { $_.full_name -ine $preferredRepo.full_name })
+            $accessibleRepos = @($accessibleRepos | Where-Object { $_.full_name -ine $preferredRepo.full_name })
         }
     }
 
@@ -2043,7 +2088,7 @@ function Initialize-GitHubSharedWorkflowFork {
         }
     }
 
-    $nonForkRepos = @($ownedRepos | Where-Object {
+    $nonForkRepos = @($accessibleRepos | Where-Object {
         $repoFullName = $_.full_name
         if ([string]::IsNullOrWhiteSpace($repoFullName)) {
             return $false
@@ -2088,6 +2133,11 @@ function Initialize-GitHubSharedWorkflowFork {
             $defaultRepositoryName = $Matches[1]
         }
 
+        $repositoryOwner = Read-TextWithDefault -Prompt 'Shared workflow repository owner (user or organization)' -DefaultValue $DefaultOwner
+        if ([string]::IsNullOrWhiteSpace($repositoryOwner)) {
+            throw 'Shared workflow repository owner cannot be empty.'
+        }
+
         while ($true) {
             $repositoryName = Read-TextWithDefault -Prompt 'Shared workflow repository name' -DefaultValue $defaultRepositoryName
 
@@ -2098,7 +2148,7 @@ function Initialize-GitHubSharedWorkflowFork {
             Write-Warning "Repository name contains invalid characters. Use letters, numbers, dot (.), underscore (_), or hyphen (-)."
         }
 
-        $selectedSharedRepositoryFullName = "$ForkOwner/$repositoryName"
+        $selectedSharedRepositoryFullName = "$repositoryOwner/$repositoryName"
 
         $creationModeItems = @(
             'Public (fork)',
@@ -2114,6 +2164,9 @@ function Initialize-GitHubSharedWorkflowFork {
         if ($creationModeSelection -eq 0) {
             $createResult = Invoke-WithSpectreStatus -Status "Creating public fork '$selectedSharedRepositoryFullName' from '$UpstreamFullName'..." -ScriptBlock {
                 $createArgs = @('repo', 'fork', $UpstreamFullName, '--clone=false', '--fork-name', $repositoryName)
+                if ($repositoryOwner -ine $script:ghUser) {
+                    $createArgs += @('--org', $repositoryOwner)
+                }
                 $createOutput = @(& gh @createArgs 2>&1)
                 return [pscustomobject]@{
                     ExitCode = $LASTEXITCODE
@@ -2158,7 +2211,7 @@ function Initialize-GitHubSharedWorkflowFork {
         $defaultBranch = $sharedRepo.defaultBranchRef.name
     }
 
-    $workParent = Join-Path $env:TEMP ("ALM4Dataverse-ForkSync-" + [guid]::NewGuid().ToString('n'))
+    $workParent = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-ForkSync-" + [guid]::NewGuid().ToString('n'))
     $workRoot = Join-Path $workParent 'repo'
     New-DirectoryIfMissing -Path $workParent
 
@@ -2824,10 +2877,10 @@ function Get-DataverseEnvironmentCatalog {
     .SYNOPSIS
         Returns the script-scoped Dataverse discovery cache, optionally refreshing it.
     .DESCRIPTION
-        Uses the enclosing TenantId for token callbacks. Normalizes resource URLs to
-        their authority, retaining unparseable resources without logging their value.
-        ForceRefresh bypasses the cache; ShowStatus affects presentation only.
-        A fresh empty discovery result throws; provider/authentication failures propagate.
+        Uses the enclosing TenantId to acquire a Global Discovery token before calling
+        the discovery cmdlet. Its token callback runs on a worker task and only returns
+        the acquired token. ForceRefresh bypasses the cache; ShowStatus affects
+        presentation only. A fresh empty result throws; failures propagate.
     #>
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
@@ -2841,19 +2894,32 @@ function Get-DataverseEnvironmentCatalog {
         return @($script:dataverseEnvironmentCatalog)
     }
 
-    $fetchCatalog = {
-        @(Get-DataverseEnvironment -AccessToken {
-            param($resource)
-            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-            try {
-                $uri = [System.Uri]$resource
-                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-            }
-            catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
+    $discoveryResource = 'https://globaldisco.crm.dynamics.com'
+    if ($ShowStatus) {
+        Write-Host 'Authenticating to retrieve Dataverse environments...' -ForegroundColor DarkGray
+    }
 
-            $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-            return $auth.AccessToken
-        })
+    $discoveryAccessToken = Get-SetupAccessToken -ResourceUrl $discoveryResource -TenantId $TenantId
+    $accessTokenProvider = {
+        param($resource)
+        if (-not [string]::IsNullOrWhiteSpace($resource)) {
+            try {
+                $resourceAuthority = ([System.Uri]$resource).GetLeftPart([System.UriPartial]::Authority)
+            }
+            catch {
+                throw 'Dataverse environment discovery requested an invalid authentication resource.'
+            }
+
+            if ($resourceAuthority -ne $discoveryResource) {
+                throw 'Dataverse environment discovery requested a token for an unexpected resource.'
+            }
+        }
+
+        return $discoveryAccessToken
+    }.GetNewClosure()
+
+    $fetchCatalog = {
+        @(Get-DataverseEnvironment -AccessToken $accessTokenProvider)
     }
 
     if ($ShowStatus) {
@@ -2968,7 +3034,6 @@ function Initialize-DataverseApplicationUser {
         Existing users are not moved between business units. Missing connection,
         business unit or role throws; these writes have no ShouldProcess guard here.
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -2978,16 +3043,8 @@ function Initialize-DataverseApplicationUser {
 
     Write-Host "Ensuring application user '$ApplicationId' exists in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
-        param($resource)
-        if (-not $resource) { $resource = $EnvironmentUrl }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
-        $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-        return $auth.AccessToken
-    }
+    $accessTokenCallback = Get-SetupAccessTokenCallback -ResourceUrl $EnvironmentUrl -TenantId $TenantId
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken $accessTokenCallback
 
     if (-not $conn) {
         throw "Failed to connect to Dataverse."
@@ -3046,7 +3103,6 @@ function Initialize-DataverseServiceAccountUser {
         assign licensing. Connection, lookup and write failures propagate; mutations
         are not guarded by ShouldProcess within this helper.
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Used in the nested authentication callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -3056,16 +3112,8 @@ function Initialize-DataverseServiceAccountUser {
 
     Write-Host "Ensuring service account '$ServiceAccountUPN' has System Administrator role in '$EnvironmentUrl'..." -ForegroundColor DarkGray
 
-    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken {
-        param($resource)
-        if (-not $resource) { $resource = $EnvironmentUrl }
-        try {
-            $uri = [System.Uri]$resource
-            $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-        } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
-        $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-        return $auth.AccessToken
-    }
+    $accessTokenCallback = Get-SetupAccessTokenCallback -ResourceUrl $EnvironmentUrl -TenantId $TenantId
+    $conn = Get-DataverseConnection -Url $EnvironmentUrl -AccessToken $accessTokenCallback
 
     if (-not $conn) { throw "Failed to connect to Dataverse." }
 
@@ -3240,17 +3288,10 @@ function Get-DataverseSolutionsSelection {
 
     Write-Host "Selected: $($selectedEnv.FriendlyName) ($devEnvUrl)" -ForegroundColor Cyan
 
+    Write-Host 'Authenticating to the selected DEV environment...' -ForegroundColor DarkGray
+    $devAccessTokenCallback = Get-SetupAccessTokenCallback -ResourceUrl $devEnvUrl -TenantId $TenantId
     $connection = Invoke-WithSpectreStatus -Status 'Connecting to the selected DEV environment...' -ScriptBlock {
-        Get-DataverseConnection -Url $devEnvUrl -AccessToken {
-            param($resource)
-            if (-not $resource) { $resource = 'https://globaldisco.crm.dynamics.com/' }
-            try {
-                $uri = [System.Uri]$resource
-                $resource = $uri.GetLeftPart([System.UriPartial]::Authority)
-            } catch { Write-Verbose 'Could not normalize the authentication resource; using the supplied value.' }
-            $auth = Get-AuthToken -ResourceUrl $resource -TenantId $TenantId
-            return $auth.AccessToken
-        }
+        Get-DataverseConnection -Url $devEnvUrl -AccessToken $devAccessTokenCallback
     }
 
     if (-not $connection) { throw "Failed to connect to Dataverse environment." }
@@ -4367,8 +4408,13 @@ function Publish-GitHubBranchSetupChange {
             }
         }
         else {
-            $directBaseRef = if ($targetBranchExistsOnOrigin) { "origin/$ConfiguredBranch" } elseif ($seedRef) { $seedRef } else { 'HEAD' }
-            & git checkout -B $ConfiguredBranch $directBaseRef 2>&1 | Out-Null
+            $directBaseRef = if ($targetBranchExistsOnOrigin) { "origin/$ConfiguredBranch" } elseif ($seedRef) { $seedRef } else { $null }
+            if ($directBaseRef) {
+                & git checkout -B $ConfiguredBranch $directBaseRef 2>&1 | Out-Null
+            }
+            else {
+                & git checkout --orphan $ConfiguredBranch 2>&1 | Out-Null
+            }
             if ($LASTEXITCODE -ne 0) {
                 throw "Failed to create or switch to target branch '$ConfiguredBranch'."
             }
@@ -5860,31 +5906,12 @@ Write-Section `
         $ErrorActionPreference = 'Continue'
         [void](& git -C $attemptCloneRoot reset --hard HEAD 2>&1)
         [void](& git -C $attemptCloneRoot clean -fd 2>&1)
-
-        $checkoutOutput = @(& git -C $attemptCloneRoot checkout -f $defaultBranch 2>&1)
-        $checkoutExitCode = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference
     }
 
-    if ($checkoutExitCode -ne 0) {
-        $previousErrorActionPreference = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = 'Continue'
-            $checkoutOutput = @(& git -C $attemptCloneRoot checkout -B $defaultBranch "origin/$defaultBranch" 2>&1)
-            $checkoutExitCode = $LASTEXITCODE
-        }
-        finally {
-            $ErrorActionPreference = $previousErrorActionPreference
-        }
-    }
-
-    if ($checkoutExitCode -ne 0) {
-        $checkoutErrorDetails = @($checkoutOutput | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        $checkoutErrorMessage = if ($checkoutErrorDetails.Count -gt 0) { $checkoutErrorDetails[-1] } else { "Exit code: $checkoutExitCode" }
-        throw "Failed to check out repository base branch '$defaultBranch'. $checkoutErrorMessage"
-    }
+    Invoke-GitHubCloneBaseBranchCheckout -RepoRoot $attemptCloneRoot -DefaultBranch $defaultBranch
 
     return [pscustomobject]@{
         CloneRoot = $attemptCloneRoot
@@ -5944,7 +5971,7 @@ Write-Section `
 $sharedWorkflowRepo = Invoke-WithErrorHandling -OperationName "Ensuring shared workflow repository" -ScriptBlock {
     Initialize-GitHubSharedWorkflowFork `
         -UpstreamFullName $upstreamWorkflowRepoFullName `
-        -ForkOwner $script:ghUser `
+        -DefaultOwner $repoOwner `
         -UpstreamGitSource $upstreamGitSource `
         -Reference $ALM4DataverseRef `
         -PreferredRepositoryFullName $existingSetupState.SharedWorkflowRepository

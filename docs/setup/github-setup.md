@@ -49,6 +49,11 @@ Setup signs in, selects or creates the application repository, selects solutions
 dependency order, and configures development and deployment environments. It prompts
 for application identities/authentication and process-owner accounts, generates caller
 workflows, and offers shared BUILD deployment validation with an optional baseline source.
+Existing repository choices include repositories owned by your account, available through
+an organization, or shared with you as a collaborator. An existing repository can be
+empty; setup creates its initial branch and commit when publishing the generated files.
+When creating a shared workflow repository, setup prompts for an owner and defaults to
+the owner of the selected application repository.
 
 > [!IMPORTANT]
 > Verify plan compatibility and the generated protection rules. Setup selects

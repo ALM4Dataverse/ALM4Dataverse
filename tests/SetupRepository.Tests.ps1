@@ -149,6 +149,52 @@ Describe 'Azure DevOps repository selection and working trees' {
     }
 }
 
+Describe 'GitHub clone base branch initialization' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GitHubCloneBaseBranchCheckout'
+        }, $false)
+        Set-Item -Path 'Function:Invoke-GitHubCloneBaseBranchCheckout' -Value $definition.Body.GetScriptBlock()
+    }
+
+    BeforeEach {
+        $script:cloneHasCommit = $false
+        Mock git {
+            $global:LASTEXITCODE = 0
+            if ($args -contains 'checkout') {
+                $global:LASTEXITCODE = 1
+                'The requested branch does not exist.'
+            }
+            elseif ($args -contains 'rev-parse' -and -not $script:cloneHasCommit) {
+                $global:LASTEXITCODE = 128
+                'fatal: Needed a single revision'
+            }
+        }
+    }
+
+    It 'points an empty clone at an unborn default branch' {
+        $originalPreference = $ErrorActionPreference
+
+        Invoke-GitHubCloneBaseBranchCheckout -RepoRoot $TestDrive -DefaultBranch main
+
+        $ErrorActionPreference | Should -Be $originalPreference
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter {
+            $args -contains 'symbolic-ref' -and $args -contains 'HEAD' -and $args -contains 'refs/heads/main'
+        }
+    }
+
+    It 'still fails when an initialized clone is missing its base branch' {
+        $script:cloneHasCommit = $true
+
+        { Invoke-GitHubCloneBaseBranchCheckout -RepoRoot $TestDrive -DefaultBranch main } | Should -Throw "*Failed to check out repository base branch 'main'*"
+        Should -Invoke git -Times 0 -Exactly -ParameterFilter { $args -contains 'symbolic-ref' }
+    }
+}
+
 Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
     @{ Provider = 'GitHub'; Source = 'setup-github.ps1' }
     @{ Provider = 'Azure DevOps'; Source = 'setup-azdo.ps1' }
@@ -173,11 +219,12 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         $script:adoAccessToken = [pscustomobject]@{ Token = 'fake-token' }
         $script:sync = [pscustomobject]@{ LocalHash = 'one'; UpstreamHash = 'one'; UpstreamRef = 'upstream/main'; CanFastForward = $false; IsAhead = $false; MatchesCanonicalUpstreamDefault = $false }
         $script:repositorySelection = 0
+        $script:ghUser = 'owner'
         $script:divergenceSelection = 2
         Mock Write-Section {}
         Mock Write-SetupGuidance {}
         Mock Read-YesNo { $true }
-        Mock Read-TextWithDefault { 'shared' }
+        Mock Read-TextWithDefault { if ($Prompt -like '*owner*') { $DefaultValue } else { 'shared' } }
         Mock Invoke-WithSpectreStatus { & $ScriptBlock }
         Mock Invoke-WithErrorHandling { & $ScriptBlock }
         Mock Select-FromMenu {
@@ -187,9 +234,9 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         Mock git { $global:LASTEXITCODE = 0; if ($args -contains 'ls-remote') { 'abcdef refs/heads/stable' } }
         Mock gh { $global:LASTEXITCODE = 0 }
         if ($Provider -eq 'GitHub') {
-            Mock Get-GitHubForksOfRepositoryForOwner { [pscustomobject]@{ full_name = 'owner/shared' } }
-            Mock Get-GitHubOwnedReposForOwner { [pscustomobject]@{ full_name = 'owner/shared' }; [pscustomobject]@{ full_name = 'owner/other' } }
-            Mock Get-GitHubRepo { [pscustomobject]@{ name = 'shared'; nameWithOwner = 'owner/shared'; defaultBranchRef = [pscustomobject]@{ name = 'main' } } }
+            Mock Get-GitHubAccessibleForksOfRepository { [pscustomobject]@{ full_name = 'owner/shared' } }
+            Mock Get-GitHubAccessibleRepository { [pscustomobject]@{ full_name = 'owner/shared' }; [pscustomobject]@{ full_name = 'owner/other' } }
+            Mock Get-GitHubRepo { [pscustomobject]@{ name = $Repo; nameWithOwner = "$Owner/$Repo"; defaultBranchRef = [pscustomobject]@{ name = 'main' } } }
             Mock Get-GitHubForkSyncState { $script:sync }
         }
         else {
@@ -214,7 +261,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
 
     It 'reuses a repository that already matches upstream' {
         if ($Provider -eq 'GitHub') {
-            $result = Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -ForkOwner owner -UpstreamGitSource $repoRoot -Reference stable -PreferredRepositoryFullName owner/shared
+            $result = Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable -PreferredRepositoryFullName owner/shared
             $result.nameWithOwner | Should -Be owner/shared
         }
         else {
@@ -227,10 +274,80 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         @(Get-ChildItem $TestDrive -Directory -Filter 'ALM4Dataverse-*').Count | Should -Be 0
     }
 
+    It 'uses the platform temporary directory when TEMP is unset' -Skip:($Provider -ne 'GitHub') {
+        $env:TEMP = $null
+
+        $result = Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable -PreferredRepositoryFullName owner/shared
+
+        $result.nameWithOwner | Should -Be owner/shared
+    }
+
+    It 'lists accessible organization repositories in the shared workflow choices' -Skip:($Provider -ne 'GitHub') {
+        Mock Get-GitHubAccessibleForksOfRepository { [pscustomobject]@{ full_name = 'first-org/shared' } }
+        Mock Get-GitHubAccessibleRepository {
+            [pscustomobject]@{ full_name = 'first-org/shared' }
+            [pscustomobject]@{ full_name = 'second-org/other' }
+        }
+        $script:repositorySelection = 0
+
+        $result = Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable
+
+        $result.nameWithOwner | Should -Be 'first-org/shared'
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
+            $Title -eq 'Select shared workflow repository' -and
+            @($Items) -contains 'Use existing fork: first-org/shared' -and
+            @($Items) -contains 'Use existing repository: second-org/other'
+        }
+    }
+
+    It 'prompts for a shared repository owner defaulting to the main repository owner for <CreationMode> creation' -ForEach @(
+        @{ CreationMode = 'Public'; CreationSelection = 0 }
+        @{ CreationMode = 'Private'; CreationSelection = 1 }
+    ) -Skip:($Provider -ne 'GitHub') {
+        Mock Get-GitHubAccessibleForksOfRepository { @() }
+        Mock Get-GitHubAccessibleRepository { @() }
+        $script:repositorySelection = 0
+        $script:ownerPromptDefault = $null
+        $script:sharedRepoCreateArgs = @()
+        Mock Read-TextWithDefault {
+            if ($Prompt -eq 'Shared workflow repository owner (user or organization)') {
+                $script:ownerPromptDefault = $DefaultValue
+                return $DefaultValue
+            }
+            return 'shared'
+        }
+        Mock Select-FromMenu {
+            if ($Title -like 'How should*') { $CreationSelection }
+            else { 0 }
+        }
+        Mock gh {
+            $script:sharedRepoCreateArgs = @($args)
+            $global:LASTEXITCODE = 0
+        }
+
+        $result = Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner main-org -UpstreamGitSource $repoRoot -Reference stable
+
+        $script:ownerPromptDefault | Should -Be 'main-org'
+        $result.nameWithOwner | Should -Be 'main-org/shared'
+        Should -Invoke Read-TextWithDefault -Times 1 -Exactly -ParameterFilter {
+            $Prompt -eq 'Shared workflow repository owner (user or organization)' -and $DefaultValue -eq 'main-org'
+        }
+        if ($CreationMode -eq 'Public') {
+            $script:sharedRepoCreateArgs | Should -Contain '--org'
+            $script:sharedRepoCreateArgs | Should -Contain 'main-org'
+            $script:sharedRepoCreateArgs | Should -Contain 'fork'
+        }
+        else {
+            $script:sharedRepoCreateArgs | Should -Contain 'create'
+            $script:sharedRepoCreateArgs | Should -Contain 'main-org/shared'
+            $script:sharedRepoCreateArgs | Should -Contain '--private'
+        }
+    }
+
     It 'fast-forwards only after approval and restores command state' {
         $script:sync.UpstreamHash = 'two'
         $script:sync.CanFastForward = $true
-        if ($Provider -eq 'GitHub') { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -ForkOwner owner -UpstreamGitSource $repoRoot -Reference stable | Out-Null }
+        if ($Provider -eq 'GitHub') { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable | Out-Null }
         else { Initialize-AzDoProjectAndRepository | Out-Null }
         Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains '--ff-only' }
         Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains 'push' }
@@ -243,7 +360,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
     ) {
         $script:sync.UpstreamHash = 'two'
         $script:divergenceSelection = $Selection
-        if ($Provider -eq 'GitHub') { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -ForkOwner owner -UpstreamGitSource $repoRoot -Reference stable | Out-Null }
+        if ($Provider -eq 'GitHub') { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable | Out-Null }
         else { Initialize-AzDoProjectAndRepository | Out-Null }
         if ($ExpectedCommand) {
             Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains $ExpectedCommand }
@@ -256,7 +373,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         $script:sync.UpstreamHash = 'two'
         $script:sync.CanFastForward = $true
         Mock git { $global:LASTEXITCODE = 1 }
-        if ($Provider -eq 'GitHub') { { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -ForkOwner owner -UpstreamGitSource $repoRoot -Reference stable } | Should -Throw '*merge failed*' }
+        if ($Provider -eq 'GitHub') { { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable } | Should -Throw '*merge failed*' }
         else { { Initialize-AzDoProjectAndRepository } | Should -Throw '*merge failed*' }
         @(Get-ChildItem $TestDrive -Directory -Filter 'ALM4Dataverse-*').Count | Should -Be 0
     }
@@ -265,7 +382,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         $script:sync.UpstreamHash = 'two'
         if ($Provider -eq 'GitHub') {
             $script:repositorySelection = 1
-            Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -ForkOwner owner -UpstreamGitSource $repoRoot -Reference stable | Out-Null
+            Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable | Out-Null
             Should -Invoke gh -Times 1 -Exactly -ParameterFilter { $args -contains 'create' }
             Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains 'reset' }
         }
@@ -363,6 +480,9 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             $result.TargetBranch | Should -Be release
             $result.Mode | Should -Be $Mode
             if ($Mode -eq 'PullRequest') { $result.PullRequestUrl | Should -Be 'https://example.invalid/pr/7' }
+            if ($Provider -eq 'GitHub' -and $Mode -eq 'Direct' -and -not $TargetExists -and -not $DefaultExists) {
+                Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains '--orphan' -and $args -contains 'release' }
+            }
             (Get-Location).Path | Should -Be $originalLocation
             $ErrorActionPreference | Should -Be $originalPreference
             (Import-PowerShellDataFile (Join-Path $script:publishRoot 'alm-config.psd1')).solutions[0].name | Should -Be Example

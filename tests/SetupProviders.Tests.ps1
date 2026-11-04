@@ -68,6 +68,8 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
     BeforeEach {
         $script:savedProviderTenant = Get-Variable -Name TenantId -Scope Global -ErrorAction SilentlyContinue
         Set-Variable -Name TenantId -Scope Global -Value 'example.com'
+        $script:providerTrace = [System.Collections.Generic.List[string]]::new()
+        $script:providerCallbackToken = $null
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $ScriptName), [ref]$tokens, [ref]$parseErrors)
@@ -78,9 +80,13 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
         }, $false)
         Set-Item -Path Function:Get-DataverseEnvironmentCatalog -Value $definition.Body.GetScriptBlock()
         Mock Get-Variable { $null } -ParameterFilter { $Name -eq 'dataverseEnvironmentCatalog' -and $Scope -eq 'Script' }
-        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
+        Mock Get-AuthToken {
+            $script:providerTrace.Add('authentication') | Out-Null
+            [pscustomobject]@{ AccessToken = 'fake-token' }
+        }
         Mock Get-DataverseEnvironment {
-            & $AccessToken 'relative/fake-secret' | Out-Null
+            $script:providerTrace.Add('discovery') | Out-Null
+            $script:providerCallbackToken = & $AccessToken 'https://globaldisco.crm.dynamics.com/'
             [pscustomobject]@{ FriendlyName = 'Test Environment' }
         }
     }
@@ -94,25 +100,23 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
         }
     }
 
-    It 'retains the supplied resource after normalization failure and emits no sensitive diagnostics' {
-        $parameters = @{ ForceRefresh = $true; Verbose = $true }
+    It 'acquires the discovery token before invoking the provider callback' {
+        $parameters = @{ ForceRefresh = $true }
         if ((Get-Command Get-DataverseEnvironmentCatalog).Parameters.ContainsKey('TenantId')) { $parameters.TenantId = 'example.com' }
-        $output = @(Get-DataverseEnvironmentCatalog @parameters 4>&1)
-        $messages = @($output | Where-Object { $_ -is [System.Management.Automation.VerboseRecord] })
-        $messages.Message | Should -Contain 'Could not normalize the authentication resource; using the supplied value.'
-        ($messages | Out-String) | Should -Not -Match 'fake-secret|fake-token'
-        Should -Invoke Get-AuthToken -Times 1 -Exactly -ParameterFilter { $ResourceUrl -eq 'relative/fake-secret' }
+        Get-DataverseEnvironmentCatalog @parameters | Out-Null
+        $script:providerTrace.ToArray() | Should -Be @('authentication', 'discovery')
+        $script:providerCallbackToken | Should -Be 'fake-token'
+        Should -Invoke Get-AuthToken -Times 1 -Exactly -ParameterFilter { $ResourceUrl -eq 'https://globaldisco.crm.dynamics.com' }
     }
 
-    It 'normalizes valid resources to their authority' {
+    It 'rejects a callback resource that does not match the pre-acquired discovery token' {
         Mock Get-DataverseEnvironment {
-            & $AccessToken 'https://resource.example.com/path/?query=1' | Out-Null
+            & $AccessToken 'https://resource.example.com' | Out-Null
             [pscustomobject]@{ FriendlyName = 'Test Environment' }
         }
         $parameters = @{ ForceRefresh = $true }
         if ((Get-Command Get-DataverseEnvironmentCatalog).Parameters.ContainsKey('TenantId')) { $parameters.TenantId = 'example.com' }
-        Get-DataverseEnvironmentCatalog @parameters | Out-Null
-        Should -Invoke Get-AuthToken -Times 1 -Exactly -ParameterFilter { $ResourceUrl -eq 'https://resource.example.com' }
+        { Get-DataverseEnvironmentCatalog @parameters } | Should -Throw '*unexpected resource*'
     }
 
     It 'propagates authentication failure instead of returning a successful environment list' {
@@ -120,6 +124,7 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
         $parameters = @{ ForceRefresh = $true }
         if ((Get-Command Get-DataverseEnvironmentCatalog).Parameters.ContainsKey('TenantId')) { $parameters.TenantId = 'example.com' }
         { Get-DataverseEnvironmentCatalog @parameters } | Should -Throw '*Authentication denied*'
+        Should -Invoke Get-DataverseEnvironment -Times 0 -Exactly
     }
 }
 
@@ -297,12 +302,12 @@ Describe 'GitHub credential writes: <Helper>' -ForEach @(
     }
 }
 
-Describe 'GitHub repository owner filtering' {
+Describe 'GitHub repository access listing' {
     BeforeAll {
         $tokens = $null
         $parseErrors = $null
         $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
-        foreach ($name in @('Get-GitHubOwnedReposForOwner', 'Get-GitHubForksOfRepositoryForOwner')) {
+        foreach ($name in @('Get-GitHubAccessibleRepository', 'Get-GitHubAccessibleForksOfRepository')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -320,22 +325,89 @@ Describe 'GitHub repository owner filtering' {
             @(
                 [pscustomobject]@{ full_name = 'OWNER/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
                 [pscustomobject]@{ full_name = 'other/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
+                [pscustomobject]@{ full_name = 'org/shared'; fork = $false }
                 [pscustomobject]@{ full_name = 'owner/unrelated'; fork = $true; parent = [pscustomobject]@{ full_name = 'other/upstream' } }
             )
         }
     }
 
-    It 'returns only repositories owned by the requested account, ignoring case' {
-        @(Get-GitHubOwnedReposForOwner -Owner owner).full_name | Should -Be @('OWNER/shared', 'owner/unrelated')
+    It 'returns repositories owned by, shared with, or available through organizations for the account' {
+        $repoNames = @(Get-GitHubAccessibleRepository).full_name
+
+        $repoNames | Should -Contain 'OWNER/shared'
+        $repoNames | Should -Contain 'org/shared'
+        $repoNames | Should -Contain 'other/shared'
+        $repoNames | Should -Contain 'owner/unrelated'
+        Should -Invoke Invoke-GhApi -Times 1 -Exactly -ParameterFilter {
+            $Endpoint -eq 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
+        }
     }
 
-    It 'returns only matching upstream forks owned by the requested account' {
-        @(Get-GitHubForksOfRepositoryForOwner -Owner owner -UpstreamFullName upstream/shared).full_name | Should -Be @('OWNER/shared')
+    It 'returns matching upstream forks regardless of owner' {
+        @(Get-GitHubAccessibleForksOfRepository -UpstreamFullName upstream/shared).full_name | Should -Be @('OWNER/shared', 'other/shared')
+        Should -Invoke Invoke-GhApi -Times 1 -Exactly -ParameterFilter {
+            $Endpoint -eq 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
+        }
     }
 
-    It 'returns no repository for an unmatched owner' {
-        @(Get-GitHubOwnedReposForOwner -Owner missing).Count | Should -Be 0
-        @(Get-GitHubForksOfRepositoryForOwner -Owner missing -UpstreamFullName upstream/shared).Count | Should -Be 0
+    It 'returns no repositories when the authenticated endpoint is empty' {
+        Mock Invoke-GhApi { @() }
+
+        @(Get-GitHubAccessibleRepository).Count | Should -Be 0
+        @(Get-GitHubAccessibleForksOfRepository -UpstreamFullName upstream/shared).Count | Should -Be 0
+    }
+}
+
+Describe 'GitHub repository listing' {
+    BeforeAll {
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-GitHubRepoList'
+        }, $false)
+        Set-Item -Path 'Function:Get-GitHubRepoList' -Value $definition.Body.GetScriptBlock()
+        function Invoke-GhApi {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($Endpoint)
+        }
+    }
+
+    BeforeEach {
+        Mock Invoke-GhApi {
+            @(
+                [pscustomobject]@{
+                    full_name     = 'user/personal'
+                    name          = 'personal'
+                    owner         = [pscustomobject]@{ login = 'user' }
+                    default_branch = 'main'
+                }
+                [pscustomobject]@{
+                    full_name     = 'org/shared'
+                    name          = 'shared'
+                    owner         = [pscustomobject]@{ login = 'org' }
+                    default_branch = 'develop'
+                }
+                [pscustomobject]@{
+                    full_name     = 'other/collaborated'
+                    name          = 'collaborated'
+                    owner         = [pscustomobject]@{ login = 'other' }
+                    default_branch = 'main'
+                }
+            )
+        }
+    }
+
+    It 'includes personal, organization and collaborator repositories in the existing selection shape' {
+        $repos = @(Get-GitHubRepoList)
+
+        $repos.nameWithOwner | Should -Be @('user/personal', 'org/shared', 'other/collaborated')
+        $repos[1].owner.login | Should -Be 'org'
+        $repos[1].defaultBranchRef.name | Should -Be 'develop'
+        Should -Invoke Invoke-GhApi -Times 1 -Exactly -ParameterFilter {
+            $Endpoint -eq 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
+        }
     }
 }
 

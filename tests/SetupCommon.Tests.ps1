@@ -2,6 +2,162 @@ BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
     . (Join-Path $repoRoot 'setup-common.ps1')
+    if (-not ('Alm4DataverseSetupAccessTokenTestRunner' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Collections.ObjectModel;
+using System.Management.Automation;
+using System.Threading.Tasks;
+
+public static class Alm4DataverseSetupAccessTokenTestRunner
+{
+    public static Task<Collection<PSObject>> Invoke(ScriptBlock callback, string resource)
+    {
+        return Task.Run(() => callback.Invoke(resource));
+    }
+}
+'@
+    }
+}
+
+Describe 'Setup MSAL assembly initialization' {
+    It 'prefers runtime-matched Core and Broker assets and loads them as a pair' {
+        $moduleBase = Join-Path $TestDrive 'runtime-matched-dataverse-module'
+        if ($PSVersionTable.PSEdition -eq 'Core') {
+            $runtimeMajor = [System.Environment]::Version.Major
+            $targetFramework = if ($runtimeMajor -ge 10) {
+                "net$runtimeMajor.0"
+            }
+            elseif ($runtimeMajor -eq 9) {
+                'net9.0'
+            }
+            else {
+                'net8.0'
+            }
+        }
+        else {
+            $targetFramework = 'net462'
+        }
+
+        $targetDirectory = Join-Path (Join-Path $moduleBase 'cmdlets') $targetFramework
+        New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+        $corePath = Join-Path $targetDirectory 'Microsoft.Identity.Client.dll'
+        $brokerPath = Join-Path $targetDirectory 'Microsoft.Identity.Client.Broker.dll'
+        Set-Content -LiteralPath $corePath -Value ''
+        Set-Content -LiteralPath $brokerPath -Value ''
+
+        if ($PSVersionTable.PSEdition -eq 'Core' -and $targetFramework -ne 'net8.0') {
+            $fallbackDirectory = Join-Path (Join-Path $moduleBase 'cmdlets') 'net8.0'
+            New-Item -ItemType Directory -Path $fallbackDirectory -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $fallbackDirectory 'Microsoft.Identity.Client.dll') -Value ''
+            Set-Content -LiteralPath (Join-Path $fallbackDirectory 'Microsoft.Identity.Client.Broker.dll') -Value ''
+        }
+
+        $paths = Get-SetupMsalAssemblyPath -ModuleBase $moduleBase
+        $paths.CorePath | Should -Be $corePath
+        $paths.BrokerPath | Should -Be $brokerPath
+
+        $script:setupMsalAssemblyLoadPaths = @()
+        Mock Get-SetupAssemblyVersion { [version]'4.84.1.0' }
+        Mock Get-SetupDefaultContextAssembly { $null }
+        Mock Add-Type { $script:setupMsalAssemblyLoadPaths += $Path }
+
+        Initialize-SetupMsalAssembly -ModuleBase $moduleBase
+
+        $script:setupMsalAssemblyLoadPaths | Should -Be @($corePath, $brokerPath)
+    }
+
+    It 'supports older module assets without a Broker assembly' {
+        $moduleBase = Join-Path $TestDrive 'core-only-dataverse-module'
+        $targetFramework = if ($PSVersionTable.PSEdition -eq 'Core') { 'net8.0' } else { 'net462' }
+        $targetDirectory = Join-Path (Join-Path $moduleBase 'cmdlets') $targetFramework
+        New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+        $corePath = Join-Path $targetDirectory 'Microsoft.Identity.Client.dll'
+        Set-Content -LiteralPath $corePath -Value ''
+
+        $script:setupMsalAssemblyLoadPaths = @()
+        Mock Get-SetupAssemblyVersion { [version]'4.84.1.0' }
+        Mock Get-SetupDefaultContextAssembly { $null }
+        Mock Add-Type { $script:setupMsalAssemblyLoadPaths += $Path }
+
+        Initialize-SetupMsalAssembly -ModuleBase $moduleBase
+
+        $script:setupMsalAssemblyLoadPaths | Should -Be @($corePath)
+    }
+
+    It 'rejects an incompatible MSAL assembly already loaded in the default context' {
+        $moduleBase = Join-Path $TestDrive 'incompatible-dataverse-module'
+        $targetFramework = if ($PSVersionTable.PSEdition -eq 'Core') { 'net8.0' } else { 'net462' }
+        $targetDirectory = Join-Path (Join-Path $moduleBase 'cmdlets') $targetFramework
+        New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $targetDirectory 'Microsoft.Identity.Client.dll') -Value ''
+        Set-Content -LiteralPath (Join-Path $targetDirectory 'Microsoft.Identity.Client.Broker.dll') -Value ''
+
+        $script:setupMismatchedMsalAssembly = [pscustomobject]@{}
+        $script:setupMismatchedMsalAssembly | Add-Member -MemberType ScriptMethod -Name GetName -Value {
+            [pscustomobject]@{ Version = [version]'4.83.0.0' }
+        }
+        Mock Get-SetupAssemblyVersion { [version]'4.84.1.0' }
+        Mock Get-SetupDefaultContextAssembly {
+            if ($Name -eq 'Microsoft.Identity.Client') {
+                return $script:setupMismatchedMsalAssembly
+            }
+
+            return $null
+        }
+
+        { Initialize-SetupMsalAssembly -ModuleBase $moduleBase } |
+            Should -Throw '*incompatible Microsoft.Identity.Client version*'
+    }
+}
+
+Describe 'Setup access token preauthentication' {
+    It 'normalizes the resource and returns a token acquired with the requested tenant' {
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
+
+        Get-SetupAccessToken -ResourceUrl 'https://test.example.com/api/data/v9.2' -TenantId 'example.com' |
+            Should -Be 'fake-token'
+
+        Should -Invoke Get-AuthToken -Times 1 -Exactly -ParameterFilter {
+            $ResourceUrl -eq 'https://test.example.com' -and $TenantId -eq 'example.com'
+        }
+    }
+
+    It 'rejects invalid resources and missing access tokens' {
+        Mock Get-AuthToken { throw 'Unexpected authentication' }
+        { Get-SetupAccessToken -ResourceUrl 'relative/resource' } |
+            Should -Throw '*valid HTTP(S) resource URL*'
+        Should -Invoke Get-AuthToken -Times 0 -Exactly
+
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = '' } }
+        { Get-SetupAccessToken -ResourceUrl 'https://test.example.com' } |
+            Should -Throw '*did not return an access token*'
+    }
+}
+
+Describe 'Setup access token callbacks' {
+    It 'returns the captured token from a worker task without reacquiring it' {
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
+        $callback = Get-SetupAccessTokenCallback -ResourceUrl 'https://test.example.com/api/data/v9.2' -TenantId 'example.com'
+        $task = [Alm4DataverseSetupAccessTokenTestRunner]::Invoke($callback, 'https://test.example.com/api/data/v9.2')
+
+        if (-not $task.Wait([TimeSpan]::FromSeconds(5))) {
+            throw 'The worker callback did not complete.'
+        }
+
+        $task.Result.Count | Should -Be 1
+        $task.Result[0] | Should -Be 'fake-token'
+        Should -Invoke Get-AuthToken -Times 1 -Exactly -ParameterFilter {
+            $ResourceUrl -eq 'https://test.example.com' -and $TenantId -eq 'example.com'
+        }
+    }
+
+    It 'rejects a callback request for a different resource' {
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
+        $callback = Get-SetupAccessTokenCallback -ResourceUrl 'https://test.example.com' -TenantId 'example.com'
+
+        { & $callback 'https://other.example.com/api/data/v9.2' } |
+            Should -Throw '*unexpected resource*'
+    }
 }
 
 Describe 'Setup status callback state' {
