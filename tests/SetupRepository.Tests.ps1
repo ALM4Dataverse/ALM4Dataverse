@@ -133,6 +133,19 @@ Describe 'Azure DevOps repository selection and working trees' {
         { Select-AzDoSharedRepository -ProjectName project } | Should -Throw '*No shared repository selected*'
     }
 
+    It 'limits existing-repository and config application to existing application repositories' {
+        $result = Select-AzDoMainRepository -ProjectName project -ExistingOnly
+        $result.Id | Should -Be main-id
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter { @($Items).Count -eq 2 -and $Items -notcontains 'Create a new repository' }
+        Should -Invoke Add-VSTeamGitRepository -Times 0 -Exactly
+
+        Mock Get-VSTeamGitRepository {}
+        { Select-AzDoMainRepository -ProjectName project -ExistingOnly } |
+            Should -Throw '*Existing-repository setup requires an existing application repository*'
+        { Select-AzDoMainRepository -ProjectName project -ExistingOnly -ApplyConfig } |
+            Should -Throw '*ApplyConfig requires an existing application repository*'
+    }
+
     It 'prepares existing, fallback and empty working branches' -ForEach @(
         @{ HasCommits = $true; Fallback = $false }
         @{ HasCommits = $true; Fallback = $true }
@@ -161,7 +174,7 @@ Describe 'Azure DevOps repository selection and working trees' {
         @(Get-ChildItem $env:TEMP -Directory -Filter 'ALM4Dataverse-MainRepo-*').Count | Should -Be 0
     }
 
-    It 'discovers extension conflicts and shared repository references from existing files' {
+    It 'reads extension mode, shared repository and branch mappings only from alm-config.psd1' {
         $root = Join-Path $TestDrive 'existing'
         New-Item (Join-Path $root pipelines) -ItemType Directory -Force | Out-Null
         (Get-AzDoExtensionModeFromWorkingTree -RepoRoot $root -Branch main).IsConfigured | Should -BeFalse
@@ -169,11 +182,24 @@ Describe 'Azure DevOps repository selection and working trees' {
         Set-Content (Join-Path $root 'pipelines/IMPORT.yml') 'useAlm4DataverseExtension: false'
         Set-Content (Join-Path $root 'pipelines/BUILD.yml') "repository: ALM4Dataverse`ntype: git`nname: shared"
         Set-Content (Join-Path $root 'pipelines/DEPLOY-main.yml') "environmentName: 'TEST'`nenvironmentName: 'TEST'`nenvironmentName: 'PROD'"
-        (Get-AzDoExtensionModeFromWorkingTree -RepoRoot $root -Branch main).HasConflict | Should -BeTrue
-        Get-AzDoSharedRepositoryNameFromWorkingTree -RepoRoot $root -Branch main | Should -Be shared
-        Get-AzDoDeploymentEnvironmentNamesFromWorkingTree -RepoRoot $root -Branch main | Should -Be @('TEST', 'PROD')
-        Set-Content (Join-Path $root 'pipelines/IMPORT.yml') 'useAlm4DataverseExtension: true'
-        (Get-AzDoExtensionModeFromWorkingTree -RepoRoot $root -Branch main).UseAlm4DataverseExtension | Should -BeTrue
+        $unconfiguredExtensionMode = Get-AzDoExtensionModeFromWorkingTree -RepoRoot $root -Branch main
+        $unconfiguredExtensionMode.IsConfigured | Should -BeFalse
+        $unconfiguredExtensionMode.HasConflict | Should -BeFalse
+        Get-AzDoSharedRepositoryNameFromWorkingTree -RepoRoot $root -Branch main | Should -BeNullOrEmpty
+        Get-AzDoDeploymentEnvironmentNamesFromWorkingTree -RepoRoot $root -Branch main | Should -BeNullOrEmpty
+
+        $configPath = Join-Path $root 'alm-config.psd1'
+        Set-Content $configPath "@{ provider = 'azDO'; repository = 'shared'; ref = 'stable'; azDOUseAlm4DataverseExtension = `$false; branches = @{} }"
+        $configuredExtensionMode = Get-AzDoExtensionModeFromWorkingTree -RepoRoot $root -Branch main
+        $configuredExtensionMode.IsConfigured | Should -BeTrue
+        $configuredExtensionMode.HasConflict | Should -BeFalse
+        $configuredExtensionMode.UseAlm4DataverseExtension | Should -BeFalse
+        $configuredExtensionMode.SourceFiles | Should -Be @($configPath)
+        Get-AzDoSharedRepositoryNameFromWorkingTree -RepoRoot $root -Branch main | Should -Be 'shared'
+        Get-AzDoDeploymentEnvironmentNamesFromWorkingTree -RepoRoot $root -Branch main | Should -BeNullOrEmpty
+
+        Set-Content $configPath "@{ provider = 'azDO'; repository = 'shared'; ref = 'stable'; azDOUseAlm4DataverseExtension = `$false; branches = @{ main = @{ deploymentEnvironments = @('Configured') } } }"
+        Get-AzDoDeploymentEnvironmentNamesFromWorkingTree -RepoRoot $root -Branch main | Should -Be @('Configured')
     }
 }
 
@@ -556,7 +582,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
     }
 }
 
-Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
+Describe 'Repository configuration and synchronization in <Provider>' -ForEach @(
     @{ Provider = 'GitHub'; Source = 'setup-github.ps1' }
     @{ Provider = 'Azure DevOps'; Source = 'setup-azdo.ps1' }
 ) {
@@ -574,11 +600,16 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
         $global:LASTEXITCODE = 0
         $script:discoveryRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item (Join-Path $script:discoveryRoot '.github/workflows') -ItemType Directory -Force | Out-Null
+        New-Item (Join-Path $script:discoveryRoot 'pipelines') -ItemType Directory -Force | Out-Null
         Set-Content (Join-Path $script:discoveryRoot '.github/workflows/BUILD.yml') 'uses: owner/shared/.github/actions/build@stable'
+        Set-Content (Join-Path $script:discoveryRoot '.github/workflows/DEPLOY-release.yml') "environment-name: 'WorkflowValue'"
+        Set-Content (Join-Path $script:discoveryRoot 'pipelines/BUILD.yml') "buildEnvironmentName: PipelineValue"
+        Set-Content (Join-Path $script:discoveryRoot 'pipelines/DEPLOY-release.yml') "environmentName: PipelineValue"
         $script:discoveryEmpty = $false
         $script:syncFastForward = $false
         $script:syncAhead = $false
         $script:syncFailure = ''
+        $script:discoveryAlmConfig = '@{ solutionCheck = @{ enabled = $true }; branches = @{} }'
         Mock git {
             $global:LASTEXITCODE = 0
             if ($script:syncFailure -and $args -contains $script:syncFailure) { $global:LASTEXITCODE = 1; 'Simulated native failure'; return }
@@ -588,7 +619,7 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
                 else { 'pipelines/BUILD.yml'; 'pipelines/DEPLOY-main.yml'; 'pipelines/DEPLOY-release.yml' }
             }
             elseif ($args -contains 'show') {
-                if ($args[-1] -like '*alm-config.psd1') { '@{ solutionCheck = @{ enabled = $true } }' }
+                if ($args[-1] -like '*alm-config.psd1') { $script:discoveryAlmConfig }
                 elseif ($Provider -eq 'GitHub') { "environment-name: 'TEST'`nenvironment-name: 'Missing'" }
                 else { "environmentName: 'TEST'`nenvironmentName: 'Missing'`nbuildEnvironmentName: 'Build'" }
             }
@@ -599,6 +630,12 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
                 if (-not $ancestor) { $global:LASTEXITCODE = 1 }
             }
             elseif ($args[-1] -eq 'remote') { 'upstream-github' }
+        }
+        Mock Get-GitRepoFileContentFromRemoteBranch {
+            if ($RelativePath -ne 'alm-config.psd1') {
+                throw "Setup state must not read caller file '$RelativePath'."
+            }
+            $script:discoveryAlmConfig
         }
         Mock gh {
             $global:LASTEXITCODE = 0
@@ -625,68 +662,64 @@ Describe 'Repository discovery and synchronization in <Provider>' -ForEach @(
         else { Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
     }
 
-    It 'discovers mapped branches and validation state from repository content' {
+    It 'uses branch settings only from alm-config.psd1' {
+        $providerName = if ($Provider -eq 'GitHub') { 'GitHub' } else { 'azDO' }
+        $script:discoveryAlmConfig = "@{ provider = '$providerName'; repository = 'owner/shared'; ref = 'stable'; branches = @{ main = @{ developmentEnvironment = 'DEV'; deploymentEnvironments = @('Configured'); buildValidation = @{ environmentName = 'ConfiguredBuild'; baselineRelease = '1.2.3' } } } }"
+
         if ($Provider -eq 'GitHub') {
-            $result = Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main -TenantId example.com
-            $result.DeploymentBranchMappings.BranchName | Should -Be @('main', 'release')
-            $result.DeploymentEnvironments.ShortName | Should -Be @('TEST', 'Missing')
-            $result.DeploymentEnvironments[1].Credentials | Should -BeNullOrEmpty
+            $result = Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main -SkipProviderState
+            $result.DeploymentBranchMappings.BranchName | Should -Be @('main')
+            $result.DeploymentBranchMappings[0].Environments.ShortName | Should -Be 'Configured'
             $result.SharedWorkflowRepository | Should -Be 'owner/shared'
-            $result.SharedWorkflowReference | Should -Be stable
-            $result.CredentialStorageScope | Should -Be Environment
+            $result.SharedWorkflowReference | Should -Be 'stable'
+            $initialMapping = @(Get-GitHubInitialBranchMapping -ExistingSetupState $result -DefaultBranch main)[0]
         }
         else {
-            $result = Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main -TenantId example.com
-            $result.BranchStates.BranchName | Should -Be @('main', 'release')
-            $result.BranchStates[0].DeploymentEnvironments.ShortName | Should -Be TEST
-            $result.BuildValidationEnvironmentName | Should -Be Build
+            $result = Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main -SkipProviderState
+            $result.BranchStates.BranchName | Should -Be @('main')
+            $result.BranchStates[0].DeploymentEnvironments.ShortName | Should -Be 'Configured'
+            $initialMapping = @(Get-AzDoInitialBranchMapping -ExistingSetupState $result -DefaultBranch main)[0]
         }
+
+        $result.BuildValidationEnvironmentName | Should -Be 'ConfiguredBuild'
         $result.BuildValidationEnabled | Should -BeTrue
+        $initialMapping.ExistingDevEnvironment.ShortName | Should -Be 'DEV'
+        $initialMapping.BuildValidationBaselineRelease | Should -Be '1.2.3'
+        Should -Invoke Get-GitRepoFileContentFromRemoteBranch -Times 1 -Exactly -ParameterFilter { $RelativePath -eq 'alm-config.psd1' }
     }
 
-    It 'ignores commented checker examples when inferring BUILD validation' {
-        $script:discoveryAlmConfig = @'
-@{
-    # solutionCheck = @{
-    #     enabled = $true
-    # }
-}
-'@
-        Mock Get-GitRepoFileContentFromRemoteBranch {
-            if ($RelativePath -eq 'alm-config.psd1') { $script:discoveryAlmConfig }
-            else { '' }
-        }
-
-        $enabled = if ($Provider -eq 'GitHub') {
-            Get-GitHubBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
-        }
-        else {
-            Get-AzDoBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
-        }
-        $enabled | Should -BeFalse
-
-        $script:discoveryAlmConfig = '@{ solutionCheck = @{ enabled = $true } }'
-        $enabled = if ($Provider -eq 'GitHub') {
-            Get-GitHubBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
-        }
-        else {
-            Get-AzDoBuildValidationEnabledFromRepoClone -RepoRoot $script:discoveryRoot -Branch main
-        }
-        $enabled | Should -BeTrue
-    }
-
-    It 'retains the default branch when no deployment mapping exists' {
-        $script:discoveryEmpty = $true
+    It 'does not import branch settings from caller files when config is missing or empty' {
+        $providerName = if ($Provider -eq 'GitHub') { 'GitHub' } else { 'azDO' }
         if ($Provider -eq 'GitHub') {
-            $result = Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main
-            $result.DeploymentBranchMappings[0].BranchName | Should -Be main
-            $result.DeploymentBranchMappings[0].Environments.Count | Should -Be 0
+            $getSetupState = {
+                Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main -SkipProviderState
+            }
+            $getInitialMapping = {
+                param($state)
+                @(Get-GitHubInitialBranchMapping -ExistingSetupState $state -DefaultBranch main)[0]
+            }
         }
         else {
-            $result = Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main
-            $result.BranchStates[0].BranchName | Should -Be main
-            $result.BranchStates[0].DeploymentEnvironments.Count | Should -Be 0
+            $getSetupState = {
+                Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main -SkipProviderState
+            }
+            $getInitialMapping = {
+                param($state)
+                @(Get-AzDoInitialBranchMapping -ExistingSetupState $state -DefaultBranch main)[0]
+            }
         }
+
+        foreach ($configContent in @('', "@{ provider = '$providerName'; branches = @{} }")) {
+            $script:discoveryAlmConfig = $configContent
+            $result = & $getSetupState
+            $result.BranchStates.Count | Should -Be 0
+            $result.BuildValidationEnabled | Should -BeFalse
+            $initialMapping = & $getInitialMapping $result
+            $initialMapping.BranchName | Should -Be 'main'
+            $initialMapping.Environments.Count | Should -Be 0
+            $initialMapping.BuildValidationEnvironmentName | Should -BeNullOrEmpty
+        }
+        Should -Invoke Get-GitRepoFileContentFromRemoteBranch -Times 2 -Exactly -ParameterFilter { $RelativePath -eq 'alm-config.psd1' }
     }
 
     It 'classifies divergent, fast-forward and ahead repository histories' -ForEach @(

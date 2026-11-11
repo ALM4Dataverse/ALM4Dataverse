@@ -2,15 +2,18 @@
 .SYNOPSIS
     Deploys an optional Release baseline, then candidate artifacts to validation.
 .DESCRIPTION
-    Reads buildValidation.baselineRelease from the candidate's alm-config.psd1
-    without merging defaults. Blank config or a missing @environment pointer deploys
-    only the candidate. Other resolution/download failures throw, not silently skip.
-    Baselines use Release artifacts.zip, not expiring Actions artifacts, and invoke
-    their own bundled deploy.ps1 before invoking the candidate's copy.
+    Reads the selected branch's buildValidation.baselineRelease from the candidate's
+    alm-config.psd1, falling back to the legacy global selector. Blank config or a
+    missing @environment pointer deploys only the candidate. Other resolution/
+    download failures throw, not silently skip. Baselines use Release artifacts.zip,
+    not expiring Actions artifacts, and invoke their own bundled deploy.ps1 before
+    invoking the candidate's copy.
 .PARAMETER ArtifactsPath
     Candidate artifact root containing alm/pipelines/scripts/deploy.ps1.
 .PARAMETER EnvironmentName
     Diagnostic label; the caller must already establish the Dataverse connection.
+.PARAMETER BranchName
+    Source branch whose BUILD validation baseline should be resolved.
 .NOTES
     Requires installed dependencies; baseline lookup also needs GITHUB_TOKEN,
     GITHUB_REPOSITORY, gh and writable RUNNER_TEMP. Temporary downloads/extractions
@@ -19,10 +22,14 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$ArtifactsPath,
-    [Parameter(Mandatory)][string]$EnvironmentName
+    [Parameter(Mandatory)][string]$EnvironmentName,
+    [Parameter()][AllowEmptyString()][string]$BranchName = ''
 )
 
 $ErrorActionPreference = 'Stop'
+if (-not (Get-Command Get-AlmBuildValidationConfiguration -ErrorAction SilentlyContinue)) {
+    . (Join-Path $PSScriptRoot '../../../pipelines/scripts/common.ps1')
+}
 
 function Get-GitHubApiHeader {
     return @{
@@ -373,10 +380,12 @@ $configuration = if (Test-Path -LiteralPath $configPath) {
 else {
     @{}
 }
-$baselineSelector = ''
-if ($configuration.Contains('buildValidation') -and $configuration.buildValidation -and $configuration.buildValidation.Contains('baselineRelease')) {
-    $baselineSelector = ([string]$configuration.buildValidation.baselineRelease).Trim()
+$effectiveBranchName = $BranchName
+if ([string]::IsNullOrWhiteSpace($effectiveBranchName)) {
+    $effectiveBranchName = [string]$env:BUILD_BRANCH
 }
+$buildValidationConfiguration = Get-AlmBuildValidationConfiguration -Config $configuration -BranchName $effectiveBranchName
+$baselineSelector = [string]$buildValidationConfiguration.BaselineRelease
 
 if ([string]::IsNullOrWhiteSpace($baselineSelector)) {
     Write-Host 'No BUILD validation baseline is configured; deploying only the candidate artifacts.'

@@ -278,6 +278,125 @@ function Initialize-SetupConsoleCancellationSupport {
     return $cancellationType
 }
 
+function Initialize-SetupConsoleEscapeNavigationSupport {
+    <#
+    .SYNOPSIS
+        Returns the process-wide console proxy for Escape navigation and F1 help.
+    .DESCRIPTION
+        The proxy is compiled once and decorates Spectre's console input at runtime.
+        Escape requests navigation; F1 opens the active documentation URL and resumes
+        the prompt. Compilation and browser-launch failures propagate.
+    #>
+    [CmdletBinding()]
+    param()
+
+    $typeName = 'ALM4Dataverse.SetupConsoleHelpDispatchProxy'
+    $proxyType = ([System.Management.Automation.PSTypeName]$typeName).Type
+    if ($null -ne $proxyType) {
+        return $proxyType
+    }
+
+    $typeDefinition = @(
+        'using System;'
+        'using System.Diagnostics;'
+        'using System.Reflection;'
+        'using System.Runtime.ExceptionServices;'
+        'using System.Threading.Tasks;'
+        'namespace ALM4Dataverse {'
+        '    public class SetupConsoleHelpDispatchProxy : DispatchProxy {'
+        '        public object Inner { get; set; }'
+        '        public object ReplacementInput { get; set; }'
+        '        public string HelpUrl { get; set; }'
+        '        public Action<string> HelpLauncher { get; set; }'
+        ''
+        '        protected override object Invoke(MethodInfo targetMethod, object[] args) {'
+        '            if (ReplacementInput != null && targetMethod.Name == "get_Input") {'
+        '                return ReplacementInput;'
+        '            }'
+        ''
+        '            object result = InvokeInner(targetMethod, args);'
+        ''
+        '            if (targetMethod.Name == "ReadKey") {'
+        '                return ReadKeyWithHelp(targetMethod, args, result);'
+        '            }'
+        ''
+        '            if (targetMethod.Name == "ReadKeyAsync" && result != null) {'
+        '                Type resultType = targetMethod.ReturnType.GetGenericArguments()[0];'
+        '                MethodInfo wrapperMethod = typeof(SetupConsoleHelpDispatchProxy).GetMethod('
+        '                    "WrapReadKeyAsync",'
+        '                    BindingFlags.NonPublic | BindingFlags.Instance'
+        '                );'
+        '                return wrapperMethod.MakeGenericMethod(resultType).Invoke(this, new object[] { result, targetMethod, args });'
+        '            }'
+        ''
+        '            return result;'
+        '        }'
+        ''
+        '        private object InvokeInner(MethodInfo targetMethod, object[] args) {'
+        '            try {'
+        '                return targetMethod.Invoke(Inner, args);'
+        '            }'
+        '            catch (TargetInvocationException exception) {'
+        '                if (exception.InnerException != null) {'
+        '                    ExceptionDispatchInfo.Capture(exception.InnerException).Throw();'
+        '                }'
+        '                throw;'
+        '            }'
+        '        }'
+        ''
+        '        private object ReadKeyWithHelp(MethodInfo targetMethod, object[] args, object key) {'
+        '            while (IsF1Key(key) && !String.IsNullOrWhiteSpace(HelpUrl)) {'
+        '                OpenHelp();'
+        '                key = InvokeInner(targetMethod, args);'
+        '            }'
+        '            ThrowIfEscapeKey(key);'
+        '            return key;'
+        '        }'
+        ''
+        '        private async Task<T> WrapReadKeyAsync<T>(Task<T> task, MethodInfo targetMethod, object[] args) {'
+        '            T key = await task.ConfigureAwait(false);'
+        '            while (IsF1Key(key) && !String.IsNullOrWhiteSpace(HelpUrl)) {'
+        '                OpenHelp();'
+        '                key = await ((Task<T>)InvokeInner(targetMethod, args)).ConfigureAwait(false);'
+        '            }'
+        '            ThrowIfEscapeKey(key);'
+        '            return key;'
+        '        }'
+        ''
+        '        private static bool IsF1Key(object value) {'
+        '            return value is ConsoleKeyInfo && ((ConsoleKeyInfo)value).Key == ConsoleKey.F1;'
+        '        }'
+        ''
+        '        private void OpenHelp() {'
+        '            if (HelpLauncher != null) {'
+        '                HelpLauncher(HelpUrl);'
+        '                return;'
+        '            }'
+        '            Process process = Process.Start(new ProcessStartInfo { FileName = HelpUrl, UseShellExecute = true });'
+        '            if (process == null) {'
+        '                throw new InvalidOperationException("The operating system did not start a browser for setup help.");'
+        '            }'
+        '            process.Dispose();'
+        '        }'
+        ''
+        '        private static void ThrowIfEscapeKey(object value) {'
+        '            if (value is ConsoleKeyInfo && ((ConsoleKeyInfo)value).Key == ConsoleKey.Escape) {'
+        '                throw new InvalidOperationException("__ALM4DATAVERSE_WIZARD_BACK__");'
+        '            }'
+        '        }'
+        '    }'
+        '}'
+    ) -join [Environment]::NewLine
+
+    Add-Type -TypeDefinition $typeDefinition -ErrorAction Stop
+    $proxyType = ([System.Management.Automation.PSTypeName]$typeName).Type
+    if ($null -eq $proxyType) {
+        throw "Could not initialize setup console F1 help type '$typeName'."
+    }
+
+    return $proxyType
+}
+
 function Initialize-SpectreConsole {
     <#
     .SYNOPSIS
@@ -825,20 +944,741 @@ function Show-KeyValueSummaryTable {
     [Spectre.Console.AnsiConsole]::WriteLine()
 }
 
+function Show-SetupFilePreview {
+    <#
+    .SYNOPSIS
+        Displays generated file content in a setup preview panel.
+    .DESCRIPTION
+        Treats the file content as literal text so YAML and PowerShell markup
+        characters are displayed without being interpreted by Spectre.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Content
+    )
+
+    Initialize-SpectreConsole
+    $markup = [Spectre.Console.Markup]::new((ConvertTo-SpectreMarkupLiteral -Text $Content.TrimEnd("`r", "`n")))
+    [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content $markup -Header $Path -BorderColor 'deepskyblue1' -Expand))
+    [Spectre.Console.AnsiConsole]::WriteLine()
+}
+
+function Get-SetupRepositoryFileChange {
+    <#
+    .SYNOPSIS
+        Compares generated setup files with the selected repository tree.
+    .DESCRIPTION
+        Only inspects the supplied relative paths and returns added, modified, and
+        deleted text files with their before and after contents.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$PreviewRoot,
+        [Parameter(Mandatory)][string[]]$RelativePaths
+    )
+
+    foreach ($root in @($RepositoryRoot, $PreviewRoot)) {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            throw "Setup comparison root not found: $root"
+        }
+    }
+
+    $repositoryPrefix = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $previewPrefix = [System.IO.Path]::GetFullPath($PreviewRoot).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    $repositoryFiles = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+    $previewFiles = [System.Collections.Generic.Dictionary[string, string]]::new([System.StringComparer]::Ordinal)
+
+    foreach ($relativeRoot in $RelativePaths) {
+        if ([string]::IsNullOrWhiteSpace($relativeRoot) -or
+            [System.IO.Path]::IsPathRooted($relativeRoot) -or
+            $relativeRoot -match '(^|[\\/])\.\.([\\/]|$)') {
+            throw "Invalid setup comparison path: '$relativeRoot'"
+        }
+
+        foreach ($rootDefinition in @(
+                [pscustomobject]@{ BasePath = $RepositoryRoot; Prefix = $repositoryPrefix; Files = $repositoryFiles }
+                [pscustomobject]@{ BasePath = $PreviewRoot; Prefix = $previewPrefix; Files = $previewFiles }
+            )) {
+            $path = Join-Path $rootDefinition.BasePath $relativeRoot
+            $items = if (Test-Path -LiteralPath $path -PathType Leaf) {
+                @(Get-Item -LiteralPath $path -ErrorAction Stop)
+            }
+            elseif (Test-Path -LiteralPath $path -PathType Container) {
+                @(Get-ChildItem -LiteralPath $path -Recurse -File -Force -ErrorAction Stop)
+            }
+            else {
+                @()
+            }
+
+            foreach ($item in $items) {
+                $relativePath = $item.FullName.Substring($rootDefinition.Prefix.Length).Replace('\', '/')
+                $rootDefinition.Files[$relativePath] = $item.FullName
+            }
+        }
+    }
+
+    $allPaths = @($repositoryFiles.Keys) + @($previewFiles.Keys)
+    $changes = [System.Collections.Generic.List[object]]::new()
+    foreach ($relativePath in @($allPaths | Sort-Object -Unique -CaseSensitive)) {
+        $hasBefore = $repositoryFiles.ContainsKey($relativePath)
+        $hasAfter = $previewFiles.ContainsKey($relativePath)
+        $beforePath = if ($hasBefore) { $repositoryFiles[$relativePath] } else { $null }
+        $afterPath = if ($hasAfter) { $previewFiles[$relativePath] } else { $null }
+        $status = if (-not $hasBefore) {
+            'Added'
+        }
+        elseif (-not $hasAfter) {
+            'Deleted'
+        }
+        else {
+            $beforeHash = (Get-FileHash -LiteralPath $beforePath -Algorithm SHA256 -ErrorAction Stop).Hash
+            $afterHash = (Get-FileHash -LiteralPath $afterPath -Algorithm SHA256 -ErrorAction Stop).Hash
+            if ($beforeHash -ceq $afterHash) {
+                continue
+            }
+            'Modified'
+        }
+
+        $beforeContent = if ($hasBefore) { [System.IO.File]::ReadAllText($beforePath) } else { $null }
+        $afterContent = if ($hasAfter) { [System.IO.File]::ReadAllText($afterPath) } else { $null }
+        $changes.Add([pscustomobject]@{
+                Path          = $relativePath
+                Status        = $status
+                BeforeContent = $beforeContent
+                AfterContent  = $afterContent
+            })
+    }
+
+    return $changes.ToArray()
+}
+
+function Add-SetupSideBySideChangeBlock {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Rows,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$DeletedLines,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AddedLines
+    )
+
+    $pairedCount = [Math]::Min($DeletedLines.Count, $AddedLines.Count)
+    for ($index = 0; $index -lt $pairedCount; $index++) {
+        $Rows.Add([pscustomobject]@{
+                Type      = 'Modified'
+                LeftText  = $DeletedLines[$index]
+                RightText = $AddedLines[$index]
+            })
+    }
+
+    for ($index = $pairedCount; $index -lt $DeletedLines.Count; $index++) {
+        $Rows.Add([pscustomobject]@{
+                Type      = 'Deleted'
+                LeftText  = $DeletedLines[$index]
+                RightText = ''
+            })
+    }
+
+    for ($index = $pairedCount; $index -lt $AddedLines.Count; $index++) {
+        $Rows.Add([pscustomobject]@{
+                Type      = 'Added'
+                LeftText  = ''
+                RightText = $AddedLines[$index]
+            })
+    }
+}
+
+function Get-SetupSideBySideDiffRow {
+    <#
+    .SYNOPSIS
+        Aligns two file contents into side-by-side context and change rows.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter()][AllowNull()][string]$BeforeContent,
+        [Parameter()][AllowNull()][string]$AfterContent
+    )
+
+    $beforeLines = [string[]]@()
+    if ($null -ne $BeforeContent -and $BeforeContent.Length -gt 0) {
+        $beforeLines = [System.Text.RegularExpressions.Regex]::Split($BeforeContent, '\r\n|\n|\r')
+    }
+    $afterLines = [string[]]@()
+    if ($null -ne $AfterContent -and $AfterContent.Length -gt 0) {
+        $afterLines = [System.Text.RegularExpressions.Regex]::Split($AfterContent, '\r\n|\n|\r')
+    }
+
+    $rows = [System.Collections.Generic.List[object]]::new()
+    $prefixCount = 0
+    while (
+        $prefixCount -lt $beforeLines.Count -and
+        $prefixCount -lt $afterLines.Count -and
+        [string]::Equals($beforeLines[$prefixCount], $afterLines[$prefixCount], [StringComparison]::Ordinal)
+    ) {
+        $rows.Add([pscustomobject]@{
+                Type      = 'Context'
+                LeftText  = $beforeLines[$prefixCount]
+                RightText = $afterLines[$prefixCount]
+            })
+        $prefixCount++
+    }
+
+    $suffixCount = 0
+    while (
+        $suffixCount -lt ($beforeLines.Count - $prefixCount) -and
+        $suffixCount -lt ($afterLines.Count - $prefixCount) -and
+        [string]::Equals(
+            $beforeLines[$beforeLines.Count - $suffixCount - 1],
+            $afterLines[$afterLines.Count - $suffixCount - 1],
+            [StringComparison]::Ordinal
+        )
+    ) {
+        $suffixCount++
+    }
+
+    $beforeMiddleCount = $beforeLines.Count - $prefixCount - $suffixCount
+    $afterMiddleCount = $afterLines.Count - $prefixCount - $suffixCount
+    $matrixCellCount = ([long]$beforeMiddleCount + 1) * ([long]$afterMiddleCount + 1)
+    if ($matrixCellCount -le 4000000) {
+        $lengths = [int[,]]::new($beforeMiddleCount + 1, $afterMiddleCount + 1)
+        for ($beforeIndex = $beforeMiddleCount - 1; $beforeIndex -ge 0; $beforeIndex--) {
+            for ($afterIndex = $afterMiddleCount - 1; $afterIndex -ge 0; $afterIndex--) {
+                $beforeLine = $beforeLines[$prefixCount + $beforeIndex]
+                $afterLine = $afterLines[$prefixCount + $afterIndex]
+                if ([string]::Equals($beforeLine, $afterLine, [StringComparison]::Ordinal)) {
+                    $lengths[$beforeIndex, $afterIndex] = $lengths[($beforeIndex + 1), ($afterIndex + 1)] + 1
+                }
+                else {
+                    $lengths[$beforeIndex, $afterIndex] = [Math]::Max(
+                        $lengths[($beforeIndex + 1), $afterIndex],
+                        $lengths[$beforeIndex, ($afterIndex + 1)]
+                    )
+                }
+            }
+        }
+
+        $operations = [System.Collections.Generic.List[object]]::new()
+        $beforeIndex = 0
+        $afterIndex = 0
+        while ($beforeIndex -lt $beforeMiddleCount -or $afterIndex -lt $afterMiddleCount) {
+            if (
+                $beforeIndex -lt $beforeMiddleCount -and
+                $afterIndex -lt $afterMiddleCount -and
+                [string]::Equals(
+                    $beforeLines[$prefixCount + $beforeIndex],
+                    $afterLines[$prefixCount + $afterIndex],
+                    [StringComparison]::Ordinal
+                )
+            ) {
+                $operations.Add([pscustomobject]@{
+                        Type      = 'Context'
+                        LeftText  = $beforeLines[$prefixCount + $beforeIndex]
+                        RightText = $afterLines[$prefixCount + $afterIndex]
+                    })
+                $beforeIndex++
+                $afterIndex++
+            }
+            elseif (
+                $afterIndex -lt $afterMiddleCount -and
+                (
+                    $beforeIndex -ge $beforeMiddleCount -or
+                    $lengths[$beforeIndex, ($afterIndex + 1)] -ge $lengths[($beforeIndex + 1), $afterIndex]
+                )
+            ) {
+                $operations.Add([pscustomobject]@{
+                        Type      = 'Added'
+                        LeftText  = ''
+                        RightText = $afterLines[$prefixCount + $afterIndex]
+                    })
+                $afterIndex++
+            }
+            else {
+                $operations.Add([pscustomobject]@{
+                        Type      = 'Deleted'
+                        LeftText  = $beforeLines[$prefixCount + $beforeIndex]
+                        RightText = ''
+                    })
+                $beforeIndex++
+            }
+        }
+
+        $deletedLines = [System.Collections.Generic.List[string]]::new()
+        $addedLines = [System.Collections.Generic.List[string]]::new()
+        foreach ($operation in $operations) {
+            if ($operation.Type -eq 'Context') {
+                Add-SetupSideBySideChangeBlock -Rows $rows -DeletedLines $deletedLines.ToArray() -AddedLines $addedLines.ToArray()
+                $deletedLines.Clear()
+                $addedLines.Clear()
+                $rows.Add($operation)
+            }
+            elseif ($operation.Type -eq 'Deleted') {
+                $deletedLines.Add([string]$operation.LeftText)
+            }
+            else {
+                $addedLines.Add([string]$operation.RightText)
+            }
+        }
+        Add-SetupSideBySideChangeBlock -Rows $rows -DeletedLines $deletedLines.ToArray() -AddedLines $addedLines.ToArray()
+    }
+    else {
+        $deletedLines = [string[]]@()
+        if ($beforeMiddleCount -gt 0) {
+            $deletedLines = $beforeLines[$prefixCount..($prefixCount + $beforeMiddleCount - 1)]
+        }
+        $addedLines = [string[]]@()
+        if ($afterMiddleCount -gt 0) {
+            $addedLines = $afterLines[$prefixCount..($prefixCount + $afterMiddleCount - 1)]
+        }
+        Add-SetupSideBySideChangeBlock -Rows $rows -DeletedLines $deletedLines -AddedLines $addedLines
+    }
+
+    for ($suffixIndex = $suffixCount; $suffixIndex -gt 0; $suffixIndex--) {
+        $beforeLine = $beforeLines[$beforeLines.Count - $suffixIndex]
+        $afterLine = $afterLines[$afterLines.Count - $suffixIndex]
+        $rows.Add([pscustomobject]@{
+                Type      = 'Context'
+                LeftText  = $beforeLine
+                RightText = $afterLine
+            })
+    }
+
+    return $rows.ToArray()
+}
+
+function Get-SetupDiffTextSegment {
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter()][AllowEmptyString()][string]$Text = '',
+        [Parameter(Mandatory)][ValidateRange(1, 10000)][int]$Width
+    )
+
+    $expandedText = $Text.Replace("`t", '    ')
+    $segments = [System.Collections.Generic.List[string]]::new()
+    if ($expandedText.Length -eq 0) {
+        $segments.Add('')
+    }
+    else {
+        for ($offset = 0; $offset -lt $expandedText.Length; $offset += $Width) {
+            $segmentLength = [Math]::Min($Width, $expandedText.Length - $offset)
+            $segments.Add($expandedText.Substring($offset, $segmentLength))
+        }
+    }
+
+    return $segments.ToArray()
+}
+
+function Read-SetupDiffViewerKey {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    return [string]([Console]::ReadKey($true).Key)
+}
+
+function Get-SetupDiffNextStartIndex {
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)][int]$CurrentStartIndex,
+        [Parameter(Mandatory)][int]$PageSize,
+        [Parameter(Mandatory)][int]$RowCount,
+        [Parameter(Mandatory)][string]$Key
+    )
+
+    $maximumStartIndex = [Math]::Max($RowCount - $PageSize, 0)
+    switch ($Key) {
+        'UpArrow' { return [Math]::Max($CurrentStartIndex - 1, 0) }
+        'DownArrow' { return [Math]::Min($CurrentStartIndex + 1, $maximumStartIndex) }
+        'PageUp' { return [Math]::Max($CurrentStartIndex - $PageSize, 0) }
+        'PageDown' { return [Math]::Min($CurrentStartIndex + $PageSize, $maximumStartIndex) }
+        'Home' { return 0 }
+        'End' { return $maximumStartIndex }
+        default { return [Math]::Min([Math]::Max($CurrentStartIndex, 0), $maximumStartIndex) }
+    }
+}
+
+function Show-SetupFileChangeSummary {
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowEmptyCollection()][object[]]$FileChanges = @()
+    )
+
+    Initialize-SpectreConsole
+    $addedCount = @($FileChanges | Where-Object { $_.Status -eq 'Added' }).Count
+    $modifiedCount = @($FileChanges | Where-Object { $_.Status -eq 'Modified' }).Count
+    $deletedCount = @($FileChanges | Where-Object { $_.Status -eq 'Deleted' }).Count
+    [Spectre.Console.AnsiConsole]::MarkupLine(
+        "[bold]Repository files:[/] [green]$addedCount added[/], [yellow]$modifiedCount modified[/], [red]$deletedCount deleted[/]"
+    )
+
+    if ($FileChanges.Count -eq 0) {
+        [Spectre.Console.AnsiConsole]::MarkupLine('[green]No repository files need changes.[/]')
+        return
+    }
+
+    foreach ($change in @($FileChanges | Sort-Object Path -CaseSensitive)) {
+        $statusColor = switch ($change.Status) {
+            'Added' { 'green' }
+            'Modified' { 'yellow' }
+            'Deleted' { 'red' }
+            default { 'grey' }
+        }
+        $literalPath = ConvertTo-SpectreMarkupLiteral -Text ([string]$change.Path)
+        [Spectre.Console.AnsiConsole]::MarkupLine("[$statusColor]$($change.Status): $literalPath[/]")
+    }
+}
+
+function Show-SetupResourceChangeSummary {
+    <#
+    .SYNOPSIS
+        Lists the external resource changes deferred until setup is applied.
+    .DESCRIPTION
+        Details are descriptive plans; sensitive credential values must never be included.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowEmptyCollection()][object[]]$ResourceChanges = @(),
+        [Parameter()][string]$Note = 'Resources already provisioned earlier to support setup are excluded.'
+    )
+
+    Initialize-SpectreConsole
+    [Spectre.Console.AnsiConsole]::MarkupLine("[bold]Deferred external resource changes: $($ResourceChanges.Count)[/]")
+    if ($ResourceChanges.Count -eq 0) {
+        [Spectre.Console.AnsiConsole]::MarkupLine('[green]No external resources will be modified by this operation.[/]')
+    }
+
+    for ($index = 0; $index -lt $ResourceChanges.Count; $index++) {
+        $change = $ResourceChanges[$index]
+        foreach ($propertyName in @('Action', 'Resource', 'Target')) {
+            if ($change.PSObject.Properties.Name -notcontains $propertyName -or [string]::IsNullOrWhiteSpace([string]$change.$propertyName)) {
+                throw "Resource change at index $index is missing required '$propertyName' text."
+            }
+        }
+
+        $action = ConvertTo-SpectreMarkupLiteral -Text ([string]$change.Action)
+        $resource = ConvertTo-SpectreMarkupLiteral -Text ([string]$change.Resource)
+        $target = ConvertTo-SpectreMarkupLiteral -Text ([string]$change.Target)
+        [Spectre.Console.AnsiConsole]::MarkupLine("[cyan]$action[/] [bold]$resource[/] [grey]($target)[/]")
+        if (-not [string]::IsNullOrWhiteSpace([string]$change.Details)) {
+            $details = ConvertTo-SpectreMarkupLiteral -Text ([string]$change.Details)
+            [Spectre.Console.AnsiConsole]::MarkupLine("  $details")
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($Note)) {
+        $noteLiteral = ConvertTo-SpectreMarkupLiteral -Text $Note
+        [Spectre.Console.AnsiConsole]::MarkupLine("[grey]$noteLiteral[/]")
+    }
+}
+
+function Show-SetupSideBySideDiff {
+    <#
+    .SYNOPSIS
+        Displays one file as a colored before/after side-by-side diff.
+    .DESCRIPTION
+        Interactive terminals support arrow keys, Page Up/Down, Home/End and Q/Esc.
+        NoPaging writes the full view once for command-line preview output.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowEmptyCollection()][object[]]$FileChanges = @(),
+        [Parameter()][string]$Title = 'Repository file changes',
+        [Parameter()][switch]$NoPaging
+    )
+
+    if ($FileChanges.Count -gt 1) {
+        throw 'The side-by-side diff viewer displays one file at a time.'
+    }
+
+    Initialize-SpectreConsole
+    if ($FileChanges.Count -eq 0) {
+        [Spectre.Console.AnsiConsole]::MarkupLine('[green]No file changes to display.[/]')
+        return
+    }
+
+    $terminalWidth = 120
+    $terminalHeight = 24
+    $interactive = $false
+    if (-not $NoPaging) {
+        try {
+            $terminalWidth = [Math]::Max([Console]::WindowWidth, 1)
+            $terminalHeight = [Math]::Max([Console]::WindowHeight, 1)
+            $interactive = -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected
+        }
+        catch {
+            $interactive = $false
+        }
+    }
+    else {
+        try {
+            $terminalWidth = [Math]::Max([Console]::WindowWidth, 1)
+        }
+        catch {
+            $terminalWidth = 120
+        }
+    }
+
+    $columnWidth = [Math]::Max([Math]::Floor(($terminalWidth - 5) / 2), 8)
+    $textWidth = [Math]::Max($columnWidth - 2, 1)
+    $displayRows = [System.Collections.Generic.List[object]]::new()
+    foreach ($change in @($FileChanges | Sort-Object Path -CaseSensitive)) {
+        $displayRows.Add([pscustomobject]@{
+                Kind   = 'Header'
+                Status = [string]$change.Status
+                Text   = [string]$change.Path
+            })
+        $diffRows = @(Get-SetupSideBySideDiffRow -BeforeContent $change.BeforeContent -AfterContent $change.AfterContent)
+        $hasTextChanges = @($diffRows | Where-Object { $_.Type -ne 'Context' }).Count -gt 0
+        if (-not $hasTextChanges) {
+            $notice = if ($change.Status -eq 'Modified') {
+                'Text is unchanged; only file encoding or line endings differ.'
+            }
+            elseif ($change.Status -eq 'Added') {
+                '(empty file)'
+            }
+            else {
+                '(empty file)'
+            }
+            $diffRows = @([pscustomobject]@{
+                    Type      = 'Notice'
+                    LeftText  = if ($change.Status -eq 'Deleted') { $notice } else { '' }
+                    RightText = if ($change.Status -eq 'Deleted') { '' } else { $notice }
+                })
+        }
+
+        foreach ($diffRow in $diffRows) {
+            $leftSegments = @(Get-SetupDiffTextSegment -Text ([string]$diffRow.LeftText) -Width $textWidth)
+            $rightSegments = @(Get-SetupDiffTextSegment -Text ([string]$diffRow.RightText) -Width $textWidth)
+            $segmentCount = [Math]::Max($leftSegments.Count, $rightSegments.Count)
+            for ($segmentIndex = 0; $segmentIndex -lt $segmentCount; $segmentIndex++) {
+                $leftSegment = if ($segmentIndex -lt $leftSegments.Count) { $leftSegments[$segmentIndex] } else { '' }
+                $rightSegment = if ($segmentIndex -lt $rightSegments.Count) { $rightSegments[$segmentIndex] } else { '' }
+                $displayRows.Add([pscustomobject]@{
+                        Kind         = 'Diff'
+                        Type         = [string]$diffRow.Type
+                        LeftText     = [string]$leftSegment
+                        RightText    = [string]$rightSegment
+                        IsContinuation = ($segmentIndex -gt 0)
+                    })
+            }
+        }
+    }
+
+    $pageSize = if ($interactive) { [Math]::Max($terminalHeight - 6, 1) } else { $displayRows.Count }
+    $startIndex = 0
+    while ($true) {
+        if ($interactive) {
+            $script:SetupGuidancePanelVisible = $false
+            [Spectre.Console.AnsiConsole]::Clear()
+        }
+        Write-SetupDashboard -Message $Title -IncludeTrailingSpacer
+        $titleLiteral = ConvertTo-SpectreMarkupLiteral -Text $Title
+        [Spectre.Console.AnsiConsole]::MarkupLine("[bold deepskyblue1]$titleLiteral[/]")
+        $leftHeading = ('BEFORE').PadRight($columnWidth)
+        [Spectre.Console.AnsiConsole]::MarkupLine("[grey]$leftHeading | AFTER[/]")
+
+        $endIndex = [Math]::Min($startIndex + $pageSize, $displayRows.Count)
+        for ($rowIndex = $startIndex; $rowIndex -lt $endIndex; $rowIndex++) {
+            $displayRow = $displayRows[$rowIndex]
+            if ($displayRow.Kind -eq 'Header') {
+                $headerColor = switch ($displayRow.Status) {
+                    'Added' { 'green' }
+                    'Modified' { 'yellow' }
+                    'Deleted' { 'red' }
+                    default { 'grey' }
+                }
+                $literalHeader = ConvertTo-SpectreMarkupLiteral -Text "$($displayRow.Status): $($displayRow.Text)"
+                [Spectre.Console.AnsiConsole]::MarkupLine("[$headerColor]$literalHeader[/]")
+                continue
+            }
+
+            $leftColor = switch ($displayRow.Type) {
+                { $_ -in @('Deleted', 'Modified') } { 'red3_1' }
+                'Notice' { 'yellow' }
+                'Context' { 'grey' }
+                default { 'grey' }
+            }
+            $rightColor = switch ($displayRow.Type) {
+                { $_ -in @('Added', 'Modified') } { 'green3_1' }
+                'Notice' { 'yellow' }
+                'Context' { 'grey' }
+                default { 'grey' }
+            }
+            $leftPrefix = if ($displayRow.IsContinuation) { '  ' } elseif ($displayRow.Type -in @('Deleted', 'Modified')) { '- ' } else { '  ' }
+            $rightPrefix = if ($displayRow.IsContinuation) { '  ' } elseif ($displayRow.Type -in @('Added', 'Modified')) { '+ ' } else { '  ' }
+            $leftCell = ($leftPrefix + $displayRow.LeftText).PadRight($columnWidth)
+            $rightCell = $rightPrefix + $displayRow.RightText
+            $leftLiteral = ConvertTo-SpectreMarkupLiteral -Text $leftCell
+            $rightLiteral = ConvertTo-SpectreMarkupLiteral -Text $rightCell
+            [Spectre.Console.AnsiConsole]::MarkupLine("[$leftColor]$leftLiteral[/] [grey]|[/] [$rightColor]$rightLiteral[/]")
+        }
+
+        if (-not $interactive) {
+            break
+        }
+
+        $firstVisibleRow = $startIndex + 1
+        $lastVisibleRow = $endIndex
+        [Spectre.Console.AnsiConsole]::MarkupLine(
+            "[grey]Rows $firstVisibleRow-$lastVisibleRow of $($displayRows.Count) | Up/Down scroll | PgUp/PgDn page | Home/End | Q/Esc close[/]"
+        )
+        $key = Read-SetupDiffViewerKey
+        if ($key -in @('Q', 'Escape', 'Enter')) {
+            break
+        }
+        $startIndex = Get-SetupDiffNextStartIndex `
+            -CurrentStartIndex $startIndex `
+            -PageSize $pageSize `
+            -RowCount $displayRows.Count `
+            -Key $key
+    }
+}
+
+function Show-SetupChangeReview {
+    <#
+    .SYNOPSIS
+        Shows the setup summary and deferred resource plan, then offers selectable, single-file diffs.
+    .DESCRIPTION
+        Resource changes describe deferred external mutations and must not contain secrets.
+        PreviewOnly uses the same file picker but writes each selected file diff without paging.
+        SummaryAction runs synchronously in the caller's scope so it can resolve setup
+        helpers and access the current setup-step state.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowEmptyCollection()][object[]]$FileChanges = @(),
+        [Parameter()][AllowEmptyCollection()][object[]]$ResourceChanges = @(),
+        [Parameter()][string]$ResourceChangeNote = 'Resources already provisioned earlier to support setup are excluded.',
+        [Parameter(Mandatory)][scriptblock]$SummaryAction,
+        [Parameter()][switch]$PreviewOnly
+    )
+
+    while ($true) {
+        & $SummaryAction
+        Show-SetupResourceChangeSummary -ResourceChanges $ResourceChanges -Note $ResourceChangeNote
+        Show-SetupFileChangeSummary -FileChanges $FileChanges
+        $repositoryFileChanges = @(
+            $FileChanges |
+                Where-Object { $_.Path -ine 'alm-config.psd1' } |
+                Sort-Object Path -CaseSensitive
+        )
+        $reviewMenuItems = [System.Collections.Generic.List[string]]::new()
+        $reviewMenuItems.Add('View alm-config.psd1 diff')
+        foreach ($change in $repositoryFileChanges) {
+            $reviewMenuItems.Add("$($change.Status): $($change.Path)")
+        }
+        $reviewMenuItems.Add('Done reviewing')
+        $selection = Select-FromMenu `
+            -Title 'Review setup changes' `
+            -Items $reviewMenuItems.ToArray() `
+            -PromptGuidanceLines @(
+                'Each file is listed with its add, modify, or delete status.',
+                'Select one file to view its diff; alm-config.psd1 has a separate option.'
+            )
+
+        if ($null -eq $selection) {
+            throw 'Setup change review was cancelled.'
+        }
+
+        switch ($selection) {
+            0 {
+                $configChanges = @($FileChanges | Where-Object { $_.Path -ieq 'alm-config.psd1' })
+                if ($configChanges.Count -eq 0) {
+                    Show-SetupSideBySideDiff `
+                        -Title 'alm-config.psd1 diff' `
+                        -FileChanges @() `
+                        -NoPaging:$PreviewOnly
+                }
+                else {
+                    Show-SetupSideBySideDiff `
+                        -Title 'alm-config.psd1 diff' `
+                        -FileChanges @($configChanges[0]) `
+                        -NoPaging:$PreviewOnly
+                }
+            }
+            default {
+                $selectedFileIndex = $selection - 1
+                if ($selectedFileIndex -lt $repositoryFileChanges.Count) {
+                    $selectedChange = $repositoryFileChanges[$selectedFileIndex]
+                    Show-SetupSideBySideDiff `
+                        -Title "$($selectedChange.Status): $($selectedChange.Path)" `
+                        -FileChanges @($selectedChange) `
+                        -NoPaging:$PreviewOnly
+                }
+                elseif ($selection -eq ($repositoryFileChanges.Count + 1)) {
+                    return
+                }
+                else {
+                    throw "Unrecognized setup change review selection: $selection"
+                }
+            }
+        }
+    }
+}
+
+function New-SetupPreviewRoot {
+    <#
+    .SYNOPSIS
+        Creates a temporary tree containing only inputs needed for artifact preview.
+    .DESCRIPTION
+        Copies the listed existing repository paths while excluding Git metadata.
+        The caller owns cleanup of the uniquely named temporary directory.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Creates a disposable preview tree outside the repository and removes it after display.')]
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$BaseRoot,
+        [Parameter(Mandatory)][string[]]$RelativePaths
+    )
+
+    if (-not (Test-Path -LiteralPath $BaseRoot -PathType Container)) {
+        throw "Setup preview source directory not found: $BaseRoot"
+    }
+
+    $previewRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("alm-setup-preview-" + [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Path $previewRoot -Force | Out-Null
+    foreach ($relativePath in $RelativePaths) {
+        $sourcePath = Join-Path $BaseRoot $relativePath
+        if (-not (Test-Path -LiteralPath $sourcePath)) {
+            continue
+        }
+
+        $destinationPath = Join-Path $previewRoot $relativePath
+        $destinationDirectory = Split-Path -Parent $destinationPath
+        if (-not (Test-Path -LiteralPath $destinationDirectory)) {
+            New-Item -ItemType Directory -Path $destinationDirectory -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $sourcePath -Destination $destinationPath -Recurse -Force
+    }
+
+    return $previewRoot
+}
+
 function Set-SetupWizardContext {
-    # Script-scoped display/navigation state; CurrentStepIndex is zero-based.
+    # Script-scoped navigation/help state; CurrentStepIndex is zero-based.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
         [Parameter(Mandatory)][string[]]$StepNames,
-        [Parameter(Mandatory)][int]$CurrentStepIndex
+        [Parameter(Mandatory)][int]$CurrentStepIndex,
+        [Parameter()][switch]$IsNavigationMenu,
+        [Parameter()][string]$HelpDocRelativePath,
+        [Parameter()][string]$HelpRef
     )
 
     $script:SetupWizardContext = [pscustomobject]@{
-        Title            = $Title
-        StepNames        = @($StepNames)
-        CurrentStepIndex = $CurrentStepIndex
+        Title                 = $Title
+        StepNames             = @($StepNames)
+        CurrentStepIndex      = $CurrentStepIndex
+        IsNavigationMenu      = [bool]$IsNavigationMenu
+        HelpDocRelativePath   = $HelpDocRelativePath
+        HelpRef               = $HelpRef
     }
+    Clear-SetupPromptDocContext
 }
 
 function Set-SetupPhaseContext {
@@ -895,14 +1735,12 @@ function Set-SetupPromptDocContext {
     [CmdletBinding()]
     param(
         [Parameter()][string]$DocRelativePath,
-        [Parameter()][string]$Ref,
-        [Parameter()][string]$LinkLabel = 'Click for docs'
+        [Parameter()][string]$Ref
     )
 
     $script:SetupPromptDocContext = [pscustomobject]@{
         DocRelativePath = $DocRelativePath
         Ref             = $Ref
-        LinkLabel       = $LinkLabel
     }
 }
 
@@ -911,6 +1749,7 @@ function Clear-SetupPromptDocContext {
     param()
 
     Remove-Variable -Name 'SetupPromptDocContext' -Scope Script -ErrorAction SilentlyContinue
+    Remove-Variable -Name 'SetupActivePromptHelpUrl' -Scope Script -ErrorAction SilentlyContinue
 }
 
 function Get-SetupPromptDocContext {
@@ -918,6 +1757,75 @@ function Get-SetupPromptDocContext {
     param()
 
     return (Get-Variable -Name 'SetupPromptDocContext' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+}
+
+function Get-SetupPromptHelpContext {
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()][string]$DocRelativePath,
+        [Parameter()][string]$Ref
+    )
+
+    $promptDocContext = Get-SetupPromptDocContext
+    $wizardContext = Get-SetupWizardContext
+    $effectiveDocRelativePath = $DocRelativePath
+    $effectiveRef = $Ref
+
+    if ([string]::IsNullOrWhiteSpace($effectiveDocRelativePath)) {
+        if ($promptDocContext -and -not [string]::IsNullOrWhiteSpace($promptDocContext.DocRelativePath)) {
+            $effectiveDocRelativePath = [string]$promptDocContext.DocRelativePath
+            if ([string]::IsNullOrWhiteSpace($effectiveRef)) {
+                $effectiveRef = [string]$promptDocContext.Ref
+            }
+        }
+        elseif ($wizardContext -and -not [string]::IsNullOrWhiteSpace($wizardContext.HelpDocRelativePath)) {
+            $effectiveDocRelativePath = [string]$wizardContext.HelpDocRelativePath
+        }
+        else {
+            $defaultHelpDocRelativePath = Get-Variable -Name 'SetupDefaultHelpDocRelativePath' -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+            $effectiveDocRelativePath = [string]$defaultHelpDocRelativePath
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($effectiveRef) -and $wizardContext) {
+        $effectiveRef = [string]$wizardContext.HelpRef
+    }
+    if ([string]::IsNullOrWhiteSpace($effectiveRef) -and $promptDocContext) {
+        $effectiveRef = [string]$promptDocContext.Ref
+    }
+    if ([string]::IsNullOrWhiteSpace($effectiveDocRelativePath)) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        DocRelativePath = $effectiveDocRelativePath
+        Ref             = (Get-Alm4DataverseDocumentationRef -Ref $effectiveRef)
+    }
+}
+
+function Get-SetupPromptHelpUrl {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][string]$DocRelativePath,
+        [Parameter()][string]$Ref
+    )
+
+    $helpContext = Get-SetupPromptHelpContext -DocRelativePath $DocRelativePath -Ref $Ref
+    if (-not $helpContext) {
+        return ''
+    }
+
+    return Get-Alm4DataverseDocUrl -RelativePath $helpContext.DocRelativePath -Ref $helpContext.Ref
+}
+
+function Get-SetupActivePromptHelpUrl {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    return [string](Get-Variable -Name 'SetupActivePromptHelpUrl' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
 }
 
 function Request-SetupWizardBack {
@@ -970,6 +1878,7 @@ function New-SetupTipsPanel {
     $tipLines = @(
         '- Use Up and Down arrows to move through prompts.',
         '- Press Enter to confirm the highlighted option.',
+        '- Press Esc to return to the setup menu; Esc on the main menu cancels setup.',
         '- Longer lists automatically enable search so you can type to filter.',
         '- The wizard navigation menu appears after each step so you can go back before applying changes.'
     )
@@ -1024,32 +1933,266 @@ function Test-IsUserInterruptException {
 function Invoke-SetupWizard {
     <#
     .SYNOPSIS
-        Executes named setup steps with exception-based backward navigation.
+        Executes named setup steps linearly or through a guided navigation menu.
     .PARAMETER Steps
-        Ordered objects with Name and Action scriptblock properties. Action output
-        passes through; actions own their state and may run again after going back.
+        Ordered objects with Name and Action scriptblock properties. Optional
+        IsComplete and IsLocked properties represent completed prerequisite steps;
+        LockAfterCompletion prevents repeating one-time setup actions. Summary may
+        be a string or scriptblock; scriptblocks are evaluated each time the menu is
+        rendered. Steps may provide HelpDocRelativePath and HelpRef to select their
+        own help page and documentation revision. Steps without a summary show
+        Complete or Not configured.
+    .PARAMETER ApplyAction
+        When supplied, adds an Apply changes item after the setup steps. Failed
+        applies are reported and return to the menu without discarding step state.
+    .PARAMETER IsNewRepository
+        Restricts new repositories to the furthest step reached, while still allowing
+        users to revisit earlier steps.
+    .PARAMETER RequireSequentialSteps
+        Restricts navigation to the furthest step reached for workflows that must
+        complete prerequisite steps in order.
+    .PARAMETER HelpDocRelativePath
+        Default help page for the wizard and steps without a step-specific page.
+    .PARAMETER HelpRef
+        Documentation revision used for wizard help links unless a prompt supplies
+        another ref. F1 opens the current help page and resumes the prompt.
     .DESCRIPTION
-        A back marker repeats the preceding step (or the first step at index zero).
-        Other errors propagate. Wizard context is cleared even after failure; no
-        rollback of action side effects or restoration of an outer context occurs.
+        Without ApplyAction, a back marker repeats the preceding step; if the first
+        step has no predecessor, setup is cancelled. With ApplyAction, step selection
+        is menu-driven and all steps must complete before applying. Escape in a step
+        returns to the navigation menu; Escape on that menu cancels setup. F1 opens
+        the active help page without leaving the prompt. Re-running a step invalidates
+        completion of later steps; locked prerequisite steps remain complete. No
+        action side effects are rolled back.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Title,
-        [Parameter(Mandatory)][array]$Steps
+        [Parameter(Mandatory)][array]$Steps,
+        [Parameter()][scriptblock]$ApplyAction,
+        [Parameter()][string]$ApplyActionName = 'Apply changes',
+        [Parameter()][switch]$IsNewRepository,
+        [Parameter()][switch]$RequireSequentialSteps,
+        [Parameter()][string]$HelpDocRelativePath,
+        [Parameter()][string]$HelpRef
     )
 
-    if ($Steps.Count -eq 0) {
+    if ($Steps.Count -eq 0 -and -not $ApplyAction) {
         return
     }
 
-    $currentStepIndex = 0
     $stepNames = @($Steps | ForEach-Object { [string]$_.Name })
 
+    if ($ApplyAction) {
+        $menuStepNames = @($stepNames) + @($ApplyActionName)
+        $completedSteps = [bool[]]::new($Steps.Count)
+        $lockedSteps = [bool[]]::new($Steps.Count)
+        for ($stepIndex = 0; $stepIndex -lt $Steps.Count; $stepIndex++) {
+            $stepProperties = @($Steps[$stepIndex].PSObject.Properties.Name)
+            $lockedSteps[$stepIndex] = $stepProperties -contains 'IsLocked' -and [bool]$Steps[$stepIndex].IsLocked
+            $completedSteps[$stepIndex] = (
+                $lockedSteps[$stepIndex] -or
+                ($stepProperties -contains 'IsComplete' -and [bool]$Steps[$stepIndex].IsComplete)
+            )
+        }
+        $furthestStepIndex = -1
+        while (($furthestStepIndex + 1) -lt $Steps.Count -and $completedSteps[$furthestStepIndex + 1]) {
+            $furthestStepIndex++
+        }
+        $requireSequentialSteps = $IsNewRepository -or $RequireSequentialSteps
+        $currentStepIndex = 0
+
+        try {
+            while ($true) {
+                $menuItems = @()
+                for ($stepIndex = 0; $stepIndex -lt $Steps.Count; $stepIndex++) {
+                    $completionLabel = if ($completedSteps[$stepIndex]) { '[done]' } else { '[ ]' }
+                    $stepProperties = @($Steps[$stepIndex].PSObject.Properties.Name)
+                    $summaryText = 'Not configured'
+                    if ($stepProperties -contains 'Summary') {
+                        $summaryValue = $Steps[$stepIndex].Summary
+                        if ($summaryValue -is [scriptblock]) {
+                            $summaryValue = @(& $summaryValue) -join ', '
+                        }
+                        elseif ($summaryValue -is [array]) {
+                            $summaryValue = $summaryValue -join ', '
+                        }
+
+                        if (-not [string]::IsNullOrWhiteSpace([string]$summaryValue)) {
+                            $summaryText = [string]$summaryValue
+                        }
+                    }
+                    elseif ($completedSteps[$stepIndex]) {
+                        $summaryText = 'Complete'
+                    }
+                    $summaryText = ($summaryText -replace '\s+', ' ').Trim()
+                    if ([string]::IsNullOrWhiteSpace($summaryText)) {
+                        $summaryText = if ($completedSteps[$stepIndex]) { 'Complete' } else { 'Not configured' }
+                    }
+
+                    $lockedAfterCompletion = (
+                        $stepProperties -contains 'LockAfterCompletion' -and
+                        [bool]$Steps[$stepIndex].LockAfterCompletion -and
+                        $completedSteps[$stepIndex]
+                    )
+                    $lockedLabel = if ($lockedSteps[$stepIndex] -or $lockedAfterCompletion) {
+                        ' (locked)'
+                    }
+                    elseif ($requireSequentialSteps -and $stepIndex -gt ($furthestStepIndex + 1)) {
+                        ' (locked; complete earlier steps first)'
+                    }
+                    else {
+                        ''
+                    }
+                    $menuItems += "$completionLabel $($stepNames[$stepIndex]) - $summaryText$lockedLabel"
+                }
+
+                $allStepsCompleted = -not ($completedSteps -contains $false)
+                $applyMenuLabel = if ($allStepsCompleted) {
+                    "$ApplyActionName - Ready"
+                }
+                else {
+                    "$ApplyActionName (finish all setup steps first) - Not ready"
+                }
+                $menuItems += $applyMenuLabel
+
+                Set-SetupWizardContext `
+                    -Title $Title `
+                    -StepNames $menuStepNames `
+                    -CurrentStepIndex $currentStepIndex `
+                    -IsNavigationMenu `
+                    -HelpDocRelativePath $HelpDocRelativePath `
+                    -HelpRef $HelpRef
+
+                $selection = Select-FromMenu `
+                    -Title "$Title menu" `
+                    -Items $menuItems `
+                    -PromptGuidanceLines @(
+                        'Work through each setup step, or select any available step to revisit it.',
+                        'Apply changes is available after every setup step has been completed.'
+                    )
+
+                if ($null -eq $selection) {
+                    throw 'Setup cancelled before changes were applied.'
+                }
+
+                if ($selection -eq $Steps.Count) {
+                    if (-not $allStepsCompleted) {
+                        Write-Host 'Complete every setup step before applying changes.' -ForegroundColor Yellow
+                        continue
+                    }
+
+                    try {
+                        $currentStepIndex = $Steps.Count
+                        Set-SetupWizardContext `
+                            -Title $Title `
+                            -StepNames $menuStepNames `
+                            -CurrentStepIndex $currentStepIndex `
+                            -HelpDocRelativePath $HelpDocRelativePath `
+                            -HelpRef $HelpRef
+                        return (& $ApplyAction)
+                    }
+                    catch {
+                        if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+                            continue
+                        }
+                        if (Test-IsUserInterruptException -Exception $_.Exception) {
+                            throw
+                        }
+
+                        Write-SetupWizardApplyFailure -OperationName $ApplyActionName -ErrorRecord $_
+                        continue
+                    }
+                }
+
+                $selectedStepProperties = @($Steps[$selection].PSObject.Properties.Name)
+                $lockedAfterCompletion = (
+                    $selectedStepProperties -contains 'LockAfterCompletion' -and
+                    [bool]$Steps[$selection].LockAfterCompletion -and
+                    $completedSteps[$selection]
+                )
+                if ($lockedSteps[$selection] -or $lockedAfterCompletion) {
+                    Write-Host 'This setup step is locked because it has already been completed.' -ForegroundColor Yellow
+                    continue
+                }
+
+                if ($requireSequentialSteps -and $selection -gt ($furthestStepIndex + 1)) {
+                    Write-Host 'Complete the earlier setup steps before moving forward.' -ForegroundColor Yellow
+                    continue
+                }
+
+                $currentStepIndex = $selection
+                $stepHelpDocRelativePath = $HelpDocRelativePath
+                $stepHelpRef = $HelpRef
+                if (
+                    $selectedStepProperties -contains 'HelpDocRelativePath' -and
+                    -not [string]::IsNullOrWhiteSpace([string]$Steps[$selection].HelpDocRelativePath)
+                ) {
+                    $stepHelpDocRelativePath = [string]$Steps[$selection].HelpDocRelativePath
+                }
+                if (
+                    $selectedStepProperties -contains 'HelpRef' -and
+                    -not [string]::IsNullOrWhiteSpace([string]$Steps[$selection].HelpRef)
+                ) {
+                    $stepHelpRef = [string]$Steps[$selection].HelpRef
+                }
+                Set-SetupWizardContext `
+                    -Title $Title `
+                    -StepNames $menuStepNames `
+                    -CurrentStepIndex $currentStepIndex `
+                    -HelpDocRelativePath $stepHelpDocRelativePath `
+                    -HelpRef $stepHelpRef
+                try {
+                    & $Steps[$selection].Action | Out-Null
+                }
+                catch {
+                    if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+                        continue
+                    }
+                    throw
+                }
+
+                $completedSteps[$selection] = $true
+                if ($selection -gt $furthestStepIndex) {
+                    $furthestStepIndex = $selection
+                }
+                for ($laterStepIndex = $selection + 1; $laterStepIndex -lt $Steps.Count; $laterStepIndex++) {
+                    if (-not $lockedSteps[$laterStepIndex]) {
+                        $completedSteps[$laterStepIndex] = $false
+                    }
+                }
+            }
+        }
+        finally {
+            Clear-SetupWizardContext
+        }
+    }
+
+    $currentStepIndex = 0
     try {
         while ($currentStepIndex -lt $Steps.Count) {
             try {
-                Set-SetupWizardContext -Title $Title -StepNames $stepNames -CurrentStepIndex $currentStepIndex
+                $stepProperties = @($Steps[$currentStepIndex].PSObject.Properties.Name)
+                $stepHelpDocRelativePath = $HelpDocRelativePath
+                $stepHelpRef = $HelpRef
+                if (
+                    $stepProperties -contains 'HelpDocRelativePath' -and
+                    -not [string]::IsNullOrWhiteSpace([string]$Steps[$currentStepIndex].HelpDocRelativePath)
+                ) {
+                    $stepHelpDocRelativePath = [string]$Steps[$currentStepIndex].HelpDocRelativePath
+                }
+                if (
+                    $stepProperties -contains 'HelpRef' -and
+                    -not [string]::IsNullOrWhiteSpace([string]$Steps[$currentStepIndex].HelpRef)
+                ) {
+                    $stepHelpRef = [string]$Steps[$currentStepIndex].HelpRef
+                }
+                Set-SetupWizardContext `
+                    -Title $Title `
+                    -StepNames $stepNames `
+                    -CurrentStepIndex $currentStepIndex `
+                    -HelpDocRelativePath $stepHelpDocRelativePath `
+                    -HelpRef $stepHelpRef
                 & $Steps[$currentStepIndex].Action
                 $currentStepIndex++
             }
@@ -1057,9 +2200,10 @@ function Invoke-SetupWizard {
                 if (Test-IsSetupWizardBackException -Exception $_.Exception) {
                     if ($currentStepIndex -gt 0) {
                         $currentStepIndex--
+                        continue
                     }
 
-                    continue
+                    throw ([System.OperationCanceledException]::new('Setup cancelled by user.'))
                 }
 
                 throw
@@ -1068,6 +2212,25 @@ function Invoke-SetupWizard {
     }
     finally {
         Clear-SetupWizardContext
+    }
+}
+
+function Write-SetupWizardApplyFailure {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$OperationName,
+        [Parameter(Mandatory)][System.Management.Automation.ErrorRecord]$ErrorRecord
+    )
+
+    Initialize-SpectreConsole
+    $errorMessage = [string]$ErrorRecord.Exception.Message
+    $errorType = [string]$ErrorRecord.Exception.GetType().Name
+    [Spectre.Console.AnsiConsole]::MarkupLine("[bold red]$([string](ConvertTo-SpectreMarkupLiteral -Text "Apply failed: $OperationName"))[/]")
+    [Spectre.Console.AnsiConsole]::MarkupLine("[yellow]$([string](ConvertTo-SpectreMarkupLiteral -Text $errorType)): $([string](ConvertTo-SpectreMarkupLiteral -Text $errorMessage))[/]")
+    [Spectre.Console.AnsiConsole]::MarkupLine('[grey]Your setup selections are still available. Edit a step or select Apply changes to retry.[/]')
+
+    if ($ErrorRecord.InvocationInfo.PositionMessage) {
+        [Spectre.Console.AnsiConsole]::MarkupLine("[grey]$([string](ConvertTo-SpectreMarkupLiteral -Text $ErrorRecord.InvocationInfo.PositionMessage.Trim()))[/]")
     }
 }
 
@@ -1103,7 +2266,6 @@ function Show-SetupPromptGuidance {
         [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref,
-        [Parameter()][string]$LinkLabel = 'Click for docs',
         [Parameter()][switch]$OmitTrailingSpacer
     )
 
@@ -1122,7 +2284,6 @@ function Show-SetupPromptGuidance {
         -Lines $effectiveGuidanceLines `
         -DocRelativePath $DocRelativePath `
         -Ref $Ref `
-        -LinkLabel $LinkLabel `
         -Header $guidanceHeader `
         -SkipContextUpdate `
         -OmitTrailingSpacer:$OmitTrailingSpacer
@@ -1236,8 +2397,9 @@ function Write-SetupConsoleBar {
 }
 
 function Show-SetupStatusBarAtBottom {
-    # Menu hints describe filtering only when enabled. Cursor-host failures render
-    # an inline status line, which Clear-SetupStatusBarAtBottom cannot erase.
+    # Menu hints describe filtering only when enabled. F1 appears only when the
+    # active prompt has a documentation URL; Escape follows wizard navigation.
+    # Cursor-host failures render an inline line that cleanup cannot erase.
     [CmdletBinding()]
     param(
         [Parameter()][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind = 'Text',
@@ -1246,12 +2408,28 @@ function Show-SetupStatusBarAtBottom {
 
     Initialize-SpectreConsole
 
+    $wizardContext = Get-SetupWizardContext
+    $escapeHint = if ($wizardContext -and -not $wizardContext.IsNavigationMenu) {
+        'Esc=back'
+    }
+    else {
+        'Esc=cancel'
+    }
+    $helpHint = if (-not [string]::IsNullOrWhiteSpace((Get-SetupActivePromptHelpUrl))) {
+        'F1=help'
+    }
+    else {
+        $null
+    }
+
     $segments = switch ($PromptKind) {
         'Menu' {
             @(
                 'Up/Down=move',
                 'Enter=select',
                 $(if ($SearchEnabled) { 'Type=filter' } else { $null }),
+                $helpHint,
+                $escapeHint,
                 'Ctrl+C=exit'
             )
         }
@@ -1259,18 +2437,24 @@ function Show-SetupStatusBarAtBottom {
             @(
                 'Y/N=choose',
                 'Enter=confirm',
+                $helpHint,
+                $escapeHint,
                 'Ctrl+C=exit'
             )
         }
         'Secret' {
             @(
                 'Enter=confirm',
+                $helpHint,
+                $escapeHint,
                 'Ctrl+C=exit'
             )
         }
         default {
             @(
                 'Enter=confirm',
+                $helpHint,
+                $escapeHint,
                 'Ctrl+C=exit'
             )
         }
@@ -1359,16 +2543,20 @@ function Remove-SetupConsoleCancelHandler {
 function Show-SelectionPromptWithInterruptHandling {
     <#
     .SYNOPSIS
-        Runs an async Spectre selection prompt synchronously with Ctrl+C cancellation.
+        Runs an async Spectre selection prompt synchronously with Escape and Ctrl+C handling.
     .DESCRIPTION
         Returns the prompt's selected value. Uses the compiled console-event bridge
         when supported, otherwise a local token source. Cancellation is normalized
         to OperationCanceledException; other failures propagate. The source and any
         attached handler are released in finally, including on prompt failure.
+        Escape requests back-navigation, or cancels when no parent menu or step exists.
+    .PARAMETER ReturnNullAtNavigationMenuOnEscape
+        Returns null for Escape on the root wizard menu so the wizard can cancel cleanly.
     #>
     [CmdletBinding()]
     param(
-        [Parameter(Mandatory)]$Prompt
+        [Parameter(Mandatory)]$Prompt,
+        [Parameter()][switch]$ReturnNullAtNavigationMenuOnEscape
     )
 
     Initialize-SpectreConsole
@@ -1388,7 +2576,13 @@ function Show-SelectionPromptWithInterruptHandling {
             $cancellationTokenSource = [System.Threading.CancellationTokenSource]::new()
         }
 
-        return $Prompt.ShowAsync([Spectre.Console.AnsiConsole]::Console, $cancellationTokenSource.Token).GetAwaiter().GetResult()
+        return Invoke-SetupPromptWithEscapeNavigation `
+            -ReturnNullAtNavigationMenuOnEscape:$ReturnNullAtNavigationMenuOnEscape `
+            -ArgumentList @($Prompt, $cancellationTokenSource.Token) `
+            -ScriptBlock {
+                param($selectionPrompt, $promptToken)
+                $selectionPrompt.ShowAsync([Spectre.Console.AnsiConsole]::Console, $promptToken).GetAwaiter().GetResult()
+            }
     }
     catch {
         if (($cancellationTokenSource -and $cancellationTokenSource.IsCancellationRequested) -or (Test-IsUserInterruptException -Exception $_.Exception)) {
@@ -1416,16 +2610,128 @@ function Show-SelectionPromptWithInterruptHandling {
     }
 }
 
+function Get-SetupDispatchProxy {
+    <#
+    .SYNOPSIS
+        Creates a DispatchProxy for an interface at runtime.
+    .DESCRIPTION
+        Uses the generic factory available across supported PowerShell runtimes.
+        Factory or proxy construction failures propagate.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Type]$InterfaceType,
+        [Parameter(Mandatory)][System.Type]$ProxyType
+    )
+
+    $createMethod = [System.Reflection.DispatchProxy].GetMethods(
+        [System.Reflection.BindingFlags]::Public -bor [System.Reflection.BindingFlags]::Static
+    ) | Where-Object {
+        $_.Name -eq 'Create' -and $_.IsGenericMethodDefinition -and $_.GetGenericArguments().Count -eq 2
+    } | Select-Object -First 1
+
+    if ($null -eq $createMethod) {
+        throw 'The current PowerShell runtime does not support creating the setup console proxy.'
+    }
+
+    $closedCreateMethod = $createMethod.MakeGenericMethod([System.Type[]]@($InterfaceType, $ProxyType))
+    return $closedCreateMethod.Invoke($null, [object[]]@())
+}
+
+function Get-SetupEscapeAwareConsole {
+    <#
+    .SYNOPSIS
+        Wraps Spectre input to route Escape and F1 without abandoning the prompt.
+    .DESCRIPTION
+        Replaces only the console Input property; all other calls delegate to the
+        supplied console instance. F1 uses the active prompt help URL and resumes
+        reading after the browser is launched.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Console
+    )
+
+    $proxyType = Initialize-SetupConsoleEscapeNavigationSupport
+    $spectreAssembly = [Spectre.Console.AnsiConsole].Assembly
+    $consoleInterfaceType = $spectreAssembly.GetType('Spectre.Console.IAnsiConsole', $true)
+    $inputInterfaceType = $spectreAssembly.GetType('Spectre.Console.IAnsiConsoleInput', $true)
+
+    $inputProxy = Get-SetupDispatchProxy -InterfaceType $inputInterfaceType -ProxyType $proxyType
+    $inputProxy.Inner = $Console.Input
+    $inputProxy.HelpUrl = Get-SetupActivePromptHelpUrl
+    $helpLauncher = Get-Variable -Name 'SetupHelpLauncher' -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($helpLauncher -is [System.Action[string]]) {
+        $inputProxy.HelpLauncher = $helpLauncher
+    }
+
+    $consoleProxy = Get-SetupDispatchProxy -InterfaceType $consoleInterfaceType -ProxyType $proxyType
+    $consoleProxy.Inner = $Console
+    $consoleProxy.ReplacementInput = $inputProxy
+
+    return $consoleProxy
+}
+
+function Invoke-SetupPromptWithEscapeNavigation {
+    <#
+    .SYNOPSIS
+        Runs one Spectre prompt with Escape navigation and F1 documentation help.
+    .DESCRIPTION
+        Temporarily decorates the process-wide Spectre console so both direct and
+        static prompts observe Escape and F1. F1 opens the active help URL and resumes
+        the prompt; the original console is always restored. In a step, Escape requests
+        back-navigation; without a parent menu it cancels.
+    .PARAMETER ReturnNullAtNavigationMenuOnEscape
+        Returns null instead of cancelling when Escape is pressed on the root menu.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][scriptblock]$ScriptBlock,
+        [Parameter()][object[]]$ArgumentList = @(),
+        [Parameter()][switch]$ReturnNullAtNavigationMenuOnEscape
+    )
+
+    $originalConsole = [Spectre.Console.AnsiConsole]::Console
+    if ($null -eq $originalConsole) {
+        throw 'The Spectre console is not initialized.'
+    }
+
+    $escapeAwareConsole = Get-SetupEscapeAwareConsole -Console $originalConsole
+    try {
+        [Spectre.Console.AnsiConsole]::Console = $escapeAwareConsole
+        return & $ScriptBlock @ArgumentList
+    }
+    catch {
+        if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+            $wizardContext = Get-SetupWizardContext
+            if ($wizardContext -and -not $wizardContext.IsNavigationMenu) {
+                Request-SetupWizardBack
+            }
+
+            if ($ReturnNullAtNavigationMenuOnEscape -and $wizardContext -and $wizardContext.IsNavigationMenu) {
+                return $null
+            }
+
+            throw ([System.OperationCanceledException]::new('Setup cancelled by user.'))
+        }
+
+        throw
+    }
+    finally {
+        [Spectre.Console.AnsiConsole]::Console = $originalConsole
+    }
+}
+
 function Write-SetupPromptFrame {
-    # Rebuild the current section unless preserving content; guidance suppression
-    # does not suppress that redraw. Without a section, existing content stays.
+    # Every new prompt gets a setup banner; use its title when no section is active.
+    # Preserved prompts keep the current view instead of accumulating guidance.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$PromptText,
+        [Parameter(Mandatory)][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind,
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
-        [Parameter()][string]$PromptGuidanceLinkLabel = 'Click for docs',
         [Parameter()][switch]$PreserveExistingContent,
         [Parameter()][switch]$SkipPromptGuidance
     )
@@ -1433,19 +2739,62 @@ function Write-SetupPromptFrame {
     Initialize-SpectreConsole
 
     $currentSectionMessage = Get-SetupCurrentSectionMessage
-    if (-not $PreserveExistingContent -and -not [string]::IsNullOrWhiteSpace($currentSectionMessage)) {
+    if (-not $PreserveExistingContent) {
+        $dashboardMessage = if ([string]::IsNullOrWhiteSpace($currentSectionMessage)) {
+            $PromptText
+        }
+        else {
+            $currentSectionMessage
+        }
+        $script:SetupGuidancePanelVisible = $false
         [Spectre.Console.AnsiConsole]::Clear()
-        Write-SetupDashboard -Message $currentSectionMessage
+        Write-SetupDashboard -Message $dashboardMessage
         [Spectre.Console.AnsiConsole]::WriteLine()
     }
 
-    if (-not $SkipPromptGuidance) {
+    $guidancePanelVisible = [bool](Get-Variable -Name 'SetupGuidancePanelVisible' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
+    if (-not ($PreserveExistingContent -and $guidancePanelVisible)) {
+        $helpUrl = Get-SetupPromptHelpUrl -DocRelativePath $PromptGuidanceDocRelativePath -Ref $PromptGuidanceRef
+        if ([string]::IsNullOrWhiteSpace($helpUrl)) {
+            Remove-Variable -Name 'SetupActivePromptHelpUrl' -Scope Script -ErrorAction SilentlyContinue
+        }
+        else {
+            $script:SetupActivePromptHelpUrl = $helpUrl
+        }
+    }
+    if (-not ($PreserveExistingContent -and $guidancePanelVisible)) {
+        $effectiveGuidanceLines = if ($SkipPromptGuidance) {
+            @()
+        }
+        else {
+            @($PromptGuidanceLines | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        }
+
+        if (@($effectiveGuidanceLines).Count -eq 0) {
+            $effectiveGuidanceLines = switch ($PromptKind) {
+                'Menu' {
+                    @(
+                        'Use the arrow keys to select an option, then press Enter.',
+                        'Esc returns to the previous menu or cancels at the first menu.'
+                    )
+                }
+                'Text' {
+                    @('Enter the requested value. Press Enter to accept the shown default, if one is available.')
+                }
+                'YesNo' {
+                    @('Choose Yes or No. Press Enter to accept the default shown in the status bar.')
+                }
+                'Secret' {
+                    @('Input is masked while typing and is not included in setup summaries.')
+                }
+            }
+        }
+
         Show-SetupPromptGuidance `
             -PromptText $PromptText `
-            -GuidanceLines $PromptGuidanceLines `
+            -GuidanceLines $effectiveGuidanceLines `
             -DocRelativePath $PromptGuidanceDocRelativePath `
             -Ref $PromptGuidanceRef `
-            -LinkLabel $PromptGuidanceLinkLabel `
             -OmitTrailingSpacer
         [Spectre.Console.AnsiConsole]::WriteLine()
     }
@@ -1473,7 +2822,9 @@ function Read-SecretText {
         Masking is display-only, not SecureString storage. Nonblank input retains
         whitespace. Blank input retries unless AllowEmpty, which returns an empty
         string even for whitespace-only input. Prompt failures propagate after
-        status-bar cleanup.
+        status-bar cleanup. Escape returns to the current setup menu or cancels when
+        no previous menu or step exists. A single guidance panel is always shown;
+        prompts without specific guidance receive concise input help.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -1482,7 +2833,6 @@ function Read-SecretText {
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
-        [Parameter()][string]$PromptGuidanceLinkLabel = 'Click for docs',
         [Parameter()][switch]$AllowEmpty
     )
 
@@ -1493,7 +2843,12 @@ function Read-SecretText {
             throw 'Read-SecretText received an empty prompt label. This would create an ambiguous input prompt.'
         }
 
-        Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+        Write-SetupPromptFrame `
+            -PromptText $Prompt `
+            -PromptKind 'Secret' `
+            -PromptGuidanceLines $PromptGuidanceLines `
+            -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
+            -PromptGuidanceRef $PromptGuidanceRef
         Show-SetupStatusBarAtBottom -PromptKind 'Secret'
         $textPrompt = [Spectre.Console.TextPrompt[string]]::new((Get-SetupPromptInlineText -PromptKind 'Secret' -PromptText $Prompt))
         $textPrompt.IsSecret = $true
@@ -1502,7 +2857,10 @@ function Read-SecretText {
         }
 
         try {
-            $value = $textPrompt.Show([Spectre.Console.AnsiConsole]::Console)
+            $value = Invoke-SetupPromptWithEscapeNavigation -ArgumentList @($textPrompt) -ScriptBlock {
+                param($promptObject)
+                $promptObject.Show([Spectre.Console.AnsiConsole]::Console)
+            }
         }
         finally {
             Clear-SetupStatusBarAtBottom
@@ -1522,24 +2880,31 @@ function Read-SecretText {
 }
 
 function Write-Section {
-    # Starts a new display section, discarding prompt-document context and clearing
-    # the console. Section guidance is display-only and needs nonempty GuidanceLines.
+    # Starts a new display section, discarding stale prompt-document context and
+    # storing the section's documentation page for the next prompt's F1 help.
     param(
         [Parameter(Mandatory)][string]$Message,
         [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$GuidanceDocRelativePath,
-        [Parameter()][string]$GuidanceRef,
-        [Parameter()][string]$GuidanceLinkLabel = 'Click for docs'
+        [Parameter()][string]$GuidanceRef
     )
 
     Initialize-SpectreConsole
     $script:SetupCurrentSectionMessage = $Message
     Clear-SetupPromptDocContext
+    $script:SetupGuidancePanelVisible = $false
     [Spectre.Console.AnsiConsole]::Clear()
     Write-SetupDashboard -Message $Message
 
-    if ($GuidanceLines -and @($GuidanceLines).Count -gt 0) {
-        Write-SetupGuidance -Lines @($GuidanceLines) -DocRelativePath $GuidanceDocRelativePath -Ref $GuidanceRef -LinkLabel $GuidanceLinkLabel -Header "$Message guidance" -SkipContextUpdate
+    if (
+        ($GuidanceLines -and @($GuidanceLines).Count -gt 0) -or
+        -not [string]::IsNullOrWhiteSpace($GuidanceDocRelativePath)
+    ) {
+        Write-SetupGuidance `
+            -Lines @($GuidanceLines) `
+            -DocRelativePath $GuidanceDocRelativePath `
+            -Ref $GuidanceRef `
+            -Header "$Message guidance"
     }
 }
 
@@ -1552,11 +2917,16 @@ function Select-FromMenu {
         Arrow keys move, Enter selects, and search is enabled automatically for long lists.
         Returns a zero-based index into Items, or null for no items, the injected
         cancel choice, or an unrecognized prompt result. Back choices throw the
-        wizard navigation marker rather than returning an index. Literal labels
-        are escaped for display; duplicate labels resolve to their first match.
+        wizard navigation marker rather than returning an index. Escape returns to the
+        previous setup menu or step, or cancels when there is no parent. Literal labels
+        are escaped for display; duplicate labels resolve to their first match. A
+        single guidance panel is always visible; nested menus preserve an existing panel.
         Console input mode restoration is attempted after selection, including prompt failure.
     .PARAMETER PreserveExistingContent
         Prevents the usual section redraw before showing this prompt.
+    .PARAMETER SkipPromptGuidance
+        Skips prompt-specific guidance when a section panel is already visible. If no
+        panel is present, concise default menu guidance is still shown.
     #>
 
     [CmdletBinding()]
@@ -1566,7 +2936,6 @@ function Select-FromMenu {
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
-        [Parameter()][string]$PromptGuidanceLinkLabel = 'Click for docs',
         [Parameter()][switch]$PreserveExistingContent,
         [Parameter()][switch]$SkipPromptGuidance
     )
@@ -1586,7 +2955,14 @@ function Select-FromMenu {
         $canRestoreTreatControlCAsInput = $false
     }
 
-    Write-SetupPromptFrame  -PromptText $Title -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel -PreserveExistingContent:$PreserveExistingContent -SkipPromptGuidance:$SkipPromptGuidance
+    Write-SetupPromptFrame `
+        -PromptText $Title `
+        -PromptKind 'Menu' `
+        -PromptGuidanceLines $PromptGuidanceLines `
+        -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
+        -PromptGuidanceRef $PromptGuidanceRef `
+        -PreserveExistingContent:$PreserveExistingContent `
+        -SkipPromptGuidance:$SkipPromptGuidance
 
     $effectiveItems = @($Items)
     $wizardContext = Get-SetupWizardContext
@@ -1594,6 +2970,7 @@ function Select-FromMenu {
     $singleChoiceCancelLabel = $null
     if (
         $wizardContext -and
+        -not $wizardContext.IsNavigationMenu -and
         $wizardContext.CurrentStepIndex -gt 0 -and
         -not ($effectiveItems -contains 'Back') -and
         -not ($effectiveItems -contains '< Back to previous step')
@@ -1653,7 +3030,9 @@ function Select-FromMenu {
     Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
 
     try {
-        $selectedDisplayValue = Show-SelectionPromptWithInterruptHandling -Prompt $prompt
+        $selectedDisplayValue = Show-SelectionPromptWithInterruptHandling `
+            -Prompt $prompt `
+            -ReturnNullAtNavigationMenuOnEscape
         Write-SetupDebug -Message "SelectionPrompt selected display value: '$selectedDisplayValue'"
 
         $selectedEffectiveIndex = -1
@@ -1712,8 +3091,8 @@ function Select-FromMenu {
 }
 
 function Read-YesNo {
-    # Returns a boolean with Yes as the default unless DefaultNo; the status bar
-    # is cleared on prompt failure, which is allowed to propagate.
+    # Returns a boolean with Yes as the default unless DefaultNo; Escape navigates
+    # back and the status bar is cleared on prompt failure.
     [CmdletBinding()]
     [OutputType([bool])]
     param(
@@ -1721,7 +3100,6 @@ function Read-YesNo {
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
-        [Parameter()][string]$PromptGuidanceLinkLabel = 'Click for docs',
         [Parameter()][switch]$DefaultNo
     )
 
@@ -1730,10 +3108,20 @@ function Read-YesNo {
         throw 'Read-YesNo received an empty prompt label. This would create an ambiguous input prompt.'
     }
 
-    Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+    Write-SetupPromptFrame `
+        -PromptText $Prompt `
+        -PromptKind 'YesNo' `
+        -PromptGuidanceLines $PromptGuidanceLines `
+        -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
+        -PromptGuidanceRef $PromptGuidanceRef
     Show-SetupStatusBarAtBottom -PromptKind 'YesNo'
     try {
-        return [Spectre.Console.AnsiConsole]::Confirm((Get-SetupPromptInlineText -PromptKind 'YesNo' -PromptText $Prompt), (-not $DefaultNo))
+        $promptText = Get-SetupPromptInlineText -PromptKind 'YesNo' -PromptText $Prompt
+        $defaultValue = -not $DefaultNo
+        return Invoke-SetupPromptWithEscapeNavigation -ArgumentList @($promptText, $defaultValue) -ScriptBlock {
+            param($confirmPromptText, $confirmDefaultValue)
+            [Spectre.Console.AnsiConsole]::Confirm($confirmPromptText, $confirmDefaultValue)
+        }
     }
     finally {
         Clear-SetupStatusBarAtBottom
@@ -1908,7 +3296,7 @@ function Get-SetupGuidanceHeaderMarkup {
 function Write-SetupPanelBottomBorderOverlay {
     <#
     .SYNOPSIS
-        Best-effort placement of a markup link over the last rendered panel border.
+        Best-effort placement of a markup label over the last rendered panel border.
     .PARAMETER VisibleText
         Plain-text counterpart of MarkupText, used for horizontal placement.
     .PARAMETER PanelWriteStartTop
@@ -1957,12 +3345,13 @@ function Write-SetupPanelBottomBorderOverlay {
 function Write-SetupGuidance {
     <#
     .SYNOPSIS
-        Displays escaped guidance lines with an optional documentation-link overlay.
+        Displays escaped guidance with an F1 help hint when a documentation page is available.
     .DESCRIPTION
-        Blank lines are omitted; a link alone can produce a panel. Updates the
-        script prompt-document context even when there is nothing to render, unless
-        SkipContextUpdate is set. A rendered panel requires a nonblank trimmed header.
-        The overlay is best-effort; other console failures propagate.
+        Blank lines are omitted; a documentation page alone can produce a panel.
+        Updates the script prompt-document context even when there is nothing to
+        render, unless SkipContextUpdate is set. A rendered panel requires a nonblank
+        trimmed header. The F1 hint placement is best-effort; other console failures
+        propagate.
     .PARAMETER Ref
         Documentation revision, falling back to script ALM4DataverseRef then stable.
     #>
@@ -1971,7 +3360,6 @@ function Write-SetupGuidance {
         [Parameter()][string[]]$Lines,
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref,
-        [Parameter()][string]$LinkLabel = 'Full docs',
         [Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$Header,
         [Parameter()][switch]$SkipContextUpdate,
         [Parameter()][switch]$OmitTrailingSpacer
@@ -1980,7 +3368,7 @@ function Write-SetupGuidance {
     Initialize-SpectreConsole
 
     if (-not $SkipContextUpdate) {
-        Set-SetupPromptDocContext -DocRelativePath $DocRelativePath -Ref $Ref -LinkLabel $LinkLabel
+        Set-SetupPromptDocContext -DocRelativePath $DocRelativePath -Ref $Ref
     }
 
     $contentLines = @()
@@ -1990,9 +3378,12 @@ function Write-SetupGuidance {
         }
     }
 
-    $docUrl = $null
-    if (-not [string]::IsNullOrWhiteSpace($DocRelativePath)) {
-        $docUrl = Get-Alm4DataverseDocUrl -RelativePath $DocRelativePath -Ref $Ref
+    $docUrl = Get-SetupPromptHelpUrl -DocRelativePath $DocRelativePath -Ref $Ref
+    if ([string]::IsNullOrWhiteSpace($docUrl)) {
+        Remove-Variable -Name 'SetupActivePromptHelpUrl' -Scope Script -ErrorAction SilentlyContinue
+    }
+    else {
+        $script:SetupActivePromptHelpUrl = $docUrl
     }
 
     if ($contentLines.Count -eq 0 -and [string]::IsNullOrWhiteSpace($docUrl)) {
@@ -2016,11 +3407,11 @@ function Write-SetupGuidance {
     }
 
     [Spectre.Console.AnsiConsole]::Write((New-SpectrePanel -Content ([Spectre.Console.Markup]::new($panelContentText)) -HeaderMarkup $panelHeaderMarkup -BorderColor 'springgreen3' -Expand))
+    $script:SetupGuidancePanelVisible = $true
 
     if (-not [string]::IsNullOrWhiteSpace($docUrl)) {
-        $overlayLabelText = if ([string]::IsNullOrWhiteSpace($LinkLabel)) { 'Click for docs' } else { $LinkLabel }
-        $overlayVisibleText = " $overlayLabelText "
-        $overlayMarkup = "[grey][link=$docUrl]$(ConvertTo-SpectreMarkupLiteral -Text $overlayVisibleText)[/][/]"
+        $overlayVisibleText = ' F1 for help '
+        $overlayMarkup = "[grey]$(ConvertTo-SpectreMarkupLiteral -Text $overlayVisibleText)[/]"
         Write-SetupPanelBottomBorderOverlay -VisibleText $overlayVisibleText -MarkupText $overlayMarkup -PanelWriteStartTop $panelWriteStartTop
     }
 
@@ -2037,7 +3428,8 @@ function Read-TextWithDefault {
         Blank input returns a nonblank DefaultValue unchanged before considering
         AllowEmpty; otherwise AllowEmpty returns an empty string and required input
         retries. Nonblank typed values are trimmed. Prompt errors propagate after
-        status-bar cleanup. A blank prompt label is rejected.
+        status-bar cleanup. A blank prompt label is rejected. Escape returns to the
+        previous setup menu or step, or cancels when there is no parent.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -2047,7 +3439,6 @@ function Read-TextWithDefault {
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
-        [Parameter()][string]$PromptGuidanceLinkLabel = 'Click for docs',
         [Parameter()][switch]$AllowEmpty
     )
 
@@ -2059,15 +3450,25 @@ function Read-TextWithDefault {
         }
 
         $value = $null
-        Write-SetupPromptFrame  -PromptText $Prompt -PromptGuidanceLines $PromptGuidanceLines -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath -PromptGuidanceRef $PromptGuidanceRef -PromptGuidanceLinkLabel $PromptGuidanceLinkLabel
+        Write-SetupPromptFrame `
+            -PromptText $Prompt `
+            -PromptKind 'Text' `
+            -PromptGuidanceLines $PromptGuidanceLines `
+            -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
+            -PromptGuidanceRef $PromptGuidanceRef
         if (-not [string]::IsNullOrWhiteSpace($DefaultValue)) {
             Show-SetupStatusBarAtBottom -PromptKind 'Text'
             try {
-                $value = Invoke-GenericStaticMethod `
-                    -Type ([Spectre.Console.AnsiConsole]) `
-                    -MethodName 'Ask' `
-                    -GenericTypeArguments ([Type[]]@([string])) `
-                    -Arguments @((Get-SetupPromptInlineText -PromptKind 'Text' -PromptText $Prompt), $DefaultValue)
+                $promptText = Get-SetupPromptInlineText -PromptKind 'Text' -PromptText $Prompt
+                $defaultValue = $DefaultValue
+                $value = Invoke-SetupPromptWithEscapeNavigation -ArgumentList @($promptText, $defaultValue) -ScriptBlock {
+                    param($textPrompt, $textDefaultValue)
+                    Invoke-GenericStaticMethod `
+                        -Type ([Spectre.Console.AnsiConsole]) `
+                        -MethodName 'Ask' `
+                        -GenericTypeArguments ([Type[]]@([string])) `
+                        -Arguments @($textPrompt, $textDefaultValue)
+                }
             }
             finally {
                 Clear-SetupStatusBarAtBottom
@@ -2081,7 +3482,10 @@ function Read-TextWithDefault {
             }
 
             try {
-                $value = $textPrompt.Show([Spectre.Console.AnsiConsole]::Console)
+                $value = Invoke-SetupPromptWithEscapeNavigation -ArgumentList @($textPrompt) -ScriptBlock {
+                    param($promptObject)
+                    $promptObject.Show([Spectre.Console.AnsiConsole]::Console)
+                }
             }
             finally {
                 Clear-SetupStatusBarAtBottom
@@ -2157,9 +3561,6 @@ function Get-RepoChangePublishPlan {
         "Branch + pull request adds review/check gates and is best when governance or branch protection is required."
     )
 
-    Write-Host ""
-    Write-SetupGuidance -Lines @($defaultGuidance + @($GuidanceLines)) -DocRelativePath $DocRelativePath -Ref $Ref -Header 'Repository publication guidance'
-
     $menuItems = @(
         "Commit directly to '$BaseBranch'",
         'Commit directly to another branch',
@@ -2169,10 +3570,10 @@ function Get-RepoChangePublishPlan {
     $selection = Select-FromMenu `
         -Title "How should the $ProviderName repository changes be published?" `
         -Items $menuItems `
-        -PromptGuidanceLines @(
-            "Choose whether to apply $ProviderName repository changes directly or through a pull request.",
-            "Use direct commit for immediate activation, or branch + PR when review/approval is required."
-        ) `
+        -PromptGuidanceLines @($defaultGuidance + @($GuidanceLines) + @(
+                "Choose whether to apply $ProviderName repository changes directly or through a pull request.",
+                'Use direct commit for immediate activation, or branch + PR when review/approval is required.'
+            )) `
         -PromptGuidanceDocRelativePath $DocRelativePath `
         -PromptGuidanceRef $Ref
     if ($null -eq $selection) {
@@ -2247,9 +3648,6 @@ function Get-BranchTargetedRepoChangePublishPlan {
         "Branch + pull request adds review/check gates and is best when '$TargetBranch' must be controlled before changes land."
     )
 
-    Write-Host ""
-    Write-SetupGuidance -Lines @($defaultGuidance + @($GuidanceLines)) -DocRelativePath $DocRelativePath -Ref $Ref -Header 'Branch publication guidance'
-
     $menuItems = @(
         "Commit directly to '$TargetBranch'",
         "Push a branch and open a pull request into '$TargetBranch'"
@@ -2258,10 +3656,10 @@ function Get-BranchTargetedRepoChangePublishPlan {
     $selection = Select-FromMenu `
         -Title "How should the $ProviderName changes for branch '$TargetBranch' be published?" `
         -Items $menuItems `
-        -PromptGuidanceLines @(
-            "Choose whether branch '$TargetBranch' updates should be applied directly or via a pull request.",
-            "Use direct commit for immediate branch updates, or branch + PR when checks and review gates are needed."
-        ) `
+        -PromptGuidanceLines @($defaultGuidance + @($GuidanceLines) + @(
+                "Choose whether branch '$TargetBranch' updates should be applied directly or via a pull request.",
+                'Use direct commit for immediate branch updates, or branch + PR when checks and review gates are needed.'
+            )) `
         -PromptGuidanceDocRelativePath $DocRelativePath `
         -PromptGuidanceRef $Ref
     if ($null -eq $selection) {
@@ -2893,6 +4291,418 @@ function Set-AlmConfigBuildValidationBaselineReleaseInFile {
     return $hasChanges
 }
 
+function ConvertTo-SetupPowerShellDataLiteral {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][AllowNull()][object]$Value,
+        [Parameter()][int]$Indent = 0
+    )
+
+    if ($null -eq $Value) {
+        return '$null'
+    }
+
+    if ($Value -is [string]) {
+        return "'" + $Value.Replace("'", "''") + "'"
+    }
+
+    if ($Value -is [bool]) {
+        return $(if ($Value) { '$true' } else { '$false' })
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        if ($Value.Count -eq 0) {
+            return '@{}'
+        }
+
+        $lineEnding = [Environment]::NewLine
+        $childIndent = $Indent + 4
+        $childPrefix = ' ' * $childIndent
+        $lines = @('@{')
+        foreach ($entry in $Value.GetEnumerator()) {
+            $escapedKey = ([string]$entry.Key).Replace("'", "''")
+            $serializedValue = ConvertTo-SetupPowerShellDataLiteral -Value $entry.Value -Indent $childIndent
+            $lines += "$childPrefix'$escapedKey' = $serializedValue"
+        }
+        $lines += (' ' * $Indent) + '}'
+        return ($lines -join $lineEnding)
+    }
+
+    if ($Value -is [System.Array] -or $Value -is [System.Collections.IList]) {
+        $items = @($Value)
+        if ($items.Count -eq 0) {
+            return '@()'
+        }
+
+        $lineEnding = [Environment]::NewLine
+        $childIndent = $Indent + 4
+        $childPrefix = ' ' * $childIndent
+        $lines = @('@(')
+        foreach ($item in $items) {
+            $lines += $childPrefix + (ConvertTo-SetupPowerShellDataLiteral -Value $item -Indent $childIndent)
+        }
+        $lines += (' ' * $Indent) + ')'
+        return ($lines -join $lineEnding)
+    }
+
+    if ($Value -is [byte] -or $Value -is [int16] -or $Value -is [int32] -or $Value -is [int64] -or $Value -is [decimal]) {
+        return ([System.IFormattable]$Value).ToString($null, [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+
+    throw "Unsupported ALM configuration data value type '$($Value.GetType().FullName)'."
+}
+
+function Get-AlmConfigForSetup {
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath
+    )
+
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+        return @{}
+    }
+
+    try {
+        return (Import-PowerShellDataFile -LiteralPath $ConfigPath)
+    }
+    catch {
+        throw "Could not import ALM setup configuration '$ConfigPath': $($_.Exception.Message)"
+    }
+}
+
+function ConvertFrom-AlmConfigContentForSetup {
+    <#
+    .SYNOPSIS
+        Imports a committed alm-config.psd1 value without changing the repository.
+    .DESCRIPTION
+        Writes the supplied data-file text to a uniquely named temporary PSD1,
+        imports it with Import-PowerShellDataFile, and removes the temporary file.
+        Invalid data or filesystem failures throw with setup context.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter()][AllowEmptyString()][string]$ConfigContent = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ConfigContent)) {
+        return @{}
+    }
+
+    $temporaryPath = Join-Path ([System.IO.Path]::GetTempPath()) ("alm-config-setup-" + [guid]::NewGuid().ToString('n') + '.psd1')
+    try {
+        Set-Content -LiteralPath $temporaryPath -Value $ConfigContent -NoNewline
+        $configuration = Import-PowerShellDataFile -LiteralPath $temporaryPath
+        if ($configuration -isnot [System.Collections.IDictionary]) {
+            throw 'The root value must be a hashtable.'
+        }
+        return $configuration
+    }
+    catch {
+        throw "Could not import committed alm-config.psd1 content: $($_.Exception.Message)"
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryPath) {
+            Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction Stop
+        }
+    }
+}
+
+function Get-AlmSetupBranchConfiguration {
+    <#
+    .SYNOPSIS
+        Returns one branch's setup settings by case-insensitive branch name.
+    .DESCRIPTION
+        A missing branches map or branch returns an empty hashtable. Malformed branch
+        maps and branch values throw rather than silently reverting to workflow discovery.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary], [System.Collections.Hashtable])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Config,
+        [Parameter(Mandatory)][string]$BranchName
+    )
+
+    if (-not $Config.Contains('branches') -or $null -eq $Config.branches) {
+        return @{}
+    }
+    if ($Config.branches -isnot [System.Collections.IDictionary]) {
+        throw 'The branches setting in alm-config.psd1 must be a hashtable keyed by branch name.'
+    }
+
+    foreach ($configuredBranchName in $Config.branches.Keys) {
+        if ([string]$configuredBranchName -ieq $BranchName) {
+            $branchConfiguration = $Config.branches[$configuredBranchName]
+            if ($branchConfiguration -isnot [System.Collections.IDictionary]) {
+                throw "Configuration for branch '$BranchName' in alm-config.psd1 must be a hashtable."
+            }
+            return $branchConfiguration
+        }
+    }
+
+    return @{}
+}
+
+function Assert-AlmSetupConfigurationForApply {
+    <#
+    .SYNOPSIS
+        Validates the minimum setup metadata required to generate repository artifacts.
+    .DESCRIPTION
+        ApplyConfig requires an explicit provider, shared repository/ref, and at least
+        one branch. It never infers missing values from existing caller files.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Configuration,
+        [Parameter(Mandatory)][ValidateSet('GitHub', 'azDO')][string]$Provider
+    )
+
+    if ([string](Get-OptionalObjectPropertyValue -InputObject $Configuration -PropertyName 'provider') -ine $Provider) {
+        throw "ApplyConfig requires alm-config.psd1 to declare provider = '$Provider'."
+    }
+
+    foreach ($propertyName in @('repository', 'ref')) {
+        if (
+            -not $Configuration.Contains($propertyName) -or
+            $Configuration[$propertyName] -isnot [string] -or
+            [string]::IsNullOrWhiteSpace($Configuration[$propertyName])
+        ) {
+            throw "ApplyConfig requires a non-empty '$propertyName' string in alm-config.psd1."
+        }
+    }
+
+    if (-not $Configuration.Contains('branches') -or $Configuration.branches -isnot [System.Collections.IDictionary] -or $Configuration.branches.Count -eq 0) {
+        throw 'ApplyConfig requires a non-empty branches map in alm-config.psd1.'
+    }
+
+    foreach ($branchName in $Configuration.branches.Keys) {
+        if ([string]::IsNullOrWhiteSpace([string]$branchName)) {
+            throw 'ApplyConfig requires every branches map key to be a non-empty branch name.'
+        }
+        if ($Configuration.branches[$branchName] -isnot [System.Collections.IDictionary]) {
+            throw "Configuration for branch '$branchName' in alm-config.psd1 must be a hashtable."
+        }
+    }
+
+    return $Configuration
+}
+
+function Get-AlmSetupBuildValidationEnvironmentMap {
+    <#
+    .SYNOPSIS
+        Builds a branch-to-environment map for generated BUILD callers.
+    .DESCRIPTION
+        Includes only enabled branches and throws when an enabled branch lacks a
+        branch name or validation environment.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)][array]$BranchStates
+    )
+
+    $environments = [ordered]@{}
+    foreach ($branchState in $BranchStates) {
+        if (-not [bool](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnabled')) {
+            continue
+        }
+
+        $branchName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BranchName')
+        $environmentConfiguration = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentConfiguration'
+        $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environmentConfiguration -PropertyName 'ShortName')
+        if ([string]::IsNullOrWhiteSpace($environmentName)) {
+            $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentName')
+        }
+        if ([string]::IsNullOrWhiteSpace($branchName) -or [string]::IsNullOrWhiteSpace($environmentName)) {
+            throw 'Enabled BUILD validation state must include a branch name and environment name.'
+        }
+
+        $environments[$branchName] = $environmentName
+    }
+
+    return $environments
+}
+
+function Get-AlmSetupConfiguration {
+    <#
+    .SYNOPSIS
+        Builds the provider-neutral setup portion of alm-config.psd1.
+    .DESCRIPTION
+        Serializes shared provider/repository/ref keys, flat provider-specific options,
+        and each branch's development, deployment and BUILD validation environments.
+        Disabled BUILD validation is written explicitly to prevent legacy global
+        selectors from being inherited by that branch.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Collections.IDictionary])]
+    param(
+        [Parameter(Mandatory)][ValidateSet('GitHub', 'azDO')][string]$Provider,
+        [Parameter(Mandatory)][string]$Repository,
+        [Parameter(Mandatory)][string]$Ref,
+        [Parameter(Mandatory)][array]$BranchStates,
+        [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{}
+    )
+
+    $settings = [ordered]@{
+        provider = $Provider
+        repository = $Repository
+        ref = $Ref
+    }
+    foreach ($option in $ProviderOptions.GetEnumerator()) {
+        $settings[[string]$option.Key] = $option.Value
+    }
+
+    $branches = [ordered]@{}
+    foreach ($branchState in $BranchStates) {
+        $branchName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BranchName')
+        if ([string]::IsNullOrWhiteSpace($branchName)) {
+            throw 'Branch setup state must include a non-empty BranchName.'
+        }
+
+        $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DevEnvironmentConfiguration'
+        $developmentEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'ShortName')
+        $deploymentEnvironmentNames = @(
+            Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments' |
+                ForEach-Object { [string](Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'ShortName') } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        )
+
+        $buildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnabled')
+        $buildEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentConfiguration'
+        $buildEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $buildEnvironment -PropertyName 'ShortName')
+        if ([string]::IsNullOrWhiteSpace($buildEnvironmentName)) {
+            $buildEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentName')
+        }
+        if ($buildValidationEnabled -and [string]::IsNullOrWhiteSpace($buildEnvironmentName)) {
+            throw "BUILD validation for branch '$branchName' is enabled but has no environment name."
+        }
+
+        $branches[$branchName] = [ordered]@{
+            developmentEnvironment = $developmentEnvironmentName
+            deploymentEnvironments = $deploymentEnvironmentNames
+            buildValidation = [ordered]@{
+                environmentName = $(if ($buildValidationEnabled) { $buildEnvironmentName } else { '' })
+                baselineRelease = $(if ($buildValidationEnabled) { [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationBaselineRelease') } else { '' })
+            }
+        }
+    }
+    $settings.branches = $branches
+    return $settings
+}
+
+function Set-AlmConfigSetupSettingsInFile {
+    <#
+    .SYNOPSIS
+        Updates selected top-level setup settings while preserving unrelated source.
+    .PARAMETER Settings
+        A hashtable of provider, repository, ref, provider options and branch settings.
+        Values must be PowerShell data types; scriptblocks and arbitrary objects fail.
+    .DESCRIPTION
+        Replaces only the selected root values or inserts missing keys. Existing
+        comments and unrelated configuration remain untouched. Missing files require
+        CreateIfMissing. Parse, shape and unsupported-value errors throw; writes are
+        not transactional. Returns whether the file text changed.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$ConfigPath,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Settings,
+        [Parameter()][switch]$CreateIfMissing,
+        [Parameter()][string]$TemplatePath
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($ConfigPath, 'Update ALM setup settings')) {
+        return $false
+    }
+
+    if (-not (Test-Path -LiteralPath $ConfigPath)) {
+        if (-not $CreateIfMissing) {
+            throw "alm-config.psd1 not found: $ConfigPath"
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($TemplatePath) -and (Test-Path -LiteralPath $TemplatePath)) {
+            Copy-Item -LiteralPath $TemplatePath -Destination $ConfigPath -Force
+        }
+        else {
+            Set-Content -LiteralPath $ConfigPath -Value "@{`n}`n" -NoNewline
+        }
+    }
+
+    $configContent = Get-Content -LiteralPath $ConfigPath -Raw
+    $tokens = $null
+    $parseErrors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($configContent, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        throw "Could not parse existing alm-config.psd1 '$ConfigPath': $($parseErrors[0].Message)"
+    }
+
+    $rootHashtable = $ast.Find({
+        param($node)
+        $node -is [System.Management.Automation.Language.HashtableAst]
+    }, $false)
+    if (-not $rootHashtable) {
+        throw "Could not find the root hashtable in '$ConfigPath'."
+    }
+
+    $lineEnding = if ($configContent -match "`r`n") { "`r`n" } else { "`n" }
+    $replacements = @()
+    $insertions = @()
+    foreach ($setting in $Settings.GetEnumerator()) {
+        $keyName = [string]$setting.Key
+        if ([string]::IsNullOrWhiteSpace($keyName)) {
+            throw 'ALM setup setting names cannot be empty.'
+        }
+
+        $serializedValue = ConvertTo-SetupPowerShellDataLiteral -Value $setting.Value
+        $settingEntry = $rootHashtable.KeyValuePairs | Where-Object {
+            $keyText = $_.Item1.Extent.Text.Trim()
+            $keyText.Trim("'").Trim('"') -ieq $keyName
+        } | Select-Object -First 1
+
+        if ($settingEntry) {
+            $valueExtent = $settingEntry.Item2.Extent
+            $replacements += [pscustomobject]@{
+                StartOffset = $valueExtent.StartOffset
+                EndOffset   = $valueExtent.EndOffset
+                Value       = $serializedValue
+            }
+        }
+        else {
+            $escapedKey = $keyName.Replace("'", "''")
+            $insertions += "    '$escapedKey' = $serializedValue"
+        }
+    }
+
+    $updatedContent = $configContent
+    if ($insertions.Count -gt 0) {
+        $insertOffset = $rootHashtable.Extent.EndOffset - 1
+        $prefix = if ($insertOffset -gt 0 -and $configContent.Substring(0, $insertOffset).EndsWith($lineEnding)) { '' } else { $lineEnding }
+        $insertText = $prefix + ($insertions -join $lineEnding) + $lineEnding
+        $replacements += [pscustomobject]@{
+            StartOffset = $insertOffset
+            EndOffset   = $insertOffset
+            Value       = $insertText
+        }
+    }
+
+    foreach ($replacement in @($replacements | Sort-Object StartOffset -Descending)) {
+        $updatedContent = $updatedContent.Substring(0, $replacement.StartOffset) +
+            $replacement.Value +
+            $updatedContent.Substring($replacement.EndOffset)
+    }
+
+    $hasChanges = ($updatedContent -ne $configContent)
+    if ($hasChanges) {
+        Set-Content -LiteralPath $ConfigPath -Value $updatedContent -NoNewline
+    }
+
+    return $hasChanges
+}
+
 function Select-BuildValidationBaselineEnvironment {
     <#
     .SYNOPSIS
@@ -3206,7 +5016,7 @@ function Show-BranchEnvironmentMappingTable {
         return
     }
 
-    $table = New-SpectreTable -Columns @('Branch', 'DEV environment', 'Deployment environments')
+    $table = New-SpectreTable -Columns @('Branch', 'DEV environment', 'Deployment environments', 'BUILD validation')
     foreach ($mapping in $items) {
         $branchName = [string]$mapping.BranchName
         $devEnvironmentLabel = '<none>'
@@ -3243,20 +5053,304 @@ function Show-BranchEnvironmentMappingTable {
             return [string]$_.FriendlyName
         } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
+        $buildValidationLabel = '<disabled>'
+        if ($mapping.PSObject.Properties.Name -contains 'BuildValidationEnabled' -and $mapping.BuildValidationEnabled) {
+            $buildValidationLabel = [string]$mapping.BuildValidationEnvironmentName
+            if ([string]::IsNullOrWhiteSpace($buildValidationLabel)) {
+                $buildValidationLabel = 'Enabled'
+            }
+            if (-not [string]::IsNullOrWhiteSpace([string]$mapping.BuildValidationBaselineRelease)) {
+                $buildValidationLabel += " (baseline: $([string]$mapping.BuildValidationBaselineRelease))"
+            }
+        }
+
         Add-SpectreTableRow -Table $table -Cells @(
             $branchName,
             $devEnvironmentLabel,
-            $(if ($environmentNames.Count -gt 0) { $environmentNames -join ', ' } else { '<none>' })
+            $(if ($environmentNames.Count -gt 0) { $environmentNames -join ', ' } else { '<none>' }),
+            $buildValidationLabel
         )
     }
 
     [Spectre.Console.AnsiConsole]::Write($table)
 }
 
+function Get-SetupBranchMenuSummary {
+    <#
+    .SYNOPSIS
+        Formats current branch environment assignments for a guided setup menu.
+    .DESCRIPTION
+        Lists DEV, deployment, and enabled BUILD-validation targets by branch. At most
+        three branches are shown so the menu remains readable.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][AllowNull()][object[]]$BranchStates
+    )
+
+    $branchLabels = @()
+    foreach ($branchState in @($BranchStates)) {
+        if ($null -eq $branchState) {
+            continue
+        }
+
+        $branchName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BranchName')
+        if ([string]::IsNullOrWhiteSpace($branchName)) {
+            continue
+        }
+
+        $environmentLabels = @()
+        $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DevEnvironmentConfiguration'
+        if (-not $devEnvironment) {
+            $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'ExistingDevEnvironment'
+        }
+        if ($devEnvironment) {
+            $devName = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'ShortName')
+            if ([string]::IsNullOrWhiteSpace($devName)) {
+                $devName = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'FriendlyName')
+            }
+            if ([string]::IsNullOrWhiteSpace($devName)) {
+                $devName = 'DEV'
+            }
+            elseif ($devName -match '^Dev-(.+)$') {
+                $devName = "DEV-$($Matches[1])"
+            }
+            else {
+                $devName = "DEV:$devName"
+            }
+            $environmentLabels += $devName
+        }
+
+        $deploymentEnvironments = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments'
+        if ($null -eq $deploymentEnvironments) {
+            $deploymentEnvironments = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'Environments'
+        }
+        foreach ($environment in @($deploymentEnvironments)) {
+            if ($null -eq $environment) {
+                continue
+            }
+
+            $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ShortName')
+            if ([string]::IsNullOrWhiteSpace($environmentName)) {
+                $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'FriendlyName')
+            }
+            if (-not [string]::IsNullOrWhiteSpace($environmentName)) {
+                $environmentLabels += $environmentName
+            }
+        }
+
+        if ([bool](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnabled')) {
+            $buildValidationName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentName')
+            if ([string]::IsNullOrWhiteSpace($buildValidationName)) {
+                $buildValidationEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentConfiguration'
+                if (-not $buildValidationEnvironment) {
+                    $buildValidationEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'ExistingBuildValidationEnvironment'
+                }
+                $buildValidationName = [string](Get-OptionalObjectPropertyValue -InputObject $buildValidationEnvironment -PropertyName 'ShortName')
+            }
+            if ([string]::IsNullOrWhiteSpace($buildValidationName)) {
+                $buildValidationName = 'enabled'
+            }
+            $environmentLabels += "BUILD:$buildValidationName"
+        }
+
+        $environmentSummary = if ($environmentLabels.Count -gt 0) {
+            $environmentLabels -join ', '
+        }
+        else {
+            'no envs'
+        }
+        $branchLabels += "$branchName ($environmentSummary)"
+    }
+
+    if ($branchLabels.Count -eq 0) {
+        return 'Not configured'
+    }
+
+    $visibleBranchLabels = @($branchLabels | Select-Object -First 3)
+    if ($branchLabels.Count -gt $visibleBranchLabels.Count) {
+        $visibleBranchLabels += "+$($branchLabels.Count - $visibleBranchLabels.Count) branches"
+    }
+
+    $summary = $visibleBranchLabels -join ', '
+    if ($summary.Length -gt 120) {
+        $summary = $summary.Substring(0, 117).TrimEnd() + '...'
+    }
+    return $summary
+}
+
+function Get-SetupPublishPlanMenuSummary {
+    <#
+    .SYNOPSIS
+        Formats selected repository publication methods for a guided setup menu.
+    .DESCRIPTION
+        Lists direct-commit and pull-request plans by target branch. At most three
+        plans are shown so the menu remains readable.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][AllowNull()][object[]]$BranchStates
+    )
+
+    $planLabels = @()
+    foreach ($branchState in @($BranchStates)) {
+        if ($null -eq $branchState) {
+            continue
+        }
+
+        $publishPlan = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'PublishPlan'
+        if ($null -eq $publishPlan) {
+            continue
+        }
+
+        $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'TargetBranch')
+        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+            $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BranchName')
+        }
+        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+            continue
+        }
+
+        $mode = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'Mode')
+        if ($mode -eq 'PullRequest') {
+            $sourceBranch = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'BranchName')
+            $planLabels += if ([string]::IsNullOrWhiteSpace($sourceBranch)) {
+                "$targetBranch`: pull request"
+            }
+            else {
+                "$targetBranch`: PR from $sourceBranch"
+            }
+        }
+        elseif ($mode -eq 'Direct') {
+            $planLabels += "$targetBranch`: direct"
+        }
+        else {
+            $planLabels += if ([string]::IsNullOrWhiteSpace($mode)) {
+                "$targetBranch`: not configured"
+            }
+            else {
+                "$targetBranch`: $mode"
+            }
+        }
+    }
+
+    if ($planLabels.Count -eq 0) {
+        return 'Not configured'
+    }
+
+    $visiblePlanLabels = @($planLabels | Select-Object -First 3)
+    if ($planLabels.Count -gt $visiblePlanLabels.Count) {
+        $visiblePlanLabels += "+$($planLabels.Count - $visiblePlanLabels.Count) branches"
+    }
+
+    $summary = $visiblePlanLabels -join ', '
+    if ($summary.Length -gt 120) {
+        $summary = $summary.Substring(0, 117).TrimEnd() + '...'
+    }
+    return $summary
+}
+
+function Get-SetupSolutionMenuSummary {
+    <#
+    .SYNOPSIS
+        Formats selected solution names for a guided setup menu.
+    .DESCRIPTION
+        Shows the source branch and at most three configured solution names. A null
+        selection means solution setup has not run; an empty list is a valid selection.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][AllowNull()][object]$SolutionData,
+        [Parameter()][string]$SourceBranch
+    )
+
+    if ($null -eq $SolutionData) {
+        return 'Not configured'
+    }
+
+    $solutionNames = @()
+    foreach ($solution in @(Get-OptionalObjectPropertyValue -InputObject $SolutionData -PropertyName 'Solutions')) {
+        if ($null -eq $solution) {
+            continue
+        }
+
+        $solutionName = [string](Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'name')
+        if ([string]::IsNullOrWhiteSpace($solutionName)) {
+            $solutionName = [string](Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'UniqueName')
+        }
+        if ([string]::IsNullOrWhiteSpace($solutionName)) {
+            $solutionName = [string](Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'uniquename')
+        }
+        if ([string]::IsNullOrWhiteSpace($solutionName)) {
+            $solutionName = [string](Get-OptionalObjectPropertyValue -InputObject $solution -PropertyName 'FriendlyName')
+        }
+        if ([string]::IsNullOrWhiteSpace($solutionName) -and $solution -is [string]) {
+            $solutionName = $solution
+        }
+        if (-not [string]::IsNullOrWhiteSpace($solutionName)) {
+            $solutionNames += $solutionName
+        }
+    }
+
+    $solutionSummary = if ($solutionNames.Count -eq 0) {
+        'No solutions selected'
+    }
+    else {
+        $visibleNames = @($solutionNames | Select-Object -First 3)
+        if ($solutionNames.Count -gt $visibleNames.Count) {
+            $visibleNames += "+$($solutionNames.Count - $visibleNames.Count)"
+        }
+        $visibleNames -join ', '
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SourceBranch)) {
+        $solutionSummary = '{0}: {1}' -f $SourceBranch, $solutionSummary
+    }
+    if ($solutionSummary.Length -gt 100) {
+        $solutionSummary = $solutionSummary.Substring(0, 97).TrimEnd() + '...'
+    }
+    return $solutionSummary
+}
+
+function Set-BranchBuildValidationMapping {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Updates an in-memory branch mapping record only.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$BranchMapping,
+        [Parameter(Mandatory)][object]$BuildValidationSettings
+    )
+
+    $requiredProperties = @(
+        'BuildValidationEnabled',
+        'BuildValidationEnvironmentName',
+        'BuildValidationBaselineRelease',
+        'BuildValidationEnvironmentConfiguration',
+        'ExistingBuildValidationEnvironment'
+    )
+    $settingsProperties = @($BuildValidationSettings.PSObject.Properties.Name)
+    foreach ($propertyName in $requiredProperties) {
+        if ($settingsProperties -notcontains $propertyName) {
+            throw "Build validation editor result is missing required property '$propertyName'."
+        }
+    }
+
+    foreach ($propertyName in $requiredProperties) {
+        $BranchMapping.$propertyName = $BuildValidationSettings.$propertyName
+    }
+
+    $BranchMapping.BuildValidationEnabled = [bool]$BranchMapping.BuildValidationEnabled
+    $BranchMapping.BuildValidationEnvironmentName = [string]$BranchMapping.BuildValidationEnvironmentName
+    $BranchMapping.BuildValidationBaselineRelease = [string]$BranchMapping.BuildValidationBaselineRelease
+    return $BranchMapping
+}
+
 function Select-BranchEnvironmentMapping {
     <#
     .SYNOPSIS
-        Edits branch/DEV/deployment mappings before provider publication.
+        Edits branch, DEV, deployment and BUILD-validation mappings.
     .PARAMETER BranchOnly
         Hides the built-in environment assignment editor; callback-based editors
         remain available.
@@ -3266,9 +5360,16 @@ function Select-BranchEnvironmentMapping {
     .PARAMETER EditDeploymentEnvironmentsScriptBlock
         Receives the complete mapping array and current mapping. Its non-null outputs
         replace Environments; no output clears that list.
+    .PARAMETER EditBuildValidationScriptBlock
+        Receives the complete mapping array and current mapping, and returns a record
+        with BUILD-validation settings for the current branch.
+    .PARAMETER IsNewRepository
+        Shows the branch-strategy prompt for a new repository only.
     .DESCRIPTION
         Copies mapping records but shares nested environment objects. A sole empty
-        main mapping triggers bootstrap strategy selection and environment callbacks.
+        main mapping is initialized with the default branch. The branch strategy is
+        prompted only when IsNewRepository is set. Environment callbacks run for
+        bootstrap and added branches; existing branches are edited from their menu.
         Built-in assignment excludes other branches' targets and sorts by ShortName.
         Done checks cross-branch deployment duplicates; a null management selection
         returns current mappings without that check. Callback failures/back navigation
@@ -3283,8 +5384,10 @@ function Select-BranchEnvironmentMapping {
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref,
         [Parameter()][switch]$BranchOnly,
+        [Parameter()][switch]$IsNewRepository,
         [Parameter()][scriptblock]$EditDevEnvironmentScriptBlock,
-        [Parameter()][scriptblock]$EditDeploymentEnvironmentsScriptBlock
+        [Parameter()][scriptblock]$EditDeploymentEnvironmentsScriptBlock,
+        [Parameter()][scriptblock]$EditBuildValidationScriptBlock
     )
 
     $allEnvironments = @($EnvironmentConfigurations | Where-Object { $null -ne $_ })
@@ -3299,20 +5402,31 @@ function Select-BranchEnvironmentMapping {
             DevEnvironmentConfiguration = $(if ($mapping.PSObject.Properties.Name -contains 'DevEnvironmentConfiguration') { $mapping.DevEnvironmentConfiguration } else { $null })
             ExistingDevEnvironment      = $(if ($mapping.PSObject.Properties.Name -contains 'ExistingDevEnvironment') { $mapping.ExistingDevEnvironment } else { $null })
             Environments                = @($mapping.Environments | Where-Object { $null -ne $_ })
+            BuildValidationEnabled = [bool]$(if ($mapping.PSObject.Properties.Name -contains 'BuildValidationEnabled') { $mapping.BuildValidationEnabled } else { $false })
+            BuildValidationEnvironmentName = [string]$(if ($mapping.PSObject.Properties.Name -contains 'BuildValidationEnvironmentName') { $mapping.BuildValidationEnvironmentName } else { '' })
+            BuildValidationBaselineRelease = [string]$(if ($mapping.PSObject.Properties.Name -contains 'BuildValidationBaselineRelease') { $mapping.BuildValidationBaselineRelease } else { '' })
+            BuildValidationEnvironmentConfiguration = $(if ($mapping.PSObject.Properties.Name -contains 'BuildValidationEnvironmentConfiguration') { $mapping.BuildValidationEnvironmentConfiguration } else { $null })
+            ExistingBuildValidationEnvironment = $(if ($mapping.PSObject.Properties.Name -contains 'ExistingBuildValidationEnvironment') { $mapping.ExistingBuildValidationEnvironment } else { $null })
         }
     }
 
-    # This exact empty-main shape is the bootstrap signal; existing configured
-    # repositories must not have their branch strategy inferred again.
-    $isNewRepositoryBootstrapState = (
-        $branchMappings.Count -eq 1 -and
-        ([string]$branchMappings[0].BranchName -ieq 'main') -and
-        ($null -eq $branchMappings[0].DevEnvironmentConfiguration) -and
-        ($null -eq $branchMappings[0].ExistingDevEnvironment) -and
-        (@($branchMappings[0].Environments).Count -eq 0)
-    )
+    if ($IsNewRepository) {
+        if ($branchMappings.Count -eq 0) {
+            $branchMappings = @(
+                [pscustomobject]@{
+                    BranchName = 'main'
+                    DevEnvironmentConfiguration = $null
+                    ExistingDevEnvironment = $null
+                    Environments = @()
+                    BuildValidationEnabled = $false
+                    BuildValidationEnvironmentName = ''
+                    BuildValidationBaselineRelease = ''
+                    BuildValidationEnvironmentConfiguration = $null
+                    ExistingBuildValidationEnvironment = $null
+                }
+            )
+        }
 
-    if ($isNewRepositoryBootstrapState) {
         $strategyItems = @(
             'main only (recommended simple option)',
             'main + develop (required for environments that enforce PRs)'
@@ -3339,12 +5453,22 @@ function Select-BranchEnvironmentMapping {
                     DevEnvironmentConfiguration = $null
                     ExistingDevEnvironment      = $null
                     Environments                = @()
+                    BuildValidationEnabled = $false
+                    BuildValidationEnvironmentName = ''
+                    BuildValidationBaselineRelease = ''
+                    BuildValidationEnvironmentConfiguration = $null
+                    ExistingBuildValidationEnvironment = $null
                 },
                 [pscustomobject]@{
                     BranchName                  = 'develop'
                     DevEnvironmentConfiguration = $null
                     ExistingDevEnvironment      = $null
                     Environments                = @()
+                    BuildValidationEnabled = $false
+                    BuildValidationEnvironmentName = ''
+                    BuildValidationBaselineRelease = ''
+                    BuildValidationEnvironmentConfiguration = $null
+                    ExistingBuildValidationEnvironment = $null
                 }
             )
         }
@@ -3362,6 +5486,16 @@ function Select-BranchEnvironmentMapping {
                 $bootstrapMapping.Environments = @($updatedDeploymentEnvironments | Where-Object { $null -ne $_ })
                 $branchMappings[$bootstrapIndex] = $bootstrapMapping
             }
+
+        }
+
+        if ($EditBuildValidationScriptBlock) {
+            for ($bootstrapIndex = 0; $bootstrapIndex -lt $branchMappings.Count; $bootstrapIndex++) {
+                $bootstrapMapping = $branchMappings[$bootstrapIndex]
+                $buildValidationSettings = & $EditBuildValidationScriptBlock @($branchMappings) $bootstrapMapping
+                [void](Set-BranchBuildValidationMapping -BranchMapping $bootstrapMapping -BuildValidationSettings $buildValidationSettings)
+                $branchMappings[$bootstrapIndex] = $bootstrapMapping
+            }
         }
     }
 
@@ -3370,7 +5504,8 @@ function Select-BranchEnvironmentMapping {
             -Message 'Configure deployment branch mappings' `
             -GuidanceLines @(
                 'Define which branches setup manages, and map each branch to DEV and deployment targets.',
-                'These mappings control generated pipelines/workflows, so clear ownership prevents ambiguous promotion paths.'
+                'Use a branch edit menu to configure DEV, ordered deployment targets, and BUILD validation.',
+                'Each deployment target should belong to only one branch to avoid ambiguous promotion paths.'
             ) `
             -GuidanceDocRelativePath 'docs/setup/github-setup.md' `
             -GuidanceRef $Ref
@@ -3410,6 +5545,11 @@ function Select-BranchEnvironmentMapping {
                     DevEnvironmentConfiguration = $null
                     ExistingDevEnvironment      = $null
                     Environments                = @()
+                    BuildValidationEnabled = $false
+                    BuildValidationEnvironmentName = ''
+                    BuildValidationBaselineRelease = ''
+                    BuildValidationEnvironmentConfiguration = $null
+                    ExistingBuildValidationEnvironment = $null
                 }
 
                 $branchMappings += $newBranchMapping
@@ -3423,6 +5563,12 @@ function Select-BranchEnvironmentMapping {
                 if ($EditDeploymentEnvironmentsScriptBlock) {
                     $updatedDeploymentEnvironments = @(& $EditDeploymentEnvironmentsScriptBlock @($branchMappings) $newBranchMapping)
                     $newBranchMapping.Environments = @($updatedDeploymentEnvironments | Where-Object { $null -ne $_ })
+                    $branchMappings[$newBranchIndex] = $newBranchMapping
+                }
+
+                if ($EditBuildValidationScriptBlock) {
+                    $buildValidationSettings = & $EditBuildValidationScriptBlock @($branchMappings) $newBranchMapping
+                    [void](Set-BranchBuildValidationMapping -BranchMapping $newBranchMapping -BuildValidationSettings $buildValidationSettings)
                     $branchMappings[$newBranchIndex] = $newBranchMapping
                 }
             }
@@ -3457,6 +5603,9 @@ function Select-BranchEnvironmentMapping {
                 if ($EditDeploymentEnvironmentsScriptBlock) {
                     $mappingMenuItems += 'Edit deployment environments'
                     $mappingMenuItems += 'Clear all deployment environments'
+                }
+                if ($EditBuildValidationScriptBlock) {
+                    $mappingMenuItems += 'Edit BUILD validation'
                 }
                 if (-not $BranchOnly) {
                     $mappingMenuItems += 'Assign environments'
@@ -3506,6 +5655,11 @@ function Select-BranchEnvironmentMapping {
                         'Edit deployment environments' {
                             $updatedDeploymentEnvironments = @(& $EditDeploymentEnvironmentsScriptBlock @($branchMappings) $currentMapping)
                             $currentMapping.Environments = @($updatedDeploymentEnvironments | Where-Object { $null -ne $_ })
+                            $branchMappings[$editIndex] = $currentMapping
+                        }
+                        'Edit BUILD validation' {
+                            $buildValidationSettings = & $EditBuildValidationScriptBlock @($branchMappings) $currentMapping
+                            [void](Set-BranchBuildValidationMapping -BranchMapping $currentMapping -BuildValidationSettings $buildValidationSettings)
                             $branchMappings[$editIndex] = $currentMapping
                         }
                         'Clear all deployment environments' {
@@ -4058,6 +6212,7 @@ function Invoke-WithErrorHandling {
             switch ($options[$choice]) {
                 'Retry' {
                     Initialize-SpectreConsole
+                    $script:SetupGuidancePanelVisible = $false
                     [Spectre.Console.AnsiConsole]::Clear()
                     Write-Host "Retrying $OperationName..." -ForegroundColor Cyan
                     continue
@@ -4096,6 +6251,7 @@ function Show-SetupCompletionScreen {
     )
 
     Initialize-SpectreConsole
+    $script:SetupGuidancePanelVisible = $false
     [Spectre.Console.AnsiConsole]::Clear()
 
     Write-SetupDashboard -Message $Heading -IncludeTrailingSpacer

@@ -30,6 +30,65 @@ Describe 'ALM configuration loading' {
     }
 }
 
+Describe 'Branch BUILD validation settings' {
+    It 'resolves per-branch environments and inherits or overrides the legacy baseline' {
+        $config = @{
+            buildValidation = @{ baselineRelease = '@GLOBAL' }
+            branches = @{
+                main = @{ buildValidation = @{ environmentName = ' Build-main '; baselineRelease = '@TEST' } }
+                develop = @{ buildValidation = @{ environmentName = 'Build-develop' } }
+            }
+        }
+
+        $main = Get-AlmBuildValidationConfiguration -Config $config -BranchName 'MAIN'
+        $main.Enabled | Should -BeTrue
+        $main.EnvironmentName | Should -Be Build-main
+        $main.BaselineRelease | Should -Be '@TEST'
+
+        $develop = Get-AlmBuildValidationConfiguration -Config $config -BranchName develop
+        $develop.Enabled | Should -BeTrue
+        $develop.EnvironmentName | Should -Be Build-develop
+        $develop.BaselineRelease | Should -Be '@GLOBAL'
+    }
+
+    It 'matches Azure DevOps refs/heads values against configured branch names' {
+        $config = @{
+            branches = @{
+                'release/1.x' = @{ buildValidation = @{ environmentName = 'Build-release'; baselineRelease = '@RELEASE' } }
+            }
+        }
+
+        $validation = Get-AlmBuildValidationConfiguration -Config $config -BranchName 'refs/heads/release/1.x'
+        $validation.Enabled | Should -BeTrue
+        $validation.EnvironmentName | Should -Be 'Build-release'
+        $validation.BaselineRelease | Should -Be '@RELEASE'
+    }
+
+    It 'treats an explicit empty baseline as an override and keeps unconfigured branches disabled' {
+        $config = @{
+            buildValidation = @{ baselineRelease = '@GLOBAL' }
+            branches = @{ main = @{ buildValidation = @{ environmentName = ''; baselineRelease = '' } } }
+        }
+
+        $main = Get-AlmBuildValidationConfiguration -Config $config -BranchName main
+        $main.Enabled | Should -BeFalse
+        $main.BaselineRelease | Should -Be ''
+
+        $other = Get-AlmBuildValidationConfiguration -Config $config -BranchName feature
+        $other.Enabled | Should -BeFalse
+        $other.BaselineRelease | Should -Be '@GLOBAL'
+    }
+
+    It 'rejects malformed branch validation shapes' {
+        { Get-AlmBuildValidationConfiguration -Config @{ branches = @('main') } -BranchName main } |
+            Should -Throw '*branches setting must be a hashtable*'
+        { Get-AlmBuildValidationConfiguration -Config @{ branches = @{ main = 'invalid' } } -BranchName main } |
+            Should -Throw '*Configuration for branch*must be a hashtable*'
+        { Get-AlmBuildValidationConfiguration -Config @{ branches = @{ main = @{ buildValidation = 'invalid' } } } -BranchName main } |
+            Should -Throw '*BUILD validation configuration*must be a hashtable*'
+    }
+}
+
 Describe 'Configured setting maps' {
     It 'identifies the source map when a scriptblock emits an invalid number of values' {
         $settings = @{

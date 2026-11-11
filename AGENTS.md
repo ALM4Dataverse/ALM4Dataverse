@@ -42,6 +42,23 @@ references; link rather than repeat facts. Preserve existing documentation file 
 because setup output and application `AGENTS.md` files link to them. Add user-visible
 changes that need action on upgrade to [upgrade notes](docs/usage/upgrade-notes.md).
 
+When a change affects guided setup steps, prompts, navigation, previews, or generated
+artifacts, update the affected step-by-step guide(s) in the same change:
+[GitHub setup](docs/setup/github-setup.md) and/or
+[Azure DevOps setup](docs/setup/azdo-automated-setup.md). Keep every user-visible step
+documented. Capture screenshots from the current setup implementation; never use
+illustrative, reconstructed, or mock screenshots. For text-only output, include
+verbatim output captured from the current setup helpers or preview generators rather
+than hand-authored approximations. Use reserved example values and exclude credentials
+and real tenant, environment, or user identifiers.
+Regenerate the full screenshot set with
+`pwsh -NoLogo -NoProfile -File ./tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1`;
+use `-Scene <name>` for one image and `-ListScenes` to list scene names. This
+PowerShell-only tool runs the real helpers in a PTY-backed terminal, captures the
+rendered terminal frames with an explicit monospaced font, and downloads pinned
+NuGet libraries on first use. It requires PowerShell 7.6/.NET 10 and NuGet access
+on first use; do not add `.cs` or `.csproj` files to the screenshot workflow.
+
 ## Comments and Help
 
 Follow the [commenting standard](docs/development/powershell.md#commenting-standard)

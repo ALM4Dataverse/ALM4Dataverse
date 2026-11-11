@@ -9,6 +9,7 @@ resources:
     - repository: ALM4Dataverse
       type: git
       name: ALM4Dataverse
+      ref: 'refs/heads/main'
 
 stages:
 - template: pipelines/templates/build.yml@ALM4Dataverse

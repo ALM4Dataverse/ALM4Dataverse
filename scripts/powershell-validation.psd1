@@ -73,7 +73,7 @@
         @{
             Path = 'setup-azdo.ps1'
             Rule = 'PSAvoidUsingConvertToSecureStringWithPlainText'
-            Function = '<script>'
+            Function = 'Initialize-AzDoAuthentication'
             Source = 'ConvertTo-SecureString -String $adoAccessToken.Token -AsPlainText -Force'
             Reason = 'The existing OAuth API supplies a plaintext access token; conversion adapts it to the downstream SecureString contract, not a hardcoded secret.'
         }

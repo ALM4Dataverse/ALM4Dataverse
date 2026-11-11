@@ -17,6 +17,34 @@
     # This is useful for running custom hook scripts provided by the ALM4Dataverse fork.
     # The placeholder is replaced with the absolute path to the ALM repo root before execution.
 
+    # Repository setup metadata. Setup writes provider as 'GitHub' or 'azDO';
+    # repository uses the selected provider's format and ref identifies the shared source ref.
+    provider = ''
+    repository = ''
+    ref = ''
+
+    # GitHub setup options; ignored by Azure DevOps setup.
+    GitHubUseEnvironments = $true
+    GitHubDeploymentPromotionMode = 'manual-gate-tag'
+    GitHubUseRepositoryVariablePrefix = $true
+    GitHubUseImmutableWifSubject = $false
+
+    # Azure DevOps setup options; ignored by GitHub setup.
+    azDOUseAlm4DataverseExtension = $true
+
+    # Branch-specific environment and BUILD validation configuration.
+    # Environment names refer to credentials configured in the selected provider.
+    branches = @{
+        # main = @{
+        #     developmentEnvironment = 'Dev-main'
+        #     deploymentEnvironments = @('TEST', 'PROD')
+        #     buildValidation = @{
+        #         environmentName = 'Build-main'
+        #         baselineRelease = '@TEST'
+        #     }
+        # }
+    }
+
     # Solutions to process, in dependency order.
     # Each entry is a hashtable with keys
     # - name: unique solution name.
