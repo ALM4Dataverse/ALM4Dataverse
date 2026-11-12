@@ -19,6 +19,7 @@ Application teams should start with [updating and customizing](usage/updating.md
 | [Azure DevOps setup](../setup-azdo.ps1), [GitHub setup](../setup-github.ps1), [shared setup helpers](../setup-common.ps1) | Interactive provisioning and caller generation. |
 | [Release preparation](../prepare-release.ps1) | Generate standalone setup assets from a source checkout. |
 | [Maintainer workflows](../.github/workflows) and [scripts](../.github/scripts) | Release publication, dependency updates, cleanup, and regression checks. |
+| [E2E scripts](../.github/scripts/e2e) | Live EXPORT, BUILD and DEPLOY cycles in dedicated test applications; see [end-to-end tests](development/e2e-tests.md). |
 
 > [!IMPORTANT]
 > Change a contract's runtime implementation, supplied caller, setup generator, and
@@ -160,3 +161,7 @@ runs as well as offline YAML checks.
 Use dedicated test environments and inspect data effects. Do not run tests against
 production just because a connection is available. Document any platform, plan, or
 authentication mode that was not exercised.
+
+The [end-to-end workflows](development/e2e-tests.md) run one EXPORT, BUILD and DEPLOY
+cycle on each platform for the commit under test. They cover the default callers and
+one upgrade path, not every configuration listed above.
