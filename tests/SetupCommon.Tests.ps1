@@ -1,7 +1,7 @@
-BeforeAll {
+﻿BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
-    . (Join-Path $repoRoot 'setup-common.ps1')
+    . (Join-Path $repoRoot 'setup/setup-common.ps1')
     if (-not ('Alm4DataverseSetupAccessTokenTestRunner' -as [type])) {
         Add-Type -TypeDefinition @'
 using System.Collections.ObjectModel;
@@ -107,6 +107,234 @@ Describe 'Setup MSAL assembly initialization' {
 
         { Initialize-SetupMsalAssembly -ModuleBase $moduleBase } |
             Should -Throw '*incompatible Microsoft.Identity.Client version*'
+    }
+
+    It 'finds compatible MSAL assets in a nested packaged framework directory' {
+        $moduleBase = Join-Path $TestDrive 'nested-dataverse-module'
+        $targetFramework = if ($PSVersionTable.PSEdition -eq 'Core') { 'netstandard2.0' } else { 'net472' }
+        $targetDirectory = Join-Path (Join-Path $moduleBase 'nested') $targetFramework
+        New-Item -ItemType Directory -Path $targetDirectory -Force | Out-Null
+        $corePath = Join-Path $targetDirectory 'Microsoft.Identity.Client.dll'
+        $brokerPath = Join-Path $targetDirectory 'Microsoft.Identity.Client.Broker.dll'
+        Set-Content -LiteralPath $corePath -Value ''
+        Set-Content -LiteralPath $brokerPath -Value ''
+
+        $paths = Get-SetupMsalAssemblyPath -ModuleBase $moduleBase
+
+        $paths.CorePath | Should -Be $corePath
+        $paths.BrokerPath | Should -Be $brokerPath
+    }
+}
+
+Describe 'Common module version management' {
+    It 'selects only the requested version from available modules' {
+        Mock Get-Module {
+            @(
+                [pscustomobject]@{ Version = [version]'1.0.0' }
+                [pscustomobject]@{ Version = [version]'2.0.0' }
+            )
+        }
+
+        (Get-ModuleAvailableExact -Name 'SetupTestModule' -RequiredVersion '2.0.0').Version |
+            Should -Be ([version]'2.0.0')
+    }
+
+    It 'downloads and verifies an exact version when it is not initially discoverable' {
+        $script:moduleAvailabilityCalls = 0
+        Mock Get-Module {
+            $script:moduleAvailabilityCalls++
+            if ($script:moduleAvailabilityCalls -eq 1) {
+                return
+            }
+
+            [pscustomobject]@{ Version = [version]'1.2.3' }
+        }
+        Mock Get-PackageProvider { [pscustomobject]@{ Name = 'NuGet' } }
+        Mock Save-Module {}
+        Mock Import-Module {}
+
+        Import-RequiredModuleVersion -Name 'SetupTestModule' -RequiredVersion '1.2.3' -Destination $TestDrive
+
+        Should -Invoke Save-Module -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'SetupTestModule' -and $RequiredVersion -eq '1.2.3' -and $Path -eq $TestDrive
+        }
+        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'SetupTestModule' -and $RequiredVersion -eq '1.2.3' -and $Force
+        }
+    }
+
+    It 'installs NuGet for the current user before saving when the provider is missing' {
+        Mock Get-PackageProvider { $null }
+        Mock Install-PackageProvider {}
+        Mock Save-Module {}
+
+        Save-ModuleExact -Name 'SetupTestModule' -RequiredVersion '1.2.3' -Destination $TestDrive
+
+        Should -Invoke Install-PackageProvider -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'NuGet' -and $Scope -eq 'CurrentUser'
+        }
+        Should -Invoke Save-Module -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'SetupTestModule' -and $RequiredVersion -eq '1.2.3'
+        }
+    }
+}
+
+Describe 'Setup authentication helpers' {
+    BeforeAll {
+        if (-not ('Microsoft.Identity.Client.PublicClientApplicationBuilder' -as [type])) {
+            Add-Type -TypeDefinition 'namespace Microsoft.Identity.Client { public class PublicClientApplicationBuilder {} }'
+        }
+
+        function New-SetupTestMsalApplication {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory MSAL test double and does not change external state.')]
+            param(
+                [Parameter(Mandatory)][object[]]$Accounts,
+                [Parameter()][object]$AuthenticationResult
+            )
+
+            $cache = [pscustomobject]@{}
+            $cache | Add-Member -MemberType ScriptMethod -Name SerializeMsalV3 -Value { return [byte[]]@() }
+
+            $accountTask = [pscustomobject]@{ Result = $Accounts }
+            $accountTask | Add-Member -MemberType ScriptMethod -Name GetAwaiter -Value { return $this }
+            $accountTask | Add-Member -MemberType ScriptMethod -Name GetResult -Value { return $this.Result }
+            $accountTaskAccessor = { return $accountTask }.GetNewClosure()
+
+            $application = [pscustomobject]@{
+                UserTokenCache = $cache
+                LastScopes     = @()
+                LastAccount    = $null
+            }
+            $application | Add-Member -MemberType ScriptMethod -Name GetAccountsAsync -Value $accountTaskAccessor
+
+            if ($null -ne $AuthenticationResult) {
+                $authenticationTask = [pscustomobject]@{ Result = $AuthenticationResult }
+                $authenticationTask | Add-Member -MemberType ScriptMethod -Name GetAwaiter -Value { return $this }
+                $authenticationTask | Add-Member -MemberType ScriptMethod -Name GetResult -Value { return $this.Result }
+
+                $silentBuilder = [pscustomobject]@{}
+                $silentBuilder | Add-Member -MemberType ScriptMethod -Name ExecuteAsync -Value {
+                    return $authenticationTask
+                }.GetNewClosure()
+                $acquireTokenSilent = {
+                    param($Scopes, $Account)
+                    $this.LastScopes = @($Scopes)
+                    $this.LastAccount = $Account
+                    return $silentBuilder
+                }.GetNewClosure()
+                $application | Add-Member -MemberType ScriptMethod -Name AcquireTokenSilent -Value $acquireTokenSilent
+            }
+
+            return $application
+        }
+    }
+
+    BeforeEach {
+        Mock Get-Module { $null }
+        Mock Initialize-SetupMsalAssembly {}
+        Mock New-DirectoryIfMissing {}
+        Mock Test-Path { $false }
+        $script:entraApplicationCache = @{}
+        Remove-Variable -Name MsalApp -Scope Script -ErrorAction SilentlyContinue
+    }
+
+    It 'lists distinct nonblank cached usernames without acquiring a token' {
+        $accounts = @(
+            [pscustomobject]@{ Username = 'first@example.invalid' }
+            [pscustomobject]@{ Username = 'first@example.invalid' }
+            [pscustomobject]@{ Username = '' }
+            [pscustomobject]@{ Username = 'second@example.invalid' }
+        )
+        $script:MsalApp = New-SetupTestMsalApplication -Accounts $accounts
+
+        @(Get-AuthToken -ResourceUrl 'https://api.example.invalid/' -ListAccountsOnly) |
+            Should -Be @('first@example.invalid', 'second@example.invalid')
+        Should -Invoke Initialize-SetupMsalAssembly -Times 1 -Exactly
+    }
+
+    It 'acquires a silent token with the normalized scope and preferred cached account' {
+        $accounts = @(
+            [pscustomobject]@{ Username = 'first@example.invalid' }
+            [pscustomobject]@{ Username = 'second@example.invalid' }
+        )
+        $authenticationResult = [pscustomobject]@{ ResultName = 'silent-result' }
+        $script:MsalApp = New-SetupTestMsalApplication -Accounts $accounts -AuthenticationResult $authenticationResult
+
+        $result = Get-AuthToken -ResourceUrl 'https://api.example.invalid/' -PreferredUsername 'SECOND@example.invalid'
+
+        $result.ResultName | Should -Be 'silent-result'
+        $script:MsalApp.LastScopes | Should -Be @('https://api.example.invalid/.default')
+        $script:MsalApp.LastAccount.Username | Should -Be 'second@example.invalid'
+    }
+}
+
+Describe 'Setup authentication reference resolution' {
+    BeforeAll {
+        function Get-DataverseEnvironmentCatalog {}
+    }
+
+    BeforeEach {
+        $script:entraApplicationCache = @{}
+    }
+
+    It 'returns the configured fallback for blank or unresolved environment URLs' {
+        Resolve-DataverseEnvironmentFriendlyName -EnvironmentUrl '' -FallbackName 'Configured name' |
+            Should -Be 'Configured name'
+
+        Mock Get-DataverseEnvironmentCatalog { throw 'Catalog unavailable' }
+        Resolve-DataverseEnvironmentFriendlyName -EnvironmentUrl 'https://org.example.invalid' -FallbackName 'Configured name' |
+            Should -Be 'Configured name'
+    }
+
+    It 'resolves an environment friendly name by normalized endpoint URL' {
+        Mock Get-DataverseEnvironmentCatalog {
+            @(
+                [pscustomobject]@{
+                    Endpoints    = @{ WebApplication = 'https://org.example.invalid/' }
+                    FriendlyName = 'Development'
+                }
+            )
+        }
+
+        Resolve-DataverseEnvironmentFriendlyName -EnvironmentUrl 'https://org.example.invalid' -FallbackName 'Configured name' |
+            Should -Be 'Development'
+    }
+
+    It 'returns and caches matching Graph application metadata' {
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = '' } }
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{
+                        id          = 'application-object'
+                        appId       = 'application-client'
+                        displayName = 'Setup application'
+                    }
+                )
+            }
+        }
+
+        $application = Resolve-EntraIdApplicationByAppId -ApplicationId 'application-client' -TenantId 'tenant.example.invalid'
+        $cachedApplication = Resolve-EntraIdApplicationByAppId -ApplicationId 'application-client' -TenantId 'tenant.example.invalid'
+
+        $application.displayName | Should -Be 'Setup application'
+        $cachedApplication.id | Should -Be 'application-object'
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+    }
+
+    It 'caches Graph misses and rejects blank identifiers before authenticating' {
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = '' } }
+        Mock Invoke-RestMethod { [pscustomobject]@{ value = @() } }
+
+        Resolve-EntraIdApplicationByAppId -ApplicationId '' -TenantId 'tenant.example.invalid' |
+            Should -BeNullOrEmpty
+        Resolve-EntraIdApplicationByAppId -ApplicationId 'application-client' -TenantId 'tenant.example.invalid' |
+            Should -BeNullOrEmpty
+        Resolve-EntraIdApplicationByAppId -ApplicationId 'application-client' -TenantId 'tenant.example.invalid' |
+            Should -BeNullOrEmpty
+
+        Should -Invoke Get-AuthToken -Times 1 -Exactly
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
     }
 }
 
@@ -227,12 +455,23 @@ namespace Spectre.Console {
         private readonly IAnsiConsoleInput _input = new TestAnsiConsoleInput();
         public IAnsiConsoleInput Input { get { return _input; } }
     }
+    public class SelectionPromptItem<T> {
+        private readonly System.Collections.Generic.List<T> _choices;
+        public SelectionPromptItem(System.Collections.Generic.List<T> choices) { _choices = choices; }
+        public SelectionPromptItem<T> AddChild(T value) {
+            _choices.Add(value);
+            return this;
+        }
+    }
     public class SelectionPrompt<T> {
         public string MoreChoicesText, SearchPlaceholderText;
         public bool WrapAround, SearchEnabled;
         public int PageSize;
         public System.Collections.Generic.List<T> Choices = new System.Collections.Generic.List<T>();
-        public void AddChoice(T value) { Choices.Add(value); }
+        public SelectionPromptItem<T> AddChoice(T value) {
+            Choices.Add(value);
+            return new SelectionPromptItem<T>(Choices);
+        }
         public System.Threading.Tasks.Task<T> ShowAsync(object console, System.Threading.CancellationToken token) {
             token.ThrowIfCancellationRequested();
             ((IAnsiConsole)console).Input.ReadKeyAsync(true, token).GetAwaiter().GetResult();
@@ -397,6 +636,135 @@ Describe 'Setup selector state transitions' {
         $script:menuAnswers.Count | Should -Be 0
     }
 
+    It 'shows the selected branch setup before opening its edit menu' {
+        $script:menuAnswers.Enqueue('Done')
+        $initial = @(
+            [pscustomobject]@{ BranchName = 'main'; Environments = @() }
+            [pscustomobject]@{
+                BranchName = 'develop'
+                DevEnvironmentConfiguration = [pscustomobject]@{ ShortName = 'Dev-develop' }
+                Environments = @([pscustomobject]@{ ShortName = 'PROD' })
+                BuildValidationEnabled = $true
+                BuildValidationEnvironmentName = 'Build-develop'
+                BuildValidationBaselineRelease = 'stable'
+            }
+        )
+        Mock Show-BranchEnvironmentMappingTable {
+            $script:branchSummaryMappings = @($BranchMappings)
+        }
+
+        $result = @(Select-BranchEnvironmentMapping `
+            -InitialBranchMappings $initial `
+            -BranchOnly `
+            -InitialEditTarget ([pscustomobject]@{ Kind = 'Branch'; BranchName = 'develop' }))
+
+        @($result.BranchName) | Should -Be @('main', 'develop')
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
+            $Title -eq "Edit branch 'develop'"
+        }
+        Should -Invoke Show-BranchEnvironmentMappingTable -Times 1 -Exactly -ParameterFilter {
+            $BranchMappings.Count -eq 1 -and $BranchMappings[0].BranchName -eq 'develop'
+        }
+        $script:branchSummaryMappings[0].DevEnvironmentConfiguration.ShortName | Should -Be 'Dev-develop'
+        $script:branchSummaryMappings[0].Environments[0].ShortName | Should -Be 'PROD'
+        $script:branchSummaryMappings[0].BuildValidationEnvironmentName | Should -Be 'Build-develop'
+        $script:branchSummaryMappings[0].BuildValidationBaselineRelease | Should -Be 'stable'
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'opens the selected DEV environment editor directly from the setup menu' {
+        $initial = [pscustomobject]@{
+            BranchName = 'main'
+            DevEnvironmentConfiguration = [pscustomobject]@{ ShortName = 'Dev-main' }
+            Environments = @()
+            BuildValidationEnabled = $false
+        }
+        $target = [pscustomobject]@{
+            Kind = 'DevEnvironment'
+            BranchName = 'main'
+            EnvironmentName = 'Dev-main'
+        }
+
+        $result = @(Select-BranchEnvironmentMapping `
+            -InitialBranchMappings @($initial) `
+            -BranchOnly `
+            -InitialEditTarget $target `
+            -EditDevEnvironmentScriptBlock {
+                param($allMappings, $mappingToEdit, $environmentNameToEdit)
+                @($allMappings).Count | Should -Be 1
+                $mappingToEdit.BranchName | Should -Be main
+                $environmentNameToEdit | Should -Be 'Dev-main'
+                [pscustomobject]@{ ShortName = 'Dev-updated' }
+            })
+
+        $result[0].DevEnvironmentConfiguration.ShortName | Should -Be 'Dev-updated'
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'opens the selected deployment environment editor for that branch and environment' {
+        $initial = [pscustomobject]@{
+            BranchName = 'main'
+            Environments = @([pscustomobject]@{ ShortName = 'PROD' }, [pscustomobject]@{ ShortName = 'TEST' })
+            BuildValidationEnabled = $false
+        }
+        $target = [pscustomobject]@{
+            Kind = 'DeploymentEnvironment'
+            BranchName = 'main'
+            EnvironmentName = 'TEST'
+        }
+
+        $result = @(Select-BranchEnvironmentMapping `
+            -InitialBranchMappings @($initial) `
+            -BranchOnly `
+            -InitialEditTarget $target `
+            -EditDeploymentEnvironmentsScriptBlock {
+                param($allMappings, $mappingToEdit, $environmentNameToEdit)
+                @($allMappings).Count | Should -Be 1
+                $mappingToEdit.BranchName | Should -Be main
+                $environmentNameToEdit | Should -Be TEST
+                @([pscustomobject]@{ ShortName = 'PROD' }, [pscustomobject]@{ ShortName = 'UAT' })
+            })
+
+        $result[0].Environments.ShortName | Should -Be @('PROD', 'UAT')
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'opens the selected BUILD-validation editor directly from the setup menu' {
+        $initial = [pscustomobject]@{
+            BranchName = 'main'
+            Environments = @()
+            BuildValidationEnabled = $true
+            BuildValidationEnvironmentName = 'Build-main'
+        }
+        $target = [pscustomobject]@{
+            Kind = 'BuildValidation'
+            BranchName = 'main'
+            EnvironmentName = 'Build-main'
+        }
+
+        $result = @(Select-BranchEnvironmentMapping `
+            -InitialBranchMappings @($initial) `
+            -BranchOnly `
+            -InitialEditTarget $target `
+            -EditBuildValidationScriptBlock {
+                param($allMappings, $mappingToEdit, $environmentNameToEdit)
+                @($allMappings).Count | Should -Be 1
+                $mappingToEdit.BranchName | Should -Be main
+                $environmentNameToEdit | Should -Be 'Build-main'
+                [pscustomobject]@{
+                    BuildValidationEnabled = $true
+                    BuildValidationEnvironmentName = 'Build-updated'
+                    BuildValidationBaselineRelease = ''
+                    BuildValidationEnvironmentConfiguration = $null
+                    ExistingBuildValidationEnvironment = $null
+                }
+            })
+
+        $result[0].BuildValidationEnabled | Should -BeTrue
+        $result[0].BuildValidationEnvironmentName | Should -Be 'Build-updated'
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
     It 'renames a branch, assigns a target exclusively, then removes another branch' {
         foreach ($answer in @('Edit a branch mapping', 'main', 'Rename branch', 'Assign environments', 'QA - QA [not selected]', 'Done', 'Done', 'Remove a branch mapping', 'develop', 'Done')) { $script:menuAnswers.Enqueue($answer) }
         $script:textAnswers.Enqueue('release')
@@ -426,6 +794,35 @@ Describe 'Setup selector state transitions' {
         $result.Count | Should -Be 1
         $result[0].FriendlyName | Should -Be Edited
     }
+
+    It 'jumps directly to editing a selected deployment environment' {
+        Mock Show-EnvironmentConfigurationTable {}
+        $initialEnvironment = [pscustomobject]@{
+            ShortName = 'TEST'
+            FriendlyName = 'Test'
+            Url = 'https://test.example.com'
+        }
+
+        $result = @(Select-ConfiguredDeploymentEnvironment `
+            -InitialEnvironments @($initialEnvironment) `
+            -InitialEditEnvironmentName 'TEST' `
+            -AddEnvironmentScriptBlock { throw 'The focused editor must not add an environment.' } `
+            -EditEnvironmentScriptBlock {
+                param($currentSelections, $environment, $index)
+                @($currentSelections).Count | Should -Be 1
+                $index | Should -Be 0
+                $environment.ShortName | Should -Be TEST
+                [pscustomobject]@{
+                    ShortName = 'UAT'
+                    FriendlyName = 'Updated'
+                    Url = 'https://uat.example.com'
+                }
+            })
+
+        $result.Count | Should -Be 1
+        $result[0].ShortName | Should -Be UAT
+        $script:menuAnswers.Count | Should -Be 0
+    }
 }
 
 Describe 'Setup wizard navigation menu' {
@@ -433,9 +830,13 @@ Describe 'Setup wizard navigation menu' {
         Mock Initialize-SpectreConsole {}
         $script:wizardSelections = [System.Collections.Generic.Queue[int]]::new()
         $script:wizardMenuItems = @()
+        $script:wizardActionMenuItems = @()
+        $script:wizardActionSectionsFirst = @()
         [Spectre.Console.AnsiConsole]::Keys.Clear()
         Mock Select-FromMenu {
             $script:wizardMenuItems += ,@($Items)
+            $script:wizardActionMenuItems += ,@($ActionItems)
+            $script:wizardActionSectionsFirst += [bool]$ActionSectionFirst
             if ($script:wizardSelections.Count -eq 0) {
                 throw "Unexpected setup menu: $Title"
             }
@@ -445,7 +846,7 @@ Describe 'Setup wizard navigation menu' {
     }
 
     It 'allows existing repositories to jump between steps and invalidates later completion' {
-        foreach ($selection in @(1, 0, 1, 2)) {
+        foreach ($selection in @(1, 0, 1, 0)) {
             $script:wizardSelections.Enqueue($selection)
         }
         $script:stepCalls = @{ First = 0; Second = 0; Apply = 0 }
@@ -463,11 +864,12 @@ Describe 'Setup wizard navigation menu' {
         $script:stepCalls.First | Should -Be 1
         $script:stepCalls.Second | Should -Be 2
         $script:stepCalls.Apply | Should -Be 1
+        $script:wizardMenuItems.Count | Should -Be 4
         $script:wizardSelections.Count | Should -Be 0
     }
 
     It 'limits new repositories to the furthest step reached' {
-        foreach ($selection in @(1, 0, 1, 2)) {
+        foreach ($selection in @(0, 1, 0)) {
             $script:wizardSelections.Enqueue($selection)
         }
         $script:stepCalls = @{ First = 0; Second = 0; Apply = 0 }
@@ -483,16 +885,38 @@ Describe 'Setup wizard navigation menu' {
         $script:stepCalls.First | Should -Be 1
         $script:stepCalls.Second | Should -Be 1
         $script:stepCalls.Apply | Should -Be 1
+        $script:wizardMenuItems.Count | Should -Be 3
         $script:wizardSelections.Count | Should -Be 0
+    }
+
+    It 'returns to a nested editor caller without showing the whole-setup exit action' {
+        Mock Select-FromMenu {
+            $script:wizardMenuItems += ,@($Items)
+            $script:wizardActionMenuItems += ,@($ActionItems)
+            return $null
+        }
+        $steps = @([pscustomobject]@{ Name = 'Configure'; Action = {} })
+
+        $result = Invoke-SetupWizard `
+            -Title 'Environment details' `
+            -Steps $steps `
+            -ApplyAction { 'done' } `
+            -ApplyActionName 'Done' `
+            -ReturnToCaller
+
+        $result | Should -BeNullOrEmpty
+        $script:wizardMenuItems.Count | Should -Be 1
+        $script:wizardMenuItems[0] | Should -Not -Contain 'Exit without applying changes'
+        $script:wizardActionMenuItems[0] | Should -Not -Contain 'Exit without applying changes'
     }
 
     It 'shows configured summaries and reevaluates dynamic summaries after a step runs' {
         $script:wizardSummaryState = @{ Branches = 'Not configured' }
         $script:wizardSelections.Enqueue(0)
-        $script:wizardSelections.Enqueue(1)
+        $script:wizardSelections.Enqueue(0)
         $steps = @(
             [pscustomobject]@{
-                Name = 'Configure branches'
+                Name = 'Configure repository settings'
                 Summary = { $script:wizardSummaryState.Branches }
                 Action = { $script:wizardSummaryState.Branches = 'main (PROD)' }
             }
@@ -501,13 +925,347 @@ Describe 'Setup wizard navigation menu' {
         Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {}
 
         $script:wizardMenuItems.Count | Should -Be 2
-        $script:wizardMenuItems[0][0] | Should -Be '[ ] Configure branches - Not configured'
-        $script:wizardMenuItems[1][0] | Should -Be '[done] Configure branches - main (PROD)'
-        $script:wizardMenuItems[1][1] | Should -Be 'Apply changes - Ready'
+        $script:wizardMenuItems[0][0] | Should -Be '[ ] Configure repository settings - Not configured'
+        $script:wizardMenuItems[1][0] | Should -Be 'Apply changes - Ready'
+        $script:wizardMenuItems[1][1] | Should -Be 'Exit without applying changes'
+        $script:wizardMenuItems[1][2] | Should -Be '[✓] Configure repository settings - main (PROD)'
+    }
+
+    It 'guides a new environment through sequential detail steps and keeps secrets out of summaries' {
+        foreach ($selection in @(0, 1, 2, 3, 4, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $credential = [pscustomobject]@{
+            Name = 'Example deployment app'
+            ApplicationId = 'example-app-id'
+            AuthType = 'WIF'
+            ClientSecret = 'must-not-be-displayed'
+        }
+        $script:environmentTestCredential = $credential
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title 'Configure deployment environment' `
+            -SelectDataverseEnvironmentAction {
+                [pscustomobject]@{ FriendlyName = 'Test'; Url = 'https://test.example.com/' }
+            } `
+            -SelectTargetNameAction { 'TEST' } `
+            -SelectCredentialsAction { $script:environmentTestCredential } `
+            -SelectServiceAccountAction { 'service@example.com' } `
+            -SelectBaselineAction { '@PROD' }
+
+        $result.ShortName | Should -Be 'TEST'
+        $result.FriendlyName | Should -Be 'Test'
+        $result.Url | Should -Be 'https://test.example.com'
+        $result.Credentials | Should -Be $credential
+        $result.ServiceAccountUPN | Should -Be 'service@example.com'
+        $result.BaselineRelease | Should -Be '@PROD'
+        $script:wizardMenuItems[0] | Should -Contain '[ ] Target name - Not configured (locked; complete earlier steps first)'
+        $script:wizardMenuItems[1] | Should -Contain '[✓] Dataverse environment - Test (https://test.example.com)'
+        $script:wizardMenuItems[1] | Should -Contain '[ ] Credentials - Not configured (locked; complete earlier steps first)'
+        (($script:wizardMenuItems | ForEach-Object { $_ -join ' ' }) -join "`n") |
+            Should -Not -Match 'must-not-be-displayed'
+        $script:wizardSelections.Count | Should -Be 0
+    }
+
+    It 'shows branch-generated DEV target names as complete and locked' {
+        Mock Select-FromMenu {
+            $script:wizardMenuItems += ,@($Items)
+            $script:wizardActionMenuItems += ,@($ActionItems)
+            return $null
+        }
+        $configuration = [pscustomobject]@{
+            ShortName = 'Dev-main'
+            FriendlyName = 'Example Development'
+            Url = 'https://development.example.invalid'
+            Credentials = [pscustomobject]@{ Name = 'Example DEV app'; ApplicationId = 'example-dev'; AuthType = 'WIF' }
+            ServiceAccountUPN = 'automation@example.invalid'
+        }
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title "Configure DEV environment for branch 'main'" `
+            -InitialConfiguration $configuration `
+            -TargetNameIsFixed `
+            -SelectDataverseEnvironmentAction { throw 'No edit action should run.' } `
+            -SelectCredentialsAction { $configuration.Credentials } `
+            -SelectServiceAccountAction { $configuration.ServiceAccountUPN }
+
+        $result | Should -BeNullOrEmpty
+        $script:wizardMenuItems[0] | Should -Contain '[✓] Target name - Dev-main (generated from branch) (locked)'
+    }
+
+    It 'clears credentials and service-account ownership when the Dataverse environment changes' {
+        foreach ($selection in @(1, 1, 2, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $oldCredential = [pscustomobject]@{ Name = 'Old app'; ApplicationId = 'old-app'; AuthType = 'WIF' }
+        $newCredential = [pscustomobject]@{ Name = 'New app'; ApplicationId = 'new-app'; AuthType = 'WIF' }
+        $script:environmentTestCredential = $newCredential
+        $initialConfiguration = [pscustomobject]@{
+            ShortName = 'TEST'
+            FriendlyName = 'Old'
+            Url = 'https://old.example.com'
+            Credentials = $oldCredential
+            ServiceAccountUPN = 'old-service@example.com'
+        }
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title 'Configure deployment environment' `
+            -InitialConfiguration $initialConfiguration `
+            -SelectDataverseEnvironmentAction {
+                [pscustomobject]@{ FriendlyName = 'New'; Url = 'https://new.example.com' }
+            } `
+            -SelectCredentialsAction {
+                param($environmentState)
+                $environmentState.Credentials | Should -BeNullOrEmpty
+                $script:environmentTestCredential
+            } `
+            -SelectServiceAccountAction {
+                param($environmentState)
+                $environmentState.ServiceAccountUPN | Should -BeNullOrEmpty
+                'new-service@example.com'
+            }
+
+        $result.Url | Should -Be 'https://new.example.com'
+        $result.Credentials | Should -Be $newCredential
+        $result.ServiceAccountUPN | Should -Be 'new-service@example.com'
+        $script:wizardSelections.Count | Should -Be 0
+    }
+
+    It 'shows nested step rows and passes the selected subitem target to its action' {
+        $script:wizardSelections.Enqueue(2)
+        $script:wizardSelections.Enqueue(0)
+        $script:selectedMenuTargets = @()
+        $steps = @(
+            [pscustomobject]@{
+                Name = 'Configure branches, dev and deployment envs'
+                Summary = { throw 'Subitem rows replace the compact summary.' }
+                SubItems = {
+                    @(
+                        [pscustomobject]@{
+                            Label = 'main'
+                            Depth = 1
+                            Target = [pscustomobject]@{ Kind = 'Branch'; BranchName = 'main' }
+                        }
+                        [pscustomobject]@{
+                            Label = 'DEV: Dev-main (main)'
+                            Depth = 2
+                            Target = [pscustomobject]@{ Kind = 'DevEnvironment'; BranchName = 'main'; EnvironmentName = 'Dev-main' }
+                        }
+                    )
+                }
+                Action = {
+                    param($selectedTarget)
+                    $script:selectedMenuTargets += $selectedTarget
+                }
+            }
+        )
+
+        $result = Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction { 'applied' }
+
+        $result | Should -Be applied
+        $script:wizardMenuItems[0] | Should -Be @(
+            '[ ] Configure branches, dev and deployment envs'
+            '  main'
+            '    DEV: Dev-main (main)'
+            'Apply changes (finish all setup steps first) - Not ready'
+            'Exit without applying changes'
+        )
+        $script:wizardMenuItems[1][2] | Should -Be '[✓] Configure branches, dev and deployment envs'
+        $script:selectedMenuTargets.Count | Should -Be 1
+        $script:selectedMenuTargets[0].Kind | Should -Be DevEnvironment
+        $script:selectedMenuTargets[0].BranchName | Should -Be main
+    }
+
+    It 'shows an unavailable shared repository as incomplete with its reason until selected' {
+        $script:wizardSharedRepositoryState = @{
+            ValidationError = "Configured repository 'old-templates' was not found."
+        }
+        $script:wizardSelections.Enqueue(0)
+        $script:wizardSelections.Enqueue(0)
+        $steps = @(
+            [pscustomobject]@{
+                Name = 'Select shared repository'
+                Summary = {
+                    if ($script:wizardSharedRepositoryState.ValidationError) {
+                        "Unavailable: $($script:wizardSharedRepositoryState.ValidationError)"
+                    }
+                    else {
+                        'shared-templates (main)'
+                    }
+                }
+                Action = { $script:wizardSharedRepositoryState.ValidationError = '' }
+                IsComplete = $false
+            }
+        )
+
+        Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {}
+
+        $script:wizardMenuItems.Count | Should -Be 2
+        $script:wizardMenuItems[0][0] | Should -Be '[ ] Select shared repository - Unavailable: Configured repository ''old-templates'' was not found.'
+        $script:wizardMenuItems[1][1] | Should -Be 'Exit without applying changes'
+        $script:wizardMenuItems[1][2] | Should -Be '[✓] Select shared repository - shared-templates (main)'
+    }
+
+    It 'keeps incomplete steps in supplied order and puts Apply first only when ready' {
+        foreach ($selection in @(0, 1, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:stepCalls = @{ First = 0; Second = 0; Apply = 0 }
+        $steps = @(
+            [pscustomobject]@{ Name = 'First'; Action = { $script:stepCalls.First++ } }
+            [pscustomobject]@{ Name = 'Second'; Action = { $script:stepCalls.Second++ } }
+        )
+
+        $result = Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {
+            $script:stepCalls.Apply++
+            'applied'
+        }
+
+        $result | Should -Be applied
+        $script:wizardMenuItems.Count | Should -Be 3
+        $script:wizardMenuItems[0][0] | Should -Be '[ ] First - Not configured'
+        $script:wizardMenuItems[0][1] | Should -Be '[ ] Second - Not configured'
+        $script:wizardMenuItems[0][2] | Should -Be 'Apply changes (finish all setup steps first) - Not ready'
+        $script:wizardMenuItems[0][3] | Should -Be 'Exit without applying changes'
+        $script:wizardMenuItems[1][0] | Should -Be '[✓] First - Complete'
+        $script:wizardMenuItems[1][1] | Should -Be '[ ] Second - Not configured'
+        $script:wizardMenuItems[1][2] | Should -Be 'Apply changes (finish all setup steps first) - Not ready'
+        $script:wizardMenuItems[1][3] | Should -Be 'Exit without applying changes'
+        $script:wizardMenuItems[2][0] | Should -Be 'Apply changes - Ready'
+        $script:wizardMenuItems[2][1] | Should -Be 'Exit without applying changes'
+        $script:stepCalls.First | Should -Be 1
+        $script:stepCalls.Second | Should -Be 1
+        $script:stepCalls.Apply | Should -Be 1
+    }
+
+    It 'keeps Preview optional and unavailable until required setup steps are complete' {
+        foreach ($selection in @(1, 0, 1, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:previewCalls = 0
+        $script:stepCalls = @{ Configure = 0; Apply = 0 }
+        $steps = @(
+            [pscustomobject]@{ Name = 'Configure'; Action = { $script:stepCalls.Configure++ } }
+        )
+
+        Invoke-SetupWizard -Title 'Setup' -Steps $steps -PreviewAction {
+            $script:previewCalls++
+        } -ApplyAction {
+            $script:stepCalls.Apply++
+        }
+
+        $script:previewCalls | Should -Be 1
+        $script:stepCalls.Configure | Should -Be 1
+        $script:stepCalls.Apply | Should -Be 1
+        $script:wizardMenuItems.Count | Should -Be 4
+        $script:wizardMenuItems[0] | Should -Be $script:wizardMenuItems[1]
+        $script:wizardMenuItems[0][1] | Should -Be 'Preview changes (finish all setup steps first) - Not ready'
+        $script:wizardMenuItems[0][2] | Should -Be 'Apply changes (finish all setup steps first) - Not ready'
+        $script:wizardMenuItems[0][3] | Should -Be 'Exit without applying changes'
+        $script:wizardMenuItems[2][0] | Should -Be 'Apply changes - Ready'
+        $script:wizardMenuItems[2][1] | Should -Be 'Preview changes'
+        $script:wizardMenuItems[2][2] | Should -Be 'Exit without applying changes'
+        $script:wizardMenuItems[2] | Should -Be $script:wizardMenuItems[3]
+        $script:wizardActionMenuItems[0] | Should -Contain 'Preview changes (finish all setup steps first) - Not ready'
+        $script:wizardActionMenuItems[0] | Should -Contain 'Apply changes (finish all setup steps first) - Not ready'
+        $script:wizardActionMenuItems[0] | Should -Contain 'Exit without applying changes'
+        $script:wizardActionMenuItems[2] | Should -Contain 'Preview changes'
+        $script:wizardActionMenuItems[2] | Should -Contain 'Apply changes - Ready'
+        $script:wizardActionMenuItems[2] | Should -Contain 'Exit without applying changes'
+        $script:wizardActionSectionsFirst[0] | Should -BeFalse
+        $script:wizardActionSectionsFirst[1] | Should -BeFalse
+        $script:wizardActionSectionsFirst[2] | Should -BeTrue
+        $script:wizardActionSectionsFirst[3] | Should -BeTrue
+    }
+
+    It 'allows Apply after required steps without selecting Preview' {
+        foreach ($selection in @(0, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:previewCalls = 0
+        $script:applyCalls = 0
+        $steps = @(
+            [pscustomobject]@{ Name = 'Configure'; Action = {} }
+        )
+
+        Invoke-SetupWizard -Title 'Setup' -Steps $steps -PreviewAction {
+            $script:previewCalls++
+        } -ApplyAction {
+            $script:applyCalls++
+        }
+
+        $script:previewCalls | Should -Be 0
+        $script:applyCalls | Should -Be 1
+        $script:wizardMenuItems[1][0] | Should -Be 'Apply changes - Ready'
+    }
+
+    It 'requires confirmation before exiting without applying changes' {
+        $script:wizardSelections.Enqueue(1)
+        $script:applyCalls = 0
+        $steps = @(
+            [pscustomobject]@{ Name = 'Complete'; Action = {}; IsComplete = $true }
+        )
+        Mock Read-YesNo { $true }
+
+        {
+            Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {
+                $script:applyCalls++
+            }
+        } | Should -Throw '*Setup exited without applying changes.*'
+
+        $script:applyCalls | Should -Be 0
+        $script:wizardActionMenuItems[0] | Should -Contain 'Exit without applying changes'
+        Should -Invoke Read-YesNo -Times 1 -Exactly -ParameterFilter {
+            $Prompt -eq 'Exit setup without applying changes?' -and $DefaultNo
+        }
+    }
+
+    It 'returns to the menu when exit confirmation is declined' {
+        foreach ($selection in @(1, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:applyCalls = 0
+        $steps = @(
+            [pscustomobject]@{ Name = 'Complete'; Action = {}; IsComplete = $true }
+        )
+        Mock Read-YesNo { $false }
+
+        $result = Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {
+            $script:applyCalls++
+            'applied'
+        }
+
+        $result | Should -Be applied
+        $script:applyCalls | Should -Be 1
+        $script:wizardMenuItems.Count | Should -Be 2
+        Should -Invoke Read-YesNo -Times 1 -Exactly -ParameterFilter { $DefaultNo }
+    }
+
+    It 'returns to the menu when exit confirmation is escaped' {
+        foreach ($selection in @(1, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:applyCalls = 0
+        $steps = @(
+            [pscustomobject]@{ Name = 'Complete'; Action = {}; IsComplete = $true }
+        )
+        Mock Read-YesNo {
+            throw [System.InvalidOperationException]::new('__ALM4DATAVERSE_WIZARD_BACK__')
+        }
+
+        $result = Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {
+            $script:applyCalls++
+            'applied'
+        }
+
+        $result | Should -Be applied
+        $script:applyCalls | Should -Be 1
+        $script:wizardMenuItems.Count | Should -Be 2
+        Should -Invoke Read-YesNo -Times 1 -Exactly
     }
 
     It 'returns to the menu after apply fails and preserves selections for retry' {
-        foreach ($selection in @(0, 1, 1)) {
+        foreach ($selection in @(0, 0, 0)) {
             $script:wizardSelections.Enqueue($selection)
         }
         $script:stepCalls = @{ Configure = 0; Apply = 0 }
@@ -531,34 +1289,76 @@ Describe 'Setup wizard navigation menu' {
     }
 }
 
-Describe 'Setup menu summaries' {
-    It 'lists branch environments and BUILD-validation targets compactly' {
+Describe 'Setup menu branch items' {
+    It 'summarizes each selectable environment without exposing credential secrets' {
         $branchStates = @(
             [pscustomobject]@{
                 BranchName = 'main'
                 DevEnvironmentConfiguration = $null
-                DeploymentEnvironments = @([pscustomobject]@{ ShortName = 'PROD' })
+                DeploymentEnvironments = @([pscustomobject]@{
+                    ShortName = 'PROD'
+                    FriendlyName = 'Production'
+                    Url = 'https://prod.example.com'
+                    Credentials = [pscustomobject]@{ Name = 'Prod deployment'; ApplicationId = 'prod-app'; AuthType = 'WIF'; ClientSecret = 'must-not-be-displayed' }
+                    ServiceAccountUPN = 'deploy@example.com'
+                })
                 BuildValidationEnabled = $false
             },
             [pscustomobject]@{
                 BranchName = 'develop'
-                DevEnvironmentConfiguration = [pscustomobject]@{ ShortName = 'Dev-develop' }
-                DeploymentEnvironments = @([pscustomobject]@{ ShortName = 'TEST' })
+                DevEnvironmentConfiguration = [pscustomobject]@{
+                    ShortName = 'Dev-develop'
+                    FriendlyName = 'Development'
+                    Url = 'https://dev.example.com'
+                    Credentials = [pscustomobject]@{ Name = 'Dev app'; ApplicationId = 'dev-app'; AuthType = 'WIF'; ClientSecret = 'must-not-be-displayed' }
+                    ServiceAccountUPN = 'dev@example.com'
+                }
+                DeploymentEnvironments = @([pscustomobject]@{
+                    ShortName = 'TEST'
+                    FriendlyName = 'Testing'
+                    Url = 'https://test.example.com'
+                    Credentials = [pscustomobject]@{ Name = 'Test app'; ApplicationId = 'test-app'; AuthType = 'Secret'; ClientSecret = 'must-not-be-displayed' }
+                    ServiceAccountUPN = 'test@example.com'
+                })
                 BuildValidationEnabled = $true
                 BuildValidationEnvironmentName = 'Build-develop'
+                BuildValidationEnvironmentConfiguration = [pscustomobject]@{
+                    ShortName = 'Build-develop'
+                    FriendlyName = 'Validation'
+                    Url = 'https://build.example.com'
+                    Credentials = [pscustomobject]@{ Name = 'Build app'; ApplicationId = 'build-app'; AuthType = 'WIF'; ClientSecret = 'must-not-be-displayed' }
+                    ServiceAccountUPN = 'build@example.com'
+                }
+                BuildValidationBaselineRelease = '@PROD'
             }
         )
 
-        Get-SetupBranchMenuSummary -BranchStates $branchStates |
-            Should -Be 'main (PROD), develop (DEV-develop, TEST, BUILD:Build-develop)'
-        Get-SetupBranchMenuSummary -BranchStates @() | Should -Be 'Not configured'
-        Get-SetupBranchMenuSummary -BranchStates @(
+        $items = @(Get-SetupBranchMenuItem -BranchStates $branchStates)
+        $items.Label | Should -Be @(
+            'main'
+            'Deployment: PROD (main) - Dataverse: Production (https://prod.example.com); Credentials: WIF - Prod deployment; Service account: deploy@example.com'
+            'develop'
+            'DEV: Dev-develop (develop) - Dataverse: Development (https://dev.example.com); Credentials: WIF - Dev app; Service account: dev@example.com'
+            'Deployment: TEST (develop) - Dataverse: Testing (https://test.example.com); Credentials: Secret - Test app; Service account: test@example.com'
+            'BUILD validation: Build-develop (develop) - Dataverse: Validation (https://build.example.com); Credentials: WIF - Build app; Service account: build@example.com; Baseline: @PROD'
+        )
+        ($items.Label -join "`n") | Should -Not -Match 'must-not-be-displayed'
+        $items.Depth | Should -Be @(1, 2, 1, 2, 2, 2)
+        $items.Target.Kind | Should -Be @('Branch', 'DeploymentEnvironment', 'Branch', 'DevEnvironment', 'DeploymentEnvironment', 'BuildValidation')
+        $items[1].Target.EnvironmentName | Should -Be PROD
+        $items[4].Target.EnvironmentName | Should -Be TEST
+        $items[5].Target.EnvironmentName | Should -Be 'Build-develop'
+        @(Get-SetupBranchMenuItem -BranchStates @()).Count | Should -Be 0
+        $emptyBranchItems = @(Get-SetupBranchMenuItem -BranchStates @(
             [pscustomobject]@{
                 BranchName = 'main'
                 Environments = @()
                 BuildValidationEnabled = $false
             }
-        ) | Should -Be 'main (no envs)'
+        ))
+        $emptyBranchItems.Count | Should -Be 1
+        $emptyBranchItems[0].Label | Should -Be main
+        $emptyBranchItems[0].Depth | Should -Be 1
     }
 
     It 'lists selected direct and pull-request publication plans' {
@@ -667,6 +1467,75 @@ Describe 'Shared setup prompt and rendering contracts' {
             -PromptGuidanceLines @('Choose the environment to configure.')
 
         $script:setupDashboardMessages | Should -Be @('Select a deployment environment')
+    }
+
+    It 'shows the product mark, name and version when branding is requested' {
+        $previousVersion = Get-Variable -Name 'ALM4DataverseVersion' -Scope Script -ErrorAction SilentlyContinue
+        Mock Write-SetupConsoleBar { $false }
+        try {
+            $script:ALM4DataverseVersion = 'v1.2.3'
+            Write-SetupDashboard -Message 'Choose setup type' -ShowProductBrand
+
+            $renderedDashboard = [Spectre.Console.AnsiConsole]::Output -join "`n"
+            $renderedDashboard | Should -Match '⢀⣠⣤⣶'
+            $renderedDashboard | Should -Not -Match '∞'
+            $renderedDashboard | Should -Not -Match '█'
+            $renderedDashboard | Should -Match 'ALM4Dataverse'
+            $renderedDashboard | Should -Match 'v1\.2\.3'
+            $renderedDashboardLines = @($renderedDashboard -split "`n")
+            $brandNameRows = @($renderedDashboardLines | Where-Object { $_ -match '\[bold\]ALM4Dataverse\[/\]' })
+            $brandVersionRows = @($renderedDashboardLines | Where-Object { $_ -match '\[grey\]v1\.2\.3\[/\]' })
+            $brandNameRows.Count | Should -Be 1
+            $brandVersionRows.Count | Should -Be 1
+            $brandNameRows[0] | Should -Match '\[bold green\].*⡜.*\[/\]    \[bold\]ALM4Dataverse\[/\]'
+            $brandVersionRows[0] | Should -Match '\[bold green\].*⠐⣝.*\[/\]    \[grey\]v1\.2\.3\[/\]'
+            $headerIndex = $renderedDashboard.IndexOf('ALM4Dataverse Setup - Choose setup type')
+            $brandIconIndex = $renderedDashboard.IndexOf('⢀⣠⣤⣶')
+            $brandNameRowIndex = [Array]::IndexOf($renderedDashboardLines, $brandNameRows[0])
+            $brandVersionRowIndex = [Array]::IndexOf($renderedDashboardLines, $brandVersionRows[0])
+            $brandNameIndex = $renderedDashboard.IndexOf('[bold]ALM4Dataverse[/]')
+            $brandVersionIndex = $renderedDashboard.IndexOf('[grey]v1.2.3[/]')
+            (
+                $headerIndex -ge 0 -and
+                $headerIndex -lt $brandIconIndex -and
+                $brandIconIndex -lt $brandNameIndex -and
+                $brandNameIndex -lt $brandVersionIndex -and
+                ($brandVersionRowIndex - $brandNameRowIndex) -eq 2
+            ) |
+                Should -BeTrue
+        }
+        finally {
+            if ($null -eq $previousVersion) {
+                Remove-Variable -Name 'ALM4DataverseVersion' -Scope Script -ErrorAction SilentlyContinue
+            }
+            else {
+                $script:ALM4DataverseVersion = $previousVersion.Value
+            }
+        }
+    }
+
+    It 'leaves a blank line below the product mark before prompt content' {
+        Mock Show-SetupPromptGuidance {
+            [Spectre.Console.AnsiConsole]::MarkupLine('PROMPT CONTENT')
+        }
+
+        Write-SetupPromptFrame `
+            -PromptText 'Choose setup type' `
+            -PromptKind Menu `
+            -ShowProductBrand
+
+        $renderedLines = @(([Spectre.Console.AnsiConsole]::Output -join "`n") -split "`n")
+        $logoLineIndex = -1
+        for ($lineIndex = 0; $lineIndex -lt $renderedLines.Count; $lineIndex++) {
+            if ($renderedLines[$lineIndex] -match '⠉⠙⠛') {
+                $logoLineIndex = $lineIndex
+            }
+        }
+        $contentLineIndex = [Array]::IndexOf($renderedLines, 'PROMPT CONTENT')
+
+        ($logoLineIndex -ge 0) | Should -BeTrue
+        $renderedLines[$logoLineIndex + 1] | Should -Be ''
+        ($contentLineIndex - $logoLineIndex) | Should -Be 2
     }
 
     It 'keeps the active section in the setup header when rendering a prompt' {
@@ -862,6 +1731,28 @@ Describe 'Shared setup prompt and rendering contracts' {
         [Spectre.Console.AnsiConsole]::Answers.Enqueue('< Cancel setup')
         Select-FromMenu -Title Test -Items @('One') | Should -BeNullOrEmpty
         Select-FromMenu -Title Test -Items @() | Should -BeNullOrEmpty
+    }
+
+    It 'groups action choices separately, styles them, and preserves their item indexes' {
+        $script:actionPromptChoices = @()
+        Mock Show-SelectionPromptWithInterruptHandling {
+            $script:actionPromptChoices = @($Prompt.Choices)
+            $script:actionPromptChoices | Where-Object { $_ -like '*Preview changes*' } | Select-Object -First 1
+        }
+
+        Select-FromMenu `
+            -Title Test `
+            -Items @('Configure branches, dev and deployment envs', 'Preview changes', 'Apply changes - Not ready', 'Exit without applying changes') `
+            -ActionItems @('Preview changes', 'Apply changes - Not ready', 'Exit without applying changes') `
+            -ActionSectionTitle '---' |
+            Should -Be 1
+
+        $script:actionPromptChoices[0] | Should -Be '[bold]Setup steps[/]'
+        $script:actionPromptChoices[1] | Should -Be 'Configure branches, dev and deployment envs'
+        $script:actionPromptChoices[2] | Should -Be '[bold deepskyblue1]---[/]'
+        $script:actionPromptChoices[3] | Should -Be '[bold deepskyblue1]Preview changes[/]'
+        $script:actionPromptChoices[4] | Should -Be '[bold deepskyblue1]Apply changes - Not ready[/]'
+        $script:actionPromptChoices[5] | Should -Be '[bold deepskyblue1]Exit without applying changes[/]'
     }
 
     It 'supports searchable menus and requests back navigation from later wizard steps' {

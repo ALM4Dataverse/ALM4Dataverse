@@ -9,9 +9,8 @@ Application repositories receive the files in `copy-to-your-repo/`, whose
 - Read the [source map](docs/maintainers.md#source-map) to find where a behavior lives.
 - A user-visible contract usually spans the runtime script under `pipelines/scripts`,
   the Azure DevOps template under `pipelines/templates`, the GitHub action under
-  `.github/actions`, the callers in `copy-to-your-repo`, the setup generators
-  (`setup-azdo.ps1`, `setup-github.ps1`, `setup-common.ps1`) and the reference in
-  `docs/config`. Change them together.
+  `.github/actions`, the callers in `copy-to-your-repo`,   the setup entrypoints (`setup-azdo.ps1`, `setup-github.ps1`) and shared helper
+  modules under `setup/`, plus the reference in `docs/config`. Change them together.
 - Builds snapshot `pipelines/scripts` and `alm-config-defaults.psd1` into the artifact.
   Deployment code must work with what the artifact contains and fail with a rebuild
   instruction when a newer helper is missing.
@@ -24,8 +23,9 @@ Run from the repository root in PowerShell 7.2 or newer, without platform creden
 
 - `./scripts/Test-PowerShell.ps1` runs syntax and analyzer checks, then every Pester
   suite (including workflow and pipeline schema validation), then the coverage gate:
-  every added or modified `.ps1` or `.psm1` file needs at least 65% command coverage
-  across the whole file.
+  every added or modified PowerShell helper source file needs at least 65% command
+  coverage across the whole file. The two root setup entrypoints are syntax- and
+  release-tested, but are excluded from command coverage.
 - `./.github/scripts/test-documentation.ps1` checks Markdown links and anchors, fenced
   PowerShell, YAML and JSON, and that every configuration key, hook, action input and
   template parameter is documented in `docs/config`.

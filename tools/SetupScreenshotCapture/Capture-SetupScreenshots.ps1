@@ -130,7 +130,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'setup-mode-choice'
             Provider = 'common'
-            ExpectedText = 'Configure an existing repository'
+            ExpectedText = 'v0.0.0'
             Rows = 32
             Interactions = @()
         },
@@ -149,6 +149,13 @@ function Get-CaptureScene {
             Interactions = @()
         },
         [pscustomobject]@{
+            Name = 'github-menu-unavailable-shared-repository'
+            Provider = 'common'
+            ExpectedText = 'Unavailable:'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
             Name = 'azdo-menu-new-repository'
             Provider = 'common'
             ExpectedText = 'main (no envs)'
@@ -159,6 +166,13 @@ function Get-CaptureScene {
             Name = 'azdo-menu-existing-repository'
             Provider = 'common'
             ExpectedText = 'main (PROD)'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-menu-unavailable-shared-repository'
+            Provider = 'common'
+            ExpectedText = 'Unavailable:'
             Rows = 32
             Interactions = @()
         },
@@ -249,6 +263,13 @@ function Get-CaptureScene {
             Interactions = @()
         },
         [pscustomobject]@{
+            Name = 'environment-detail-menu'
+            Provider = 'common'
+            ExpectedText = 'Example Test'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
             Name = 'deployment-environment-plan'
             Provider = 'common'
             ExpectedText = 'Example Test'
@@ -305,17 +326,17 @@ function Get-CaptureScene {
             Provider = 'azdo'
             ExpectedText = 'Example Test'
             Rows = 32
-            Interactions = @([pscustomobject]@{ WaitForText = 'Add an environment'; Input = "`r" })
+            Interactions = @(
+                [pscustomobject]@{ WaitForText = 'Add an environment'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'Dataverse environment'; Input = "`r" }
+            )
         },
         [pscustomobject]@{
             Name = 'azdo-deployment-short-name'
             Provider = 'azdo'
             ExpectedText = 'Enter a short name for this environment'
             Rows = 32
-            Interactions = @(
-                [pscustomobject]@{ WaitForText = 'Add an environment'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = 'Example Test'; Input = "`r" }
-            )
+            Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-deployment-environment-plan'
@@ -377,7 +398,7 @@ function Get-RepositoryRoot {
     }
 
     while ($null -ne $directory) {
-        $setupCommonPath = Join-Path $directory.FullName 'setup-common.ps1'
+        $setupCommonPath = Join-Path $directory.FullName 'setup/setup-common.ps1'
         $setupDocsPath = Join-Path $directory.FullName 'docs/setup'
         if ((Test-Path -LiteralPath $setupCommonPath -PathType Leaf) -and
             (Test-Path -LiteralPath $setupDocsPath -PathType Container)) {
@@ -410,32 +431,17 @@ $ProgressPreference = 'SilentlyContinue'
 $repoRoot = {{REPO_ROOT}}
 $provider = {{PROVIDER}}
 $scene = {{SCENE}}
-. (Join-Path $repoRoot 'setup-common.ps1')
+. (Join-Path $repoRoot 'setup/setup-common.ps1')
 $script:ALM4DataverseRef = 'stable'
+$script:ALM4DataverseVersion = 'v0.0.0'
 $script:SetupDefaultHelpDocRelativePath = switch ($provider) {
     'github' { 'docs/setup/github-setup.md' }
     'azdo' { 'docs/setup/azdo-automated-setup.md' }
     default { 'docs/config/alm-config.md' }
 }
 
-function Import-SetupFunctionDefinitions {
-    param([Parameter(Mandatory)][string]$Path)
-
-    $tokens = $null
-    $parseErrors = $null
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$parseErrors)
-    if ($parseErrors) {
-        throw "Could not parse setup source '$Path': $($parseErrors[0].Message)"
-    }
-
-    # Define provider helpers without running installer startup or authentication code.
-    foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
-        Set-Item -Path "Function:script:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
-    }
-}
-
 if ($provider -ne 'common') {
-    Import-SetupFunctionDefinitions -Path (Join-Path $repoRoot "setup-$provider.ps1")
+    . (Join-Path $repoRoot "setup/setup-$provider.ps1")
 }
 
 function Get-VSTeamServiceEndpoint {
@@ -562,6 +568,7 @@ switch ($scene) {
     'setup-mode-choice' {
         Select-FromMenu `
             -Title 'Choose setup type' `
+            -ShowProductBrand `
             -Items @('Set up a new application repository', 'Configure an existing repository') `
             -PromptGuidanceLines @(
                 'Choose whether this run should create a new application repository or configure one that already exists.',
@@ -570,55 +577,34 @@ switch ($scene) {
             -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
             -PromptGuidanceRef $script:ALM4DataverseRef
     }
-    { $_ -in @('github-menu-new-repository', 'github-menu-existing-repository', 'azdo-menu-new-repository', 'azdo-menu-existing-repository') } {
+    { $_ -in @('github-menu-new-repository', 'github-menu-existing-repository', 'github-menu-unavailable-shared-repository', 'azdo-menu-new-repository', 'azdo-menu-existing-repository', 'azdo-menu-unavailable-shared-repository') } {
         $isGitHubSetup = $scene.StartsWith('github-', [StringComparison]::Ordinal)
-        $isExistingRepository = $scene -like '*existing-repository'
+        $isSharedRepositoryUnavailable = $scene -like '*unavailable-shared-repository'
+        $isExistingRepository = $scene -like '*existing-repository' -or $isSharedRepositoryUnavailable
         $setupTitle = if ($isGitHubSetup) {
             'GitHub Actions ALM4Dataverse setup'
         }
         else {
             'Azure DevOps ALM4Dataverse setup'
         }
-        $prerequisiteNames = if ($isGitHubSetup) {
-            @('Authenticate with GitHub and Azure', 'Select and inspect application repository')
-        }
-        else {
-            @('Authenticate with Azure DevOps', 'Select Azure DevOps organization', 'Select project and repositories')
-        }
         $stepNames = if ($isGitHubSetup) {
             @(
                 'Configure branches',
                 'Select solutions',
-                'Configure GitHub OIDC identity',
-                'Review setup changes'
+                'Configure GitHub OIDC identity'
             )
         }
         else {
             @(
                 'Configure branches',
-                'Select solutions',
-                'Review setup changes'
+                'Select solutions'
             )
-        }
-        $prerequisiteSummaries = if ($isGitHubSetup) {
-            @{
-                'Authenticate with GitHub and Azure' = 'Authenticated'
-                'Select and inspect application repository' = 'example-org/sample-app (main)'
-            }
-        }
-        else {
-            @{
-                'Authenticate with Azure DevOps' = 'Authenticated'
-                'Select Azure DevOps organization' = 'example-org'
-                'Select project and repositories' = 'ALM / sample-app; shared'
-            }
         }
         $branchSummaries = if ($isExistingRepository) {
             @{
                 'Configure branches' = 'main (PROD), develop (DEV-develop, TEST)'
                 'Select solutions' = 'develop: Core, Sales'
                 'Configure GitHub OIDC identity' = 'Immutable subjects'
-                'Review setup changes' = '4 files; 3 resources'
             }
         }
         else {
@@ -626,18 +612,31 @@ switch ($scene) {
                 'Configure branches' = 'main (no envs)'
             }
         }
-        $prerequisiteSteps = @(
-            foreach ($stepName in $prerequisiteNames) {
-                [pscustomobject]@{
-                    Name = $stepName
-                    Summary = $prerequisiteSummaries[$stepName]
-                    Action = {}
-                    IsComplete = $true
-                    IsLocked = $isExistingRepository
-                    LockAfterCompletion = $true
+        $sharedRepositoryStep = [pscustomobject]@{
+            Name = if ($isGitHubSetup) { 'Select shared workflow repository' } else { 'Select shared repository' }
+            Summary = if ($isSharedRepositoryUnavailable) {
+                if ($isGitHubSetup) {
+                    "Unavailable: Could not access configured repository 'example-org/old-templates'."
+                }
+                else {
+                    "Unavailable: Repository 'old-templates' was not found in project 'Example project'."
                 }
             }
-        )
+            elseif ($isGitHubSetup) {
+                'example-org/alm-templates (stable)'
+            }
+            else {
+                'alm-templates (stable)'
+            }
+            Action = {}
+            IsComplete = -not $isSharedRepositoryUnavailable
+        }
+        $sharedRepositoryVersionStep = [pscustomobject]@{
+            Name = if ($isGitHubSetup) { 'Check and update shared workflow repository version' } else { 'Check and update shared repository version' }
+            Summary = 'Upstream ref: stable'
+            Action = {}
+            IsComplete = $false
+        }
         $branchSteps = @(
             foreach ($stepName in $stepNames) {
                 $stepSummary = if ($branchSummaries.ContainsKey($stepName)) {
@@ -653,10 +652,11 @@ switch ($scene) {
                 }
             }
         )
-        $setupSteps = @($prerequisiteSteps) + $branchSteps
+        $setupSteps = @($sharedRepositoryStep, $sharedRepositoryVersionStep) + $branchSteps
         Invoke-SetupWizard `
             -Title $setupTitle `
             -Steps $setupSteps `
+            -PreviewAction {} `
             -ApplyAction {} `
             -IsNewRepository:($scene -like '*new-repository')
     }
@@ -903,6 +903,26 @@ switch ($scene) {
     'deployment-short-name' {
         Read-TextWithDefault -Prompt 'Enter a short name for this environment' -DefaultValue ''
     }
+    'environment-detail-menu' {
+        $incompleteDeploymentConfiguration = [pscustomobject]@{
+            FriendlyName = 'Example Test'
+            Url = 'https://test.example.invalid'
+            Credentials = $null
+            ServiceAccountUPN = ''
+        }
+        Invoke-SetupEnvironmentConfigurationWizard `
+            -Title "Configure deployment environment for branch 'main'" `
+            -SelectDataverseEnvironmentAction {
+                [pscustomobject]@{ FriendlyName = 'Example Test'; Url = 'https://test.example.invalid' }
+            } `
+            -InitialConfiguration $incompleteDeploymentConfiguration `
+            -TargetNameStepName 'Short name' `
+            -SelectTargetNameAction { 'TEST' } `
+            -SelectCredentialsAction { $credential } `
+            -SelectServiceAccountAction { $serviceAccount } `
+            -HelpDocRelativePath 'docs/setup/github-setup.md' `
+            -HelpRef $script:ALM4DataverseRef
+    }
     'deployment-environment-plan' {
         Select-ConfiguredDeploymentEnvironment `
             -InitialEnvironments @($testEnvironment, $productionEnvironment) `
@@ -939,12 +959,15 @@ switch ($scene) {
             -UseAlm4DataverseExtension $false
     }
     'azdo-deployment-short-name' {
-        Get-DataverseEnvironmentsSelection `
-            -ExcludedUrl $developmentEnvironment.Url `
-            -ProjectName 'Example project' `
-            -InitialEnvironments @() `
-            -TenantId 'example.invalid' `
-            -UseAlm4DataverseExtension $false
+        Read-TextWithDefault `
+            -Prompt 'Enter a short name for this environment' `
+            -DefaultValue '' `
+            -PromptGuidanceLines @(
+                'Use a concise name such as TEST, UAT, or PROD.',
+                'This label appears in setup summaries and must be unique within the branch.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef
     }
     'azdo-deployment-environment-plan' {
         Select-ConfiguredDeploymentEnvironment `

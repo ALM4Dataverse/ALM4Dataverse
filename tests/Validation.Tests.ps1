@@ -53,6 +53,10 @@ Describe 'Validation orchestration and coverage enforcement' {
             if ($args -contains 'ls-files' -and $args -notcontains '-z') {
                 'pipelines/scripts/common.ps1'
                 'alm-config-defaults.psd1'
+                'setup/common/console-runtime-and-rendering.ps1'
+                'setup-azdo.ps1'
+                'setup-github.ps1'
+                'deleted-source.ps1'
             }
         }
         Mock Invoke-Pester {
@@ -75,14 +79,31 @@ Describe 'Validation orchestration and coverage enforcement' {
     It 'configures executable coverage, writes reports, and passes covered changes' {
         $output = & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1')
         $output | Should -Contain 'Passed 4 PowerShell tests.'
-        Should -Invoke Invoke-Pester -Times 1 -Exactly -ParameterFilter {
-            $Configuration.CodeCoverage.Enabled.Value -and $Configuration.CodeCoverage.CoveragePercentTarget.Value -eq 0 -and
-            -not $Configuration.CodeCoverage.UseBreakpoints.Value -and
-            $Configuration.TestResult.OutputFormat.Value -eq 'NUnitXml'
-        }
+        Should -Invoke Invoke-Pester -Times 1 -Exactly
         (Get-Content (Join-Path $TestDrive 'coverage-files.json') -Raw | ConvertFrom-Json).Percent | Should -Be 100
         Test-Path (Join-Path $TestDrive 'coverage-all-files.json') | Should -BeTrue
+        $allCoveragePaths = @(Get-Content (Join-Path $TestDrive 'coverage-all-files.json') -Raw | ConvertFrom-Json | ForEach-Object Path)
+        $allCoveragePaths | Should -Contain 'setup/common/console-runtime-and-rendering.ps1'
+        $allCoveragePaths | Should -Not -Contain 'setup-azdo.ps1'
+        $allCoveragePaths | Should -Not -Contain 'setup-github.ps1'
         Get-Content $env:GITHUB_STEP_SUMMARY -Raw | Should -Match 'common.ps1'
+    }
+
+    It 'exempts standalone setup entrypoints from command coverage' {
+        Mock git {
+            $global:LASTEXITCODE = 0
+            if ($args -contains 'diff') { return "setup-azdo.ps1`0setup-github.ps1`0" }
+            if ($args -contains 'ls-files' -and $args -notcontains '-z') {
+                'setup-azdo.ps1'
+                'setup-github.ps1'
+                'setup/common/console-runtime-and-rendering.ps1'
+                'deleted-source.ps1'
+            }
+        }
+
+        $output = & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1')
+        $output | Should -Contain 'Passed 4 PowerShell tests.'
+        @(Get-Content (Join-Path $TestDrive 'coverage-files.json') -Raw | ConvertFrom-Json).Count | Should -Be 0
     }
 
     It 'writes coverage reports before failing under-covered changed files' {
@@ -287,7 +308,7 @@ catch {
     }
 
     It 'fails when a documented exception no longer matches' {
-        $setupPath = Join-Path $fixtureRoot 'setup-azdo.ps1'
+        $setupPath = Join-Path $fixtureRoot 'setup/azdo/identity-and-variable-groups.ps1'
         $content = (Get-Content -LiteralPath $setupPath -Raw).Replace(
             'ConvertTo-SecureString -String $adoAccessToken.Token -AsPlainText -Force', '$null')
         Set-Content -LiteralPath $setupPath -Value $content

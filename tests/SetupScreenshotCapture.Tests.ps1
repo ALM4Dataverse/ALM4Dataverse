@@ -27,7 +27,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'defines all documented setup scenes and waits for visible content' {
         $scenes = @(Get-CaptureScene)
 
-        $scenes.Count | Should -Be 29
+        $scenes.Count | Should -Be 32
         foreach ($scene in $scenes) {
             $scene.Name | Should -Not -BeNullOrEmpty
             $scene.Provider | Should -BeIn @('common', 'github', 'azdo')
@@ -37,10 +37,13 @@ Describe 'Setup screenshot capture infrastructure' {
         $scenes.Name | Should -Contain 'branch-strategy'
         $scenes.Name | Should -Contain 'branch-mapping'
         $scenes.Name | Should -Contain 'azdo-deployment-environment-plan'
+        $scenes.Name | Should -Contain 'environment-detail-menu'
         $scenes.Name | Should -Contain 'github-menu-new-repository'
         $scenes.Name | Should -Contain 'github-menu-existing-repository'
+        $scenes.Name | Should -Contain 'github-menu-unavailable-shared-repository'
         $scenes.Name | Should -Contain 'azdo-menu-new-repository'
         $scenes.Name | Should -Contain 'azdo-menu-existing-repository'
+        $scenes.Name | Should -Contain 'azdo-menu-unavailable-shared-repository'
         $scenes.Name | Should -Contain 'setup-mode-choice'
         $scenes.Name | Should -Contain 'github-build-validation'
         $scenes.Name | Should -Contain 'azdo-build-validation'
@@ -52,6 +55,10 @@ Describe 'Setup screenshot capture infrastructure' {
             Should -Be 'main (PROD)'
         ($scenes | Where-Object Name -eq 'azdo-menu-existing-repository').ExpectedText |
             Should -Be 'main (PROD)'
+        ($scenes | Where-Object Name -eq 'github-menu-unavailable-shared-repository').ExpectedText |
+            Should -Be 'Unavailable:'
+        ($scenes | Where-Object Name -eq 'azdo-menu-unavailable-shared-repository').ExpectedText |
+            Should -Be 'Unavailable:'
     }
 
     It 'resolves a scene case-insensitively and rejects an unknown scene' {
@@ -349,14 +356,28 @@ Describe 'Setup screenshot capture infrastructure' {
         }
     }
 
+    It 'captures Azure DevOps deployment selection and target-name prompts' {
+        $selectionInteractions = @((Get-CaptureScene | Where-Object Name -eq 'azdo-deployment-environment-selection').Interactions)
+        $selectionInteractions.Count | Should -Be 2
+        $selectionInteractions[0].WaitForText | Should -Be 'Add an environment'
+        $selectionInteractions[1].WaitForText | Should -Be 'Dataverse environment'
+
+        $shortNameScene = Get-CaptureScene | Where-Object Name -eq 'azdo-deployment-short-name'
+        $shortNameScene.ExpectedText | Should -Be 'Enter a short name for this environment'
+        @($shortNameScene.Interactions).Count | Should -Be 0
+    }
+
     It 'runs scene listing without installing or loading the capture runtime' {
         $listedScenes = @(& (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1') -ListScenes)
 
-        $listedScenes.Count | Should -Be 29
+        $listedScenes.Count | Should -Be 32
         $listedScenes | Should -Contain 'branch-mapping'
+        $listedScenes | Should -Contain 'environment-detail-menu'
         $listedScenes | Should -Contain 'setup-mode-choice'
         $listedScenes | Should -Contain 'github-menu-new-repository'
         $listedScenes | Should -Contain 'azdo-menu-existing-repository'
+        $listedScenes | Should -Contain 'github-menu-unavailable-shared-repository'
+        $listedScenes | Should -Contain 'azdo-menu-unavailable-shared-repository'
         $listedScenes | Should -Contain 'github-build-validation'
         $listedScenes | Should -Contain 'azdo-build-validation'
         $listedScenes | Should -Contain 'github-setup-change-review'

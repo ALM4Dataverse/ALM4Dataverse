@@ -37,6 +37,13 @@ Windows setup downloads temporary portable Git; Linux setup uses system Git from
 Setup also downloads its required PowerShell modules. Keep interactive authentication in
 the console/browser; do not put passwords or tokens into source files or command history.
 
+> [!NOTE]
+> **Optional Dev Container.** The repository includes a [Dev Container](../../.devcontainer/devcontainer.json)
+> with PowerShell 7, Git, and GitHub CLI. It keeps the setup toolchain in a separate
+> container, but is not a security boundary: setup still acts with the permissions of
+> authenticated accounts. Use least-privilege identities and do not mount host credential
+> files into the container.
+
 ### 1) An Azure DevOps organisation
 
 You will need an Azure DevOps organisation with pipeline capabilities enabled. See [Azure DevOps Organisation Requirements](azdo-organisation-requirements.md) for details on:
@@ -95,10 +102,11 @@ The one-line bootstrap is also available after you have reviewed and trust the r
 
 Interactive setup first asks whether to set up a new application repository or
 configure an existing one. This choice appears before authentication. New-repository
-setup shows authentication, organization selection, and project/repository selection
-as ordered prerequisite steps. Existing-repository setup performs those steps before
-the guided setup menu and requires an existing project and application repository. In
-that menu, the prerequisite rows are marked complete and locked.
+setup runs authentication, organization selection, and project/application-repository
+selection as ordered prerequisite steps before opening the guided setup menu.
+Existing-repository setup does the same and requires an existing project and application
+repository. Authentication and resource selection are completed before the menu and do
+not appear as menu rows.
 
 After resource selection, normal setup checks that the required Power Platform Azure
 DevOps extension is installed and asks whether to use the ALM4Dataverse extension task
@@ -110,29 +118,57 @@ disabled). Normal setup can select or create the shared ALM4Dataverse repository
 installation and shared-repository updates; it selects existing resources and reads
 the shared repository/ref from committed config.
 
+The shared repository appears as a separate, editable menu step. For an existing
+repository, setup uses the shared repository and ref from `alm-config.psd1` and marks
+selection complete without prompting when that repository is accessible. If the
+repository is missing or inaccessible, the selection row remains incomplete and its
+summary explains why; select that row to choose an accessible repository. Selecting a
+different repository changes the source used by preview and apply but does not check or
+update its version. The separate **Check and update shared repository version** step
+seeds an empty repository or checks the selected repository against the running
+ALM4Dataverse ref and offers the appropriate reconciliation options. Re-running
+selection marks that later step incomplete. With `-ApplyConfig`, selection is locked to
+committed config and the version-update step is marked as skipped; no shared repository
+is changed.
+
 ### Guided setup menu
 
 The menu seeds existing-repository choices from `alm-config.psd1`; it does not read
 pipeline files or pipeline definitions to discover setup settings. If the config has
 no branch map, the editor starts with the repository's default branch and empty
-environment mappings. The authentication, organization, and project/repository
-prerequisites appear at the top as complete and locked. They cannot be repeated from
-the guided setup menu.
+environment mappings. Authentication, organization, and project/application-repository
+selection are completed before this menu and are not listed. Shared repository selection
+is the first row; for an existing repository it is complete only when the configured
+repository is accessible, otherwise the incomplete row includes the reason. The version
+check/update is a separate row and remains incomplete until selected during normal setup.
 
-For a new application repository, only **Configure branches** is available until it
-has been completed; later steps unlock in order. Existing repositories can select any
-configuration step immediately. They are initialized from saved branch settings and
-skip the branch-strategy prompt. Re-running an editable step marks later steps
-incomplete until they are revisited. **Apply changes** is the final menu item and only
-runs after every editable setup step is complete.
+For a new application repository, the version check/update follows shared-repository
+selection and later steps unlock in order. The shared-repository row remains editable.
+Existing repositories can select any configuration step immediately. They are initialized
+from saved branch settings and skip the branch-strategy prompt. After each guided step,
+setup returns to the menu. Configuration steps are grouped separately from the bold
+cyan **Preview changes**, **Apply changes**, and **Exit without applying changes**
+actions under a `---` separator. Preview and Apply are marked **Not ready** until every
+required setup step is complete; Exit is always available and asks for confirmation.
+Preview is optional and does not count toward setup completion. Re-running an editable
+step marks later steps incomplete until they are revisited. When ready, the action group
+moves first and **Apply changes** is highlighted. Preview is not required before Apply.
 
-Each menu row includes a short summary of its current selection: branch rows list DEV,
-deployment, and BUILD-validation targets; the solution row lists selected solution
-names; publication-plan rows when applying a config file list each target's direct or
-pull-request mode; and prerequisite rows show the selected project, repositories,
-organization, or authentication status. These summaries describe configuration, while
-the progress markers describe completion in the current run. Every prompt and menu
-shows a setup header for its active section (or prompt title) and keeps one guidance
+Each setup-step row includes a short summary of its current selection: the first shared
+repository row shows its repository and ref; the solution row lists selected solution
+names; and publication-plan rows when applying a config file list each target's direct
+or pull-request mode. The version check/update row shows the upstream ALM4Dataverse ref.
+The **Configure branches, dev and deployment envs** row expands into selectable branch
+items and nested DEV, deployment, and BUILD-validation environment items instead of a
+compact branch summary. Environment rows summarize the Dataverse friendly name and URL,
+credential type and name, service-account UPN, and BUILD baseline when applicable;
+secret values are never shown. Selecting a branch opens its editor; selecting an
+environment opens its detail menu with separate Dataverse, target-name, credentials,
+and service-account steps, plus a BUILD-baseline step when applicable. Completed parts
+are marked done, and later parts stay locked until earlier steps are complete. New and
+existing environments use the same editor. Progress markers describe completion in the
+current run. Preview, Apply, and Exit are actions, not progress rows. Every prompt and
+menu shows a setup header for its active section (or prompt title) and keeps one guidance
 panel visible; prompts without task-specific guidance show concise input or navigation
 help.
 
@@ -142,12 +178,12 @@ browser; setup then resumes at the same prompt. The page is selected for the pro
 step, or Azure DevOps setup flow, and its URL uses the ALM4Dataverse ref selected by
 the running setup script.
 
-Before authentication, **Esc** on the setup-type choice cancels setup. In new-repository
-setup, **Esc** inside a prerequisite prompt returns to the prerequisite menu, and
-**Esc** on that menu cancels. In existing-repository setup, **Esc** in a later
-prerequisite returns to the preceding prerequisite; **Esc** at the first one cancels.
-Inside branch configuration, **Esc** returns to the guided setup menu. **Esc** on the
-main menu cancels setup.
+Before authentication, **Esc** on the setup-type choice cancels setup. During ordered
+authentication and resource selection, **Esc** in a later prerequisite returns to the
+preceding prerequisite; **Esc** at the first one cancels. There is no separate
+prerequisite menu. Inside branch configuration, **Esc** returns to the guided setup
+menu. **Esc** on the main menu cancels setup without confirmation; **Exit without
+applying changes** asks for confirmation first.
 
 The screenshots below are actual terminal output from the setup display helpers used by
 the released setup scripts. They were captured with a local sample environment catalog
@@ -158,24 +194,42 @@ choices depend on the signed-in account.
 
 #### Setup menu examples
 
-Both menus show the authentication and resource-selection prerequisites as complete
-and locked. For a new repository, only **Configure branches** is initially available;
-for an existing repository, the configuration steps are available and the branch
-editor starts from saved mappings. The progress markers show completion in the current
-run, not whether configuration is saved.
+Authentication and resource selection are completed before the menu and are not listed.
+The shared-repository row is always first. For both new and existing repositories, setup
+opens this menu after prerequisites and returns to it after each selected step. New
+repositories unlock setup steps in order; existing repositories can select any
+configuration step and the branch editor starts from saved mappings. The branch step
+expands to show each branch and its configured DEV, deployment, and BUILD-validation
+environments beneath it. Select a branch to open its editor or an environment to edit
+that branch's matching configuration. After each step,
+the next incomplete row is highlighted. The bold cyan Preview and Apply actions are
+grouped separately from setup steps under a `---` separator, alongside **Exit without
+applying changes**. Preview and Apply are marked **Not ready** until all required setup
+steps are complete. Preview is optional and does not affect completion; Apply does not
+require a preview. Exit is always available and asks for confirmation before leaving
+setup without applying the generated changes. The progress markers show completion in
+the current run, not whether configuration is saved.
 
 ![Guided setup menu for a new Azure DevOps repository](./screenshots/azdo-menu-new-repository.png)
 
 ![Guided setup menu for an existing, fully configured Azure DevOps repository](./screenshots/azdo-menu-existing-repository.png)
 
-![Setup type choice before Azure DevOps authentication](./screenshots/setup-mode-choice.png)
+![Guided setup menu when the configured Azure DevOps shared repository is unavailable](./screenshots/azdo-menu-unavailable-shared-repository.png)
 
-#### Step 1 — Configure branches
+The first screen shows the green Unicode-art product mark beside the ALM4Dataverse
+name and version below the setup header. The name and version are on separate lines
+with a blank line between them. The version is shown as Development when running
+from a source checkout.
+
+![Setup type choice with ALM4Dataverse branding below the setup header, before Azure DevOps authentication](./screenshots/setup-mode-choice.png)
+
+#### Step 1 — Configure branches, dev and deployment envs
 
 The branch editor is where you define branch names and configure DEV environments,
 deployment targets, and BUILD validation separately for each branch. These settings
-are all part of **Configure branches**; there are no separate DEV, deployment, or BUILD
-validation menu items.
+are all part of **Configure branches, dev and deployment envs**; there are no separate
+DEV, deployment, or BUILD-validation setup steps. The guided menu lists each branch
+and its configured environments as selectable nested rows.
 
 1. **Choose a branch strategy for a new repository.** Select `main only` or
    `main + develop`. This creates the starting branch mappings; it does not configure
@@ -189,6 +243,8 @@ validation menu items.
    optionally, `develop` mappings. To add another branch, choose **Add a branch
    mapping** and enter its branch name. To change an existing branch, choose **Edit a
    branch mapping** and select it. Branch names must be unique.
+   The branch edit menu shows the selected branch's current DEV environment,
+   deployment targets, and BUILD validation above its actions.
 
    ![Prompt for a new branch name](./screenshots/branch-name.png)
 
@@ -197,21 +253,24 @@ validation menu items.
    a Dataverse environment; setup assigns it the name `Dev-<branch>`. The name is
    generated from the branch and is not entered separately. Choose **No** when the
    branch has no DEV environment; that branch cannot be selected later as the source
-   for discovering solutions. Existing DEV mappings are loaded into the editor and can
-   be retained or changed.
+   for discovering solutions. After choosing **Yes**, the environment detail menu
+   opens. Its generated target-name row is already complete and locked; select the
+   Dataverse environment, credentials, and service account in their separate rows.
+   Existing DEV mappings open in the same editor with their current values.
 
    ![Azure DevOps DEV environment confirmation](./screenshots/azdo-dev-confirmation.png)
 
    ![Azure DevOps DEV environment selection](./screenshots/azdo-dev-environment-selection.png)
 
-4. **Choose credentials and the process-owner account.** Setup asks for service-principal
-   credentials and a service-account UPN after you select a DEV, deployment, or BUILD
-   validation environment. Depending on what is already configured or selected in this
-   setup run, the menus offer creating a service connection, entering existing
-   connection details, or reusing an available credential. When the required Azure
-   DevOps extension is enabled, a new credential can use workload identity federation
-   or a client secret; without the extension, setup offers secret-based authentication
-   only. The service-account menu similarly lets you enter or reuse an account.
+4. **Choose credentials and the process-owner account.** The environment detail menu
+   keeps credentials and the service-account UPN as separate steps after Dataverse
+   selection and target naming. Depending on what is already configured or selected in
+   this setup run, the credential menu offers creating a service connection, entering
+   existing connection details, or reusing an available credential. When the required
+   Azure DevOps extension is enabled, a new credential can use workload identity
+   federation or a client secret; without the extension, setup offers secret-based
+   authentication only. The service-account menu similarly lets you enter or reuse an
+   account.
 
    ![Azure DevOps credential choices](./screenshots/azdo-credentials.png)
 
@@ -224,12 +283,17 @@ validation menu items.
    setup does not verify its licensing or Dataverse roles. Keep client secrets out of
    `alm-config.psd1` and source control.
 
-5. **Add deployment targets for the branch.** Choose **Add an environment**, select a
-   Dataverse environment, then enter its short name (for example, `TEST`, `UAT`, or
-   `PROD`). The branch's DEV environment is excluded from the deployment choices.
-   Repeat for each target, selecting credentials and a service account for each one;
-   previously selected credentials and accounts may be offered for reuse. Choose
-   **Done** when the list is complete. A branch may have no deployment targets.
+5. **Add deployment targets for the branch.** Choose **Add an environment** to open its
+   detail menu. Complete the Dataverse environment, short name (for example, `TEST`,
+   `UAT`, or `PROD`), credentials, and service-account rows in order. Later rows remain
+   locked until earlier parts are complete. The branch's DEV environment is excluded
+   from the deployment choices. The same menu opens when you select an existing target
+   to edit; changing its Dataverse URL clears credentials and service-account ownership
+   selected for the old target. Previously selected credentials and accounts may be
+   offered for reuse. Choose **Done** when the list is complete. A branch may have no
+   deployment targets.
+
+   ![Per-environment detail menu showing completed setup and locked later steps](./screenshots/environment-detail-menu.png)
 
    ![Azure DevOps deployment environment selection](./screenshots/azdo-deployment-environment-selection.png)
 
@@ -243,10 +307,12 @@ validation menu items.
    ![Azure DevOps deployment environment plan](./screenshots/azdo-deployment-environment-plan.png)
 
 6. **Configure BUILD validation for each branch.** Choose whether to deploy the
-   branch's BUILD artifact to a Dataverse validation environment. If enabled, select
-   that environment, set its Azure DevOps service connection name, and optionally
-   choose a deployment environment as the baseline source. This is separate from the
-   branch's DEV and deployment targets.
+   branch's BUILD artifact to a Dataverse validation environment. If enabled, its
+   detail menu separates Dataverse selection, Azure DevOps service connection name,
+   credentials, service account, and BUILD baseline into ordered rows. Configure the
+   baseline row even when no baseline is needed; choosing no baseline is valid. When a
+   baseline is selected, it must be a deployment environment. This is separate from
+   the branch's DEV and deployment targets.
 
    ![Azure DevOps BUILD validation environment selection for a branch](./screenshots/azdo-build-validation.png)
 
@@ -272,20 +338,21 @@ Selected solutions (dependency order)
 └───┴───────────────┴─────────────┘
 ```
 
-#### Step 3 — Review setup changes
+#### Optional — Preview changes
 
-Review the summary of the complete setup for a new repository or the changes to an
-existing repository. It includes the project and repository, branch/environment
-mappings, BUILD validation, solution choices, extension mode, and counts of files to
-add, modify, or delete. It also lists deferred Azure DevOps, Entra ID, and Dataverse
-operations: pipeline definitions and permissions, service connections and federated
-credentials, environments, variable groups and checks, and Dataverse application and
-service-account users/roles. This is a plan based on the selected setup, not a live
-before/after resource diff; an **Ensure** operation may find the resource already in
-its desired state. Prerequisites already applied to let setup proceed are excluded,
-and secret values are never displayed. Existing service connections are marked for
-reuse, existing variable values are not overwritten, and existing approval checks
-are retained when no new approval is requested.
+After all required setup steps are complete, select **Preview changes** to inspect the
+generated files and deferred resource plan. Preview is optional and does not need to be
+selected before Apply. The summary includes the project and repository, branch/environment mappings,
+BUILD validation, solution choices, extension mode, and counts of files to add, modify,
+or delete. It also lists deferred Azure DevOps, Entra ID, and Dataverse operations:
+pipeline definitions and permissions, service connections and federated credentials,
+environments, variable groups and checks, and Dataverse application and service-account
+users/roles. This is a plan based on the selected setup, not a live before/after
+resource diff; an **Ensure** operation may find the resource already in its desired
+state. Prerequisites already applied to let setup proceed are excluded, and secret
+values are never displayed. Existing service connections are marked for reuse, existing
+variable values are not overwritten, and existing approval checks are retained when
+no new approval is requested.
 
 The review menu separates the config-only diff from the diff of every repository file
 that setup will change:
@@ -301,18 +368,24 @@ and leave the selected repository unchanged.
 
 ![Scrollable colored side-by-side setup diff](./screenshots/setup-change-side-by-side-diff.png)
 
-#### Step 4 — Apply changes
+#### Exit without applying changes
 
-**Apply changes** is the final menu item. Before all setup steps are complete, selecting
-it reports that the remaining steps must be completed; after that, setup publishes the
-generated files according to each branch's publication plan and applies the listed
-Azure DevOps, Entra ID, and Dataverse operations. These external changes happen during
+This action is always available in the main menu. Select **Exit without applying changes**
+and confirm to leave setup without publishing the generated files or applying the deferred
+Azure DevOps, Entra ID, and Dataverse operations. Choose **No** or press **Esc** at the
+confirmation to return to the menu. Resources changed during earlier prerequisite steps
+are not rolled back.
+
+#### Step 3 — Apply changes
+
+The bold cyan **Apply changes** action is unavailable until all required setup steps
+are complete. **Preview changes** also becomes available then, but remains optional.
+When ready, Apply moves to the first position in its action group and is highlighted.
+Selecting it publishes the generated files according to each branch's
+publication plan and applies the listed Azure DevOps, Entra ID, and Dataverse
+operations; you do not have to preview first. These external changes happen during
 setup even if publication creates a pull request; only the repository-file changes wait
-for that pull request to merge. The last menu item before completion is:
-
-```text
-Apply changes (finish all setup steps first)
-```
+for that pull request to merge.
 
 On success, the completion panel links to the Azure DevOps project. Its example output
 is:
@@ -366,19 +439,12 @@ To inspect committed config changes without publishing:
    pipeline definitions, and does not install extensions, register pipeline
    definitions, grant permissions, or configure environments.
 
-3. The reduced menu shows the prerequisites as complete and locked, then lets you
-   choose publication methods and review the generated changes. The config has a
-   separate diff, and each repository file is selectable from the status-labeled
-   change list:
-
-   ```text
-   Authenticate with Azure DevOps (complete and locked)
-   Select Azure DevOps organization (complete and locked)
-   Select project and repositories (complete and locked)
-   Choose publication methods
-   Review setup changes
-   Apply changes (finish all setup steps first)
-   ```
+3. The shared-repository row appears first and is locked to committed config.
+   **Choose publication methods** is a required step. **Preview changes** is optional in
+   the separate action group and becomes available after all required steps are complete;
+   it can be used to inspect the config and generated-file diffs. **Apply changes**
+   becomes ready at the same time and may be selected without previewing. The config has
+   a separate diff, and each repository file is selectable from the status-labeled change list.
 
    `-PreviewOnly` skips the publication-plan step and opens the same status-labeled file
    picker. Select one file to print its complete diff without paging; return to the
@@ -387,9 +453,10 @@ To inspect committed config changes without publishing:
    reports that no external resources will be modified; this mode does not plan or
    provision Azure DevOps, Entra ID, or Dataverse changes.
 
-4. Select **Apply changes** after reviewing the diff. Setup publishes the generated
-   repository files and returns to the menu with selections intact if publication fails.
-   The completion panel is the same as [Step 4](#step-4--apply-changes). Missing or
+4. Optionally select **Preview changes** to review the diff, then select **Apply
+   changes** when ready. Setup publishes the generated repository files and returns to
+   the menu with selections intact if publication fails. The completion panel is the
+   same as [Step 3](#step-3--apply-changes). Missing or
    invalid provider, repository, ref, or branch metadata stops before publication.
 
 > [!NOTE]

@@ -89,6 +89,17 @@ immutable format. See
 **Do this:** run setup on a workstation with a browser. The switch is still accepted so
 existing commands don't fail.
 
+### Branch Environments Must Be Configured In `alm-config.psd1`
+
+**You'll see:** existing branch deployment and BUILD-validation settings are no longer
+inferred from workflow or pipeline files. If `alm-config.psd1` has no `branches` map,
+setup starts with the repository's default branch and empty environment mappings.
+
+**Do this:** run interactive setup, configure the branch and its environments, then
+commit `alm-config.psd1`. To regenerate the caller files afterward, run
+`setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig` from the application
+repository. See [setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
+
 ### Re-Running Setup Keeps More Of Your Files
 
 Re-running setup now keeps an existing `AGENTS.md`, files under `data/` and, on Azure

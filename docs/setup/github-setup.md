@@ -17,6 +17,13 @@ GitHub repository unless you want to maintain a fork of the shared implementatio
 - A GitHub plan supporting the environment features you intend to use; see [licence limitations](#github-licence-limitations).
 - For automated setup: Windows PowerShell 5.1 or PowerShell 7 on Windows, Git, and network access to GitHub and the required Microsoft/package services. Setup downloads a temporary GitHub CLI when `gh` is missing.
 
+> [!NOTE]
+> **Optional Dev Container.** The repository includes a [Dev Container](../../.devcontainer/devcontainer.json)
+> with PowerShell 7, Git, and GitHub CLI. It keeps the setup toolchain in a separate
+> container, but is not a security boundary: setup still acts with the permissions of
+> authenticated accounts. Use least-privilege identities and do not mount host credential
+> files into the container.
+
 > [!CAUTION]
 > Use separate application identities for production and non-production. The application
 > user authenticates automation; the service-account user owns and activates processes.
@@ -47,39 +54,71 @@ iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setu
 
 Interactive setup first asks whether to set up a new application repository or
 configure an existing one. This choice appears before authentication. New-repository
-setup shows GitHub/Azure authentication and application-repository selection as ordered
-prerequisite steps. Existing-repository setup performs them before the guided setup menu,
-requires an existing repository, and marks the prerequisite rows complete and locked in
-that menu. Existing repository choices include repositories
-owned by your account, available through an organization, or shared with you as a
-collaborator. An existing repository can be empty; setup creates its initial branch and
-commit when publishing generated files. When creating a shared workflow repository,
-setup prompts for an owner and defaults to the owner of the selected application
-repository.
+setup runs GitHub/Azure authentication and application-repository selection as ordered
+prerequisite steps before opening the guided setup menu. Existing-repository setup does
+the same and requires an existing repository. Authentication and application-repository
+selection are completed before the menu and do not appear as menu rows. Existing
+repository choices include repositories owned by your account, available through an
+organization, or shared with you as a collaborator. An existing repository can be empty;
+setup creates its initial branch and commit when publishing generated files. When
+creating a shared workflow repository, setup prompts for an owner and defaults to the
+owner of the selected application repository.
+
+The shared workflow repository appears as a separate, editable menu step. For an existing
+repository, setup uses the shared repository and ref from `alm-config.psd1` and marks
+selection complete without prompting when that repository is accessible. If the
+repository is missing or inaccessible, the selection row remains incomplete and its
+summary explains why; select that row to choose an accessible repository. Selecting a
+different repository changes the source used by preview and apply but does not check or
+update its version. The separate **Check and update shared workflow repository version**
+step compares the selected repository with the running ALM4Dataverse ref and offers the
+appropriate reconciliation options. Re-running selection marks that later step
+incomplete. With `-ApplyConfig`, selection is locked to committed config and the
+version-update step is marked as skipped; no shared repository is changed.
 
 ### Guided setup menu
 
 The menu seeds existing-repository choices from `alm-config.psd1`; it does not read
 workflow files to discover setup settings. If the config has no branch map, the editor
 starts with the repository's default branch and empty environment mappings. The
-authentication and repository-selection prerequisites appear at the top as complete
-and locked. They cannot be repeated from the guided setup menu.
+authentication and application-repository prerequisites are completed before this menu
+and are not listed. Shared workflow repository selection is the first row; for an
+existing repository it is complete only when the configured repository is accessible,
+otherwise the incomplete row includes the reason. The version check/update is a separate
+row and remains incomplete until selected during normal setup.
 
-For a new application repository, only **Configure branches** is available until it
-has been completed; later steps unlock in order. Existing repositories can select any
-configuration step immediately. They are initialized from saved branch settings and
-skip the branch-strategy prompt. Re-running an editable step marks later steps
-incomplete until they are revisited. **Apply changes** is the final menu item and only
-runs after every editable setup step is complete.
+For a new application repository, the version check/update follows shared-repository
+selection and later steps unlock in order. The shared-repository row remains editable.
+Existing repositories can select any configuration step immediately. They are initialized
+from saved branch settings and skip the branch-strategy prompt. After each guided step,
+setup returns to the menu. Configuration steps are grouped separately from the bold
+cyan **Preview changes**, **Apply changes**, and **Exit without applying changes**
+actions under a `---` separator. Preview and Apply are marked **Not ready** until every
+required setup step is complete; Exit is always available and asks for confirmation.
+Preview is optional and does not count toward setup completion. Re-running an editable
+step marks later steps incomplete until they are revisited. When ready, the action group
+moves first and **Apply changes** is highlighted. Preview is not required before Apply.
 
-Each menu row includes a short summary of its current selection: branch rows list DEV,
-deployment, and BUILD-validation targets; the solution row lists selected solution
-names; publication-plan rows when applying a config file list each target's direct or
-pull-request mode; and prerequisite rows show the selected repository or authentication
-status. These summaries describe configuration, while the progress markers describe
-completion in the current run. Every prompt and menu shows a setup header for its active
-section (or prompt title) and keeps one guidance panel visible; prompts without
-task-specific guidance show concise input or navigation help.
+Each setup-step row includes a short summary of its current selection: the first shared
+workflow repository row shows its repository and ref; the solution row lists selected
+solution names; and publication-plan rows when applying a config file list each target's
+direct or pull-request mode. The version check/update row shows the upstream
+ALM4Dataverse ref. The **Configure branches, dev and deployment envs** row expands into
+selectable branch items and nested DEV, deployment, and BUILD-validation environment
+items instead of a compact branch summary. Environment rows summarize the Dataverse
+friendly name and URL, credential type and name, service-account UPN, and BUILD baseline
+when applicable; secret values are never shown. Selecting a branch opens its editor;
+selecting an environment opens its detail menu with separate Dataverse, target-name,
+credentials, and service-account steps, plus a BUILD-baseline step when applicable.
+Completed parts are marked done, and later parts stay locked until earlier steps are
+complete. New and existing environments use the same editor. Progress markers describe
+completion in the current run. Preview, Apply, and Exit are actions, not progress rows.
+An incomplete existing deployment environment keeps branch setup incomplete. A warning
+lists each affected branch/environment and its missing details; select its environment
+row and finish its detail steps before Preview or Apply becomes available.
+Every prompt and menu shows a setup header for its active section (or prompt title) and
+keeps one guidance panel visible; prompts without task-specific guidance show concise
+input or navigation help.
 
 When a help page is available, the panel and status bar show **F1 for help**. Press
 F1 while a prompt or menu is active to open the current step's page in the default
@@ -87,12 +126,12 @@ browser; setup then resumes at the same prompt. The page is selected for the pro
 step, or GitHub setup flow, and its URL uses the ALM4Dataverse ref selected by the
 running setup script.
 
-Before authentication, **Esc** on the setup-type choice cancels setup. In new-repository
-setup, **Esc** inside a prerequisite prompt returns to the prerequisite menu, and
-**Esc** on that menu cancels. In existing-repository setup, **Esc** in the later
-prerequisite returns to the preceding prerequisite; **Esc** at the first one cancels.
-Inside branch configuration, **Esc** returns to the guided setup menu. **Esc** on the
-main menu cancels setup.
+Before authentication, **Esc** on the setup-type choice cancels setup. During ordered
+authentication and repository selection, **Esc** in a later prerequisite returns to the
+preceding prerequisite; **Esc** at the first one cancels. There is no separate
+prerequisite menu. Inside branch configuration, **Esc** returns to the guided setup
+menu. **Esc** on the main menu cancels setup without confirmation; **Exit without
+applying changes** asks for confirmation first.
 
 The screenshots below are actual terminal output from the setup display helpers used by
 the released setup scripts. They were captured with a local sample environment catalog
@@ -103,24 +142,42 @@ choices depend on the signed-in account.
 
 #### Setup menu examples
 
-Both menus show authentication and repository selection as complete and locked. For a
-new repository, only **Configure branches** is initially available; for an existing
-repository, the configuration steps are available and the branch editor starts from
-saved mappings. The progress markers show completion in the current run, not whether
-configuration is saved.
+Authentication and application-repository selection are completed before the menu and
+are not listed. The shared-workflow-repository row is always first. For both new and
+existing repositories, setup opens this menu after prerequisites and returns to it after
+each selected step. New repositories unlock setup steps in order; existing repositories
+can select any configuration step and the branch editor starts from saved mappings.
+The branch step expands to show each branch and its configured DEV, deployment, and
+BUILD-validation environments beneath it. Select a branch to open its editor or an
+environment to edit that branch's matching configuration. After each step, the next
+incomplete row is highlighted. The bold cyan Preview and
+Apply actions are grouped separately from setup steps under a `---` separator, alongside
+**Exit without applying changes**. Preview and Apply are marked **Not ready** until all
+required setup steps are complete. Preview is optional and does not affect completion;
+Apply does not require a preview. Exit is always available and asks for confirmation
+before leaving setup without applying the generated changes. The progress markers show
+completion in the current run, not whether configuration is saved.
 
 ![Guided setup menu for a new GitHub repository](./screenshots/github-menu-new-repository.png)
 
 ![Guided setup menu for an existing, fully configured GitHub repository](./screenshots/github-menu-existing-repository.png)
 
-![Setup type choice before GitHub authentication](./screenshots/setup-mode-choice.png)
+![Guided setup menu when the configured shared workflow repository is inaccessible](./screenshots/github-menu-unavailable-shared-repository.png)
 
-#### Step 1 — Configure branches
+The first screen shows the green Unicode-art product mark beside the ALM4Dataverse
+name and version below the setup header. The name and version are on separate lines
+with a blank line between them. The version is shown as Development when running
+from a source checkout.
+
+![Setup type choice with ALM4Dataverse branding below the setup header, before GitHub authentication](./screenshots/setup-mode-choice.png)
+
+#### Step 1 — Configure branches, dev and deployment envs
 
 The branch editor is where you define branch names and configure DEV environments,
 deployment targets, and BUILD validation separately for each branch. These settings
-are all part of **Configure branches**; there are no separate DEV, deployment, or BUILD
-validation menu items.
+are all part of **Configure branches, dev and deployment envs**; there are no separate
+DEV, deployment, or BUILD-validation setup steps. The guided menu lists each branch
+and its configured environments as selectable nested rows.
 
 1. **Choose a branch strategy for a new repository.** Select `main only` or
    `main + develop`. This creates the starting branch mappings; it does not configure
@@ -134,6 +191,8 @@ validation menu items.
    optionally, `develop` mappings. To add another branch, choose **Add a branch
    mapping** and enter its branch name. To change an existing branch, choose **Edit a
    branch mapping** and select it. Branch names must be unique.
+   The branch edit menu shows the selected branch's current DEV environment,
+   deployment targets, and BUILD validation above its actions.
 
    ![Prompt for a new branch name](./screenshots/branch-name.png)
 
@@ -142,21 +201,23 @@ validation menu items.
    Dataverse environment; setup assigns it the name `Dev-<branch>`. The name is
    generated from the branch and is not entered separately. Choose **No** when the
    branch has no DEV environment; that branch cannot be selected later as the source
-   for discovering solutions. Existing DEV mappings are loaded into the editor and can
-   be retained or changed.
+   for discovering solutions. After choosing **Yes**, the environment detail menu
+   opens. Its generated target-name row is already complete and locked; select the
+   Dataverse environment, credentials, and service account in their separate rows.
+   Existing DEV mappings open in the same editor with their current values.
 
    ![GitHub DEV environment confirmation](./screenshots/github-dev-confirmation.png)
 
    ![GitHub DEV environment selection](./screenshots/github-dev-environment-selection.png)
 
-4. **Choose credentials and the process-owner account.** Setup asks for an App
-   Registration credential and a service-account UPN after you select a DEV, deployment,
-   or BUILD validation environment. Depending on what is already configured or selected
-   in this setup run, the menus offer creating an App Registration, entering existing
-   App Registration details, or reusing an available credential. A new registration
-   asks whether to use workload identity federation or a client secret. The service-
-   account menu similarly lets you enter or reuse an account. Reuse the same identity
-   only where that is appropriate for your environment boundaries.
+4. **Choose credentials and the process-owner account.** The environment detail menu
+   keeps credentials and the service-account UPN as separate steps after Dataverse
+   selection and target naming. Depending on what is already configured or selected in
+   this setup run, the credential menu offers creating an App Registration, entering
+   existing App Registration details, or reusing an available credential. A new
+   registration asks whether to use workload identity federation or a client secret.
+   The service-account menu similarly lets you enter or reuse an account. Reuse the
+   same identity only where that is appropriate for your environment boundaries.
 
    ![GitHub credential choices](./screenshots/github-credentials.png)
 
@@ -170,12 +231,17 @@ validation menu items.
    secret, follow the prompts to store it as a GitHub secret. Never put secret values
    in `alm-config.psd1` or commit them.
 
-5. **Add deployment targets for the branch.** Choose **Add an environment**, select a
-   Dataverse environment, then enter its short name (for example, `TEST`, `UAT`, or
-   `PROD`). The branch's DEV environment is excluded from the deployment choices.
-   Repeat for each target, selecting credentials and a service account for each one;
-   previously selected credentials and accounts may be offered for reuse. Choose
-   **Done** when the list is complete. A branch may have no deployment targets.
+5. **Add deployment targets for the branch.** Choose **Add an environment** to open its
+   detail menu. Complete the Dataverse environment, short name (for example, `TEST`,
+   `UAT`, or `PROD`), credentials, and service-account rows in order. Later rows remain
+   locked until earlier parts are complete. The branch's DEV environment is excluded
+   from the deployment choices. The same menu opens when you select an existing target
+   to edit; changing its Dataverse URL clears credentials and service-account ownership
+   selected for the old target. Previously selected credentials and accounts may be
+   offered for reuse. Choose **Done** when the list is complete. A branch may have no
+   deployment targets.
+
+   ![Per-environment detail menu showing completed setup and locked later steps](./screenshots/environment-detail-menu.png)
 
    ![GitHub deployment environment selection](./screenshots/github-deployment-environment-selection.png)
 
@@ -189,10 +255,12 @@ validation menu items.
    ![GitHub deployment environment plan](./screenshots/deployment-environment-plan.png)
 
 6. **Configure BUILD validation for each branch.** Choose whether to deploy the
-   branch's BUILD artifact to a Dataverse validation environment. If enabled, select
-   that environment, set its GitHub environment name, and optionally choose a deployment
-   environment as the baseline source. This is separate from the branch's DEV and
-   deployment targets.
+   branch's BUILD artifact to a Dataverse validation environment. If enabled, its
+   detail menu separates Dataverse selection, GitHub environment name, credentials,
+   service account, and BUILD baseline into ordered rows. Configure the baseline row
+   even when no baseline is needed; choosing no baseline is valid. When a baseline is
+   selected, it must be a deployment environment. This is separate from the branch's
+   DEV and deployment targets.
 
    ![GitHub BUILD validation environment selection for a branch](./screenshots/github-build-validation.png)
 
@@ -228,17 +296,18 @@ setting is changed only during Apply. The prompt for the example repository is:
 Enable immutable GitHub OIDC subjects for 'example-org/sample-app'?
 ```
 
-#### Step 4 — Review setup changes
+#### Optional — Preview changes
 
-Review the summary of the complete setup for a new repository or the changes to an
-existing repository. It includes the configured branches, environment mappings,
-provider options, solution choices, and counts of files to add, modify, or delete.
-It also lists deferred GitHub, Entra ID, and Dataverse operations: repository OIDC
-settings, environment variables/secrets and approvals, federated credentials, and
-Dataverse application and service-account users/roles. This is a plan based on the
-selected setup, not a live before/after resource diff; an **Ensure** operation may
-find the resource already in its desired state. Prerequisites already applied to let
-setup proceed are excluded. Secret values are never displayed.
+After all required setup steps are complete, select **Preview changes** to inspect the
+generated files and deferred resource plan. Preview is optional and does not need to be
+selected before Apply. The summary includes the configured branches, environment
+mappings, provider options, solution choices, and counts of files to add, modify, or delete. It also lists
+deferred GitHub, Entra ID, and Dataverse operations: repository OIDC settings,
+environment variables/secrets and approvals, federated credentials, and Dataverse
+application and service-account users/roles. This is a plan based on the selected
+setup, not a live before/after resource diff; an **Ensure** operation may find the
+resource already in its desired state. Prerequisites already applied to let setup
+proceed are excluded. Secret values are never displayed.
 
 The review menu separates the config-only diff from the diff of every repository file
 that setup will change:
@@ -254,18 +323,24 @@ and leave the selected repository unchanged.
 
 ![Scrollable colored side-by-side setup diff](./screenshots/setup-change-side-by-side-diff.png)
 
-#### Step 5 — Apply changes
+#### Exit without applying changes
 
-**Apply changes** is the final menu item. Before all setup steps are complete, selecting
-it reports that the remaining steps must be completed; after that, it publishes the
-generated files according to each branch's publication plan and applies the listed
-GitHub, Entra ID, and Dataverse settings. If publication creates a pull request, these
-external operations still happen during setup; only the repository-file changes wait
-for that pull request to merge. The last menu item before completion is:
+This action is always available in the main menu. Select **Exit without applying changes**
+and confirm to leave setup without publishing the generated files or applying the deferred
+GitHub, Entra ID, and Dataverse operations. Choose **No** or press **Esc** at the
+confirmation to return to the menu. Resources changed during earlier prerequisite steps
+are not rolled back.
 
-```text
-Apply changes (finish all setup steps first)
-```
+#### Step 4 — Apply changes
+
+The bold cyan **Apply changes** action is unavailable until all required setup steps
+are complete. **Preview changes** also becomes available then, but remains optional.
+When ready, Apply moves to the first position in its action group and is highlighted.
+Selecting it publishes the generated files according to each branch's
+publication plan and applies the listed GitHub, Entra ID, and Dataverse settings; you
+do not have to preview first. If publication creates a pull request, these external
+operations still happen during setup; only the repository-file changes wait for that
+pull request to merge.
 
 On success, the completion panel links to the repository's Actions page. Its example
 output is:
@@ -320,21 +395,16 @@ To inspect committed config changes without publishing:
    ```text
    Reading shared workflow source from alm-config.psd1
    Shared workflow repository: example-org/sample-workflows
-   Shared workflow reference (synced branch): stable
+   Shared workflow reference: stable
    ```
 
-4. The reduced menu shows the prerequisites as complete and locked, then lets you
-   choose publication methods and review the generated changes. The config has a
-   separate diff, and each repository file is selectable from the status-labeled
-   change list:
-
-   ```text
-   Authenticate with GitHub (complete and locked)
-   Select and inspect application repository (complete and locked)
-   Choose publication methods
-   Review setup changes
-   Apply changes (finish all setup steps first)
-   ```
+4. The shared-workflow-repository row appears first and is locked to committed config.
+   **Choose publication methods** is a required step. **Preview changes** is optional in
+   the separate action group and becomes available after all required steps are complete;
+   it can be used to inspect the config and generated-file diffs. **Apply changes**
+   becomes ready at the same time and may be selected without previewing. The config has
+   a separate diff, and each repository
+   file is selectable from the status-labeled change list.
 
    `-PreviewOnly` skips the publication-plan step and opens the same status-labeled file
    picker. Select one file to print its complete diff without paging; return to the
@@ -343,9 +413,10 @@ To inspect committed config changes without publishing:
    reports that no external resources will be modified; this mode does not plan or
    provision GitHub, Entra ID, or Dataverse changes.
 
-5. Select **Apply changes** after reviewing the diff. Setup publishes the generated
-   repository files and returns to the menu with selections intact if publication fails.
-   The completion panel is the same as [Step 5](#step-5--apply-changes). Missing or
+5. Optionally select **Preview changes** to review the diff, then select **Apply
+   changes** when ready. Setup publishes the generated repository files and returns to
+   the menu with selections intact if publication fails. The completion panel is the
+   same as [Step 4](#step-4--apply-changes). Missing or
    invalid provider, repository, ref, or branch metadata stops before publication.
 
 > [!IMPORTANT]

@@ -1,6 +1,7 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
-    . (Join-Path $repoRoot 'setup-common.ps1')
+    . (Join-Path $repoRoot 'setup/setup-common.ps1')
+    . (Join-Path $repoRoot 'tests/helpers/SetupTestHelpers.ps1')
     function Get-DataverseEnvironment {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Mock command signature; Pester inspects these arguments.')]
         param($AccessToken)
@@ -63,16 +64,65 @@ BeforeAll {
     }
 }
 
+Describe 'Setup provider source aggregators' {
+    It 'loads the Azure DevOps helper modules into the caller scope' {
+        $loaded = & {
+            . (Join-Path $repoRoot 'setup/setup-azdo.ps1')
+            [bool](Get-Command -Name Get-AzDoCallerSecretVariableBlock -ErrorAction SilentlyContinue)
+        }
+
+        $loaded | Should -BeTrue
+    }
+
+    It 'loads the GitHub helper modules into the caller scope' {
+        $loaded = & {
+            . (Join-Path $repoRoot 'setup/setup-github.ps1')
+            [bool](Get-Command -Name Get-GitHubAccessibleRepository -ErrorAction SilentlyContinue)
+        }
+
+        $loaded | Should -BeTrue
+    }
+}
+
+Describe 'Setup bootstrap source aggregators' {
+    It 'loads Azure DevOps bootstrap helpers into the caller scope' {
+        $loaded = & {
+            . (Join-Path $repoRoot 'setup/setup-azdo-bootstrap.ps1')
+            [bool](Get-Command -Name Install-PortableGit -ErrorAction SilentlyContinue)
+        }
+
+        $loaded | Should -BeTrue
+    }
+
+    It 'loads GitHub bootstrap helpers into the caller scope' {
+        $loaded = & {
+            . (Join-Path $repoRoot 'setup/setup-github-bootstrap.ps1')
+            [bool](Get-Command -Name Install-PortableGitHubCli -ErrorAction SilentlyContinue)
+        }
+
+        $loaded | Should -BeTrue
+    }
+}
+
 Describe 'Azure DevOps Git bootstrap' {
     BeforeAll {
         $tokens = $null
         $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup/azdo/bootstrap.ps1'), [ref]$tokens, [ref]$parseErrors)
         $definition = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-PortableGit'
         }, $false)
         Set-Item -Path 'Function:Install-PortableGit' -Value $definition.Body.GetScriptBlock()
+
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup/github/bootstrap.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-PortableGitHubCli'
+        }, $false)
+        Set-Item -Path 'Function:Install-PortableGitHubCli' -Value $definition.Body.GetScriptBlock()
     }
 
     It 'uses system Git without downloading a Windows executable on non-Windows systems' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
@@ -89,6 +139,54 @@ Describe 'Azure DevOps Git bootstrap' {
         Should -Invoke Start-Process -Times 0 -Exactly
     }
 
+    It 'reuses an existing portable Windows Git installation' {
+        $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        $expectedGitBinDirectory = Join-Path (Join-Path $destination 'Git') 'bin'
+        New-Item -ItemType Directory -Path $expectedGitBinDirectory -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $expectedGitBinDirectory 'git.exe') -Force | Out-Null
+        Mock Invoke-WebRequest { throw 'Unexpected Windows Git download.' }
+
+        $gitBinDirectory = Install-PortableGit -Destination $destination -Platform ([System.PlatformID]::Win32NT)
+
+        $gitBinDirectory | Should -Be $expectedGitBinDirectory
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+
+    It 'downloads and extracts Windows Git when it is not cached' {
+        $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        $expectedGitBinDirectory = Join-Path (Join-Path $destination 'Git') 'bin'
+        Mock Invoke-WebRequest {
+            Set-Content -LiteralPath $OutFile -Value 'installer'
+        }
+        Mock Start-Process {
+            $gitBinDirectory = Join-Path (Join-Path (Split-Path -Parent $FilePath) 'Git') 'bin'
+            New-Item -ItemType Directory -Path $gitBinDirectory -Force | Out-Null
+            New-Item -ItemType File -Path (Join-Path $gitBinDirectory 'git.exe') -Force | Out-Null
+            [pscustomobject]@{ ExitCode = 0 }
+        }
+
+        $gitBinDirectory = Install-PortableGit -Destination $destination -Platform ([System.PlatformID]::Win32NT)
+
+        $gitBinDirectory | Should -Be $expectedGitBinDirectory
+        Test-Path (Join-Path $destination 'PortableGit.exe') | Should -BeFalse
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly
+        Should -Invoke Start-Process -Times 1 -Exactly
+    }
+
+    It 'reports a missing Windows Git installer after download' {
+        $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        Mock Invoke-WebRequest {}
+        Mock Start-Process { throw 'Unexpected Windows Git extraction.' }
+
+        { Install-PortableGit -Destination $destination -Platform ([System.PlatformID]::Win32NT) } |
+            Should -Throw '*Failed to download Git installer*'
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly
+        Should -Invoke Start-Process -Times 0 -Exactly
+    }
+
     It 'fails with an install instruction when system Git is unavailable on non-Windows systems' -Skip:([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) {
         Mock Get-Command { $null }
         Mock Invoke-WebRequest { throw 'Unexpected Windows Git download.' }
@@ -96,6 +194,101 @@ Describe 'Azure DevOps Git bootstrap' {
         { Install-PortableGit -Destination $TestDrive } |
             Should -Throw '*Git must be installed and available on PATH*'
         Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+}
+
+Describe 'GitHub CLI bootstrap' {
+    BeforeAll {
+        $repoRoot = Split-Path $PSScriptRoot -Parent
+        . (Join-Path $repoRoot 'setup/setup-common.ps1')
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup/github/bootstrap.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Install-PortableGitHubCli'
+        }, $false)
+        Set-Item -Path 'Function:Install-PortableGitHubCli' -Value $definition.Body.GetScriptBlock()
+    }
+
+    BeforeEach {
+        $script:savedProcessorArchitecture = $env:PROCESSOR_ARCHITECTURE
+        $env:PROCESSOR_ARCHITECTURE = 'AMD64'
+    }
+
+    AfterEach {
+        $env:PROCESSOR_ARCHITECTURE = $script:savedProcessorArchitecture
+    }
+
+    It 'reuses an existing GitHub CLI executable' {
+        $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        $installDirectory = Join-Path $destination 'GitHubCLI'
+        $expectedBinDirectory = Join-Path $installDirectory 'bin'
+        New-Item -ItemType Directory -Path $expectedBinDirectory -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $expectedBinDirectory 'gh.exe') -Force | Out-Null
+        Mock Invoke-RestMethod { throw 'Unexpected GitHub CLI release request.' }
+
+        Install-PortableGitHubCli -Destination $destination | Should -Be $expectedBinDirectory
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly
+    }
+
+    It 'downloads the matching GitHub CLI archive and removes it after extraction' {
+        $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        $installDirectory = Join-Path $destination 'GitHubCLI'
+        $expectedBinDirectory = Join-Path $installDirectory 'bin'
+        New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{
+                assets = @(
+                    [pscustomobject]@{
+                        name = 'gh_2.55.0_windows_amd64.zip'
+                        browser_download_url = 'https://example.invalid/gh.zip'
+                    }
+                )
+            }
+        }
+        Mock Invoke-WebRequest {
+            Set-Content -LiteralPath $OutFile -Value 'archive'
+        }
+        Mock Expand-SetupConsoleArchive {
+            $binDirectory = Join-Path $DestinationPath 'bin'
+            New-Item -ItemType Directory -Path $binDirectory -Force | Out-Null
+            New-Item -ItemType File -Path (Join-Path $binDirectory 'gh.exe') -Force | Out-Null
+        }
+
+        $binDirectory = Install-PortableGitHubCli -Destination $destination
+
+        $binDirectory | Should -Be $expectedBinDirectory
+        Test-Path (Join-Path $destination 'GitHubCLI.zip') | Should -BeFalse
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly
+        Should -Invoke Invoke-WebRequest -Times 1 -Exactly
+        Should -Invoke Expand-SetupConsoleArchive -Times 1 -Exactly
+    }
+
+    It 'fails when no release asset matches the architecture' {
+        $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $destination | Out-Null
+        Mock Invoke-RestMethod {
+            [pscustomobject]@{
+                assets = @([pscustomobject]@{ name = 'gh_2.55.0_windows_arm64.zip'; browser_download_url = 'https://example.invalid/gh.zip' })
+            }
+        }
+        Mock Invoke-WebRequest { throw 'Unexpected GitHub CLI archive download.' }
+
+        { Install-PortableGitHubCli -Destination $destination } |
+            Should -Throw '*Could not find a GitHub CLI release archive*'
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+
+    It 'rejects unsupported processor architectures' {
+        $env:PROCESSOR_ARCHITECTURE = 'UNSUPPORTED'
+        Mock Invoke-RestMethod { throw 'Unexpected GitHub CLI release request.' }
+
+        { Install-PortableGitHubCli -Destination $TestDrive } |
+            Should -Throw '*Unsupported processor architecture*'
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly
     }
 }
 
@@ -108,9 +301,7 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
         Set-Variable -Name TenantId -Scope Global -Value 'example.com'
         $script:providerTrace = [System.Collections.Generic.List[string]]::new()
         $script:providerCallbackToken = $null
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $ScriptName), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint $ScriptName
         # Import only the function under test, not the installer's interactive entry point.
         $definition = $ast.Find({
             param($node)
@@ -168,9 +359,7 @@ Describe 'Dataverse setup authentication callbacks in <ScriptName>' -ForEach @(
 
 Describe 'Azure DevOps lookup failure handling' {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
         foreach ($name in @('Get-PowerPlatformSCCredential', 'Get-AzDoVariableGroupByName', 'Initialize-AzDoVariableGroup', 'Update-AzDoVariableGroup')) {
             $definition = $ast.Find({
                 param($node)
@@ -358,9 +547,7 @@ Describe 'Provider mutation guards in <ScriptName>: <Helper>' -ForEach @(
     @{ ScriptName = 'setup-github.ps1'; Helper = 'Set-GitHubEnvironmentConfiguration' }
 ) {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $ScriptName), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint $ScriptName
         $definition = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $Helper
@@ -415,9 +602,7 @@ Describe 'GitHub credential writes: <Helper>' -ForEach @(
     @{ Helper = 'Set-GitHubRepoVariable'; Settings = @{ Owner = 'owner'; Repo = 'repo'; VariableName = 'URL'; VariableValue = 'https://example.invalid/' }; ExpectedValue = 'https://example.invalid/' }
 ) {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
         $definition = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $Helper
@@ -458,9 +643,7 @@ Describe 'GitHub credential writes: <Helper>' -ForEach @(
 
 Describe 'GitHub repository access listing' {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
         foreach ($name in @('Get-GitHubAccessibleRepository', 'Get-GitHubAccessibleForksOfRepository')) {
             $definition = $ast.Find({
                 param($node)
@@ -477,6 +660,7 @@ Describe 'GitHub repository access listing' {
     BeforeEach {
         Mock Invoke-GhApi {
             @(
+                [pscustomobject]@{ full_name = 'OWNER/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
                 [pscustomobject]@{ full_name = 'OWNER/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
                 [pscustomobject]@{ full_name = 'other/shared'; fork = $true; parent = [pscustomobject]@{ full_name = 'upstream/shared' } }
                 [pscustomobject]@{ full_name = 'org/shared'; fork = $false }
@@ -497,7 +681,7 @@ Describe 'GitHub repository access listing' {
         }
     }
 
-    It 'returns matching upstream forks regardless of owner' {
+    It 'returns each matching upstream fork once regardless of owner' {
         @(Get-GitHubAccessibleForksOfRepository -UpstreamFullName upstream/shared).full_name | Should -Be @('OWNER/shared', 'other/shared')
         Should -Invoke Invoke-GhApi -Times 1 -Exactly -ParameterFilter {
             $Endpoint -eq 'user/repos?affiliation=owner,collaborator,organization_member&sort=updated&per_page=100'
@@ -514,9 +698,7 @@ Describe 'GitHub repository access listing' {
 
 Describe 'GitHub repository listing' {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
         $definition = $ast.Find({
             param($node)
             $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-GitHubRepoList'
@@ -565,15 +747,289 @@ Describe 'GitHub repository listing' {
     }
 }
 
+Describe 'GitHub API response handling' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Invoke-GhApi'
+        }, $false)
+        Set-Item -Path 'Function:Invoke-GhApi' -Value $definition.Body.GetScriptBlock()
+        function gh { throw 'Unmocked GitHub CLI call' }
+    }
+
+    BeforeEach {
+        $script:savedApiExitCode = $global:LASTEXITCODE
+    }
+
+    AfterEach {
+        $global:LASTEXITCODE = $script:savedApiExitCode
+    }
+
+    It 'parses successful JSON responses and restores the caller error preference' {
+        Mock gh { $global:LASTEXITCODE = 0; '{"login":"example-user"}' }
+        $previousPreference = $ErrorActionPreference
+
+        $response = Invoke-GhApi -Endpoint 'user'
+
+        $response.login | Should -Be 'example-user'
+        $ErrorActionPreference | Should -Be $previousPreference
+        Should -Invoke gh -Times 1 -Exactly
+    }
+
+    It 'sends request bodies and returns null for an allowed not-found response' {
+        Mock gh { $global:LASTEXITCODE = 0; '{"accepted":true}' }
+        (Invoke-GhApi -Endpoint 'repos/example/repository/hooks' -Method POST -Body @{ accepted = $true }).accepted |
+            Should -BeTrue
+
+        Mock gh { $global:LASTEXITCODE = 1; 'HTTP 404: Not Found' }
+        Invoke-GhApi -Endpoint 'repos/example/repository/missing' -AllowNotFound |
+            Should -BeNullOrEmpty
+    }
+
+    It 'throws for other CLI failures after restoring the caller error preference' {
+        Mock gh { $global:LASTEXITCODE = 3; 'Request denied' }
+        $previousPreference = $ErrorActionPreference
+
+        { Invoke-GhApi -Endpoint 'user' } | Should -Throw '*exit code 3*Request denied*'
+
+        $ErrorActionPreference | Should -Be $previousPreference
+    }
+}
+
+Describe 'GitHub setup authentication and application repository context' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
+        foreach ($name in @('Initialize-GitHubSetupAuthentication', 'Initialize-GitHubApplicationRepositoryContext')) {
+            $definition = $ast.Find({
+                param($node)
+                $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
+            }, $false)
+            Set-Item -Path "Function:$name" -Value $definition.Body.GetScriptBlock()
+        }
+
+        function gh { throw 'Unmocked GitHub CLI call' }
+        function git { throw 'Unmocked Git call' }
+        function Get-GitHubRepoList {}
+        function Get-GitHubRepositoryIdentity {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($Owner, $Repo)
+        }
+        function Get-GitHubRepositoryExistingSetupState {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($RepoRoot, $RepoOwner, $RepoName, $DefaultBranch, $TenantId, [switch]$SkipProviderState)
+        }
+        function Invoke-GitHubCloneBaseBranchCheckout {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($RepoRoot, $DefaultBranch)
+        }
+    }
+
+    BeforeEach {
+        $script:ALM4DataverseRef = 'stable'
+        $script:savedSetupGitHubExitCode = $global:LASTEXITCODE
+        Mock Invoke-WithSpectreStatus { & $ScriptBlock }
+        Mock Invoke-WithErrorHandling { & $ScriptBlock }
+    }
+
+    AfterEach {
+        $global:LASTEXITCODE = $script:savedSetupGitHubExitCode
+    }
+
+    It 'uses the existing GitHub login in apply-config mode without Azure authentication' {
+        $script:authenticationGhCalls = @()
+        Mock gh {
+            $script:authenticationGhCalls += ,@($args)
+            if ($args[0] -eq 'auth' -and $args[1] -eq 'status') {
+                $global:LASTEXITCODE = 0
+                return
+            }
+            if ($args[0] -eq 'api' -and $args[-1] -eq '.login') {
+                $global:LASTEXITCODE = 0
+                return 'example-user'
+            }
+            if ($args[0] -eq 'api' -and $args[-1] -eq '.id') {
+                $global:LASTEXITCODE = 0
+                return '42'
+            }
+
+            throw 'Unexpected GitHub CLI command.'
+        }
+        Mock Select-FromMenu { 0 }
+
+        $result = Initialize-GitHubSetupAuthentication -ApplyConfig
+
+        $result.TenantId | Should -BeNullOrEmpty
+        $result.GitHubUser | Should -Be 'example-user'
+        $result.GitHubUserId | Should -Be 42
+        $script:authenticationGhCalls.Count | Should -Be 4
+        Should -Invoke Select-FromMenu -Times 1 -Exactly
+    }
+
+    It 'opens browser authentication when the GitHub CLI has no existing login' {
+        $script:authenticationGhCalls = @()
+        Mock gh {
+            $script:authenticationGhCalls += ,@($args)
+            if ($args[0] -eq 'auth' -and $args[1] -eq 'status') {
+                $global:LASTEXITCODE = 1
+                return 'Not logged in.'
+            }
+            if ($args[0] -eq 'auth' -and $args[1] -eq 'login') {
+                $global:LASTEXITCODE = 0
+                return
+            }
+            if ($args[0] -eq 'api' -and $args[-1] -eq '.login') {
+                $global:LASTEXITCODE = 0
+                return 'example-user'
+            }
+            if ($args[0] -eq 'api' -and $args[-1] -eq '.id') {
+                $global:LASTEXITCODE = 0
+                return '42'
+            }
+
+            throw 'Unexpected GitHub CLI command.'
+        }
+        Mock Select-FromMenu { 0 }
+
+        $result = Initialize-GitHubSetupAuthentication -ApplyConfig
+
+        $result.GitHubUser | Should -Be 'example-user'
+        $result.GitHubUserId | Should -Be 42
+        $script:authenticationGhCalls.Count | Should -Be 4
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
+    }
+
+    It 'clones and inspects the selected existing repository in setup mode' {
+        $script:selectedRepository = [pscustomobject]@{
+            name             = 'application'
+            nameWithOwner    = 'example-owner/application'
+            owner            = [pscustomobject]@{ login = 'example-owner' }
+            defaultBranchRef = [pscustomobject]@{ name = 'release' }
+        }
+        $script:existingRepositoryState = [pscustomobject]@{ IsConfigured = $true }
+
+        Mock Get-GitHubRepoList { @($script:selectedRepository) }
+        Mock Select-FromMenu { 0 }
+        Mock Get-GitHubRepositoryIdentity {
+            [pscustomobject]@{ OwnerId = 11; RepositoryId = 22; UseImmutableSubject = $true }
+        }
+        Mock Get-GitHubRepositoryExistingSetupState { $script:existingRepositoryState }
+        Mock Invoke-GitHubCloneBaseBranchCheckout {}
+        Mock gh { $global:LASTEXITCODE = 0 }
+        Mock git { $global:LASTEXITCODE = 0 }
+
+        $result = Initialize-GitHubApplicationRepositoryContext -ExistingSetupMode
+
+        $result.RepoFullName | Should -Be 'example-owner/application'
+        $result.RepoOwnerId | Should -Be 11
+        $result.RepoId | Should -Be 22
+        $result.DefaultBranch | Should -Be 'release'
+        $result.CloneRoot | Should -Not -BeNullOrEmpty
+        $result.ExistingSetupState.IsConfigured | Should -BeTrue
+        $result.IsNewRepository | Should -BeFalse
+        Should -Invoke Invoke-GitHubCloneBaseBranchCheckout -Times 1 -Exactly
+        Should -Invoke Get-GitHubRepositoryExistingSetupState -Times 1 -Exactly -ParameterFilter {
+            $RepoRoot -eq $result.CloneRoot -and $RepoOwner -eq 'example-owner' -and $RepoName -eq 'application' -and
+            $DefaultBranch -eq 'release' -and -not $SkipProviderState
+        }
+    }
+}
+
+Describe 'Azure DevOps organization selection' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
+        $definition = $ast.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Initialize-AzDoOrganization'
+        }, $false)
+        Set-Item -Path 'Function:Initialize-AzDoOrganization' -Value $definition.Body.GetScriptBlock()
+        function Set-VSTeamAccount {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Empty test command stub; it performs no account or service mutation.')]
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($Account, $SecurePersonalAccessToken, [switch]$UseBearerToken, [switch]$Force)
+        }
+    }
+
+    BeforeEach {
+        $script:secureToken = [System.Security.SecureString]::new()
+        $script:previousAdoAccessToken = Get-Variable -Name adoAccessToken -Scope Global -ErrorAction SilentlyContinue
+        Set-Variable -Name adoAccessToken -Value ([pscustomobject]@{ Token = '' }) -Scope Global
+        Mock Invoke-WithErrorHandling { & $ScriptBlock }
+        Mock Test-SetupDebugEnabled { $true }
+        Mock Write-SetupDebug {}
+    }
+
+    AfterEach {
+        if ($script:previousAdoAccessToken) {
+            Set-Variable -Name adoAccessToken -Value $script:previousAdoAccessToken.Value -Scope Global
+        }
+        else {
+            Remove-Variable -Name adoAccessToken -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'deduplicates organizations and disambiguates duplicate names in the selection menu' {
+        $script:organizationMenuItems = @()
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*profiles/me*') {
+                return [pscustomobject]@{ publicAlias = 'member-alias' }
+            }
+
+            [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{ accountId = 'organization-id'; accountName = 'Example'; accountUri = 'https://dev.azure.com/example' }
+                    [pscustomobject]@{ accountId = 'organization-id'; accountName = 'Example'; accountUri = 'https://dev.azure.com/duplicate' }
+                    [pscustomobject]@{ accountId = $null; accountUri = 'https://dev.azure.com/example-alt'; accountName = 'Example' }
+                    [pscustomobject]@{ accountId = $null; accountUri = $null; accountName = 'Solo' }
+                )
+            }
+        }
+        Mock Select-FromMenu {
+            $script:organizationMenuItems = @($Items)
+            0
+        }
+        Mock Set-VSTeamAccount {}
+
+        $organization = Initialize-AzDoOrganization
+
+        $organization.Name | Should -Be 'Example'
+        $organization.Uri | Should -Be 'https://dev.azure.com/example'
+        $script:organizationMenuItems | Should -Contain 'Example (https://dev.azure.com/example)'
+        $script:organizationMenuItems | Should -Contain 'Example (https://dev.azure.com/example-alt)'
+        $script:organizationMenuItems | Should -Contain 'Solo'
+        Should -Invoke Set-VSTeamAccount -Times 1 -Exactly -ParameterFilter {
+            $Account -eq 'Example' -and $UseBearerToken -and $Force
+        }
+    }
+
+    It 'returns without configuring VSTeam when the organization menu is cancelled' {
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*profiles/me*') {
+                return [pscustomobject]@{ publicAlias = $null; id = 'member-id' }
+            }
+
+            [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{ accountId = 'organization-id'; accountName = 'Example'; accountUri = 'https://dev.azure.com/example' }
+                )
+            }
+        }
+        Mock Select-FromMenu { $null }
+        Mock Set-VSTeamAccount {}
+
+        Initialize-AzDoOrganization | Should -BeNullOrEmpty
+
+        Should -Invoke Set-VSTeamAccount -Times 0 -Exactly
+    }
+}
+
 Describe 'Provider cleanup failure handling' {
     BeforeAll {
         foreach ($provider in @(
             @{ Path = 'setup-azdo.ps1'; Name = 'New-AzDoRepoWorkingTree' }
             @{ Path = 'setup-github.ps1'; Name = 'Get-GitHubEnvironmentCapability' }
         )) {
-            $tokens = $null
-            $parseErrors = $null
-            $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $provider.Path), [ref]$tokens, [ref]$parseErrors)
+            $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint $provider.Path
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $provider.Name
@@ -672,9 +1128,7 @@ Describe 'Generated GitHub workflow files' {
                 throw "actionlint rejected a generated workflow: $($output -join [Environment]::NewLine)"
             }
         }
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-github.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
         foreach ($name in @('Update-BuildWorkflowInRepoClone', 'Update-DeployWorkflowInRepoClone', 'Get-SecretJsonInputBlock', 'Merge-SecretJsonInput')) {
             $definition = $ast.Find({
                 param($node)
@@ -807,9 +1261,7 @@ Describe 'Generated Azure DevOps pipeline files' {
                 throw "Microsoft's Azure Pipelines language service rejected '$Path': $($output -join [Environment]::NewLine)"
             }
         }
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
         foreach ($name in @('Get-AzDoCallerSecretVariableBlock', 'Update-AzDoBuildPipelineInWorkingTree', 'Update-DeployPipelineInWorkingTree')) {
             $definition = $ast.Find({
                 param($node)
@@ -908,11 +1360,221 @@ Describe 'Generated Azure DevOps pipeline files' {
 
 Describe 'Azure DevOps pipeline and endpoint reconciliation' {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot 'setup-azdo.ps1'), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
         foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
             Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    Describe 'Azure DevOps provisioning primitives' {
+        BeforeAll {
+            $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
+            foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+                Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+            }
+
+            function Get-VSTeamQueue {
+                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Mock command signature; Pester inspects these arguments.')]
+                param($ProjectName)
+            }
+            function Get-VSTeamUser {
+                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SubjectTypes', Justification = 'Mock command signature; Pester inspects these arguments.')]
+                [CmdletBinding()]
+                param($SubjectTypes)
+            }
+            function Get-VSTeamSecurityNamespace {
+                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Id', Justification = 'Mock command signature; Pester inspects these arguments.')]
+                [CmdletBinding()]
+                param($Id)
+            }
+            function Get-VSTeamAccessControlList {
+                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+                [CmdletBinding()]
+                param($SecurityNamespaceId, $Token, $Descriptors)
+            }
+            function Get-VSTeamGroup {
+                [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Mock command signature; Pester inspects these arguments.')]
+                [CmdletBinding()]
+                param($ProjectName)
+            }
+        }
+
+        BeforeEach {
+            $script:previousGlobalAdoAccessToken = Get-Variable -Name adoAccessToken -Scope Global -ErrorAction SilentlyContinue
+            Set-Variable -Name adoAccessToken -Value ([pscustomobject]@{ Token = '' }) -Scope Global
+            $script:adoAccessToken = Get-Variable -Name adoAccessToken -Scope Global -ValueOnly
+            $script:agentQueues = @()
+            Mock Get-VSTeamQueue { $script:agentQueues }
+            Mock Get-VSTeamUser { @() }
+            Mock Get-VSTeamSecurityNamespace { @() }
+            Mock Get-VSTeamAccessControlList { @() }
+            Mock Get-VSTeamGroup { @() }
+            Mock Invoke-VSTeamRequest { }
+            Mock Invoke-RestMethod { [pscustomobject]@{ count = 0; value = @() } }
+        }
+
+        AfterEach {
+            if ($script:previousGlobalAdoAccessToken) {
+                Set-Variable -Name adoAccessToken -Value $script:previousGlobalAdoAccessToken.Value -Scope Global
+            }
+            else {
+                Remove-Variable -Name adoAccessToken -Scope Global -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'prefers Azure Pipelines then Default and falls back to the first queue' -ForEach @(
+            @{
+                Queues = @(
+                    [pscustomobject]@{ name = 'Default'; id = 1 }
+                    [pscustomobject]@{ name = 'Azure Pipelines'; id = 2 }
+                )
+                Expected = 2
+            }
+            @{
+                Queues = @(
+                    [pscustomobject]@{ name = 'First'; id = 3 }
+                    [pscustomobject]@{ name = 'Default'; id = 4 }
+                )
+                Expected = 4
+            }
+            @{
+                Queues = @(
+                    [pscustomobject]@{ name = 'First'; id = 5 }
+                    [pscustomobject]@{ name = 'Second'; id = 6 }
+                )
+                Expected = 5
+            }
+        ) {
+            $script:agentQueues = @($Queues)
+            Get-AzDoDefaultAgentQueueId -Project 'example-project' | Should -Be $Expected
+        }
+
+        It 'rejects an empty queue list and queues without a usable id' {
+            { Get-AzDoDefaultAgentQueueId -Project 'example-project' } | Should -Throw '*No agent queues found*'
+            $script:agentQueues = @([pscustomobject]@{ name = 'Unusable'; id = 0 })
+            { Get-AzDoDefaultAgentQueueId -Project 'example-project' } | Should -Throw '*Unable to resolve an agent queue id*'
+        }
+
+        It 'decodes service descriptors and skips malformed identities' {
+            $decodedIdentity = 'org\project\Build:project-id'
+            $encodedIdentity = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($decodedIdentity)).TrimEnd('=')
+            $script:serviceIdentities = @(
+                [pscustomobject]@{ descriptor = 'svc.%%%'; displayName = 'Malformed service identity' }
+                [pscustomobject]@{ descriptor = "svc.$encodedIdentity"; displayName = 'Example Build Service' }
+            )
+            Mock Get-VSTeamUser { $script:serviceIdentities }
+
+            Get-AzDoBuildServiceIdentity -ProjectId 'project-id' -ProjectName 'example-project' |
+                Should -Be "Microsoft.TeamFoundation.ServiceIdentity;$decodedIdentity"
+        }
+
+        It 'throws when no decodable Build Service identity matches the project' {
+            Mock Get-VSTeamUser { @([pscustomobject]@{ descriptor = 'svc.%%%'; displayName = 'Malformed service identity' }) }
+
+            { Get-AzDoBuildServiceIdentity -ProjectId 'project-id' -ProjectName 'example-project' } |
+                Should -Throw "*Unable to find Build Service identity with descriptor ending 'Build:project-id'*"
+        }
+
+        It 'resolves a security action bit by its display name and rejects missing metadata' {
+            $namespace = [pscustomobject]@{
+                name = 'Git Repositories'
+                actions = @([pscustomobject]@{ name = 'Contribute'; displayName = 'Contribute access'; bit = 8 })
+            }
+            Get-AzDoSecurityNamespaceActionBit -Namespace $namespace -ActionName 'Contribute access' | Should -Be 8
+
+            $missingBitNamespace = [pscustomobject]@{
+                name = 'Git Repositories'
+                actions = @([pscustomobject]@{ name = 'Contribute' })
+            }
+            { Get-AzDoSecurityNamespaceActionBit -Namespace $missingBitNamespace -ActionName 'Contribute' } |
+                Should -Throw "*Unable to resolve action 'Contribute'*"
+        }
+
+        It 'returns the matching access-control entry and treats unreadable ACL data as absent' {
+            $script:expectedAce = [pscustomobject]@{ allow = 4; deny = 1 }
+            $aceDictionary = @{ 'example-descriptor' = $script:expectedAce }
+            Mock Get-VSTeamAccessControlList { [pscustomobject]@{ acesDictionary = $aceDictionary } }
+
+            $ace = Get-AzDoAccessControlEntry -NamespaceId 'namespace-id' -Token 'repoV2/project-id/repository-id' -Descriptor 'example-descriptor'
+            $ace.allow | Should -Be 4
+            $ace.deny | Should -Be 1
+
+            Mock Get-VSTeamAccessControlList { throw 'ACL lookup failed' }
+            Get-AzDoAccessControlEntry -NamespaceId 'namespace-id' -Token 'repoV2/project-id/repository-id' -Descriptor 'example-descriptor' |
+                Should -BeNullOrEmpty
+        }
+
+        It 'preserves existing repository permission masks and clears only a Contribute deny' {
+            Mock Get-AzDoBuildServiceIdentity { ' service-descriptor ' }
+            Mock Get-AzDoSecurityNamespaceByName { [pscustomobject]@{ Id = 'namespace-id' } }
+            Mock Get-AzDoSecurityNamespaceActionBit { 8 }
+            Mock Get-AzDoAccessControlEntry { [pscustomobject]@{ allow = 2; deny = 8 } }
+            Mock Set-AzDoAccessControlEntry { }
+
+            Initialize-AzDoBuildServiceRepositoryPermission -ProjectName 'example-project' -ProjectId 'project-id' -RepositoryId 'repository-id'
+
+            Should -Invoke Set-AzDoAccessControlEntry -Times 1 -Exactly -ParameterFilter {
+                $NamespaceId -eq 'namespace-id' -and
+                $Token -eq 'repoV2/project-id/repository-id' -and
+                $Descriptor -eq 'service-descriptor' -and
+                $Allow -eq 10 -and
+                $Deny -eq 0
+            }
+
+            Mock Get-AzDoAccessControlEntry { [pscustomobject]@{ allow = 8; deny = 0 } }
+            Initialize-AzDoBuildServiceRepositoryPermission -ProjectName 'example-project' -ProjectId 'project-id' -RepositoryId 'repository-id'
+            Should -Invoke Set-AzDoAccessControlEntry -Times 1 -Exactly
+        }
+
+        It 'leaves existing variable-group Approval and ExclusiveLock checks untouched' {
+            $script:existingChecks = [pscustomobject]@{
+                count = 2
+                value = @(
+                    [pscustomobject]@{
+                        resource = [pscustomobject]@{ type = 'variablegroup'; id = '12' }
+                        type = [pscustomobject]@{ name = 'Approval' }
+                    }
+                    [pscustomobject]@{
+                        resource = [pscustomobject]@{ type = 'variablegroup'; id = '12' }
+                        type = [pscustomobject]@{ name = 'ExclusiveLock' }
+                    }
+                )
+            }
+            Mock Invoke-RestMethod { $script:existingChecks }
+
+            Initialize-AzDoVariableGroupApproval -Organization 'example-org' -Project 'example-project' -VariableGroupId '12' -VariableGroupName 'TEST' -ApproverTeam ([pscustomobject]@{ name = 'TEST deployment approvers' })
+            Initialize-AzDoVariableGroupExclusiveLock -Organization 'example-org' -Project 'example-project' -VariableGroupId '12' -VariableGroupName 'TEST'
+
+            Should -Invoke Invoke-RestMethod -Times 2 -Exactly -ParameterFilter { $Method -eq 'Get' }
+            Should -Invoke Invoke-VSTeamRequest -Times 0 -Exactly
+            Should -Invoke Get-VSTeamGroup -Times 0 -Exactly
+        }
+
+        It 'creates missing variable-group Approval and ExclusiveLock checks' {
+            $script:createdCheckTypes = @()
+            Mock Get-VSTeamGroup {
+                [pscustomobject]@{
+                    principalName = 'TEST deployment approvers'
+                    displayName = 'TEST deployment approvers'
+                    originId = 'group-id'
+                    descriptor = 'group-descriptor'
+                }
+            }
+            Mock Invoke-VSTeamRequest {
+                $check = $Body | ConvertFrom-Json
+                $script:createdCheckTypes += $check.type.name
+            }
+
+            Initialize-AzDoVariableGroupApproval -Organization 'example-org' -Project 'example-project' -VariableGroupId '12' -VariableGroupName 'TEST' -ApproverTeam ([pscustomobject]@{ name = 'TEST deployment approvers' })
+            Initialize-AzDoVariableGroupExclusiveLock -Organization 'example-org' -Project 'example-project' -VariableGroupId '12' -VariableGroupName 'TEST'
+
+            $script:createdCheckTypes | Should -HaveCount 2
+            $script:createdCheckTypes[0] | Should -Be 'Approval'
+            $script:createdCheckTypes[1] | Should -Be 'ExclusiveLock'
+            Should -Invoke Get-VSTeamGroup -Times 1 -Exactly
+            Should -Invoke Invoke-VSTeamRequest -Times 2 -Exactly -ParameterFilter {
+                $Method -eq 'POST' -and $Resource -eq 'pipelines/checks/configurations'
+            }
         }
     }
 

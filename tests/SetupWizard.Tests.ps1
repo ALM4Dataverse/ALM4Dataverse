@@ -1,6 +1,7 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
-    . (Join-Path $repoRoot 'setup-common.ps1')
+    . (Join-Path $repoRoot 'setup/setup-common.ps1')
+    . (Join-Path $repoRoot 'tests/helpers/SetupTestHelpers.ps1')
     # Standalone runs need only these no-op console members; reuse a richer fixture type
     # when SetupCommon has already loaded it because CLR types cannot be replaced in-process.
     if (-not ('Spectre.Console.AnsiConsole' -as [type])) {
@@ -20,9 +21,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
     @{ Provider = 'Azure DevOps'; Source = 'setup-azdo.ps1'; Wizard = 'Invoke-AzDoBranchAwareSetup' }
 ) {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $Source), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint $Source
         # Exercise orchestration functions without running installer startup and authentication.
         foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
             Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
@@ -76,8 +75,20 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         Mock Invoke-WithSpectreStatus { & $ScriptBlock }
         Mock Invoke-SetupWizard {
             $script:setupWizardSteps = @($Steps | ForEach-Object { $_.Name })
+            $script:setupWizardPreviewAction = $PreviewAction
             foreach ($step in $Steps) {
-                & $step.Action | Out-Null
+                try {
+                    & $step.Action | Out-Null
+                }
+                catch {
+                    if ($ReturnToCaller -and (Test-IsSetupWizardBackException -Exception $_.Exception)) {
+                        return $null
+                    }
+                    throw
+                }
+            }
+            if ($PreviewAction) {
+                & $PreviewAction | Out-Null
             }
             & $ApplyAction
         }
@@ -114,6 +125,47 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         Mock Select-FromMenu { 0 }
         Mock Select-BuildValidationBaselineEnvironment { '@TEST' }
         Mock Select-DataverseEnvironment { [pscustomobject]@{ FriendlyName = 'Validation'; Endpoints = @{ WebApplication = 'https://build.example.com/' } } }
+        Mock Invoke-SetupEnvironmentConfigurationWizard {
+            $shortName = [string]$InitialTargetName
+            $friendlyName = 'Test'
+            $url = 'https://test.example.com'
+            if ($Title -like '*BUILD validation*') {
+                $friendlyName = 'Build validation'
+                $url = 'https://build.example.com'
+            }
+            elseif ($Title -like '*DEV*') {
+                $friendlyName = 'Development'
+                $url = 'https://dev.example.com'
+            }
+            if ($InitialConfiguration) {
+                if (-not [string]::IsNullOrWhiteSpace($InitialConfiguration.ShortName)) {
+                    $shortName = [string]$InitialConfiguration.ShortName
+                }
+                if (-not [string]::IsNullOrWhiteSpace($InitialConfiguration.FriendlyName)) {
+                    $friendlyName = [string]$InitialConfiguration.FriendlyName
+                }
+                if (-not [string]::IsNullOrWhiteSpace($InitialConfiguration.Url)) {
+                    $url = [string]$InitialConfiguration.Url
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($shortName)) {
+                $shortName = if ($Title -like '*BUILD validation*') { 'Build-main' } else { 'TEST' }
+            }
+            $baselineRelease = [string]$InitialBaselineRelease
+            if ($SelectBaselineAction) {
+                $script:environmentWizardBaselineCalls++
+                $baselineRelease = '@TEST'
+            }
+
+            return [pscustomobject]@{
+                ShortName = $shortName
+                FriendlyName = $friendlyName
+                Url = $url
+                Credentials = $script:credential
+                ServiceAccountUPN = 'service@example.com'
+                BaselineRelease = $baselineRelease
+            }
+        }
         Mock Get-BranchTargetedRepoChangePublishPlan { [pscustomobject]@{ Mode = 'Direct'; BranchName = $TargetBranch; TargetBranch = $TargetBranch } }
         Mock Get-DataverseSolutionsSelection { [pscustomobject]@{ Solutions = @([pscustomobject]@{ name = 'Example' }) } }
         $workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
@@ -122,10 +174,22 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $script:branchEditorCallbacks = $null
         $script:reviewResourceChanges = @()
         $script:reviewResourceChangeNote = $null
+        $script:sharedRepositoryPreview = $null
+        $script:sharedRepositoryApply = $null
+        $script:environmentWizardBaselineCalls = 0
         if ($Provider -eq 'GitHub') {
-            Mock Get-GitHubSetupArtifactsPreview { [pscustomobject]@{ FileChanges = @() } }
+            Mock Get-GitHubSetupArtifactsPreview {
+                $script:sharedRepositoryPreview = [pscustomobject]@{
+                    Repository = $Repository
+                    Ref = $Ref
+                    CopyRoot = $CopyRoot
+                }
+                [pscustomobject]@{ FileChanges = @() }
+            }
             Mock Get-GitHubExistingEnvironmentState { $script:dev }
             Mock Get-GitHubEnvironmentConfiguration { [pscustomobject]@{ ShortName = $EnvironmentName; FriendlyName = $FriendlyName; Url = $EnvironmentUrl; Credentials = $script:credential; ServiceAccountUPN = 'service@example.com' } }
+            Mock Get-GitHubCredentialsForEnvironment { $script:credential }
+            Mock Get-DataverseServiceAccountUPN { 'service@example.com' }
             Mock Publish-GitHubBranchSetupChange { [pscustomobject]@{ BranchName = $ConfiguredBranch; TargetBranch = $ConfiguredBranch; PullRequestUrl = $null; Mode = 'Direct'; HasChanges = $true } }
             $script:wizardParameters = @{
                 CloneRoot = $workingRoot
@@ -153,9 +217,18 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
             }
         }
         else {
-            Mock Get-AzDoSetupArtifactsPreview { [pscustomobject]@{ FileChanges = @() } }
+            Mock Get-AzDoSetupArtifactsPreview {
+                $script:sharedRepositoryPreview = [pscustomobject]@{
+                    Repository = $SharedRepositoryName
+                    Ref = $SharedRepositoryRef
+                    CopyRoot = $CopyRoot
+                }
+                [pscustomobject]@{ FileChanges = @() }
+            }
             Mock Get-AzDoRepositoryExistingSetupState { $script:existingState }
             Mock Get-AzDoEnvironmentConfiguration { [pscustomobject]@{ ShortName = $EnvironmentName; FriendlyName = $FriendlyName; Url = $EnvironmentUrl; Credentials = $script:credential; ServiceAccountUPN = 'service@example.com' } }
+            Mock Get-PowerPlatformSCCredential { $script:credential }
+            Mock Get-DataverseServiceAccountUPN { 'service@example.com' }
             Mock Get-GitRepoFileContentFromRemoteBranch { '@{ solutions = @() }' }
             Mock Publish-AzDoBranchSetupChange { [pscustomobject]@{ BranchName = $ConfiguredBranch; TargetBranch = $ConfiguredBranch; PullRequestUrl = $null; Mode = 'Direct'; HasChanges = $true } }
             $script:wizardParameters = @{
@@ -186,21 +259,118 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
             $Prompt -eq "Enable Dataverse deployment validation during BUILD for branch 'main'?" -and $DefaultNo
         }
         Should -Invoke Get-DataverseSolutionsSelection -Times 1 -Exactly -ParameterFilter { $ExistingEnvironmentUrl -eq 'https://dev.example.com' }
-        Should -Invoke Confirm-SetupReviewAction -Times 1 -Exactly
+        Should -Invoke Confirm-SetupReviewAction -Times 0 -Exactly
     }
 
-    It 'combines setup review and previews after provider-specific choices' {
+    It 'keeps optional preview separate from required provider setup choices' {
         $null = & $Wizard @script:wizardParameters
 
-        $script:setupWizardSteps | Should -Contain 'Review setup changes'
+        $script:setupWizardSteps | Should -Not -Contain 'Review setup changes'
+        $script:setupWizardSteps | Should -Not -Contain 'Preview changes'
         $script:setupWizardSteps | Should -Not -Contain 'Review choices'
         $script:setupWizardSteps | Should -Not -Contain 'Preview alm-config.psd1'
         $script:setupWizardSteps | Should -Not -Contain 'Preview generated workflows'
         $script:setupWizardSteps | Should -Not -Contain 'Preview generated pipelines'
+        $script:setupWizardPreviewAction | Should -BeOfType [scriptblock]
         if ($Provider -eq 'GitHub') {
             [System.Array]::IndexOf($script:setupWizardSteps, 'Configure GitHub OIDC identity') |
-                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Review setup changes'))
+                Should -BeLessThan $script:setupWizardSteps.Count
         }
+    }
+
+    It 'uses the editable shared repository selection for artifact previews' {
+        if ($Provider -eq 'GitHub') {
+            $script:sharedRepositoryStateForTest = [ordered]@{
+                Repository = ''
+                Reference = ''
+                ValidationError = 'No shared workflow repository is configured.'
+            }
+            $script:wizardParameters.SharedWorkflowRepository = ''
+            $script:wizardParameters.SharedWorkflowReference = ''
+            $script:wizardParameters.SharedWorkflowRepositoryState = $script:sharedRepositoryStateForTest
+            $sharedRepositoryStep = [pscustomobject]@{
+                Name = 'Select shared workflow repository'
+                Action = {
+                    $script:sharedRepositoryStateForTest.Repository = 'owner/selected'
+                    $script:sharedRepositoryStateForTest.Reference = 'stable'
+                }
+            }
+            $sharedRepositoryVersionStep = [pscustomobject]@{
+                Name = 'Check and update shared workflow repository version'
+                Action = {}
+            }
+            Mock Invoke-GitHubBranchAwareSetupApply {
+                $script:sharedRepositoryApply = [pscustomobject]@{
+                    Repository = $SharedWorkflowRepository
+                    Ref = $SharedWorkflowReference
+                }
+                [pscustomobject]@{ BranchStates = @(); UseImmutableWifSubject = $false; PublishResults = @() }
+            }
+        }
+        else {
+            $script:sharedRepositoryStateForTest = [ordered]@{
+                Name = 'initial'
+                Ref = 'main'
+                CopyRoot = (Join-Path $repoRoot 'copy-to-your-repo')
+            }
+            $script:wizardParameters.SharedRepositoryState = $script:sharedRepositoryStateForTest
+            $sharedRepositoryStep = [pscustomobject]@{
+                Name = 'Select shared repository'
+                Action = {
+                    $script:sharedRepositoryStateForTest.Name = 'selected'
+                    $script:sharedRepositoryStateForTest.Ref = 'stable'
+                    $script:sharedRepositoryStateForTest.CopyRoot = $script:wizardParameters.MainRepoWorkingRoot
+                }
+            }
+            $sharedRepositoryVersionStep = [pscustomobject]@{
+                Name = 'Check and update shared repository version'
+                Action = {}
+            }
+            Mock Invoke-AzDoBranchAwareSetupApply {
+                $script:sharedRepositoryApply = [pscustomobject]@{
+                    Repository = $SharedRepositoryName
+                    Ref = $SharedRepositoryRef
+                    CopyRoot = $CopyRoot
+                }
+                [pscustomobject]@{ BranchStates = @(); PublishResults = @() }
+            }
+        }
+        $script:wizardParameters.PrerequisiteSteps = @($sharedRepositoryStep, $sharedRepositoryVersionStep)
+
+        $null = & $Wizard @script:wizardParameters
+
+        if ($Provider -eq 'GitHub') {
+            $script:setupWizardSteps[0] | Should -Be 'Select shared workflow repository'
+            $script:sharedRepositoryPreview.Repository | Should -Be 'owner/selected'
+            $script:sharedRepositoryPreview.Ref | Should -Be stable
+            $script:sharedRepositoryApply.Repository | Should -Be 'owner/selected'
+            $script:sharedRepositoryApply.Ref | Should -Be stable
+            $script:setupWizardSteps | Should -Contain 'Select shared workflow repository'
+            $script:setupWizardSteps | Should -Contain 'Check and update shared workflow repository version'
+            [System.Array]::IndexOf($script:setupWizardSteps, 'Select shared workflow repository') |
+                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Check and update shared workflow repository version'))
+        }
+        else {
+            $script:setupWizardSteps[0] | Should -Be 'Select shared repository'
+            $script:sharedRepositoryPreview.Repository | Should -Be selected
+            $script:sharedRepositoryPreview.Ref | Should -Be stable
+            $script:sharedRepositoryApply.Repository | Should -Be selected
+            $script:sharedRepositoryApply.Ref | Should -Be stable
+            $script:sharedRepositoryPreview.CopyRoot | Should -Be $script:wizardParameters.MainRepoWorkingRoot
+            $script:sharedRepositoryApply.CopyRoot | Should -Be $script:wizardParameters.MainRepoWorkingRoot
+            $script:setupWizardSteps | Should -Contain 'Select shared repository'
+            $script:setupWizardSteps | Should -Contain 'Check and update shared repository version'
+            [System.Array]::IndexOf($script:setupWizardSteps, 'Select shared repository') |
+                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Check and update shared repository version'))
+        }
+    }
+
+    It 'requires mutable state when GitHub shared workflow configuration is empty' -Skip:($Provider -ne 'GitHub') {
+        $script:wizardParameters.SharedWorkflowRepository = ''
+        $script:wizardParameters.SharedWorkflowReference = ''
+
+        { & $Wizard @script:wizardParameters } |
+            Should -Throw '*SharedWorkflowRepositoryState is required when the shared workflow repository or reference is empty*'
     }
 
     It 'includes deferred provider resource changes without exposing credential values' {
@@ -355,20 +525,20 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $result.BuildValidationEnvironmentConfiguration.ShortName | Should -Be 'Build-main'
         $result.BuildValidationBaselineRelease | Should -Be '@TEST'
         Should -Invoke Read-YesNo -Times 1 -Exactly
-        Should -Invoke Select-BuildValidationBaselineEnvironment -Times 1 -Exactly -ParameterFilter { $ExcludedEnvironmentUrl -eq 'https://build.example.com' }
+        $script:environmentWizardBaselineCalls | Should -Be 1
     }
 
     It 'rejects duplicate deployment targets before review or publishing' {
         $script:mappings += [pscustomobject]@{ BranchName = 'release'; DevEnvironmentConfiguration = $null; ExistingDevEnvironment = $null; Environments = @($script:target) }
         { & $Wizard @script:wizardParameters } | Should -Throw '*only be assigned to one branch*'
-        Should -Invoke Confirm-SetupReviewAction -Times 0 -Exactly
+        Should -Invoke Show-SetupChangeReview -Times 0 -Exactly
         if ($Provider -eq 'GitHub') { Should -Invoke Publish-GitHubBranchSetupChange -Times 0 -Exactly }
     }
 
     It 'rejects configured branches without any environment' -Skip:($Provider -ne 'GitHub') {
         $script:mappings = @([pscustomobject]@{ BranchName = 'main'; DevEnvironmentConfiguration = $null; ExistingDevEnvironment = $null; Environments = @() })
         { & $Wizard @script:wizardParameters } | Should -Throw '*at least one mapped environment*'
-        Should -Invoke Confirm-SetupReviewAction -Times 0 -Exactly
+        Should -Invoke Show-SetupChangeReview -Times 0 -Exactly
     }
 
     It 'skips solution discovery when only deployment targets are configured' {
@@ -378,9 +548,9 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         Should -Invoke Get-DataverseSolutionsSelection -Times 0 -Exactly
     }
 
-    It 'does not publish after review is cancelled' {
-        Mock Confirm-SetupReviewAction { throw 'Setup cancelled by user.' }
-        { & $Wizard @script:wizardParameters } | Should -Throw '*cancelled by user*'
+    It 'does not apply when optional preview fails' {
+        Mock Show-SetupChangeReview { throw 'Preview display failed.' }
+        { & $Wizard @script:wizardParameters } | Should -Throw '*Preview display failed*'
         if ($Provider -eq 'GitHub') { Should -Invoke Publish-GitHubBranchSetupChange -Times 0 -Exactly }
     }
 
@@ -415,11 +585,115 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $script:branchEditorBuildValidationCalls | Should -Be 1
     }
 
-    It 'rejects enabled BUILD validation when no environment was selected' {
+    It 'applies target-name callbacks when adding and editing deployment environments' -Skip:($Provider -ne 'GitHub') {
+        $script:environmentTargetNames = @()
+        Mock Invoke-SetupEnvironmentConfigurationWizard {
+            $targetName = if ([string]::IsNullOrWhiteSpace([string]$InitialTargetName)) { 'UAT' } else { [string]$InitialTargetName }
+            if ($SelectTargetNameAction) {
+                $targetName = & $SelectTargetNameAction ([pscustomobject]@{
+                    ShortName = $targetName
+                    Url = 'https://uat.example.com'
+                })
+                $script:environmentTargetNames += $targetName
+            }
+
+            return [pscustomobject]@{
+                ShortName = $targetName
+                FriendlyName = 'User Acceptance Testing'
+                Url = 'https://uat.example.com'
+                Credentials = $script:credential
+                ServiceAccountUPN = 'service@example.com'
+            }
+        }
+        Mock Select-BranchEnvironmentMapping {
+            $mapping = $script:mappings[0]
+            $mapping.Environments = @(& $EditDeploymentEnvironmentsScriptBlock @($script:mappings) $mapping)
+            return @($mapping)
+        }
+        Mock Select-ConfiguredDeploymentEnvironment {
+            $added = & $AddEnvironmentScriptBlock @()
+            $edited = & $EditEnvironmentScriptBlock @($added, $script:target) $added 0
+            return @($edited)
+        }
+        $previousGlobalReadTextWithDefault = Get-Item -Path 'Function:\global:Read-TextWithDefault' -ErrorAction SilentlyContinue
+        Set-Item -Path 'Function:\global:Read-TextWithDefault' -Value {
+            [CmdletBinding()]
+            param($Prompt, $DefaultValue, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+            $null = @($Prompt, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+            if ($DefaultValue) { return $DefaultValue }
+            return 'UAT'
+        }
+
+        try {
+            $result = & $Wizard @script:wizardParameters
+        }
+        finally {
+            if ($previousGlobalReadTextWithDefault) {
+                Set-Item -Path 'Function:\global:Read-TextWithDefault' -Value $previousGlobalReadTextWithDefault.ScriptBlock
+            }
+            else {
+                Remove-Item -Path 'Function:\global:Read-TextWithDefault' -ErrorAction SilentlyContinue
+            }
+        }
+
+        $result.BranchStates[0].DeploymentEnvironments.Count | Should -Be 1
+        $result.BranchStates[0].DeploymentEnvironments[0].ShortName | Should -Be 'UAT'
+        $script:environmentTargetNames | Should -Be @('UAT', 'UAT')
+    }
+
+    It 'keeps Apply unavailable when an existing GitHub deployment environment is missing <MissingPart>' -ForEach @(
+        @{ MissingPart = 'target name'; MissingField = 'ShortName' }
+        @{ MissingPart = 'Dataverse environment'; MissingField = 'Url' }
+        @{ MissingPart = 'credentials'; MissingField = 'Credentials' }
+        @{ MissingPart = 'service account'; MissingField = 'ServiceAccountUPN' }
+        @{ MissingPart = 'provider configuration'; MissingField = 'ConfigurationPending' }
+    ) -Skip:($Provider -ne 'GitHub') {
+        switch ($MissingField) {
+            'ShortName' { $script:target.ShortName = '' }
+            'Url' { $script:target.Url = '' }
+            'Credentials' { $script:target.Credentials = $null }
+            'ServiceAccountUPN' { $script:target.ServiceAccountUPN = '' }
+            'ConfigurationPending' { $script:target | Add-Member -NotePropertyName ConfigurationPending -NotePropertyValue $true -Force }
+        }
+        $script:branchStepReturnedToMenu = $false
+        $script:applyActionCalled = $false
+        $script:branchMenuItems = @()
+        $script:incompleteWarning = @()
+        Mock Write-Host { $script:incompleteWarning += [string]$Object }
+        Mock Invoke-SetupWizard {
+            $branchStep = @($Steps | Where-Object { $_.Name -eq 'Configure branches, dev and deployment envs' })[0]
+            $script:branchMenuItems = @(& $branchStep.SubItems)
+            try {
+                & $branchStep.Action | Out-Null
+            }
+            catch {
+                if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+                    $script:branchStepReturnedToMenu = $true
+                    return $null
+                }
+                throw
+            }
+
+            $script:applyActionCalled = $true
+            & $ApplyAction
+        }
+
+        $null = & $Wizard @script:wizardParameters
+
+        $deploymentMenuItem = @($script:branchMenuItems | Where-Object { $_.Target.Kind -eq 'DeploymentEnvironment' })
+        $deploymentMenuItem.Count | Should -Be 1
+        ($script:incompleteWarning -join ' ') | Should -Match ([regex]::Escape($MissingPart))
+        $script:branchStepReturnedToMenu | Should -BeTrue
+        $script:applyActionCalled | Should -BeFalse
+        Should -Invoke Get-BranchTargetedRepoChangePublishPlan -Times 0 -Exactly
+    }
+
+    It 'leaves BUILD validation disabled when environment detail editing is cancelled' {
         $script:validationEnabled = $true
-        Mock Select-DataverseEnvironment { $null }
-        { & $Wizard @script:wizardParameters } | Should -Throw '*no Dataverse environment was selected*'
-        Should -Invoke Confirm-SetupReviewAction -Times 0 -Exactly
+        Mock Invoke-SetupEnvironmentConfigurationWizard { $null }
+        $result = & $Wizard @script:wizardParameters
+        $result.BranchStates[0].BuildValidationEnabled | Should -BeFalse
+        $result.BranchStates[0].BuildValidationEnvironmentConfiguration | Should -BeNullOrEmpty
     }
 
     It 'selects a solution source when multiple branches have DEV environments' {
@@ -430,10 +704,10 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $result.SolutionSourceBranch | Should -Be release
     }
 
-    It 'keeps per-branch environment settings inside the Configure branches step' {
+    It 'keeps per-branch environment settings inside the branch and environment step' {
         $null = & $Wizard @script:wizardParameters
 
-        $script:setupWizardSteps | Should -Contain 'Configure branches'
+        $script:setupWizardSteps | Should -Contain 'Configure branches, dev and deployment envs'
         $script:setupWizardSteps | Should -Not -Contain 'Continue DEV access'
         $script:setupWizardSteps | Should -Not -Contain 'Configure DEV environments'
         $script:setupWizardSteps | Should -Not -Contain 'Configure deployment environments'
@@ -459,12 +733,7 @@ Describe 'Provider setup artifact preview scopes' {
     BeforeAll {
         $repositoryRoot = Split-Path $PSScriptRoot -Parent
         foreach ($scriptName in @('setup-github.ps1', 'setup-azdo.ps1')) {
-            $tokens = $null
-            $parseErrors = $null
-            $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repositoryRoot $scriptName), [ref]$tokens, [ref]$parseErrors)
-            if ($parseErrors) {
-                throw "Could not parse $scriptName`: $($parseErrors[0].Message)"
-            }
+            $ast = Get-SetupProviderAst -RepositoryRoot $repositoryRoot -EntryPoint $scriptName
             foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
                 Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
             }
