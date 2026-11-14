@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+  <VGpu>Disable</VGpu>
+  <Networking>Enable</Networking>
+  <ClipboardRedirection>Disable</ClipboardRedirection>
+  <PrinterRedirection>Disable</PrinterRedirection>
+  <ProtectedClient>Enable</ProtectedClient>
+  <LogonCommand>
+    <Command>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoProfile -NoExit -Command "Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/download/__ALM4DATAVERSE_RELEASE_TAG__/setup-github.ps1' | Invoke-Expression"</Command>
+  </LogonCommand>
+</Configuration>

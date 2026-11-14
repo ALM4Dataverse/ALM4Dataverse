@@ -118,9 +118,10 @@ The [caller pipelines](../../copy-to-your-repo/pipelines) declare the shared rep
 
 | Template | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| [build](../../pipelines/templates/build.yml) | `buildEnvironmentName` | String | `''` | Nonempty selects a validation service connection and `Environment-<name>` variable group. |
+| [build](../../pipelines/templates/build.yml) | `buildEnvironmentName` | String | `''` | Fallback validation service connection and `Environment-<name>` variable group when no branch mapping applies. |
+| build | `buildValidationEnvironments` | Object map | `{}` | Maps application branch names to validation service connection names; the matching branch selects its `Environment-<name>` variable group. Setup generates this map from `branches.<branch>.buildValidation.environmentName`. |
 | build | `useAlm4DataverseExtension` | Boolean | `true` | Use the ALM4Dataverse connection-variable task. |
-| build | `secretVariables` | List of names | `[]` | Secret variables from the validation group to expose to connected build and validation-deployment steps. Ignored without `buildEnvironmentName`. |
+| build | `secretVariables` | List of names | `[]` | Secret variables from the selected validation group to expose to connected build and validation-deployment steps. Ignored when validation is disabled globally and for every branch. |
 | [export](../../pipelines/templates/export.yml) | `commitMessage` | String | Required | Commit message for exported changes. |
 | export | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
 | export | `secretVariables` | List of names | `[]` | Secret variables from the development group to expose to export scripts and hooks. |
@@ -159,8 +160,10 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
-| `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. |
+| `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. Ignored by GitHub `-ApplyConfig`, which does not sign in to Azure. |
 | `ALM4DataverseRef` | String | Embedded release ref | Choose the shared code ref used during setup. Repository-source scripts resolve the local branch/commit, falling back to `stable`. |
+| `ApplyConfig` | Switch | Off | Select an existing repository and review then regenerate/publish caller files from its committed `alm-config.psd1`; skips settings editors and provider-resource provisioning. Its external-resource plan is empty. Requires provider, repository, ref, and a non-empty branches map. |
+| `PreviewOnly` | Switch | Off | With `ApplyConfig`, show the setup summary and select individual changed files to preview without publishing or modifying files. The selected file diff is written without paging. Requires `ApplyConfig`. |
 
 `UseDeviceAuthentication` is still accepted so older invocations keep working, but it
 is ignored: setup always uses its normal interactive sign-in. On a machine without a
@@ -172,7 +175,23 @@ Download a released script to review it and pass parameters. For example, after 
 .\setup-github.ps1 -TenantId '00000000-0000-0000-0000-000000000001' -ALM4DataverseRef 'stable'
 ```
 
-The downloadable release scripts embed their helpers and dependency versions. Raw repository-source scripts require the adjacent shared helper and defaults files; downloading just the raw script is not equivalent to downloading a Release asset. Setup is interactive and makes changes to repositories and cloud configuration, not a dry run.
+To regenerate files from configuration that has already been committed to the
+application repository, run `.\setup-github.ps1 -ApplyConfig` or
+`.\setup-azdo.ps1 -ApplyConfig`. The scripts require an existing repository and do not
+create or provision provider resources in this mode.
+
+Add `-PreviewOnly` to either command to show the generated change summary and select
+individual file diffs without publishing; the selected file is written without paging.
+It is available only with `-ApplyConfig`.
+Normal guided setup also lists deferred provider, Entra ID, and Dataverse operations
+separately from repository-file changes. This is an intent plan, not a live resource
+diff; it excludes prerequisites already applied during setup and never prints secret
+values. `-ApplyConfig` remains repository-file-only.
+The downloadable release scripts embed their helpers and dependency versions. Raw
+repository-source scripts require the adjacent shared helper and defaults files;
+downloading just the raw script is not equivalent to downloading a Release asset.
+Normal setup provisions selected cloud resources; `-ApplyConfig` publishes repository
+files only and is not a dry run unless `-PreviewOnly` is specified.
 
 ## Direct PowerShell Usage
 

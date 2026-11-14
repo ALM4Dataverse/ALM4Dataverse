@@ -26,17 +26,19 @@ jobs:
         id: get_tag
         run: echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare setup scripts for release
+      - name: Prepare setup scripts and sandbox launchers for release
         id: prepare_setup
         run: |
           TAG_NAME="${{ steps.get_tag.outputs.TAG_NAME }}"
           UPSTREAM_REPO="https://github.com/${{ github.repository }}.git"
           
-          # Use the prepare-release.ps1 script (produces release/setup-azdo.ps1 and release/setup-github.ps1)
+          # Generate setup scripts and launchers pinned to this release tag.
           pwsh -File prepare-release.ps1 -TagName "$TAG_NAME" -OutputDir release -UpstreamRepo "$UPSTREAM_REPO"
           
           echo "SETUP_AZDO_FILE=release/setup-azdo.ps1" >> "$GITHUB_OUTPUT"
           echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> "$GITHUB_OUTPUT"
+          echo "SETUP_AZDO_WSB_FILE=release/setup-azdo.wsb" >> "$GITHUB_OUTPUT"
+          echo "SETUP_GITHUB_WSB_FILE=release/setup-github.wsb" >> "$GITHUB_OUTPUT"
 
       - name: Update stable tag
         # Unlike immutable version tags, stable is an intentionally moving pointer.
@@ -151,10 +153,12 @@ jobs:
               console.log('Created new release');
             }
             
-            // Upload setup scripts as release assets
+            // Upload setup scripts and their provider-specific sandbox launchers.
             const setupFiles = [
               { path: '${{ steps.prepare_setup.outputs.SETUP_AZDO_FILE }}',   name: 'setup-azdo.ps1' },
               { path: '${{ steps.prepare_setup.outputs.SETUP_GITHUB_FILE }}', name: 'setup-github.ps1' },
+              { path: '${{ steps.prepare_setup.outputs.SETUP_AZDO_WSB_FILE }}', name: 'setup-azdo.wsb' },
+              { path: '${{ steps.prepare_setup.outputs.SETUP_GITHUB_WSB_FILE }}', name: 'setup-github.wsb' },
             ];
 
             // Listing/deletion failures are warned; a later upload can still fail.

@@ -9,11 +9,12 @@ BeforeAll {
 
 Describe 'GitHub baseline package selection and deployment order' {
     BeforeEach {
-        $script:savedBaselineEnvironment = @{ RUNNER_TEMP = $env:RUNNER_TEMP; GITHUB_TOKEN = $env:GITHUB_TOKEN; GITHUB_REPOSITORY = $env:GITHUB_REPOSITORY; GH_TOKEN = $env:GH_TOKEN }
+        $script:savedBaselineEnvironment = @{ RUNNER_TEMP = $env:RUNNER_TEMP; GITHUB_TOKEN = $env:GITHUB_TOKEN; GITHUB_REPOSITORY = $env:GITHUB_REPOSITORY; GH_TOKEN = $env:GH_TOKEN; BUILD_BRANCH = $env:BUILD_BRANCH }
         $script:savedBaselineExitCode = $global:LASTEXITCODE
         $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $env:GITHUB_TOKEN = 'fake-test-token'
         $env:GITHUB_REPOSITORY = 'example/repository'
+        $env:BUILD_BRANCH = 'main'
         $script:candidatePath = Join-Path $env:RUNNER_TEMP 'candidate'
         $baselineSource = Join-Path $env:RUNNER_TEMP 'baseline-source'
         # Both packages expose a recording-only deploy entry point, so archive extraction and
@@ -56,13 +57,25 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
     }
 
     It 'deploys a downloaded baseline before the candidate and removes temporary packages' {
-        & $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
+        & $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST -BranchName main
         $order = @(Get-Content (Join-Path $env:RUNNER_TEMP 'deploy-order.log'))
         $order.Count | Should -Be 2
         $order[0] | Should -Match 'alm4dataverse-baseline-'
         $order[1] | Should -Be $script:candidatePath
         @(Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'alm4dataverse-*').Count | Should -Be 0
         Should -Invoke gh -Times 1 -Exactly
+    }
+
+    It 'uses the selected branch baseline instead of the legacy global baseline' {
+        Set-Content -LiteralPath (Join-Path $script:candidatePath 'alm-config.psd1') `
+            -Value "@{ buildValidation = @{ baselineRelease = 'release-1' }; branches = @{ main = @{ buildValidation = @{ baselineRelease = '' } } } }"
+
+        & $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST -BranchName main
+
+        $order = @(Get-Content (Join-Path $env:RUNNER_TEMP 'deploy-order.log'))
+        $order.Count | Should -Be 1
+        $order[0] | Should -Be $script:candidatePath
+        Should -Invoke gh -Times 0 -Exactly
     }
 
     It 'supports numeric, annotated pointer, and legacy pointer selectors' -ForEach @(

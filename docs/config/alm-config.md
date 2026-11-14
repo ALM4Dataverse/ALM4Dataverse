@@ -54,10 +54,105 @@ The supplied template additionally includes the `data` asset and example data ho
 | `pacCliVersion` | String | `'2.13.1'`. |
 | `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
-| `buildValidation.baselineRelease` | String | `''`; no baseline. |
+| `provider` | String | Empty until setup; `GitHub` or `azDO`. |
+| `repository`, `ref` | Strings | Shared ALM4Dataverse repository and source ref used by generated callers. |
+| `GitHubUseEnvironments` | Boolean | `$true`; use GitHub environments for credential scoping. |
+| `GitHubDeploymentPromotionMode` | String | `'manual-gate-tag'`; or `'environment-approval'`. |
+| `GitHubUseRepositoryVariablePrefix` | Boolean | `$true`; prefix repository-level variables by environment. |
+| `GitHubUseImmutableWifSubject` | Boolean | `$false`; use immutable owner/repository IDs in GitHub OIDC subjects. |
+| `azDOUseAlm4DataverseExtension` | Boolean | `$true`; use the ALM4Dataverse Azure DevOps extension. |
+| `branches` | Hashtable keyed by branch name | Per-branch development, deployment, and BUILD-validation environment names. |
+| `branches.<branch>.buildValidation.baselineRelease` | String | `''`; no baseline for that branch. |
+| `buildValidation.baselineRelease` | String | Legacy fallback for configurations without a branch-specific baseline. |
 | `solutionCheck` | Hashtable | Disabled; full settings below. |
 
 ## Configuration Sections
+
+### Setup Metadata and Branch Environments
+
+The setup scripts store provider and repository-generation settings in
+`alm-config.psd1`. They use these values to seed future edits and generate the
+provider caller files. GitHub and Azure DevOps share `provider`, `repository`, and
+`ref`; provider-specific options remain flat and use the `GitHub` or `azDO` prefix.
+
+`repository` identifies the shared ALM4Dataverse source repository, not the
+application repository. For GitHub it is an `owner/repository` name; for Azure
+DevOps it is the shared repository name. `ref` is the shared source branch/ref.
+The exact branch names under `branches` identify application branches and must
+match the branches used by the provider.
+
+Each `branches.<branch>` entry can set:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `developmentEnvironment` | String | Provider environment used by DEV/EXPORT for that branch; `''` disables it. |
+| `deploymentEnvironments` | Array of strings | Ordered deployment stages for that branch; `@()` means no DEPLOY workflow/pipeline. |
+| `buildValidation.environmentName` | String | BUILD validation environment for that branch; `''` disables validation there. |
+| `buildValidation.baselineRelease` | String | Optional baseline selector used by BUILD for that branch. |
+
+For example:
+
+```powershell
+@{
+    provider = 'GitHub'
+    repository = 'contoso/ALM4Dataverse'
+    ref = 'main'
+    GitHubUseEnvironments = $true
+    GitHubDeploymentPromotionMode = 'environment-approval'
+    GitHubUseRepositoryVariablePrefix = $true
+    GitHubUseImmutableWifSubject = $false
+    branches = @{
+        main = @{
+            developmentEnvironment = 'Dev-main'
+            deploymentEnvironments = @('TEST', 'PROD')
+            buildValidation = @{
+                environmentName = 'Build-main'
+                baselineRelease = '@TEST'
+            }
+        }
+        release = @{
+            developmentEnvironment = 'Dev-release'
+            deploymentEnvironments = @('PROD')
+            buildValidation = @{
+                environmentName = ''
+                baselineRelease = ''
+            }
+        }
+    }
+}
+```
+
+For Azure DevOps, set `provider = 'azDO'`, use the shared Azure DevOps repository
+name in `repository`, set its branch in `ref`, and use
+`azDOUseAlm4DataverseExtension` instead of the GitHub-specific options. Do not put
+credentials, tenant IDs, or environment URLs in this metadata; setup stores
+credential values in the provider's environment configuration.
+
+Setup uses `alm-config.psd1` as the source for shared-source settings, provider options,
+branches, and environment mappings. It does not infer missing settings from existing
+workflow or pipeline files. An existing repository without configured branches starts
+with its default branch and empty environment mappings; configure those values in the
+guided editor and commit the config before applying it.
+
+Run `setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig` to regenerate and
+publish caller files from the config committed on the repository's default branch. This
+mode requires `provider`, non-empty `repository` and `ref` strings, and a non-empty
+`branches` map. It skips settings editors and provider-resource provisioning; it still
+previews the config and generated files and asks how to publish each branch. Its
+external-resource plan is empty by design: this mode only applies repository files.
+Normal guided setup also previews the serialized config and generated workflow/pipeline
+files and lists deferred provider, Entra ID, and Dataverse operations before
+**Apply changes**. That list is a plan based on the selected setup, not a live
+before/after resource diff; prerequisites already created to let setup proceed are
+excluded, and secret values are never displayed. Previewing writes only to a temporary
+directory. If applying changes fails, setup returns to the menu with selections
+retained; branch publications that already succeeded are not rolled back.
+
+The legacy top-level `buildValidation.baselineRelease` remains a fallback for
+older configurations. New setup writes the baseline under each branch's
+`buildValidation` entry. `solutionCheck.enabled` remains the global switch for
+running Solution Checker; setup enables it when BUILD validation is enabled for at
+least one branch.
 
 ### Organization Settings
 

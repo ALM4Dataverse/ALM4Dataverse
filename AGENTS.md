@@ -9,9 +9,8 @@ Application repositories receive the files in `copy-to-your-repo/`, whose
 - Read the [source map](docs/maintainers.md#source-map) to find where a behavior lives.
 - A user-visible contract usually spans the runtime script under `pipelines/scripts`,
   the Azure DevOps template under `pipelines/templates`, the GitHub action under
-  `.github/actions`, the callers in `copy-to-your-repo`, the setup generators
-  (`setup-azdo.ps1`, `setup-github.ps1`, `setup-common.ps1`) and the reference in
-  `docs/config`. Change them together.
+  `.github/actions`, the callers in `copy-to-your-repo`,   the setup entrypoints (`setup-azdo.ps1`, `setup-github.ps1`) and shared helper
+  modules under `setup/`, plus the reference in `docs/config`. Change them together.
 - Builds snapshot `pipelines/scripts` and `alm-config-defaults.psd1` into the artifact.
   Deployment code must work with what the artifact contains and fail with a rebuild
   instruction when a newer helper is missing.
@@ -24,8 +23,9 @@ Run from the repository root in PowerShell 7.2 or newer, without platform creden
 
 - `./scripts/Test-PowerShell.ps1` runs syntax and analyzer checks, then every Pester
   suite (including workflow and pipeline schema validation), then the coverage gate:
-  every added or modified `.ps1` or `.psm1` file needs at least 65% command coverage
-  across the whole file.
+  every added or modified PowerShell helper source file needs at least 65% command
+  coverage across the whole file. The two root setup entrypoints are syntax- and
+  release-tested, but are excluded from command coverage.
 - `./.github/scripts/test-documentation.ps1` checks Markdown links and anchors, fenced
   PowerShell, YAML and JSON, and that every configuration key, hook, action input and
   template parameter is documented in `docs/config`.
@@ -41,6 +41,23 @@ Keep end-user guides task-focused and put exhaustive detail in the `docs/config`
 references; link rather than repeat facts. Preserve existing documentation file paths,
 because setup output and application `AGENTS.md` files link to them. Add user-visible
 changes that need action on upgrade to [upgrade notes](docs/usage/upgrade-notes.md).
+
+When a change affects guided setup steps, prompts, navigation, previews, or generated
+artifacts, update the affected step-by-step guide(s) in the same change:
+[GitHub setup](docs/setup/github-setup.md) and/or
+[Azure DevOps setup](docs/setup/azdo-automated-setup.md). Keep every user-visible step
+documented. Capture screenshots from the current setup implementation; never use
+illustrative, reconstructed, or mock screenshots. For text-only output, include
+verbatim output captured from the current setup helpers or preview generators rather
+than hand-authored approximations. Use reserved example values and exclude credentials
+and real tenant, environment, or user identifiers.
+Regenerate the full screenshot set with
+`pwsh -NoLogo -NoProfile -File ./tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1`;
+use `-Scene <name>` for one image and `-ListScenes` to list scene names. This
+PowerShell-only tool runs the real helpers in a PTY-backed terminal, captures the
+rendered terminal frames with an explicit monospaced font, and downloads pinned
+NuGet libraries on first use. It requires PowerShell 7.6/.NET 10 and NuGet access
+on first use; do not add `.cs` or `.csproj` files to the screenshot workflow.
 
 ## Comments and Help
 

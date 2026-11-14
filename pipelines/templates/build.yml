@@ -1,5 +1,5 @@
-# An empty buildEnvironmentName packs without a connection. A selected environment
-# enables validation deployment; it is not just a label for the resulting artifact.
+# If both settings are empty, this pipeline only packs. A selected validation
+# environment enables deployment; it is not just an artifact label.
 parameters:
 - name: useAlm4DataverseExtension
   type: boolean
@@ -7,8 +7,12 @@ parameters:
 - name: buildEnvironmentName
   type: string
   default: ''
+- name: buildValidationEnvironments
+  type: object
+  default: {}
 # Secret names from the validation variable group to expose to connected build
-# and validation-deployment scripts. Ignored when buildEnvironmentName is empty.
+# and validation-deployment scripts. Ignored when validation is disabled globally
+# and for every branch.
 - name: secretVariables
   type: object
   default: []
@@ -23,8 +27,15 @@ stages:
         displayName: 'Build'
         timeoutInMinutes: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
         variables:
+          - name: BuildValidationEnvironmentName
+            value: ${{ parameters.buildEnvironmentName }}
           - ${{ if ne(parameters.buildEnvironmentName, '') }}:
             - group: 'Environment-${{ parameters.buildEnvironmentName }}'
+          - ${{ each branch in parameters.buildValidationEnvironments }}:
+            - ${{ if eq(variables['Build.SourceBranch'], format('refs/heads/{0}', branch.key)) }}:
+              - name: BuildValidationEnvironmentName
+                value: ${{ branch.value }}
+              - group: 'Environment-${{ branch.value }}'
         steps:
         # Fixed checkout paths are consumed by scripts and copied into artifact metadata.
         - checkout: self
@@ -60,22 +71,24 @@ stages:
 
         # Compile-time selection chooses the task provider; runtime output macros
         # from the unselected provider may remain literal and must be rejected.
-        - ${{ if ne(parameters.buildEnvironmentName, '') }}:
+        - ${{ if or(ne(parameters.buildEnvironmentName, ''), gt(length(parameters.buildValidationEnvironments), 0)) }}:
           - ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
             - task: ALM4Dataverse.alm4dataverse-azdo-extensions.alm4dataverse-set-connection-variables.ALM4DataverseSetConnectionVariables@1
               displayName: 'Set Connection Variables'
+              condition: and(succeeded(), ne(variables['BuildValidationEnvironmentName'], ''))
               name: ALM4DataverseSetConnectionVariables
               inputs:
                 authenticationType: 'PowerPlatformSPN'
-                PowerPlatformSPN: ${{ parameters.buildEnvironmentName }}
+                PowerPlatformSPN: $(BuildValidationEnvironmentName)
 
           - ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
             - task: microsoft-IsvExpTools.PowerPlatform-BuildTools.set-connection-variables.PowerPlatformSetConnectionVariables@2
               displayName: 'Set Connection Variables'
+              condition: and(succeeded(), ne(variables['BuildValidationEnvironmentName'], ''))
               name: PowerPlatformSetConnectionVariables
               inputs:
                 authenticationType: 'PowerPlatformSPN'
-                PowerPlatformSPN: ${{ parameters.buildEnvironmentName }}
+                PowerPlatformSPN: $(BuildValidationEnvironmentName)
 
           - pwsh: |
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1" -ForBuild
@@ -133,9 +146,10 @@ stages:
                 -SourceDirectory "$(Pipeline.Workspace)/self" `
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)"
             displayName: 'Install Dependencies, Connect and Build artifacts'
+            condition: and(succeeded(), ne(variables['BuildValidationEnvironmentName'], ''))
             workingDirectory: '$(Pipeline.Workspace)/self'
             env:
-              BUILD_VALIDATION_ENVIRONMENT_NAME: ${{ parameters.buildEnvironmentName }}
+              BUILD_VALIDATION_ENVIRONMENT_NAME: $(BuildValidationEnvironmentName)
               ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
                 AZURE_CLIENT_SECRET: $(AZURE_CLIENT_SECRET)
               ${{ if ne(parameters.useAlm4DataverseExtension, true) }}:
@@ -145,13 +159,14 @@ stages:
               ${{ each secretVariable in parameters.secretVariables }}:
                 ${{ secretVariable }}: $(${{ secretVariable }})
 
-        - ${{ if eq(parameters.buildEnvironmentName, '') }}:
+        - ${{ if or(eq(parameters.buildEnvironmentName, ''), gt(length(parameters.buildValidationEnvironments), 0)) }}:
           - pwsh: |
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1" -ForBuild
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/build.ps1" `
                 -SourceDirectory "$(Pipeline.Workspace)/self" `
                 -ArtifactStagingDirectory "$(Build.ArtifactStagingDirectory)"
             displayName: 'Install Dependencies and Build artifacts'
+            condition: and(succeeded(), eq(variables['BuildValidationEnvironmentName'], ''))
             workingDirectory: '$(Pipeline.Workspace)/self'
 
         - pwsh: |
@@ -172,7 +187,7 @@ stages:
 
         # Baseline resolution sets a runtime variable, so downloading uses a task
         # condition rather than a compile-time template expression.
-        - ${{ if ne(parameters.buildEnvironmentName, '') }}:
+        - ${{ if or(ne(parameters.buildEnvironmentName, ''), gt(length(parameters.buildValidationEnvironments), 0)) }}:
           - pwsh: |
               $ErrorActionPreference = 'Stop'
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/resolvebuildvalidationbaseline.ps1" `
@@ -181,15 +196,17 @@ stages:
                 -CollectionUri "$(System.CollectionUri)" `
                 -Project "$(System.TeamProject)" `
                 -DefinitionId "$(System.DefinitionId)" `
-                -AccessToken $env:SYSTEM_ACCESSTOKEN
+                -AccessToken $env:SYSTEM_ACCESSTOKEN `
+                -BranchName "$(Build.SourceBranch)"
             displayName: 'Resolve BUILD validation baseline'
+            condition: and(succeeded(), ne(variables['BuildValidationEnvironmentName'], ''))
             workingDirectory: '$(Pipeline.Workspace)/self'
             env:
               SYSTEM_ACCESSTOKEN: $(System.AccessToken)
 
           - task: DownloadPipelineArtifact@2
             displayName: 'Download BUILD validation baseline artifacts'
-            condition: and(succeeded(), ne(variables['BuildValidationBaselineBuildId'], ''))
+            condition: and(succeeded(), ne(variables['BuildValidationEnvironmentName'], ''), ne(variables['BuildValidationBaselineBuildId'], ''))
             inputs:
               buildType: 'specific'
               project: '$(System.TeamProject)'
@@ -265,6 +282,7 @@ stages:
               & "$(Build.ArtifactStagingDirectory)/alm/pipelines/scripts/deploy.ps1" `
                 -ArtifactsPath "$(Build.ArtifactStagingDirectory)"
             displayName: 'Deploy baseline and candidate to BUILD validation environment'
+            condition: and(succeeded(), ne(variables['BuildValidationEnvironmentName'], ''))
             workingDirectory: '$(Build.ArtifactStagingDirectory)'
             env:
               ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:

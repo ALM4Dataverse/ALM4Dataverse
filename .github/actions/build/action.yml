@@ -196,7 +196,8 @@ runs:
           $artifactsPath = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
           & "${{ github.action_path }}/../common/deploy-build-validation.ps1" `
             -ArtifactsPath $artifactsPath `
-            -EnvironmentName $env:BUILD_ENVIRONMENT_NAME
+            -EnvironmentName $env:BUILD_ENVIRONMENT_NAME `
+            -BranchName $env:BUILD_BRANCH
           Write-Host '##[endgroup]'
         }
 

@@ -33,8 +33,16 @@ $trackedPaths = @(& git -C $repoRoot ls-files --cached --others --exclude-standa
 if ($LASTEXITCODE -ne 0) {
     throw 'Could not enumerate repository files.'
 }
-$sourcePaths = @($trackedPaths | Where-Object { $_ -match '\.(ps1|psm1|psd1|psrc|pssc|ps1xml|cdxml)$' } | Sort-Object -Unique)
-$coveragePaths = @($sourcePaths | Where-Object { $_ -match '\.(ps1|psm1)$' -and $_ -notmatch '(^|/)tests/|\.Tests\.(ps1|psm1)$' })
+$sourcePaths = @($trackedPaths | Where-Object {
+    $_ -match '\.(ps1|psm1|psd1|psrc|pssc|ps1xml|cdxml)$' -and
+        (Test-Path -LiteralPath (Join-Path $repoRoot $_) -PathType Leaf)
+} | Sort-Object -Unique)
+$coverageExemptPaths = @('setup-azdo.ps1', 'setup-github.ps1')
+$coveragePaths = @($sourcePaths | Where-Object {
+    $_ -match '\.(ps1|psm1)$' -and
+        $_ -notmatch '(^|/)tests/|\.Tests\.(ps1|psm1)$' -and
+        $_ -notin $coverageExemptPaths
+})
 $exceptions = @{}
 foreach ($exception in $policy.Exceptions) {
     if ([string]::IsNullOrWhiteSpace($exception.Reason)) {
@@ -131,7 +139,8 @@ $configuration.CodeCoverage.OutputPath = Join-Path $repoRoot 'TestResults/covera
 $configuration.CodeCoverage.OutputFormat = 'JaCoCo'
 $configuration.CodeCoverage.CoveragePercentTarget = 0
 $result = Invoke-Pester -Configuration $configuration
-$coverageReport = @(Get-PowerShellFileCoverage -RepositoryRoot $repoRoot -ModifiedFiles $modifiedFiles -Coverage $result.CodeCoverage -MinimumPercent 65)
+$coverageFiles = @($modifiedFiles | Where-Object { $_ -notin $coverageExemptPaths })
+$coverageReport = @(Get-PowerShellFileCoverage -RepositoryRoot $repoRoot -ModifiedFiles $coverageFiles -Coverage $result.CodeCoverage -MinimumPercent 65)
 $reportPath = Join-Path $repoRoot 'TestResults/coverage-files.json'
 ConvertTo-Json -InputObject $coverageReport -Depth 5 | Set-Content -LiteralPath $reportPath -Encoding utf8
 # Keep the diagnostic all-file report separate from the changed-file enforcement gate.
@@ -140,7 +149,7 @@ ConvertTo-Json -InputObject $allFileCoverage -Depth 5 | Set-Content -LiteralPath
 $summary = [System.Collections.Generic.List[string]]::new()
 $summary.Add('# Changed PowerShell File Coverage')
 $summary.Add('')
-$summary.Add('Minimum command coverage: 65% per changed executable file.')
+$summary.Add('Minimum command coverage: 65% per changed helper source file; installer entrypoints are syntax- and release-tested.')
 $summary.Add('')
 $summary.Add('| File | Executed / Total Commands | Coverage | Result |')
 $summary.Add('|---|---:|---:|---|')
