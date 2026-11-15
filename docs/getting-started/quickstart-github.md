@@ -15,7 +15,7 @@ Check that you have all of these. Setup stops when it needs something you don't 
 - [ ] A Windows computer with Windows PowerShell 5.1 or PowerShell 7, Git, and a browser.
 - [ ] A GitHub account that can create or administer the application repository. Use a
       **public** repository, or a private one on a plan with environments; see
-      [plan limitations](../setup/github-setup.md#github-licence-limitations).
+      [plan limitations](../setup/github-manual-setup.md#github-licence-limitations).
 - [ ] A **development** Dataverse environment containing your unmanaged solutions, and at
       least one **test** Dataverse environment to deploy to.
 - [ ] The **unique names** of the solutions to manage, in dependency order (a solution

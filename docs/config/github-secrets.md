@@ -35,7 +35,8 @@ authentication or grant approval capabilities.
 > stores client secrets there. Use a supported plan, or explicitly adapt jobs, secret
 > storage, and OIDC subjects together for an environment-free workflow.
 
-See [GitHub Setup Guide](../setup/github-setup.md) for detailed configuration steps.
+See the [manual setup guide](../setup/github-manual-setup.md) for detailed configuration
+steps.
 
 ---
 

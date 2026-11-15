@@ -66,7 +66,7 @@ Not sure which platform? Read
 
 | Platform | Guides |
 | --- | --- |
-| GitHub Actions | [Quickstart](docs/getting-started/quickstart-github.md), [full setup](docs/setup/github-setup.md), [environment checklist](docs/setup/github-variables.md) |
+| GitHub Actions | [Quickstart](docs/getting-started/quickstart-github.md), [automated setup](docs/setup/github-setup.md), [manual setup](docs/setup/github-manual-setup.md), [environment checklist](docs/setup/github-variables.md) |
 | Azure DevOps | [Quickstart](docs/getting-started/quickstart-azdo.md), [requirements](docs/setup/azdo-organisation-requirements.md), [automated setup](docs/setup/azdo-automated-setup.md), [manual setup](docs/setup/azdo-manual-setup.md) |
 
 ### Use It Day To Day

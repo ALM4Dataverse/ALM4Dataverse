@@ -32,7 +32,7 @@ Prefer WIF/OIDC, with a federated credential matching the job's actual subject.
 Alternatively, create an expiring client secret and record a rotation owner/date.
 Both methods can use environment values or explicitly mapped repository values.
 
-Check [plan restrictions](github-setup.md#github-licence-limitations) first.
+Check [plan restrictions](github-manual-setup.md#github-licence-limitations) first.
 Repository values do not remove the shipped jobs' dependency on GitHub environments.
 
 ### Environment Values

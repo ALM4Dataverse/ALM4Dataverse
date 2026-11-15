@@ -89,7 +89,7 @@ option does **not** include private deployment required-reviewer approvals.
 > Enterprise Cloud. Pro supports private environments for personal repositories, with
 > the same approval limitation. ALM4Dataverse's manual gate tags record promotion order;
 > they do not provide independent approval. Prefixed credentials do not remove the
-> supplied jobs' environment requirement. See the [GitHub plan limitations](setup/github-setup.md#github-licence-limitations).
+> supplied jobs' environment requirement. See the [GitHub plan limitations](setup/github-manual-setup.md#github-licence-limitations).
 
 Official sources: [Azure DevOps pricing](https://azure.microsoft.com/en-us/pricing/details/devops/azure-devops-services/),
 [Azure hosted-job rules](https://learn.microsoft.com/en-us/azure/devops/pipelines/licensing/concurrent-jobs?view=azure-devops),

@@ -1,52 +1,51 @@
 # Azure DevOps Manual Setup
 
-Use this guide when you need to configure each resource yourself. The
-[automated setup](azdo-automated-setup.md) creates the same core arrangement interactively.
-For GitHub, use [GitHub setup](github-setup.md).
+Use this guide to create the Azure DevOps resources yourself. The
+[automated setup](azdo-automated-setup.md) performs the same steps interactively. For
+GitHub, use [GitHub setup](github-setup.md).
 
-## Prerequisites
+## Before You Start
 
-- An Azure DevOps Services organization with hosted pipeline capacity and permission to create/configure the project resources.
-- Dataverse development and deployment environments, with permissions to create application users and assign security roles.
-- Entra app registrations and permission to configure client secrets or federated credentials.
-- An existing Dataverse user for process ownership, with appropriate licensing, roles, and connection access.
-- A workstation with Git for preparing repositories; runtime scripts use PowerShell 7 on the supplied `windows-2022` agents.
+- An Azure DevOps Services organization with hosted pipeline capacity and permission to
+  create and configure the project resources. See
+  [organization requirements](azdo-organisation-requirements.md).
+- Development and deployment Dataverse environments, with permission to create
+  application users and assign security roles.
+- Entra app registrations and permission to configure client secrets or federated
+  credentials.
+- An existing licensed Dataverse user for process ownership, with the roles and
+  connection access the processes need.
+- Git on a workstation for preparing repositories. The supplied pipelines run PowerShell
+  7 on `windows-2022` agents.
 
-See [organization requirements](azdo-organisation-requirements.md) before starting.
 Use non-production environments for the initial verification.
 
 ## 1. Azure DevOps Project Setup
 
-Create or select a long-lived project. Use a product/team name rather than a phase name.
-Arrange Project Administrator permissions for setup, or ask administrators to perform
-the privileged steps. Creating a new project or installing extensions may require
+Create or select a long-lived project. Use a product or team name rather than a phase
+name. Arrange Project Administrator permissions for setup, or ask administrators to
+perform the privileged steps. Creating a project or installing extensions can require
 organization-level permissions beyond Project Administrator.
 
-Record your application repository name, shared repository name, development branch,
-deployment targets, and whether you will use WIF or client secrets.
+Record the application repository name, shared repository name, development branch,
+deployment targets, and whether you will use workload identity federation or client
+secrets.
 
-## 2. Install Power Platform Build Tools
+## 2. Install Extensions
 
-Install [Power Platform Build Tools](https://marketplace.visualstudio.com/items?itemName=microsoft-IsvExpTools.PowerPlatform-BuildTools).
-The supplied templates also default to the
-[ALM4Dataverse Azure DevOps extension](https://marketplace.visualstudio.com/items?itemName=ALM4Dataverse.alm4dataverse-azdo-extensions)
-for connection-variable resolution. It is required for WIF in this integration.
-
-> [!NOTE]
-> **Advanced: using only Microsoft tooling.** If you cannot use the ALM4Dataverse extension,
-> set `useAlm4DataverseExtension: false` in every caller and deployment-stage invocation,
-> and use client-secret service connections. Microsoft tooling is still installed, but
-> its PAC stays off PATH so the configured `pacCliVersion` is used.
-> See [service connections](../config/azdo-environment-service-connection.md).
+Install [Power Platform Build Tools](https://marketplace.visualstudio.com/items?itemName=microsoft-IsvExpTools.PowerPlatform-BuildTools)
+and the [ALM4Dataverse Azure DevOps extension](https://marketplace.visualstudio.com/items?itemName=ALM4Dataverse.alm4dataverse-azdo-extensions).
+The ALM4Dataverse extension is required for workload identity federation. See
+[organization requirements](azdo-organisation-requirements.md) for installation steps and
+the Microsoft-tooling-only fallback.
 
 ## 3. Repository Setup
 
 ### Shared Repository
 
-Create an empty Azure Repos Git repository named `ALM4Dataverse`. Populate its `main`
-branch from a tested upstream release. The following example uses the moving `stable`
-tag; substitute an actual version tag if you want an explicitly pinned starting point.
-Replace `YOUR_CLONE_URL` with the new repository's clone URL:
+Create an empty Azure Repos Git repository named `ALM4Dataverse` and populate its `main`
+branch from a tested release. Replace `YOUR_CLONE_URL` with the new repository's clone
+URL:
 
 ```bash
 git clone YOUR_CLONE_URL
@@ -57,16 +56,14 @@ git switch -c main stable
 git push origin main
 ```
 
-> [!CAUTION]
-> These commands are for an empty repository. For an existing shared repository, review
-> and merge upstream changes instead of replacing its branch history.
-
-Each consuming pipeline uses the repository alias `ALM4Dataverse`; preserve that alias even if its
-repository resource `name` includes a project prefix.
+Keep the pipeline repository alias `ALM4Dataverse` even when the resource name includes a
+project prefix. For an existing shared repository, merge upstream changes instead of
+replacing its branch history.
 
 ### Application Repository
 
-Create or clone the application repository. Copy these items from the same shared release:
+Create or clone the application repository and copy these items from the same shared
+release:
 
 | Source | Destination |
 | --- | --- |
@@ -75,55 +72,44 @@ Create or clone the application repository. Copy these items from the same share
 | [Data hook examples](../../copy-to-your-repo/data) | `data/` |
 | [Azure DevOps callers](../../copy-to-your-repo/pipelines) | `pipelines/` |
 
-Do not copy the GitHub workflows unless you also intend to configure GitHub Actions.
-Check each caller's shared repository resource. Add an explicit `ref` if you need to
-pin the shared repository to a tag/branch instead of its default branch.
+Do not copy the GitHub workflows unless you also configure GitHub Actions. Pin the shared
+repository `ref` in each caller if you do not want to follow its default branch. Keep
+`AGENTS.md` and ask an AI agent to read it before changing components or configuration.
+See [application repository layout](../concepts/application-repository.md).
 
-Keep `AGENTS.md` in the application repository and ask an AI agent to read it before
-changing Dataverse components or ALM configuration.
-
-> [!IMPORTANT]
-> In the DEPLOY caller, set the `build` pipeline resource's `source` to the BUILD pipeline's
-> full name, including its folder. Use the displayed path separator: if the UI displays
-> `YourApp\BUILD`, use that exact name. Set the branch filter, caller filename, and pipeline
-> name for your deployment branch. The supplied DEPLOY stages are commented out until
-> you configure targets.
-
-The shared configuration defaults `buildVersion.default` to `1.0`; override it
-or add branch-specific MAJOR.MINOR entries in `alm-config.psd1` when needed.
-
-> [!NOTE]
-> Every BUILD keeps its branch-suffixed SemVer version and source tag.
+In the DEPLOY caller, set the `build` pipeline resource's `source` to the BUILD pipeline's
+full name, including its folder. Use the separator shown in the UI: if it displays
+`YourApp\BUILD`, use that exact name. The supplied DEPLOY stages are commented out until
+you configure targets.
 
 ## 4. Service Principal Setup
 
-For each target, create or select an Entra application registration. Prefer separate
-identities for production and non-production. Record the application/client ID and
-tenant ID; do not confuse application IDs with Entra object IDs.
+For each target, create or select an Entra app registration. Prefer separate identities
+for production and non-production. Record the application/client ID and tenant ID, not
+the Entra object ID.
 
-For a client secret, create one under **Certificates & secrets**, store its **value**
-securely, and record expiry. For WIF, create the service connection first and configure
-the app's federated credential using the **issuer and subject shown by that connection**,
-with audience `api://AzureADTokenExchange`. Do not guess these values from a legacy pattern.
+- **Client secret:** create one under **Certificates & secrets**, store its value
+  securely, and record the expiry.
+- **Workload identity federation:** create the service connection first, then add a
+  federated credential using the issuer and subject shown by that connection, with
+  audience `api://AzureADTokenExchange`. Do not guess these values from a legacy pattern.
 
 In the Power Platform admin center, select the environment, then **Settings > Users +
-permissions > Application users**. Add the app, choose its business unit, and assign
-the System Administrator role used by the standard setup. A narrower custom role
-requires validation against all solution, process, and hook operations you use.
+permissions > Application users**. Add the app, choose its business unit, and assign the
+System Administrator role used by the standard setup. A narrower custom role requires
+validation against every solution, process and hook operation you use.
 
-> [!IMPORTANT]
-> The process-owner/service-account user is separate from the application user. It must
-> already exist and be able to own and activate the relevant processes and connections.
+The process-owner user is separate from the application user. It must already exist, be
+enabled, and be able to own and activate the relevant processes and connections.
 
-Official guidance: [register an app](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app)
-and [manage application users](https://learn.microsoft.com/en-us/power-platform/admin/manage-application-users).
+See [service connections](../config/azdo-environment-service-connection.md) for the full
+connection reference.
 
 ## 5. Service Connections
 
-In **Project Settings > Service connections**, create a **Power Platform** connection
-for each development, deployment, and optional BUILD validation environment. Use the
-selected authentication type and Dataverse base URL. Complete WIF trust using the
-connection's displayed issuer/subject, or supply the client secret value.
+In **Project Settings > Service connections**, create a **Power Platform** connection for
+each development, deployment and optional BUILD validation environment. Use the selected
+authentication type and Dataverse base URL.
 
 | Purpose | Connection name |
 | --- | --- |
@@ -132,38 +118,38 @@ connection's displayed issuer/subject, or supply the client secret value.
 | Deployment target | Exactly its `environmentName`, for example `TEST-main` or `PROD` |
 | BUILD validation | Exactly `buildEnvironmentName`, for example `Build` |
 
-For `feature/customer-import`, `Build.SourceBranchName` is `customer-import`.
-See [branch naming](../usage/branching-strategies.md#branch-and-environment-names).
-Authorize only the pipelines that use each connection; avoid blanket access.
-Full options: [service connection reference](../config/azdo-environment-service-connection.md).
+For `feature/customer-import`, `Build.SourceBranchName` is `customer-import`. See
+[branch and environment names](../usage/branching-strategies.md#branch-and-environment-names).
+Authorize only the pipelines that use each connection. Full options:
+[service connection reference](../config/azdo-environment-service-connection.md).
 
 ## 6. Variable Groups
 
-In **Pipelines > Library**, create `Environment-<connection-name>` for every target.
-For example, `Environment-Dev-main`, `Environment-TEST-main`, and `Environment-Build`.
+In **Pipelines > Library**, create `Environment-<connection-name>` for every target, for
+example `Environment-Dev-main`, `Environment-TEST-main` and `Environment-Build`.
 
 Add `DataverseServiceAccountUpn`, connection-reference IDs, Dataverse environment-variable
 values, and any custom hook settings. The complete names and secret-mapping requirements
 are in the [variable-group reference](../config/azdo-environment-variable-group.md).
-Connections must exist in the target; settings do not create them or grant access.
+Connections must already exist in the target; settings do not create them or grant
+access.
 
 Add an **Exclusive lock** check for shared targets. Add **Approvals** for controlled
 deployment targets, with designated approvers. Normal development and disposable BUILD
-validation should not use production approval requirements. If an existing group is
-reused, review its checks because setup does not remove existing ones.
+validation should not use production approval requirements. Review existing checks when
+reusing a group because setup does not remove them.
 
 ## 7. Environments And Approvals
 
-In **Pipelines > Environments**, create an environment for each DEPLOY target, with
-the exact `environmentName` and no resource unless you need one for other purposes.
-The deployment job uses it to record history. Configure any additional approvals,
-branch controls, or exclusive locks required by your policy.
+In **Pipelines > Environments**, create an environment for each DEPLOY target with the
+exact `environmentName` and no resource unless you need one for another purpose. The
+deployment job uses it to record history. Configure any additional approvals, branch
+controls or exclusive locks required by your policy.
 
 > [!NOTE]
-> **Advanced: layered checks.** Variable-group checks and environment checks are separate
-> and can both pause a stage. Choose where approval lives to avoid accidental duplicates.
-> The Dataverse environment is the external target; the Azure DevOps environment is a CI
-> resource and does not provision Dataverse.
+> Variable-group checks and environment checks are separate and can both pause a stage.
+> Choose where approval lives to avoid accidental duplicates. The Dataverse environment is
+> the external target; the Azure DevOps environment is a CI resource.
 
 ## 8. Pipeline Creation
 
@@ -177,9 +163,9 @@ for each caller in the application repository:
 | IMPORT | `/pipelines/IMPORT.yml` | Manual |
 | DEPLOY-main | `/pipelines/DEPLOY-main.yml` | Matching BUILD completion, or manual |
 
-Save them in an application-specific pipeline folder if sharing a project. Ensure the
+Save them in an application-specific pipeline folder if you share a project. Ensure the
 DEPLOY resource `source` matches the resulting full BUILD name. Do not run DEPLOY until
-its stages are configured. A BUILD before the first EXPORT may fail because configured
+its stages are configured. A BUILD before the first EXPORT may fail because the configured
 solution folders do not exist yet.
 
 ## 9. Pipeline Permissions
@@ -200,12 +186,12 @@ are separate controls.
 
 Authorize service connections and variable groups through their **Pipeline permissions**,
 and deployment environments through their security settings. Resolve first-run resource
-authorization prompts as an administrator. Keep branch/tag policies compatible with
+authorization prompts as an administrator. Keep branch and tag policies compatible with
 the intended automation without bypassing review requirements for human source changes.
 
 ## 10. Solution Configuration
 
-In the application configuration, list solutions by unique name in dependency order:
+List solutions by unique name in dependency order in `alm-config.psd1`:
 
 ```powershell
 @{
@@ -221,30 +207,33 @@ In the application configuration, list solutions by unique name in dependency or
 }
 ```
 
-The example data scripts are initially no-ops until you customize them. Configure
-[Solution Checker](../config/alm-config.md#solution-check-pac-solution-check), additional
-assets/hooks, or unmanaged deployment only where needed.
+Configure [Solution Checker](../config/alm-config.md#solution-check-pac-solution-check),
+additional assets or hooks, and unmanaged deployment only where needed.
 
-In DEPLOY, add one `pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse`
-stage entry per target, in promotion order. Each entry supplies `environmentName`,
-optionally `useAlm4DataverseExtension`, and optionally `timeoutInMinutes`. Start from the
-commented example in the caller and keep valid YAML indentation.
+In DEPLOY, add one `pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse` stage
+entry per target in promotion order. Each entry supplies `environmentName`, optionally
+`useAlm4DataverseExtension`, and optionally `timeoutInMinutes`. Start from the commented
+example in the caller and keep valid YAML indentation. See the
+[template reference](../config/pipelines.md#azure-devops-templates).
 
 > [!TIP]
 > **Optional: deployment validation.** Set `buildEnvironmentName` in BUILD to a dedicated
-> non-production connection/group name. To test an upgrade path, set
-> `branches.<branch>.buildValidation.baselineRelease` to a retained BUILD ID/number or `@<deployment-environment>`.
-> The baseline source is separate from the validation target. Serialize builds if branches
-> share that target. See [BUILD validation](../usage/building-releases.md#build-validation).
+> non-production connection/group. To test an upgrade path, set
+> `branches.<branch>.buildValidation.baselineRelease` to a retained BUILD ID/number or
+> `@<deployment-environment>`. The baseline source is separate from the validation
+> target. See [BUILD validation](../usage/building-releases.md#build-validation).
 
 ## Verify The Installation
 
 1. Commit the configured application files.
 2. Run EXPORT on the intended development branch and inspect its commit.
 3. Verify BUILD succeeds and publishes the expected packages and reports.
-4. Deploy that exact build to the first non-production target and verify connection values, process activation, and app behavior.
+4. Deploy that exact build to the first non-production target and verify connection
+   values, process activation and application behavior.
 5. Promote the same build through later stages, checking approvals and deployment history.
-6. Configure the target branch's **Build validation** policy if PRs must pass BUILD before merge; setup does not create that policy automatically.
+6. Configure the target branch's **Build validation** policy if pull requests must pass
+   BUILD before merge; setup does not create that policy.
 
 Continue with [usage and branching](../usage/branching-strategies.md),
-[configuration](../config/alm-config.md), or [pipeline/template inputs](../config/pipelines.md).
+[configuration](../config/alm-config.md), or
+[pipeline and template inputs](../config/pipelines.md).

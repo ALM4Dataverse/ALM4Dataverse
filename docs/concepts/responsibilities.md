@@ -45,7 +45,7 @@ before production depends on the automation.
 - **Who can approve a deployment.** On Azure DevOps, setup creates an approvers team per
   target containing only you; add the right people. On GitHub, required reviewers depend
   on your plan, and the manual gate-tag fallback enforces order, not approval. See
-  [GitHub plan limitations](../setup/github-setup.md#github-licence-limitations).
+  [GitHub plan limitations](../setup/github-manual-setup.md#github-licence-limitations).
 - **Protecting the automation.** Anyone who can change workflows, pipelines, hooks or
   `alm-config.psd1` on a deployment branch can change what runs with deployment
   credentials. Treat those changes as privileged.
