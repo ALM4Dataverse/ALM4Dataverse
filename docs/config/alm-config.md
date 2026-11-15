@@ -140,6 +140,9 @@ mode requires `provider`, non-empty `repository` and `ref` strings, and a non-em
 `branches` map. It skips settings editors and provider-resource provisioning; it still
 previews the config and generated files and asks how to publish each branch. Its
 external-resource plan is empty by design: this mode only applies repository files.
+Branches, deployment environments, solutions, BUILD validation and OIDC settings can be
+changed only by editing and committing `alm-config.psd1`, then running `-ApplyConfig`
+again; this mode offers no editor for them.
 Normal guided setup also previews the serialized config and generated workflow/pipeline
 files and lists deferred provider, Entra ID, and Dataverse operations before
 **Apply changes**. That list is a plan based on the selected setup, not a live
@@ -721,13 +724,20 @@ For GitHub, set `timeout-minutes` beside `runs-on` on the job, **not** under the
 
 ### BUILD validation baseline
 
-`buildValidation.baselineRelease` optionally configures a release that BUILD
-deploys to the Dataverse validation environment before deploying the candidate
-artifacts. Leave it empty to deploy only the candidate.
+`branches.<branch>.buildValidation.baselineRelease` optionally configures a release
+that BUILD deploys to the Dataverse validation environment before deploying the
+candidate artifacts. Leave it empty to deploy only the candidate. The top-level
+`buildValidation.baselineRelease` is a legacy fallback used only for branches whose
+entry has no `baselineRelease` key.
 
 ```powershell
-buildValidation = @{
-    baselineRelease = '@TEST'
+branches = @{
+    main = @{
+        buildValidation = @{
+            environmentName = 'Build-main'
+            baselineRelease = '@TEST'
+        }
+    }
 }
 ```
 

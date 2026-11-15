@@ -17,6 +17,7 @@ Application teams should start with [updating and customizing](usage/updating.md
 | [GitHub actions](../.github/actions) | Composite action wrappers and their shared credential/build/promotion helpers. |
 | [Application templates](../copy-to-your-repo) | Files copied or generated into consuming repositories. |
 | [Azure DevOps setup](../setup-azdo.ps1), [GitHub setup](../setup-github.ps1), [shared setup modules](../setup) | Interactive provisioning and caller generation. |
+| [Setup screenshot capture](../tools/SetupScreenshotCapture) | Capture setup screens and generate the README walkthrough animation. |
 | [Release preparation](../prepare-release.ps1) | Generate standalone setup assets from a source checkout. |
 | [Maintainer workflows](../.github/workflows) and [scripts](../.github/scripts) | Release publication, dependency updates, cleanup, and regression checks. |
 

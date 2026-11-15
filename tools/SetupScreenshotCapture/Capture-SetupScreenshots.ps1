@@ -1,16 +1,24 @@
-<#
+﻿<#
 .SYNOPSIS
-    Captures the current setup helper screens as colored PNGs.
+    Captures the current setup helper screens as PNGs and an interactive walkthrough GIF.
 .PARAMETER Scene
-    Captures one named scene instead of the full screenshot set.
+    Captures one named scene instead of the full screenshot set. A single scene does
+    not generate the walkthrough GIF.
 .PARAMETER ListScenes
     Lists available scene names without loading capture dependencies.
+.PARAMETER SkipAnimation
+    Captures the full PNG set without generating the walkthrough GIF.
 .DESCRIPTION
     Runs the real setup helper functions in a PTY-backed Terminal.Avalonia control
-    and saves the rendered frames under docs/setup/screenshots. The tool downloads
-    its pinned NuGet dependencies on first use. It requires PowerShell 7.6 or newer
-    on .NET 10 and a platform monospaced font: Consolas on Windows, Noto Sans Mono
-    on Linux, or Menlo on macOS.
+    and saves the rendered frames under docs/setup/screenshots. The walkthrough
+    captures real terminal states around setup inputs, then creates
+    setup-walkthrough.gif. Checkpoints stay on screen for six seconds, and typed
+    text appears one character at a time. Captions sit over a semi-transparent
+    white footer beneath a raised green divider. The tool downloads its pinned
+    NuGet dependencies on first use. It requires PowerShell 7.6 or newer on .NET
+    10 and a platform monospaced font: Consolas on Windows, Noto Sans Mono on
+    Linux, or Menlo on macOS. Full captures require ffmpeg with drawtext and
+    fontconfig support; use -SkipAnimation for PNG-only captures.
 .NOTES
     Provider API calls are stubbed and all displayed values are reserved examples.
     No GitHub, Azure DevOps, Entra ID, or Dataverse resources are accessed.
@@ -18,13 +26,23 @@
 [CmdletBinding()]
 param(
     [Parameter()][string]$Scene,
-    [Parameter()][switch]$ListScenes
+    [Parameter()][switch]$ListScenes,
+    [Parameter()][switch]$SkipAnimation
 )
 
 $script:CaptureTerminalWidth = 1600
-$script:CaptureTerminalColumns = 150
-$script:CaptureTerminalFontSize = 16
+$script:CaptureTerminalColumns = 100
+$script:CaptureTerminalFontSize = 20
 $script:CaptureScreenshotRelativePath = 'docs/setup/screenshots'
+$script:CaptureWalkthroughRelativePath = 'docs/setup/screenshots/setup-walkthrough.gif'
+$script:CaptureWalkthroughWidth = 1200
+$script:CaptureWalkthroughHeight = 880
+$script:CaptureWalkthroughContentWidth = 1160
+$script:CaptureWalkthroughContentHeight = 720
+$script:CaptureWalkthroughFooterHeight = 200
+$script:CaptureWalkthroughOutputFrameRate = 6
+$script:CaptureWalkthroughDwellSeconds = 6
+$script:CaptureWalkthroughTypingFrameDurationSeconds = 1.0 / $script:CaptureWalkthroughOutputFrameRate
 
 function Get-CapturePlatformName {
     [CmdletBinding()]
@@ -130,56 +148,91 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'setup-mode-choice'
             Provider = 'common'
-            ExpectedText = 'v0.0.0'
+            ExpectedText = 'Configure an existing repository'
+            Rows = 36
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-authentication'
+            Provider = 'azdo'
+            ExpectedText = 'Use existing Azure login: automation@example.invalid'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-project-selection'
+            Provider = 'azdo'
+            ExpectedText = 'Example project'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-main-repository-selection'
+            Provider = 'azdo'
+            ExpectedText = 'Create a new repository'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-shared-repository-selection'
+            Provider = 'azdo'
+            ExpectedText = 'Create a new repository'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-apply-changes'
+            Provider = 'azdo'
+            ExpectedText = 'Apply changes - Ready'
             Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'github-menu-new-repository'
             Provider = 'common'
-            ExpectedText = 'main (no envs)'
-            Rows = 32
+            ExpectedText = 'main'
+            Rows = 44
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'github-menu-existing-repository'
             Provider = 'common'
-            ExpectedText = 'main (PROD)'
-            Rows = 32
+            ExpectedText = 'Deployment: PROD (main)'
+            Rows = 48
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'github-menu-unavailable-shared-repository'
             Provider = 'common'
             ExpectedText = 'Unavailable:'
-            Rows = 32
+            Rows = 48
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-menu-new-repository'
             Provider = 'common'
-            ExpectedText = 'main (no envs)'
-            Rows = 32
+            ExpectedText = 'main'
+            Rows = 44
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-menu-existing-repository'
             Provider = 'common'
-            ExpectedText = 'main (PROD)'
-            Rows = 32
+            ExpectedText = 'Deployment: PROD (main)'
+            Rows = 48
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-menu-unavailable-shared-repository'
             Provider = 'common'
             ExpectedText = 'Unavailable:'
-            Rows = 32
+            Rows = 48
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'github-build-validation'
             Provider = 'github'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
@@ -189,7 +242,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-build-validation'
             Provider = 'azdo'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
@@ -220,7 +273,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'github-dev-environment-selection'
             Provider = 'github'
-            ExpectedText = 'Example Development'
+            ExpectedText = 'Contoso Development'
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
@@ -251,28 +304,28 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'github-deployment-environment-selection'
             Provider = 'github'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'deployment-short-name'
             Provider = 'github'
-            ExpectedText = 'Enter a short name for this environment'
+            ExpectedText = 'Enter a short name for this environment >'
             Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'environment-detail-menu'
             Provider = 'common'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'deployment-environment-plan'
             Provider = 'common'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @()
         },
@@ -293,7 +346,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-dev-environment-selection'
             Provider = 'azdo'
-            ExpectedText = 'Example Development'
+            ExpectedText = 'Contoso Development'
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
@@ -324,7 +377,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-deployment-environment-selection'
             Provider = 'azdo'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Add an environment'; Input = "`r" },
@@ -334,28 +387,28 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-deployment-short-name'
             Provider = 'azdo'
-            ExpectedText = 'Enter a short name for this environment'
+            ExpectedText = 'Enter a short name for this environment >'
             Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-deployment-environment-plan'
             Provider = 'azdo'
-            ExpectedText = 'Example Test'
+            ExpectedText = 'Contoso Test'
             Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'github-setup-change-review'
             Provider = 'common'
-            ExpectedText = 'View alm-config.psd1 diff'
+            ExpectedText = 'Modified: alm-config.psd1'
             Rows = 50
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-setup-change-review'
             Provider = 'common'
-            ExpectedText = 'View alm-config.psd1 diff'
+            ExpectedText = 'Modified: alm-config.psd1'
             Rows = 50
             Interactions = @()
         },
@@ -363,7 +416,7 @@ function Get-CaptureScene {
             Name = 'setup-change-side-by-side-diff'
             Provider = 'common'
             HasPromptHelp = $false
-            ExpectedText = 'Up/Down scroll'
+            ExpectedText = 'Up/Down=scroll'
             Rows = 32
             Interactions = @()
         }
@@ -386,6 +439,303 @@ function Resolve-CaptureScene {
     }
 
     return $selectedScenes
+}
+
+function Get-CaptureWalkthroughStep {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param()
+
+    $enter = "`r"
+    $arrowDown = "$([char]27)[B"
+
+    return @(
+        [pscustomobject]@{
+            SceneName = 'setup-mode-choice'
+            ExpectedText = 'v0.0.0'
+            CaptionLines = @(
+                'Launch setup.'
+                'Choose a new or existing application repo.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Configure an existing repository'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $false
+            HasPromptHelp = $false
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-authentication'
+            ExpectedText = 'Example organization'
+            CaptionLines = @(
+                'Authenticate with Azure DevOps or GitHub'
+                'and Azure for Dataverse access.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Use existing Azure login: automation@example.invalid'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-project-selection'
+            ExpectedText = 'Create a new repository'
+            CaptionLines = @(
+                'Select an existing project/repo'
+                'or create a new one.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Example project'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-main-repository-selection'
+            ExpectedText = "Created repository 'contoso-dataverse'."
+            CaptionLines = @(
+                'Name the application repository separately'
+                'from the shared ALM4Dataverse repository.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Create a new repository'
+                    Input = $enter
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Enter the name for the new main repository >'
+                    Input = "contoso-dataverse`r"
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+            HasPromptHelp = $false
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-shared-repository-selection'
+            ExpectedText = "Created shared repository 'ALM4Dataverse'."
+            CaptionLines = @(
+                'Choose the ALM4Dataverse template repository'
+                'so it can be updated independently.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Create a new repository'
+                    Input = "$([char]27)[B`r"
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Enter the name for the shared repository >'
+                    Input = "ALM4Dataverse`r"
+                },
+                [pscustomobject]@{
+                    WaitForText = "Create shared repository 'ALM4Dataverse'"
+                    Input = "y`r"
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+            HasPromptHelp = $false
+        },
+        [pscustomobject]@{
+            SceneName = 'branch-strategy'
+            ExpectedText = 'develop'
+            CaptionLines = @(
+                'Choose a branch strategy (allows isolation of changes and pull requests)'
+                'or start simple with just a main branch.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Choose a branching strategy for this repository'
+                    Input = $arrowDown
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Choose a branching strategy for this repository'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-dev-environment-selection'
+            ExpectedText = 'UAT'
+            CaptionLines = @(
+                'For each branch, select the DEV'
+                'environment (optional) and its deployment targets.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Choose a branching strategy for this repository'
+                    Input = $arrowDown
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Choose a branching strategy for this repository'
+                    Input = $enter
+                },
+                [pscustomobject]@{
+                    WaitForText = "Configure a DEV environment for branch 'main'"
+                    Input = "y`r"
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = "Select the DEV environment for branch 'main'"
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = "Select a deployment environment for branch 'main'"
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = "Configure a DEV environment for branch 'develop'"
+                    Input = "y`r"
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = "Select the DEV environment for branch 'develop'"
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = "Select a deployment environment for branch 'develop'"
+                    Input = $arrowDown
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = "Select a deployment environment for branch 'develop'"
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $false
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-deployment-short-name'
+            ExpectedText = 'Enter a short name for this environment >'
+            CaptionLines = @(
+                'Give each deployment environment a concise short name.'
+                'test, uat, prod etc.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Enter a short name for this environment >'
+                    Input = 'TEST'
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'branch-mapping'
+            ExpectedText = 'develop'
+            CaptionLines = @(
+                'Map each branch to the environments it can deploy to.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Configure deployment branch mappings'
+                    Input = $arrowDown
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Configure deployment branch mappings'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-authentication-type'
+            ExpectedText = 'AuthType'
+            CaptionLines = @(
+                'Choose authentication type for each environment.'
+                'Workload identity federation avoids secrets.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Select Service Principal credentials'
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Select authentication type for the new service connection'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+            HasPromptHelp = $false
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-setup-change-review'
+            ExpectedText = 'Up/Down=scroll'
+            CaptionLines = @(
+                'Preview the generated file changes'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Modified: alm-config.psd1'
+                    Input = $arrowDown
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Modified: pipelines/BUILD.yml'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+            HasPromptHelp = $false
+        },
+        [pscustomobject]@{
+            SceneName = 'azdo-apply-changes'
+            ExpectedText = 'Azure DevOps ALM4Dataverse setup menu'
+            CaptionLines = @(
+                'Apply the changes when ready.'
+            )
+            Interactions = @(
+                [pscustomobject]@{
+                    WaitForText = 'Apply changes - Ready'
+                    Input = $enter
+                }
+            )
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $false
+            HasPromptHelp = $false
+        },
+        [pscustomobject]@{
+            SceneName = 'github-menu-existing-repository'
+            ExpectedText = 'Deployment: PROD (main)'
+            CaptionLines = @(
+                'Available for both Azure DevOps and GitHub Actions!'
+            )
+            Interactions = @()
+            CaptureInitialFrame = $false
+            CaptureFinalFrame = $true
+        }
+    )
+}
+
+function Test-CaptureWalkthroughEnabled {
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter()][string]$SceneName,
+        [Parameter()][switch]$SkipAnimation
+    )
+
+    return [string]::IsNullOrWhiteSpace($SceneName) -and -not $SkipAnimation
 }
 
 function Get-RepositoryRoot {
@@ -454,9 +804,20 @@ function Get-AuthToken {
     [CmdletBinding()]
     param(
         [Parameter()][string]$ResourceUrl,
-        [Parameter()][string]$TenantId
+        [Parameter()][string]$TenantId,
+        [Parameter()][string]$PreferredUsername,
+        [Parameter()][switch]$ForceInteractive,
+        [Parameter()][switch]$ListAccountsOnly
     )
-    return $null
+
+    if ($ListAccountsOnly) {
+        return @('automation@example.invalid')
+    }
+
+    return [pscustomobject]@{
+        AccessToken = 'example-access-token'
+        Username = 'automation@example.invalid'
+    }
 }
 
 function Invoke-RestMethod {
@@ -467,24 +828,128 @@ function Invoke-RestMethod {
         [Parameter()][string]$Method,
         [Parameter()][string]$Body
     )
+
+    if ($Uri.Contains('/_apis/profile/profiles/me')) {
+        return [pscustomobject]@{ publicAlias = 'example-member' }
+    }
+    if ($Uri.Contains('/_apis/accounts?')) {
+        return [pscustomobject]@{
+            value = @(
+                [pscustomobject]@{
+                    accountName = 'Example organization'
+                    accountId = 'example-organization-id'
+                    accountUri = 'https://dev.azure.com/example-organization'
+                }
+            )
+        }
+    }
+
     return [pscustomobject]@{ value = @() }
+}
+
+function Set-VSTeamAccount {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$Account,
+        [Parameter()][System.Security.SecureString]$SecurePersonalAccessToken,
+        [Parameter()][switch]$UseBearerToken,
+        [Parameter()][switch]$Force
+    )
+}
+
+function Set-VSTeamDefaultProject {
+    [CmdletBinding()]
+    param([Parameter()][string]$Project)
+}
+
+function Get-VSTeamProject {
+    [CmdletBinding()]
+    param()
+    return @([pscustomobject]@{ Name = 'Example project'; Id = 'example-project' })
+}
+
+function Get-VSTeamGitRepository {
+    [CmdletBinding()]
+    param([Parameter()][string]$ProjectName)
+
+    if ($ProjectName -ne 'Example project') {
+        return @()
+    }
+
+    if ($script:scene -in @('azdo-project-selection', 'azdo-main-repository-selection')) {
+        return @(
+            [pscustomobject]@{
+                Id = 'example-contoso-crm-repository'
+                Name = 'contoso-crm'
+                defaultBranch = 'refs/heads/main'
+            }
+        )
+    }
+
+    if ($script:scene -eq 'azdo-shared-repository-selection') {
+        return @(
+            [pscustomobject]@{
+                Id = 'example-alm-template-repository'
+                Name = 'ALM4Dataverse-templates'
+                defaultBranch = 'refs/heads/main'
+            }
+        )
+    }
+
+    return @()
+}
+
+function Add-VSTeamGitRepository {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$ProjectName,
+        [Parameter()][string]$Name
+    )
+    return [pscustomobject]@{
+        Id = 'example-created-repository'
+        Name = $Name
+        defaultBranch = 'refs/heads/main'
+    }
+}
+
+function New-EntraIdApplication {
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$DisplayName,
+        [Parameter()][string]$TenantId,
+        [Parameter()][string]$AuthType
+    )
+    return [pscustomobject]@{
+        Name = $DisplayName
+        ApplicationId = 'example-app'
+        ApplicationObjectId = 'example-object'
+        TenantId = $TenantId
+        AuthType = $AuthType
+        ClientSecret = $null
+        IsExistingServiceConnection = $false
+    }
 }
 
 $script:dataverseEnvironmentCatalog = @(
     [pscustomobject]@{
-        FriendlyName = 'Example Development'
-        UniqueName = 'exampledevelopment'
-        Endpoints = @{ WebApplication = 'https://development.example.invalid' }
+        FriendlyName = 'Contoso Development'
+        UniqueName = 'contosodevelopment'
+        Endpoints = @{ WebApplication = 'https://contoso-development.crm.dynamics.com' }
     },
     [pscustomobject]@{
-        FriendlyName = 'Example Test'
-        UniqueName = 'exampletest'
-        Endpoints = @{ WebApplication = 'https://test.example.invalid' }
+        FriendlyName = 'Contoso Test'
+        UniqueName = 'contosotest'
+        Endpoints = @{ WebApplication = 'https://contoso-test.crm.dynamics.com' }
     },
     [pscustomobject]@{
-        FriendlyName = 'Example Production'
-        UniqueName = 'exampleproduction'
-        Endpoints = @{ WebApplication = 'https://production.example.invalid' }
+        FriendlyName = 'Contoso UAT'
+        UniqueName = 'contosouat'
+        Endpoints = @{ WebApplication = 'https://contoso-uat.crm.dynamics.com' }
+    },
+    [pscustomobject]@{
+        FriendlyName = 'Contoso Production'
+        UniqueName = 'contosoproduction'
+        Endpoints = @{ WebApplication = 'https://contoso-production.crm.dynamics.com' }
     }
 )
 
@@ -500,32 +965,56 @@ $credential = [pscustomobject]@{
 $serviceAccount = 'automation@example.invalid'
 $developmentEnvironment = [pscustomobject]@{
     ShortName = 'Dev-main'
-    FriendlyName = 'Example Development'
-    Url = 'https://development.example.invalid'
+    FriendlyName = 'Contoso Development'
+    Url = 'https://contoso-development.crm.dynamics.com'
     Credentials = $credential
     ServiceAccountUPN = $serviceAccount
 }
 $testEnvironment = [pscustomobject]@{
     ShortName = 'TEST'
-    FriendlyName = 'Example Test'
-    Url = 'https://test.example.invalid'
+    FriendlyName = 'Contoso Test'
+    Url = 'https://contoso-test.crm.dynamics.com'
     Credentials = $credential
     ServiceAccountUPN = $serviceAccount
 }
 $uatEnvironment = [pscustomobject]@{
     ShortName = 'UAT'
-    FriendlyName = 'Example UAT'
-    Url = 'https://uat.example.invalid'
+    FriendlyName = 'Contoso UAT'
+    Url = 'https://contoso-uat.crm.dynamics.com'
     Credentials = $credential
     ServiceAccountUPN = $serviceAccount
 }
 $productionEnvironment = [pscustomobject]@{
     ShortName = 'PROD'
-    FriendlyName = 'Example Production'
-    Url = 'https://production.example.invalid'
+    FriendlyName = 'Contoso Production'
+    Url = 'https://contoso-production.crm.dynamics.com'
     Credentials = $credential
     ServiceAccountUPN = $serviceAccount
 }
+$developBranchDevEnvironment = [pscustomobject]@{
+    ShortName = 'Dev-develop'
+    FriendlyName = $developmentEnvironment.FriendlyName
+    Url = $developmentEnvironment.Url
+    Credentials = $credential
+    ServiceAccountUPN = $serviceAccount
+}
+$script:newRepositoryBranchMenuStates = @(
+    [pscustomobject]@{
+        BranchName = 'main'
+        DeploymentEnvironments = @()
+    }
+)
+$script:existingRepositoryBranchMenuStates = @(
+    [pscustomobject]@{
+        BranchName = 'main'
+        DeploymentEnvironments = @($productionEnvironment)
+    }
+    [pscustomobject]@{
+        BranchName = 'develop'
+        DevEnvironmentConfiguration = $developBranchDevEnvironment
+        DeploymentEnvironments = @($testEnvironment)
+    }
+)
 $emptyMainBranch = [pscustomobject]@{
     BranchName = 'main'
     DevEnvironmentConfiguration = $null
@@ -564,6 +1053,32 @@ $devEnvironmentEditor = {
     }
 }.GetNewClosure()
 
+$deploymentEnvironmentEditor = {
+    param($allMappings, $mapping)
+
+    $branchName = [string]$mapping.BranchName
+    $selectedEnvironment = Select-DataverseEnvironment `
+        -Prompt "Select a deployment environment for branch '$branchName'" `
+        -ExcludeUrl ([string]$mapping.DevEnvironmentConfiguration.Url)
+    if ($null -eq $selectedEnvironment) {
+        throw "No deployment environment selected for branch '$branchName'."
+    }
+
+    $shortName = switch ([string]$selectedEnvironment.UniqueName) {
+        'contosotest' { 'TEST' }
+        'contosouat' { 'UAT' }
+        'contosoproduction' { 'PROD' }
+        default { throw "No deployment short name is configured for '$($selectedEnvironment.FriendlyName)'." }
+    }
+    return [pscustomobject]@{
+        ShortName = $shortName
+        FriendlyName = $selectedEnvironment.FriendlyName
+        Url = $selectedEnvironment.Endpoints['WebApplication']
+        Credentials = $credential
+        ServiceAccountUPN = $serviceAccount
+    }
+}.GetNewClosure()
+
 switch ($scene) {
     'setup-mode-choice' {
         Select-FromMenu `
@@ -571,16 +1086,59 @@ switch ($scene) {
             -ShowProductBrand `
             -Items @('Set up a new application repository', 'Configure an existing repository') `
             -PromptGuidanceLines @(
-                'Choose whether this run should create a new application repository or configure one that already exists.',
-                'Existing-repository setup authenticates and selects its resources before opening the guided configuration menu.'
-            ) `
+                'Choose whether this run should create a new application repository or configure one that already exists.'
+                ) `
             -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
             -PromptGuidanceRef $script:ALM4DataverseRef
+    }
+    'azdo-authentication' {
+        $authentication = Initialize-AzDoAuthentication -TenantId 'example.invalid'
+        $script:adoAccessToken = $authentication.AccessToken
+        $script:secureToken = $authentication.SecureToken
+        $organization = Initialize-AzDoOrganization
+        $script:orgName = $organization.Name
+    }
+    'azdo-project-selection' {
+        $script:adoAccessToken = [pscustomobject]@{ Token = 'example-access-token' }
+        $script:orgName = 'Example organization'
+        Initialize-AzDoProjectAndRepository -SkipSharedRepositoryVersionUpdate | Out-Null
+    }
+    'azdo-main-repository-selection' {
+        Select-AzDoMainRepository `
+            -ProjectName 'Example project' `
+            -SharedRepositoryName 'ALM4Dataverse' | Out-Null
+    }
+    'azdo-shared-repository-selection' {
+        Select-AzDoSharedRepository `
+            -ProjectName 'Example project' `
+            -ExcludeRepositoryName 'contoso-dataverse' | Out-Null
+    }
+    'azdo-apply-changes' {
+        $completedSteps = @(
+            [pscustomobject]@{
+                Name = 'Configure branches, dev and deployment envs'
+                SubItems = @(Get-SetupBranchMenuItem -BranchStates @($script:existingRepositoryBranchMenuStates))
+                IsComplete = $true
+                Action = {}
+            }
+        )
+        Invoke-SetupWizard `
+            -Title 'Azure DevOps ALM4Dataverse setup' `
+            -Steps $completedSteps `
+            -PreviewAction {} `
+            -ApplyAction {} | Out-Null
     }
     { $_ -in @('github-menu-new-repository', 'github-menu-existing-repository', 'github-menu-unavailable-shared-repository', 'azdo-menu-new-repository', 'azdo-menu-existing-repository', 'azdo-menu-unavailable-shared-repository') } {
         $isGitHubSetup = $scene.StartsWith('github-', [StringComparison]::Ordinal)
         $isSharedRepositoryUnavailable = $scene -like '*unavailable-shared-repository'
         $isExistingRepository = $scene -like '*existing-repository' -or $isSharedRepositoryUnavailable
+        $branchStepName = 'Configure branches, dev and deployment envs'
+        $branchStates = if ($isExistingRepository) {
+            $script:existingRepositoryBranchMenuStates
+        }
+        else {
+            $script:newRepositoryBranchMenuStates
+        }
         $setupTitle = if ($isGitHubSetup) {
             'GitHub Actions ALM4Dataverse setup'
         }
@@ -589,28 +1147,25 @@ switch ($scene) {
         }
         $stepNames = if ($isGitHubSetup) {
             @(
-                'Configure branches',
-                'Select solutions',
+                $branchStepName,
+                'Configure solutions',
                 'Configure GitHub OIDC identity'
             )
         }
         else {
             @(
-                'Configure branches',
-                'Select solutions'
+                $branchStepName,
+                'Configure solutions'
             )
         }
         $branchSummaries = if ($isExistingRepository) {
             @{
-                'Configure branches' = 'main (PROD), develop (DEV-develop, TEST)'
-                'Select solutions' = 'develop: Core, Sales'
+                'Configure solutions' = 'develop: Core, Sales'
                 'Configure GitHub OIDC identity' = 'Immutable subjects'
             }
         }
         else {
-            @{
-                'Configure branches' = 'main (no envs)'
-            }
+            @{}
         }
         $sharedRepositoryStep = [pscustomobject]@{
             Name = if ($isGitHubSetup) { 'Select shared workflow repository' } else { 'Select shared repository' }
@@ -645,11 +1200,18 @@ switch ($scene) {
                 else {
                     'Not configured'
                 }
-                [pscustomobject]@{
+                $step = [pscustomobject]@{
                     Name = $stepName
                     Summary = $stepSummary
                     Action = {}
                 }
+                if ($stepName -eq $branchStepName) {
+                    Add-Member `
+                        -InputObject $step `
+                        -NotePropertyName 'SubItems' `
+                        -NotePropertyValue @(Get-SetupBranchMenuItem -BranchStates @($branchStates))
+                }
+                $step
             }
         )
         $setupSteps = @($sharedRepositoryStep, $sharedRepositoryVersionStep) + $branchSteps
@@ -782,7 +1344,7 @@ switch ($scene) {
             -SummaryAction $summaryAction
     }
     'setup-change-side-by-side-diff' {
-        Show-SetupSideBySideDiff -Title 'Modified: pipelines/BUILD.yml' -FileChanges @(
+        Show-SetupSideBySideDiff -Title 'Repository file changes' -FileChanges @(
             [pscustomobject]@{
                 Path = 'pipelines/BUILD.yml'
                 Status = 'Modified'
@@ -811,14 +1373,14 @@ switch ($scene) {
             BranchName = 'main'
             DevEnvironmentConfiguration = $developmentEnvironment
             ExistingDevEnvironment = $developmentEnvironment
-            Environments = @($testEnvironment, $productionEnvironment)
+            Environments = @($testEnvironment)
         }
         $developBranch = [pscustomobject]@{
             BranchName = 'develop'
             DevEnvironmentConfiguration = ([pscustomobject]@{
                 ShortName = 'Dev-develop'
-                FriendlyName = 'Example Development'
-                Url = 'https://development.example.invalid'
+                FriendlyName = 'Contoso Development'
+                Url = 'https://contoso-development.crm.dynamics.com'
                 Credentials = $credential
                 ServiceAccountUPN = $serviceAccount
             })
@@ -830,11 +1392,19 @@ switch ($scene) {
             -InitialBranchMappings @($mainBranch, $developBranch) `
             -Ref $script:ALM4DataverseRef
     }
-    { $_ -in @('github-dev-confirmation', 'github-dev-environment-selection', 'azdo-dev-confirmation', 'azdo-dev-environment-selection') } {
+    { $_ -in @('github-dev-confirmation', 'github-dev-environment-selection', 'azdo-dev-confirmation') } {
         Select-BranchEnvironmentMapping `
             -InitialBranchMappings @($emptyMainBranch) `
             -IsNewRepository `
             -EditDevEnvironmentScriptBlock $devEnvironmentEditor `
+            -Ref $script:ALM4DataverseRef
+    }
+    'azdo-dev-environment-selection' {
+        Select-BranchEnvironmentMapping `
+            -InitialBranchMappings @($emptyMainBranch) `
+            -IsNewRepository `
+            -EditDevEnvironmentScriptBlock $devEnvironmentEditor `
+            -EditDeploymentEnvironmentsScriptBlock $deploymentEnvironmentEditor `
             -Ref $script:ALM4DataverseRef
     }
     { $_ -in @('github-build-validation', 'azdo-build-validation') } {
@@ -904,18 +1474,19 @@ switch ($scene) {
         Read-TextWithDefault -Prompt 'Enter a short name for this environment' -DefaultValue ''
     }
     'environment-detail-menu' {
-        $incompleteDeploymentConfiguration = [pscustomobject]@{
-            FriendlyName = 'Example Test'
-            Url = 'https://test.example.invalid'
-            Credentials = $null
+        $deploymentConfigurationUnderEdit = [pscustomobject]@{
+            ShortName = 'TEST'
+            FriendlyName = 'Contoso Test'
+            Url = 'https://contoso-test.crm.dynamics.com'
+            Credentials = $credential
             ServiceAccountUPN = ''
         }
         Invoke-SetupEnvironmentConfigurationWizard `
             -Title "Configure deployment environment for branch 'main'" `
             -SelectDataverseEnvironmentAction {
-                [pscustomobject]@{ FriendlyName = 'Example Test'; Url = 'https://test.example.invalid' }
+                [pscustomobject]@{ FriendlyName = 'Contoso Test'; Url = 'https://contoso-test.crm.dynamics.com' }
             } `
-            -InitialConfiguration $incompleteDeploymentConfiguration `
+            -InitialConfiguration $deploymentConfigurationUnderEdit `
             -TargetNameStepName 'Short name' `
             -SelectTargetNameAction { 'TEST' } `
             -SelectCredentialsAction { $credential } `
@@ -1020,6 +1591,20 @@ function Get-CapturePowerShellExecutable {
     $powerShellCommand = Get-Command -Name 'pwsh' -CommandType Application -ErrorAction Stop |
         Select-Object -First 1
     return $powerShellCommand.Source
+}
+
+function Get-CaptureFfmpegExecutable {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $ffmpegCommand = Get-Command -Name 'ffmpeg' -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $ffmpegCommand) {
+        throw 'Full screenshot capture requires ffmpeg with drawtext and fontconfig support. Install ffmpeg or rerun with -SkipAnimation.'
+    }
+
+    return $ffmpegCommand.Source
 }
 
 function Assert-CaptureRuntimePrerequisite {
@@ -1442,6 +2027,407 @@ function Save-CaptureFrame {
     $frame.Save($OutputPath, $pngOptions)
 }
 
+function Invoke-CaptureProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [Parameter(Mandatory)][string]$Operation
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ExecutablePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start the capture process for '$Operation'."
+        }
+
+        $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $standardErrorTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $standardOutput = $standardOutputTask.GetAwaiter().GetResult()
+        $standardError = $standardErrorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            $details = $standardError.Trim()
+            if (-not [string]::IsNullOrWhiteSpace($standardOutput)) {
+                if (-not [string]::IsNullOrWhiteSpace($details)) {
+                    $details += [Environment]::NewLine
+                }
+                $details += $standardOutput.Trim()
+            }
+
+            throw "Capture process failed during '$Operation' with exit code $($process.ExitCode). $details"
+        }
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Get-CaptureInputAction {
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$InputText)
+
+    $actions = [System.Collections.Generic.List[object]]::new()
+
+    for ($index = 0; $index -lt $InputText.Length; $index++) {
+        $characterCode = [int]$InputText[$index]
+        $inputAction = [string]$InputText[$index]
+        $isTypingCharacter = $true
+
+        if ($characterCode -eq 27) {
+            $isTypingCharacter = $false
+            if ($InputText.Length -ge ($index + 3)) {
+                $arrowSequence = $InputText.Substring($index, 3)
+                if ($arrowSequence -in @(
+                        "$([char]27)[A",
+                        "$([char]27)[B",
+                        "$([char]27)[C",
+                        "$([char]27)[D"
+                    )) {
+                    $inputAction = $arrowSequence
+                    $index += 2
+                }
+            }
+        }
+        elseif ($characterCode -in @(3, 8, 9, 10, 13, 127)) {
+            $isTypingCharacter = $false
+            if (
+                $characterCode -eq 13 -and
+                ($index + 1) -lt $InputText.Length -and
+                [int]$InputText[$index + 1] -eq 10
+            ) {
+                $inputAction += [string]$InputText[$index + 1]
+                $index++
+            }
+        }
+
+        $actions.Add([pscustomobject]@{
+            InputText = $inputAction
+            IsTypingCharacter = $isTypingCharacter
+        })
+    }
+
+    return $actions.ToArray()
+}
+
+function Invoke-CaptureWalkthroughFrame {
+    [CmdletBinding(DefaultParameterSetName = 'Scene')]
+    param(
+        [Parameter(Mandatory)][string]$FfmpegExecutable,
+        [Parameter(Mandatory)][string]$FontFamilyName,
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter(Mandatory, ParameterSetName = 'Intro')][string]$LogoPath,
+        [Parameter(Mandatory, ParameterSetName = 'Intro')][string]$Title,
+        [Parameter(Mandatory, ParameterSetName = 'Intro')][string]$Subtitle,
+        [Parameter(Mandatory, ParameterSetName = 'Scene')][string]$SourceImagePath,
+        [Parameter(Mandatory, ParameterSetName = 'Scene')][ValidateNotNullOrEmpty()][string[]]$CaptionLines
+    )
+
+    if ($PSCmdlet.ParameterSetName -eq 'Intro') {
+        $titlePath = Join-Path $WorkingDirectory 'walkthrough-title.txt'
+        $subtitlePath = Join-Path $WorkingDirectory 'walkthrough-subtitle.txt'
+        $utf8WithoutBom = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText($titlePath, $Title, $utf8WithoutBom)
+        [System.IO.File]::WriteAllText($subtitlePath, $Subtitle, $utf8WithoutBom)
+
+        $backgroundInput = 'color=c=0xffffff:s={0}x{1}:r=1' -f `
+            $script:CaptureWalkthroughWidth, $script:CaptureWalkthroughHeight
+        $filter = "[1:v]scale=760:-1[logo];[0:v][logo]overlay=(W-w)/2:240,drawbox=x=390:y=470:w=420:h=4:color=0x2ea96b:t=fill,drawtext=font='$FontFamilyName':textfile='walkthrough-title.txt':fontcolor=0x101820:fontsize=38:x=(w-text_w)/2:y=520,drawtext=font='$FontFamilyName':textfile='walkthrough-subtitle.txt':fontcolor=0x4b5563:fontsize=18:x=(w-text_w)/2:y=580[intro]"
+        $arguments = @(
+            '-hide_banner', '-loglevel', 'error', '-y',
+            '-f', 'lavfi', '-i', $backgroundInput,
+            '-i', $LogoPath,
+            '-filter_complex', $filter,
+            '-map', '[intro]',
+            '-frames:v', '1',
+            '-update', '1',
+            $OutputPath
+        )
+        $operation = 'setup walkthrough intro frame'
+    }
+    else {
+        $captionPath = Join-Path $WorkingDirectory 'walkthrough-caption.txt'
+        [System.IO.File]::WriteAllLines(
+            $captionPath,
+            $CaptionLines,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $paddingX = [int](($script:CaptureWalkthroughWidth - $script:CaptureWalkthroughContentWidth) / 2)
+        $footerDividerY = $script:CaptureWalkthroughHeight - $script:CaptureWalkthroughFooterHeight
+        $captionY = $script:CaptureWalkthroughContentHeight + 4
+        $filter = 'scale={0}:{1}:force_original_aspect_ratio=decrease,pad={0}:{1}:(ow-iw)/2:(oh-ih)/2:color=0xffffff,pad={2}:{3}:{4}:0:color=0xffffff,drawbox=x=0:y={6}:w={2}:h={5}:color=0xffffff@0.85:t=fill,drawbox=x=0:y={6}:w={2}:h=5:color=0x2ea96b:t=fill,drawtext=font=''{7}'':textfile=''walkthrough-caption.txt'':fontcolor=0x101820:fontsize=26:x=(w-text_w)/2:y={8}:line_spacing=4' -f `
+            $script:CaptureWalkthroughContentWidth,
+            $script:CaptureWalkthroughContentHeight,
+            $script:CaptureWalkthroughWidth,
+            $script:CaptureWalkthroughHeight,
+            $paddingX,
+            $script:CaptureWalkthroughFooterHeight,
+            $footerDividerY,
+            $FontFamilyName,
+            $captionY
+        $arguments = @(
+            '-hide_banner', '-loglevel', 'error', '-y',
+            '-i', $SourceImagePath,
+            '-vf', $filter,
+            '-frames:v', '1',
+            '-update', '1',
+            $OutputPath
+        )
+        $operation = 'setup walkthrough scene frame'
+    }
+
+    Invoke-CaptureProcess `
+        -ExecutablePath $FfmpegExecutable `
+        -Arguments $arguments `
+        -WorkingDirectory $WorkingDirectory `
+        -Operation $operation
+    if (-not (Test-Path -LiteralPath $OutputPath -PathType Leaf)) {
+        throw "FFmpeg did not create the setup walkthrough frame '$OutputPath'."
+    }
+}
+
+function Invoke-CaptureWalkthrough {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$ScreenshotDirectory,
+        [Parameter(Mandatory)][string]$FfmpegExecutable,
+        [Parameter(Mandatory)][string]$FontFamilyName,
+        [Parameter()][string]$ConPtyLibraryPath
+    )
+
+    $steps = @(Get-CaptureWalkthroughStep)
+    $availableSceneNames = @(Get-CaptureScene | ForEach-Object Name)
+    foreach ($step in $steps) {
+        if ($step.SceneName -notin $availableSceneNames) {
+            throw "Setup walkthrough references unknown screenshot scene '$($step.SceneName)'."
+        }
+    }
+
+    $logoPath = Join-Path $RepositoryRoot 'logo.png'
+    if (-not (Test-Path -LiteralPath $logoPath -PathType Leaf)) {
+        throw "Setup walkthrough logo '$logoPath' was not found."
+    }
+
+    $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'alm4dataverse-setup-walkthrough-' + [guid]::NewGuid().ToString('N')
+    )
+    [System.IO.Directory]::CreateDirectory($temporaryDirectory) | Out-Null
+    try {
+        $frameNumber = 0
+        $frameManifestLines = [System.Collections.Generic.List[string]]::new()
+        $frameManifestLines.Add('ffconcat version 1.0')
+        $introFramePath = Join-Path $temporaryDirectory ('frame-{0:D3}.png' -f $frameNumber)
+        Invoke-CaptureWalkthroughFrame `
+            -FfmpegExecutable $FfmpegExecutable `
+            -FontFamilyName $FontFamilyName `
+            -WorkingDirectory $temporaryDirectory `
+            -OutputPath $introFramePath `
+            -LogoPath $logoPath `
+            -Title 'ALM4Dataverse  - automated setup' `
+            -Subtitle 'the easiest way to get powerful ALM for Dataverse/D365/Power Platform set up in minutes'
+        $frameManifestLines.Add("file '$([System.IO.Path]::GetFileName($introFramePath))'")
+        $frameManifestLines.Add(
+            [string]::Format(
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                'duration {0:0.#########}',
+                $script:CaptureWalkthroughDwellSeconds
+            )
+        )
+
+        $stepNumber = 0
+        foreach ($step in $steps) {
+            $stepNumber++
+            $screenshotPath = Join-Path $ScreenshotDirectory "$($step.SceneName).png"
+            if (-not (Test-Path -LiteralPath $screenshotPath -PathType Leaf)) {
+                throw "Setup walkthrough screenshot '$screenshotPath' was not found. Run a full screenshot capture first."
+            }
+
+            $sceneDefinition = @(Resolve-CaptureScene -SceneName $step.SceneName)[0]
+            $expectedText = if ($step.PSObject.Properties['ExpectedText']) {
+                [string]$step.ExpectedText
+            }
+            else {
+                [string]$sceneDefinition.ExpectedText
+            }
+            $interactions = if ($step.PSObject.Properties['Interactions']) {
+                @($step.Interactions)
+            }
+            else {
+                @($sceneDefinition.Interactions)
+            }
+            $captureInitialFrame = if ($step.PSObject.Properties['CaptureInitialFrame']) {
+                [bool]$step.CaptureInitialFrame
+            }
+            else {
+                $true
+            }
+            $captureFinalFrame = if ($step.PSObject.Properties['CaptureFinalFrame']) {
+                [bool]$step.CaptureFinalFrame
+            }
+            else {
+                $true
+            }
+            $hasPromptHelp = $true
+            if ($sceneDefinition.PSObject.Properties['HasPromptHelp']) {
+                $hasPromptHelp = [bool]$sceneDefinition.HasPromptHelp
+            }
+            if ($step.PSObject.Properties['HasPromptHelp']) {
+                $hasPromptHelp = [bool]$step.HasPromptHelp
+            }
+
+            $walkthroughScene = [pscustomobject]@{
+                Name = $sceneDefinition.Name
+                Provider = $sceneDefinition.Provider
+                ExpectedText = $expectedText
+                Rows = $sceneDefinition.Rows
+                Interactions = $interactions
+                CaptureInitialFrame = $captureInitialFrame
+                CaptureFinalFrame = $captureFinalFrame
+                HasPromptHelp = $hasPromptHelp
+            }
+            $frameOutputDirectory = Join-Path $temporaryDirectory ('scene-{0:D3}' -f $stepNumber)
+            $sceneOutputPath = Join-Path $temporaryDirectory ('scene-output-{0:D3}.png' -f $stepNumber)
+            Invoke-CaptureScene `
+                -Scene $walkthroughScene `
+                -RepositoryRoot $RepositoryRoot `
+                -OutputPath $sceneOutputPath `
+                -FontFamilyName $FontFamilyName `
+                -ConPtyLibraryPath $ConPtyLibraryPath `
+                -FrameOutputDirectory $frameOutputDirectory
+
+            $capturedFrames = @(
+                Get-ChildItem -LiteralPath $frameOutputDirectory -Filter 'checkpoint-*.png' -File |
+                    Sort-Object Name
+            )
+            if ($capturedFrames.Count -eq 0) {
+                throw "No terminal checkpoints were captured for walkthrough scene '$($step.SceneName)'."
+            }
+
+            foreach ($capturedFrame in $capturedFrames) {
+                $typingMarkerPath = [System.IO.Path]::ChangeExtension($capturedFrame.FullName, '.typing.txt')
+                $isTypingFrame = Test-Path -LiteralPath $typingMarkerPath -PathType Leaf
+                $frameDurationSeconds = if ($isTypingFrame) {
+                    $script:CaptureWalkthroughTypingFrameDurationSeconds
+                }
+                else {
+                    $script:CaptureWalkthroughDwellSeconds
+                }
+
+                $frameNumber++
+                $framePath = Join-Path $temporaryDirectory ('frame-{0:D3}.png' -f $frameNumber)
+                Invoke-CaptureWalkthroughFrame `
+                    -FfmpegExecutable $FfmpegExecutable `
+                    -FontFamilyName $FontFamilyName `
+                    -WorkingDirectory $temporaryDirectory `
+                    -OutputPath $framePath `
+                    -SourceImagePath $capturedFrame.FullName `
+                    -CaptionLines $step.CaptionLines
+                $frameManifestLines.Add("file '$([System.IO.Path]::GetFileName($framePath))'")
+                $frameManifestLines.Add(
+                    [string]::Format(
+                        [System.Globalization.CultureInfo]::InvariantCulture,
+                        'duration {0:0.#########}',
+                        $frameDurationSeconds
+                    )
+                )
+            }
+        }
+
+        if ($frameNumber -lt 1) {
+            throw 'No frames were captured for the setup walkthrough.'
+        }
+        $lastFramePath = Join-Path $temporaryDirectory ('frame-{0:D3}.png' -f $frameNumber)
+        $frameManifestLines.Add("file '$([System.IO.Path]::GetFileName($lastFramePath))'")
+        [System.IO.File]::WriteAllLines(
+            (Join-Path $temporaryDirectory 'walkthrough-frames.ffconcat'),
+            $frameManifestLines,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $temporaryGifPath = Join-Path $temporaryDirectory 'setup-walkthrough.gif'
+        $paletteFilter = '[0:v]fps={0},split[palette_source][frame_source];[palette_source]palettegen=stats_mode=diff[palette];[frame_source][palette]paletteuse=dither=bayer:bayer_scale=3[gif]' -f `
+            $script:CaptureWalkthroughOutputFrameRate
+        $arguments = @(
+            '-hide_banner', '-loglevel', 'error', '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', 'walkthrough-frames.ffconcat',
+            '-filter_complex', $paletteFilter,
+            '-map', '[gif]',
+            '-loop', '0',
+            $temporaryGifPath
+        )
+        Invoke-CaptureProcess `
+            -ExecutablePath $FfmpegExecutable `
+            -Arguments $arguments `
+            -WorkingDirectory $temporaryDirectory `
+            -Operation 'setup walkthrough GIF encoding'
+
+        $temporaryGif = Get-Item -LiteralPath $temporaryGifPath -ErrorAction Stop
+        if ($temporaryGif.Length -le 0) {
+            throw 'FFmpeg created an empty setup walkthrough GIF.'
+        }
+
+        $outputPath = Join-Path $RepositoryRoot $script:CaptureWalkthroughRelativePath
+        Move-Item -LiteralPath $temporaryGifPath -Destination $outputPath -Force
+        Write-Output "Captured $([System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath))."
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryDirectory -PathType Container) {
+            try {
+                Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Could not remove temporary walkthrough files from '$temporaryDirectory': $($_.Exception.Message)"
+            }
+        }
+    }
+}
+
+function Save-CaptureSceneFrame {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Capture,
+        [Parameter(Mandatory)][pscustomobject]$Scene,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter()][switch]$TypingFrame
+    )
+
+    Wait-ForTerminalText -Terminal $Capture.Terminal -ExpectedText 'ALM4Dataverse Setup -' | Out-Null
+    if (-not ($Scene.PSObject.Properties['HasPromptHelp'] -and -not $Scene.HasPromptHelp)) {
+        Wait-ForTerminalText -Terminal $Capture.Terminal -ExpectedText 'F1 for help' | Out-Null
+    }
+    Start-Sleep -Milliseconds 200
+    Invoke-CaptureDispatcherQueue
+    Invoke-CaptureRenderTick
+    Invoke-CaptureDispatcherQueue
+    Save-CaptureFrame -Window $Capture.Window -OutputPath $OutputPath
+    if ($TypingFrame) {
+        [System.IO.File]::WriteAllText(
+            [System.IO.Path]::ChangeExtension($OutputPath, '.typing.txt'),
+            'typing',
+            [System.Text.UTF8Encoding]::new($false)
+        )
+    }
+}
+
 function Invoke-CaptureScene {
     [CmdletBinding()]
     param(
@@ -1449,7 +2435,8 @@ function Invoke-CaptureScene {
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][string]$OutputPath,
         [Parameter(Mandatory)][string]$FontFamilyName,
-        [Parameter()][string]$ConPtyLibraryPath
+        [Parameter()][string]$ConPtyLibraryPath,
+        [Parameter()][string]$FrameOutputDirectory
     )
 
     $capture = Open-CaptureTerminalWindow -Rows $Scene.Rows -FontFamilyName $FontFamilyName
@@ -1460,23 +2447,91 @@ function Invoke-CaptureScene {
             -RepositoryRoot $RepositoryRoot `
             -ConPtyLibraryPath $ConPtyLibraryPath
 
-        foreach ($interaction in $Scene.Interactions) {
-            Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText $interaction.WaitForText | Out-Null
-            if (-not $capture.Terminal.SendText($interaction.Input)) {
+        $captureCheckpoints = -not [string]::IsNullOrWhiteSpace($FrameOutputDirectory)
+        $captureInitialFrame = $true
+        $captureFinalFrame = $true
+        if ($Scene.PSObject.Properties['CaptureInitialFrame']) {
+            $captureInitialFrame = [bool]$Scene.CaptureInitialFrame
+        }
+        if ($Scene.PSObject.Properties['CaptureFinalFrame']) {
+            $captureFinalFrame = [bool]$Scene.CaptureFinalFrame
+        }
+        $interactions = @($Scene.Interactions)
+        $checkpointNumber = 0
+        if ($captureCheckpoints) {
+            [System.IO.Directory]::CreateDirectory($FrameOutputDirectory) | Out-Null
+            if ($interactions.Count -gt 0) {
+                Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText $interactions[0].WaitForText | Out-Null
+                if ($captureInitialFrame) {
+                    $checkpointNumber++
+                    Save-CaptureSceneFrame `
+                        -Capture $capture `
+                        -Scene $Scene `
+                        -OutputPath (Join-Path $FrameOutputDirectory ('checkpoint-{0:D3}.png' -f $checkpointNumber))
+                }
+            }
+        }
+
+        for ($interactionIndex = 0; $interactionIndex -lt $interactions.Count; $interactionIndex++) {
+            $interaction = $interactions[$interactionIndex]
+            if (-not $captureCheckpoints -or $interactionIndex -gt 0) {
+                Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText $interaction.WaitForText | Out-Null
+            }
+            if ($captureCheckpoints) {
+                $inputActions = @(Get-CaptureInputAction -InputText ([string]$interaction.Input))
+                foreach ($inputAction in $inputActions) {
+                    if (-not $capture.Terminal.SendText($inputAction.InputText)) {
+                        throw "Could not send input to screenshot scene '$($Scene.Name)'."
+                    }
+                    if ($inputAction.IsTypingCharacter) {
+                        Start-Sleep -Milliseconds 100
+                        Invoke-CaptureDispatcherQueue
+                        $checkpointNumber++
+                        Save-CaptureSceneFrame `
+                            -Capture $capture `
+                            -Scene $Scene `
+                            -OutputPath (Join-Path $FrameOutputDirectory ('checkpoint-{0:D3}.png' -f $checkpointNumber)) `
+                            -TypingFrame
+                    }
+                }
+            }
+            elseif (-not $capture.Terminal.SendText($interaction.Input)) {
                 throw "Could not send input to screenshot scene '$($Scene.Name)'."
+            }
+
+            if ($captureCheckpoints) {
+                Start-Sleep -Milliseconds 150
+                Invoke-CaptureDispatcherQueue
+                $nextExpectedText = if ($interactionIndex -lt ($interactions.Count - 1)) {
+                    $interactions[$interactionIndex + 1].WaitForText
+                }
+                else {
+                    $Scene.ExpectedText
+                }
+                Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText $nextExpectedText | Out-Null
+                if (
+                    $interactionIndex -lt ($interactions.Count - 1) -and
+                    $interaction.PSObject.Properties['CaptureAfter'] -and
+                    $interaction.CaptureAfter
+                ) {
+                    $checkpointNumber++
+                    Save-CaptureSceneFrame `
+                        -Capture $capture `
+                        -Scene $Scene `
+                        -OutputPath (Join-Path $FrameOutputDirectory ('checkpoint-{0:D3}.png' -f $checkpointNumber))
+                }
             }
         }
 
         Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText $Scene.ExpectedText | Out-Null
-        Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText 'ALM4Dataverse Setup -' | Out-Null
-        if (-not ($Scene.PSObject.Properties['HasPromptHelp'] -and -not $Scene.HasPromptHelp)) {
-            Wait-ForTerminalText -Terminal $capture.Terminal -ExpectedText 'F1=help' | Out-Null
+        if ($captureCheckpoints -and $captureFinalFrame) {
+            $checkpointNumber++
+            Save-CaptureSceneFrame `
+                -Capture $capture `
+                -Scene $Scene `
+                -OutputPath (Join-Path $FrameOutputDirectory ('checkpoint-{0:D3}.png' -f $checkpointNumber))
         }
-        Start-Sleep -Milliseconds 200
-        Invoke-CaptureDispatcherQueue
-        Invoke-CaptureRenderTick
-        Invoke-CaptureDispatcherQueue
-        Save-CaptureFrame -Window $capture.Window -OutputPath $OutputPath
+        Save-CaptureSceneFrame -Capture $capture -Scene $Scene -OutputPath $OutputPath
     }
     finally {
         $capture.Terminal.Dispose()
@@ -1490,7 +2545,8 @@ function Invoke-CaptureScreenshotSet {
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][pscustomobject[]]$Scenes,
-        [Parameter(Mandatory)][string]$OutputDirectory
+        [Parameter(Mandatory)][string]$OutputDirectory,
+        [Parameter()][string]$FfmpegExecutable
     )
 
     Assert-CaptureRuntimePrerequisite
@@ -1517,6 +2573,15 @@ function Invoke-CaptureScreenshotSet {
             -ConPtyLibraryPath $runtime.ConPtyLibraryPath
         Write-Output "Captured $([System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath))."
     }
+
+    if (-not [string]::IsNullOrWhiteSpace($FfmpegExecutable)) {
+        Invoke-CaptureWalkthrough `
+            -RepositoryRoot $RepositoryRoot `
+            -ScreenshotDirectory $OutputDirectory `
+            -FfmpegExecutable $FfmpegExecutable `
+            -FontFamilyName $fontFamilyName `
+            -ConPtyLibraryPath $runtime.ConPtyLibraryPath
+    }
 }
 
 if ($MyInvocation.InvocationName -eq '.') {
@@ -1533,7 +2598,13 @@ if ($ListScenes) {
 }
 
 $outputDirectory = Join-Path $repositoryRoot $script:CaptureScreenshotRelativePath
+$ffmpegExecutable = $null
+if (Test-CaptureWalkthroughEnabled -SceneName $Scene -SkipAnimation:$SkipAnimation) {
+    $ffmpegExecutable = Get-CaptureFfmpegExecutable
+}
+
 Invoke-CaptureScreenshotSet `
     -RepositoryRoot $repositoryRoot `
     -Scenes $selectedScenes `
-    -OutputDirectory $outputDirectory
+    -OutputDirectory $outputDirectory `
+    -FfmpegExecutable $ffmpegExecutable

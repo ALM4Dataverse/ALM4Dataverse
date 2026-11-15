@@ -413,8 +413,11 @@ function Show-SetupSideBySideDiff {
     .SYNOPSIS
         Displays one file as a colored before/after side-by-side diff.
     .DESCRIPTION
-        Interactive terminals support arrow keys, Page Up/Down, Home/End and Q/Esc.
-        NoPaging writes the full view once for command-line preview output.
+        Interactive terminals support arrow keys, Page Up/Down, Home/End and Enter,
+        Q or Esc to close. A centered filename heading and distinct BEFORE/AFTER labels
+        identify the file and diff sides; the bottom status bar shows the visible row
+        range and controls. NoPaging writes the full view once for command-line preview
+        output.
     #>
     [CmdletBinding()]
     param(
@@ -459,11 +462,6 @@ function Show-SetupSideBySideDiff {
     $textWidth = [Math]::Max($columnWidth - 2, 1)
     $displayRows = [System.Collections.Generic.List[object]]::new()
     foreach ($change in @($FileChanges | Sort-Object Path -CaseSensitive)) {
-        $displayRows.Add([pscustomobject]@{
-                Kind   = 'Header'
-                Status = [string]$change.Status
-                Text   = [string]$change.Path
-            })
         $diffRows = @(Get-SetupSideBySideDiffRow -BeforeContent $change.BeforeContent -AfterContent $change.AfterContent)
         $hasTextChanges = @($diffRows | Where-Object { $_.Type -ne 'Context' }).Count -gt 0
         if (-not $hasTextChanges) {
@@ -501,6 +499,17 @@ function Show-SetupSideBySideDiff {
         }
     }
 
+    $fileChange = $FileChanges[0]
+    $headerText = "$($fileChange.Status): $($fileChange.Path)"
+    $headerColor = switch ($fileChange.Status) {
+        'Added' { 'green' }
+        'Modified' { 'yellow' }
+        'Deleted' { 'red' }
+        default { 'grey' }
+    }
+    $headerPadding = [Math]::Max([int][Math]::Floor(($terminalWidth - $headerText.Length) / 2), 0)
+    $headerLiteral = ConvertTo-SpectreMarkupLiteral -Text $headerText
+
     $pageSize = if ($interactive) { [Math]::Max($terminalHeight - 6, 1) } else { $displayRows.Count }
     $startIndex = 0
     while ($true) {
@@ -509,26 +518,13 @@ function Show-SetupSideBySideDiff {
             [Spectre.Console.AnsiConsole]::Clear()
         }
         Write-SetupDashboard -Message $Title -IncludeTrailingSpacer
-        $titleLiteral = ConvertTo-SpectreMarkupLiteral -Text $Title
-        [Spectre.Console.AnsiConsole]::MarkupLine("[bold deepskyblue1]$titleLiteral[/]")
-        $leftHeading = ('BEFORE').PadRight($columnWidth)
-        [Spectre.Console.AnsiConsole]::MarkupLine("[grey]$leftHeading | AFTER[/]")
+        [Spectre.Console.AnsiConsole]::MarkupLine((' ' * $headerPadding) + "[$headerColor]$headerLiteral[/]")
+        $beforeHeaderPadding = ' ' * [Math]::Max($columnWidth - 6, 0)
+        [Spectre.Console.AnsiConsole]::MarkupLine("[bold dodgerblue1]BEFORE[/]$beforeHeaderPadding [grey]|[/] [bold gold1]AFTER[/]")
 
         $endIndex = [Math]::Min($startIndex + $pageSize, $displayRows.Count)
         for ($rowIndex = $startIndex; $rowIndex -lt $endIndex; $rowIndex++) {
             $displayRow = $displayRows[$rowIndex]
-            if ($displayRow.Kind -eq 'Header') {
-                $headerColor = switch ($displayRow.Status) {
-                    'Added' { 'green' }
-                    'Modified' { 'yellow' }
-                    'Deleted' { 'red' }
-                    default { 'grey' }
-                }
-                $literalHeader = ConvertTo-SpectreMarkupLiteral -Text "$($displayRow.Status): $($displayRow.Text)"
-                [Spectre.Console.AnsiConsole]::MarkupLine("[$headerColor]$literalHeader[/]")
-                continue
-            }
-
             $leftColor = switch ($displayRow.Type) {
                 { $_ -in @('Deleted', 'Modified') } { 'red3_1' }
                 'Notice' { 'yellow' }
@@ -556,10 +552,15 @@ function Show-SetupSideBySideDiff {
 
         $firstVisibleRow = $startIndex + 1
         $lastVisibleRow = $endIndex
-        [Spectre.Console.AnsiConsole]::MarkupLine(
-            "[grey]Rows $firstVisibleRow-$lastVisibleRow of $($displayRows.Count) | Up/Down scroll | PgUp/PgDn page | Home/End | Q/Esc close[/]"
-        )
-        $key = Read-SetupDiffViewerKey
+        Show-SetupStatusBarAtBottom `
+            -PromptKind 'Diff' `
+            -StatusDetail "Rows $firstVisibleRow-$lastVisibleRow of $($displayRows.Count)"
+        try {
+            $key = Read-SetupDiffViewerKey
+        }
+        finally {
+            Clear-SetupStatusBarAtBottom
+        }
         if ($key -in @('Q', 'Escape', 'Enter')) {
             break
         }
@@ -578,6 +579,8 @@ function Show-SetupChangeReview {
     .DESCRIPTION
         Resource changes describe deferred external mutations and must not contain secrets.
         PreviewOnly uses the same file picker but writes each selected file diff without paging.
+        All changed files, including alm-config.psd1, use the same status-labeled choices;
+        Done reviewing is a separate action.
         SummaryAction runs synchronously in the caller's scope so it can resolve setup
         helpers and access the current setup-step state.
     #>
@@ -591,65 +594,41 @@ function Show-SetupChangeReview {
     )
 
     while ($true) {
-        & $SummaryAction
-        Show-SetupResourceChangeSummary -ResourceChanges $ResourceChanges -Note $ResourceChangeNote
-        Show-SetupFileChangeSummary -FileChanges $FileChanges
-        $repositoryFileChanges = @(
-            $FileChanges |
-                Where-Object { $_.Path -ine 'alm-config.psd1' } |
-                Sort-Object Path -CaseSensitive
-        )
-        $reviewMenuItems = [System.Collections.Generic.List[string]]::new()
-        $reviewMenuItems.Add('View alm-config.psd1 diff')
-        foreach ($change in $repositoryFileChanges) {
-            $reviewMenuItems.Add("$($change.Status): $($change.Path)")
-        }
+    & $SummaryAction
+    Show-SetupResourceChangeSummary -ResourceChanges $ResourceChanges -Note $ResourceChangeNote
+    Show-SetupFileChangeSummary -FileChanges $FileChanges
+    $repositoryFileChanges = @($FileChanges | Sort-Object Path -CaseSensitive)
+    $reviewMenuItems = [System.Collections.Generic.List[string]]::new()
+    foreach ($change in $repositoryFileChanges) {
+        $reviewMenuItems.Add("$($change.Status): $($change.Path)")
+    }
         $reviewMenuItems.Add('Done reviewing')
         $selection = Select-FromMenu `
             -Title 'Review setup changes' `
             -Items $reviewMenuItems.ToArray() `
+            -ActionItems @('Done reviewing') `
+            -ActionSectionTitle '---' `
             -PromptGuidanceLines @(
                 'Each file is listed with its add, modify, or delete status.',
-                'Select one file to view its diff; alm-config.psd1 has a separate option.'
+                'Select a file to view its diff, then choose Done reviewing to return.'
             )
 
         if ($null -eq $selection) {
             throw 'Setup change review was cancelled.'
         }
 
-        switch ($selection) {
-            0 {
-                $configChanges = @($FileChanges | Where-Object { $_.Path -ieq 'alm-config.psd1' })
-                if ($configChanges.Count -eq 0) {
-                    Show-SetupSideBySideDiff `
-                        -Title 'alm-config.psd1 diff' `
-                        -FileChanges @() `
-                        -NoPaging:$PreviewOnly
-                }
-                else {
-                    Show-SetupSideBySideDiff `
-                        -Title 'alm-config.psd1 diff' `
-                        -FileChanges @($configChanges[0]) `
-                        -NoPaging:$PreviewOnly
-                }
-            }
-            default {
-                $selectedFileIndex = $selection - 1
-                if ($selectedFileIndex -lt $repositoryFileChanges.Count) {
-                    $selectedChange = $repositoryFileChanges[$selectedFileIndex]
-                    Show-SetupSideBySideDiff `
-                        -Title "$($selectedChange.Status): $($selectedChange.Path)" `
-                        -FileChanges @($selectedChange) `
-                        -NoPaging:$PreviewOnly
-                }
-                elseif ($selection -eq ($repositoryFileChanges.Count + 1)) {
-                    return
-                }
-                else {
-                    throw "Unrecognized setup change review selection: $selection"
-                }
-            }
+        if ($selection -eq $repositoryFileChanges.Count) {
+            return
         }
+        if ($selection -lt 0 -or $selection -ge $repositoryFileChanges.Count) {
+            throw "Unrecognized setup change review selection: $selection"
+        }
+
+        $selectedChange = $repositoryFileChanges[$selection]
+        Show-SetupSideBySideDiff `
+            -Title 'Repository file changes' `
+            -FileChanges @($selectedChange) `
+            -NoPaging:$PreviewOnly
     }
 }
 

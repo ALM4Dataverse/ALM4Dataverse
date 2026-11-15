@@ -1,4 +1,4 @@
-class SetupScreenshotFakePtyOptions {
+﻿class SetupScreenshotFakePtyOptions {
     [string]$Command
     [object]$Arguments
     [string]$WorkingDirectory
@@ -27,7 +27,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'defines all documented setup scenes and waits for visible content' {
         $scenes = @(Get-CaptureScene)
 
-        $scenes.Count | Should -Be 32
+        $scenes.Count | Should -Be 37
         foreach ($scene in $scenes) {
             $scene.Name | Should -Not -BeNullOrEmpty
             $scene.Provider | Should -BeIn @('common', 'github', 'azdo')
@@ -45,20 +45,37 @@ Describe 'Setup screenshot capture infrastructure' {
         $scenes.Name | Should -Contain 'azdo-menu-existing-repository'
         $scenes.Name | Should -Contain 'azdo-menu-unavailable-shared-repository'
         $scenes.Name | Should -Contain 'setup-mode-choice'
+        $scenes.Name | Should -Contain 'azdo-authentication'
+        $scenes.Name | Should -Contain 'azdo-project-selection'
+        $scenes.Name | Should -Contain 'azdo-main-repository-selection'
+        $scenes.Name | Should -Contain 'azdo-shared-repository-selection'
+        $scenes.Name | Should -Contain 'azdo-apply-changes'
         $scenes.Name | Should -Contain 'github-build-validation'
         $scenes.Name | Should -Contain 'azdo-build-validation'
         ($scenes | Where-Object Name -eq 'github-menu-new-repository').ExpectedText |
-            Should -Be 'main (no envs)'
+            Should -Be 'main'
         ($scenes | Where-Object Name -eq 'azdo-menu-new-repository').ExpectedText |
-            Should -Be 'main (no envs)'
+            Should -Be 'main'
         ($scenes | Where-Object Name -eq 'github-menu-existing-repository').ExpectedText |
-            Should -Be 'main (PROD)'
+            Should -Be 'Deployment: PROD (main)'
         ($scenes | Where-Object Name -eq 'azdo-menu-existing-repository').ExpectedText |
-            Should -Be 'main (PROD)'
+            Should -Be 'Deployment: PROD (main)'
         ($scenes | Where-Object Name -eq 'github-menu-unavailable-shared-repository').ExpectedText |
             Should -Be 'Unavailable:'
         ($scenes | Where-Object Name -eq 'azdo-menu-unavailable-shared-repository').ExpectedText |
             Should -Be 'Unavailable:'
+        ($scenes | Where-Object Name -eq 'setup-mode-choice').ExpectedText |
+            Should -Be 'Configure an existing repository'
+        ($scenes | Where-Object Name -eq 'azdo-project-selection').ExpectedText |
+            Should -Be 'Example project'
+        ($scenes | Where-Object Name -eq 'deployment-short-name').ExpectedText |
+            Should -Be 'Enter a short name for this environment >'
+        ($scenes | Where-Object Name -eq 'azdo-deployment-short-name').ExpectedText |
+            Should -Be 'Enter a short name for this environment >'
+        ($scenes | Where-Object Name -eq 'azdo-setup-change-review').ExpectedText |
+            Should -Be 'Modified: alm-config.psd1'
+        ($scenes | Where-Object Name -eq 'setup-change-side-by-side-diff').ExpectedText |
+            Should -Be 'Up/Down=scroll'
     }
 
     It 'resolves a scene case-insensitively and rejects an unknown scene' {
@@ -66,10 +83,124 @@ Describe 'Setup screenshot capture infrastructure' {
         { Resolve-CaptureScene -SceneName 'not-a-scene' } | Should -Throw '*Unknown screenshot scene*'
     }
 
+    It 'defines interactive walkthrough steps in the requested setup order' {
+        $steps = @(Get-CaptureWalkthroughStep)
+        $availableSceneNames = @(Get-CaptureScene | ForEach-Object Name)
+        $expectedSceneNames = @(
+            'setup-mode-choice'
+            'azdo-authentication'
+            'azdo-project-selection'
+            'azdo-main-repository-selection'
+            'azdo-shared-repository-selection'
+            'branch-strategy'
+            'azdo-dev-environment-selection'
+            'azdo-deployment-short-name'
+            'branch-mapping'
+            'azdo-authentication-type'
+            'azdo-setup-change-review'
+            'azdo-apply-changes'
+            'github-menu-existing-repository'
+        )
+
+        $steps.Count | Should -Be $expectedSceneNames.Count
+        ($steps.SceneName -join '|') | Should -Be ($expectedSceneNames -join '|')
+        foreach ($step in $steps) {
+            $step.SceneName | Should -BeIn $availableSceneNames
+            @($step.CaptionLines).Count | Should -BeGreaterThan 0
+            $step.CaptionLines | Should -Not -Contain ''
+        }
+        $modeChoiceStep = $steps | Where-Object SceneName -EQ 'setup-mode-choice'
+        $modeChoiceStep.Interactions[0].WaitForText |
+            Should -Be 'Configure an existing repository'
+        $modeChoiceStep.ExpectedText | Should -Be 'v0.0.0'
+        $projectSelectionStep = $steps | Where-Object SceneName -EQ 'azdo-project-selection'
+        $projectSelectionStep.Interactions[0].WaitForText | Should -Be 'Example project'
+        $projectSelectionStep.ExpectedText | Should -Be 'Create a new repository'
+        $mainRepositoryStep = $steps | Where-Object SceneName -EQ 'azdo-main-repository-selection'
+        $mainRepositoryStep.Interactions[0].WaitForText | Should -Be 'Create a new repository'
+        $mainRepositoryStep.Interactions[1].WaitForText |
+            Should -Be 'Enter the name for the new main repository >'
+        $sharedRepositoryStep = $steps | Where-Object SceneName -EQ 'azdo-shared-repository-selection'
+        $sharedRepositoryStep.Interactions[0].WaitForText |
+            Should -Be 'Create a new repository'
+        $sharedRepositoryStep.Interactions[0].Input |
+            Should -Be "$([char]27)[B`r"
+        $sharedRepositoryStep.Interactions[1].WaitForText |
+            Should -Be 'Enter the name for the shared repository >'
+        $sharedRepositoryStep.Interactions[2].WaitForText |
+            Should -Be "Create shared repository 'ALM4Dataverse'"
+        $sharedRepositoryStep.Interactions[2].Input | Should -Be "y`r"
+        $mainRepositoryStep.ExpectedText |
+            Should -Be "Created repository 'contoso-dataverse'."
+        $mainRepositoryStep.Interactions[1].Input |
+            Should -Be "contoso-dataverse`r"
+        ($steps[0].CaptionLines -join ' ') | Should -Match '^Launch setup'
+        ($steps[1].CaptionLines -join ' ') | Should -Match 'Azure DevOps'
+        $environmentStep = $steps | Where-Object SceneName -EQ 'azdo-dev-environment-selection'
+        $environmentStep.ExpectedText | Should -Be 'UAT'
+        @($environmentStep.Interactions | Where-Object WaitForText -Like 'Select a deployment environment*').Count |
+            Should -Be 3
+        $shortNameStep = $steps | Where-Object SceneName -EQ 'azdo-deployment-short-name'
+        $shortNameStep.ExpectedText | Should -Be 'Enter a short name for this environment >'
+        $shortNameStep.Interactions[0].WaitForText | Should -Be 'Enter a short name for this environment >'
+        $shortNameStep.Interactions[0].Input | Should -Be 'TEST'
+        $authenticationStep = $steps | Where-Object SceneName -EQ 'azdo-authentication-type'
+        ($authenticationStep.CaptionLines -join ' ') | Should -Match 'Workload identity federation'
+        ($authenticationStep.CaptionLines -join ' ') | Should -Match 'avoids secrets'
+        $reviewStep = $steps | Where-Object SceneName -EQ 'azdo-setup-change-review'
+        ($reviewStep.CaptionLines -join ' ') | Should -Match 'file changes'
+        $reviewStep.ExpectedText | Should -Be 'Up/Down=scroll'
+        $applyStep = $steps | Where-Object SceneName -EQ 'azdo-apply-changes'
+        $applyStep.ExpectedText | Should -Be 'Azure DevOps ALM4Dataverse setup menu'
+        $existingMenuStep = $steps | Where-Object SceneName -EQ 'github-menu-existing-repository'
+        $existingMenuStep.ExpectedText | Should -Be 'Deployment: PROD (main)'
+        $reviewStep.Interactions[0].WaitForText | Should -Be 'Modified: alm-config.psd1'
+        ($steps[-1].CaptionLines -join ' ') | Should -Match 'GitHub Actions'
+    }
+
+    It 'enables animation only for a full capture when it is not skipped' {
+        Test-CaptureWalkthroughEnabled | Should -BeTrue
+        Test-CaptureWalkthroughEnabled -SceneName 'branch-strategy' | Should -BeFalse
+        Test-CaptureWalkthroughEnabled -SkipAnimation | Should -BeFalse
+    }
+
+    It 'keeps special input atomic and splits typed text into characters' {
+        $arrowAndEnter = @(Get-CaptureInputAction -InputText "$([char]27)[B`r")
+        $arrowAndEnter.Count | Should -Be 2
+        $arrowAndEnter[0].InputText | Should -Be "$([char]27)[B"
+        $arrowAndEnter[0].IsTypingCharacter | Should -BeFalse
+        $arrowAndEnter[1].InputText | Should -Be "`r"
+        $arrowAndEnter[1].IsTypingCharacter | Should -BeFalse
+
+        $choice = @(Get-CaptureInputAction -InputText "y`r")
+        $choice.Count | Should -Be 2
+        $choice[0].InputText | Should -Be 'y'
+        $choice[0].IsTypingCharacter | Should -BeTrue
+        $choice[1].IsTypingCharacter | Should -BeFalse
+
+        $repositoryNameInput = "contoso-dataverse`r"
+        $repositoryName = @(Get-CaptureInputAction -InputText $repositoryNameInput)
+        $repositoryName.Count | Should -Be $repositoryNameInput.Length
+        ($repositoryName.InputText -join '') | Should -Be $repositoryNameInput
+        @($repositoryName | Where-Object IsTypingCharacter).Count |
+            Should -Be ($repositoryNameInput.Length - 1)
+    }
+
     It 'uses an explicit monospaced font for each supported platform' {
         Get-CaptureFontFamily -Platform 'Windows' | Should -Be 'Consolas'
         Get-CaptureFontFamily -Platform 'Linux' | Should -Be 'Noto Sans Mono'
         Get-CaptureFontFamily -Platform 'macOS' | Should -Be 'Menlo'
+    }
+
+    It 'resolves ffmpeg and explains how to skip animation when it is missing' {
+        Mock Get-Command {
+            [pscustomobject]@{ Source = '/usr/bin/ffmpeg' }
+        } -ParameterFilter { $Name -eq 'ffmpeg' }
+
+        Get-CaptureFfmpegExecutable | Should -Be '/usr/bin/ffmpeg'
+
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq 'ffmpeg' }
+        { Get-CaptureFfmpegExecutable } | Should -Throw '*Install ffmpeg or rerun with -SkipAnimation*'
     }
 
     It 'uses platform-specific package caches' {
@@ -356,6 +487,184 @@ Describe 'Setup screenshot capture infrastructure' {
         }
     }
 
+    It 'captures terminal checkpoints before and after scene interactions' {
+        $terminal = [pscustomobject]@{ SentText = [System.Collections.Generic.List[string]]::new() }
+        $terminal | Add-Member -MemberType ScriptMethod -Name SendText -Value {
+            param($Value)
+            $this.SentText.Add($Value)
+            return $true
+        }
+        $terminal | Add-Member -MemberType ScriptMethod -Name Dispose -Value {}
+        $window = [pscustomobject]@{}
+        $window | Add-Member -MemberType ScriptMethod -Name Close -Value {}
+        $script:fakeCaptureWindow = [pscustomobject]@{ Terminal = $terminal; Window = $window }
+        Mock Open-CaptureTerminalWindow { $script:fakeCaptureWindow }
+        Mock Connect-CaptureTerminal {}
+        Mock Wait-ForTerminalText { "ALM4Dataverse Setup - $ExpectedText`nvisible terminal screen" }
+        Mock Invoke-CaptureDispatcherQueue {}
+        Mock Invoke-CaptureRenderTick {}
+        Mock Save-CaptureFrame {
+            Set-Content -LiteralPath $OutputPath -Value 'frame'
+        }
+        Mock Start-Sleep {}
+
+        $frameDirectory = Join-Path $TestDrive 'checkpoints'
+        $scene = [pscustomobject]@{
+            Name = 'interactive-scene'
+            Provider = 'common'
+            ExpectedText = 'finished'
+            Rows = 32
+            Interactions = @([pscustomobject]@{ WaitForText = 'ready'; Input = "g`r" })
+        }
+        Invoke-CaptureScene `
+            -Scene $scene `
+            -RepositoryRoot $repositoryRoot `
+            -OutputPath (Join-Path $TestDrive 'final.png') `
+            -FontFamilyName 'Noto Sans Mono' `
+            -FrameOutputDirectory $frameDirectory
+
+        $terminal.SentText | Should -Contain 'g'
+        $terminal.SentText | Should -Contain "`r"
+        @(Get-ChildItem -LiteralPath $frameDirectory -Filter 'checkpoint-*.png').Count | Should -Be 3
+        @(Get-ChildItem -LiteralPath $frameDirectory -Filter 'checkpoint-*.keycaps.txt').Count |
+            Should -Be 0
+        Test-Path -LiteralPath (Join-Path $frameDirectory 'checkpoint-001.typing.txt') |
+            Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $frameDirectory 'checkpoint-002.typing.txt') |
+            Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $frameDirectory 'checkpoint-003.typing.txt') |
+            Should -BeFalse
+        Should -Invoke Save-CaptureFrame -Times 4 -Exactly
+    }
+
+    It 'builds a typing walkthrough with a translucent caption footer' {
+        $repositoryRoot = Join-Path $TestDrive 'walkthrough-repository'
+        $screenshotDirectory = Join-Path $repositoryRoot 'docs/setup/screenshots'
+        New-Item -Path $screenshotDirectory -ItemType Directory -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $repositoryRoot 'logo.png') -Value 'logo'
+        $steps = @(Get-CaptureWalkthroughStep)
+        foreach ($step in $steps) {
+            Set-Content -LiteralPath (Join-Path $screenshotDirectory "$($step.SceneName).png") -Value 'screenshot'
+        }
+
+        $script:walkthroughProcessCalls = [System.Collections.Generic.List[object]]::new()
+        $script:walkthroughCaptureCalls = [System.Collections.Generic.List[object]]::new()
+        $script:walkthroughCaptionTexts = [System.Collections.Generic.List[string]]::new()
+        $script:walkthroughFrameManifest = ''
+        Mock Invoke-CaptureProcess {
+            $script:walkthroughProcessCalls.Add([pscustomobject]@{
+                Arguments = @($Arguments)
+                Operation = $Operation
+                WorkingDirectory = $WorkingDirectory
+            })
+            if ($Operation -eq 'setup walkthrough intro frame') {
+                $script:walkthroughTitle = [System.IO.File]::ReadAllText(
+                    (Join-Path $WorkingDirectory 'walkthrough-title.txt')
+                )
+                $script:walkthroughSubtitle = [System.IO.File]::ReadAllText(
+                    (Join-Path $WorkingDirectory 'walkthrough-subtitle.txt')
+                )
+            }
+            elseif ($Operation -eq 'setup walkthrough scene frame') {
+                $script:walkthroughCaptionTexts.Add(
+                    [System.IO.File]::ReadAllText((Join-Path $WorkingDirectory 'walkthrough-caption.txt'))
+                )
+            }
+            elseif ($Operation -eq 'setup walkthrough GIF encoding') {
+                $script:walkthroughFrameManifest = [System.IO.File]::ReadAllText(
+                    (Join-Path $WorkingDirectory 'walkthrough-frames.ffconcat')
+                )
+            }
+            Set-Content -LiteralPath $Arguments[-1] -Value 'generated image' | Out-Null
+        }
+        Mock Invoke-CaptureScene {
+            $script:walkthroughCaptureCalls.Add([pscustomobject]@{
+                Name = $Scene.Name
+                ExpectedText = $Scene.ExpectedText
+                InteractionCount = @($Scene.Interactions).Count
+                FrameOutputDirectory = $FrameOutputDirectory
+            })
+            New-Item -Path $FrameOutputDirectory -ItemType Directory -Force | Out-Null
+            $checkpointCount = if (@($Scene.Interactions).Count -gt 0) { 2 } else { 1 }
+            for ($checkpointIndex = 1; $checkpointIndex -le $checkpointCount; $checkpointIndex++) {
+                $checkpointPath = Join-Path $FrameOutputDirectory ('checkpoint-{0:D3}.png' -f $checkpointIndex)
+                Set-Content -LiteralPath $checkpointPath -Value 'terminal frame'
+                if ($checkpointIndex -gt 1) {
+                    [System.IO.File]::WriteAllText(
+                        [System.IO.Path]::ChangeExtension($checkpointPath, '.typing.txt'),
+                        'typing'
+                    )
+                }
+            }
+        }
+
+        Invoke-CaptureWalkthrough `
+            -RepositoryRoot $repositoryRoot `
+            -ScreenshotDirectory $screenshotDirectory `
+            -FfmpegExecutable '/usr/bin/ffmpeg' `
+            -FontFamilyName 'Noto Sans Mono' |
+            Should -Be 'Captured docs/setup/screenshots/setup-walkthrough.gif.'
+
+        $expectedSceneFrameCount = 0
+        foreach ($step in $steps) {
+            $expectedSceneFrameCount += if (@($step.Interactions).Count -gt 0) { 2 } else { 1 }
+        }
+        $script:walkthroughProcessCalls.Count | Should -Be ($expectedSceneFrameCount + 2)
+        $script:walkthroughCaptureCalls.Count | Should -Be $steps.Count
+        ($script:walkthroughCaptureCalls.Name -join '|') | Should -Be ($steps.SceneName -join '|')
+        $script:walkthroughCaptureCalls |
+            ForEach-Object { $_.FrameOutputDirectory | Should -Not -BeNullOrEmpty }
+        $script:walkthroughProcessCalls[0].Operation | Should -Be 'setup walkthrough intro frame'
+        $introArguments = $script:walkthroughProcessCalls[0].Arguments -join ' '
+        $introArguments | Should -Match 'color=c=0xffffff'
+        $introArguments | Should -Match 'fontcolor=0x101820'
+        $introArguments | Should -Match 'fontsize=18'
+        $script:walkthroughTitle | Should -Be 'ALM4Dataverse  - automated setup'
+        $script:walkthroughSubtitle |
+            Should -Be 'the easiest way to get powerful ALM for Dataverse/D365/Power Platform set up in minutes'
+        $script:walkthroughProcessCalls[1].Arguments | Should -Contain '-vf'
+        $sceneArguments = $script:walkthroughProcessCalls[1].Arguments -join ' '
+        $sceneArguments | Should -Match "font='Noto Sans Mono'"
+        $sceneArguments | Should -Match 'color=0xffffff'
+        $sceneArguments | Should -Match 'fontcolor=0x101820'
+        $sceneArguments |
+            Should -Match 'drawbox=x=0:y=680:w=1200:h=200:color=0xffffff@0\.85:t=fill'
+        $sceneArguments |
+            Should -Match 'drawbox=x=0:y=680:w=1200:h=5:color=0x2ea96b:t=fill'
+        $sceneArguments | Should -Match 'y=724:line_spacing=4'
+        $sceneArguments | Should -Not -Match 'keycap'
+        $captionText = $script:walkthroughCaptionTexts -join "`n"
+        $captionText | Should -Match 'Workload identity federation'
+        $captionText | Should -Match 'avoids secrets'
+        $captionText | Should -Match 'GitHub Actions'
+        $gifArguments = $script:walkthroughProcessCalls[-1].Arguments
+        $gifArguments | Should -Contain 'concat'
+        $gifArguments | Should -Contain 'walkthrough-frames.ffconcat'
+        $script:walkthroughFrameManifest | Should -Match 'duration 6'
+        $script:walkthroughFrameManifest | Should -Match 'duration 0\.166666667'
+        $gifArguments | Should -Contain '-loop'
+        $gifArguments | Should -Contain '0'
+        Test-Path -LiteralPath (Join-Path $repositoryRoot 'docs/setup/screenshots/setup-walkthrough.gif') |
+            Should -BeTrue
+    }
+
+    It 'runs capture processes and reports non-zero exit codes' {
+        $powerShellExecutable = Get-CapturePowerShellExecutable
+        Invoke-CaptureProcess `
+            -ExecutablePath $powerShellExecutable `
+            -Arguments @('-NoLogo', '-NoProfile', '-Command', 'Write-Output capture-test') `
+            -WorkingDirectory $TestDrive `
+            -Operation 'process test'
+
+        {
+            Invoke-CaptureProcess `
+                -ExecutablePath $powerShellExecutable `
+                -Arguments @('-NoLogo', '-NoProfile', '-Command', 'Write-Error capture-test; exit 7') `
+                -WorkingDirectory $TestDrive `
+                -Operation 'failure test'
+        } | Should -Throw '*exit code 7*'
+    }
+
     It 'captures Azure DevOps deployment selection and target-name prompts' {
         $selectionInteractions = @((Get-CaptureScene | Where-Object Name -eq 'azdo-deployment-environment-selection').Interactions)
         $selectionInteractions.Count | Should -Be 2
@@ -363,17 +672,24 @@ Describe 'Setup screenshot capture infrastructure' {
         $selectionInteractions[1].WaitForText | Should -Be 'Dataverse environment'
 
         $shortNameScene = Get-CaptureScene | Where-Object Name -eq 'azdo-deployment-short-name'
-        $shortNameScene.ExpectedText | Should -Be 'Enter a short name for this environment'
+        $shortNameScene.ExpectedText | Should -Be 'Enter a short name for this environment >'
+        $githubShortNameScene = Get-CaptureScene | Where-Object Name -eq 'deployment-short-name'
+        $githubShortNameScene.ExpectedText | Should -Be 'Enter a short name for this environment >'
         @($shortNameScene.Interactions).Count | Should -Be 0
     }
 
     It 'runs scene listing without installing or loading the capture runtime' {
         $listedScenes = @(& (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1') -ListScenes)
 
-        $listedScenes.Count | Should -Be 32
+        $listedScenes.Count | Should -Be 37
         $listedScenes | Should -Contain 'branch-mapping'
         $listedScenes | Should -Contain 'environment-detail-menu'
         $listedScenes | Should -Contain 'setup-mode-choice'
+        $listedScenes | Should -Contain 'azdo-authentication'
+        $listedScenes | Should -Contain 'azdo-project-selection'
+        $listedScenes | Should -Contain 'azdo-main-repository-selection'
+        $listedScenes | Should -Contain 'azdo-shared-repository-selection'
+        $listedScenes | Should -Contain 'azdo-apply-changes'
         $listedScenes | Should -Contain 'github-menu-new-repository'
         $listedScenes | Should -Contain 'azdo-menu-existing-repository'
         $listedScenes | Should -Contain 'github-menu-unavailable-shared-repository'

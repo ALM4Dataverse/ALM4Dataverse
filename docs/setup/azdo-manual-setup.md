@@ -233,7 +233,7 @@ commented example in the caller and keep valid YAML indentation.
 > [!TIP]
 > **Optional: deployment validation.** Set `buildEnvironmentName` in BUILD to a dedicated
 > non-production connection/group name. To test an upgrade path, set
-> `buildValidation.baselineRelease` to a retained BUILD ID/number or `@<deployment-environment>`.
+> `branches.<branch>.buildValidation.baselineRelease` to a retained BUILD ID/number or `@<deployment-environment>`.
 > The baseline source is separate from the validation target. Serialize builds if branches
 > share that target. See [BUILD validation](../usage/building-releases.md#build-validation).
 

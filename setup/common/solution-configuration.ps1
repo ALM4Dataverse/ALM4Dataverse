@@ -63,7 +63,13 @@ function Select-OrderedSolution {
             $menuItems += 'Done'
         }
 
-        $selection = Select-FromMenu -Title 'Manage solutions' -Items $menuItems -PreserveExistingContent -SkipPromptGuidance
+        $selection = Select-FromMenu `
+            -Title 'Manage solutions' `
+            -Items $menuItems `
+            -ActionItems @('Done') `
+            -ActionSectionTitle '---' `
+            -PreserveExistingContent `
+            -SkipPromptGuidance
 
         if ($null -eq $selection) {
             return @($selectedSolutions)
@@ -342,10 +348,12 @@ function Get-SolutionCheckEnabledFromConfigContent {
 function Set-AlmConfigSolutionCheckEnabledInFile {
     <#
     .SYNOPSIS
-        Writes a solutionCheck hashtable containing the requested enabled flag.
+        Sets solutionCheck.enabled to the requested flag.
     .DESCRIPTION
-        Replaces the entire solutionCheck value, not just enabled; existing checker
-        subsettings are discarded. Other root settings are preserved by AST offsets.
+        Updates only the enabled key of an existing solutionCheck hashtable, so checker
+        subsettings such as geo, failThreshold and ruleSet are retained. The enabled key
+        is inserted when absent. solutionCheck is written as a whole block only when it
+        is missing or not a hashtable. Other root settings are preserved by AST offsets.
         ShouldProcess rejection returns false before I/O. Missing files require
         CreateIfMissing and use an existing template or minimal hashtable.
         Parse/root errors throw. Returns text-change status after any initial
@@ -400,13 +408,38 @@ function Set-AlmConfigSolutionCheckEnabledInFile {
         $keyText -in @('solutionCheck', "'solutionCheck'", '"solutionCheck"')
     } | Select-Object -First 1
 
+    $lineEnding = if ($configContent -match "`r`n") { "`r`n" } else { "`n" }
+
+    $solutionCheckHashtable = $null
     if ($solutionCheckEntry) {
+        $solutionCheckHashtable = $solutionCheckEntry.Item2.Find({
+            param($node)
+            $node -is [System.Management.Automation.Language.HashtableAst]
+        }, $false)
+    }
+
+    if ($solutionCheckEntry -and -not $solutionCheckHashtable) {
         $valueExtent = $solutionCheckEntry.Item2.Extent
         $updatedContent = $configContent.Substring(0, $valueExtent.StartOffset) + $solutionCheckBlock + $configContent.Substring($valueExtent.EndOffset)
     }
+    elseif ($solutionCheckHashtable) {
+        $enabledEntry = $solutionCheckHashtable.KeyValuePairs | Where-Object {
+            $keyText = $_.Item1.Extent.Text.Trim()
+            $keyText -in @('enabled', "'enabled'", '"enabled"')
+        } | Select-Object -First 1
+
+        if ($enabledEntry) {
+            $valueExtent = $enabledEntry.Item2.Extent
+            $updatedContent = $configContent.Substring(0, $valueExtent.StartOffset) + $enabledLiteral + $configContent.Substring($valueExtent.EndOffset)
+        }
+        else {
+            $insertOffset = $solutionCheckHashtable.Extent.EndOffset - 1
+            $insertText = "$lineEnding        enabled = $enabledLiteral$lineEnding    "
+            $updatedContent = $configContent.Substring(0, $insertOffset) + $insertText + $configContent.Substring($insertOffset)
+        }
+    }
     else {
         $insertOffset = $rootHashtable.Extent.EndOffset - 1
-        $lineEnding = if ($configContent -match "`r`n") { "`r`n" } else { "`n" }
         $insertText = "$lineEnding    solutionCheck = $solutionCheckBlock$lineEnding"
         $updatedContent = $configContent.Substring(0, $insertOffset) + $insertText + $configContent.Substring($insertOffset)
     }

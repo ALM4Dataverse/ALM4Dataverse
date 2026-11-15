@@ -119,10 +119,12 @@ function New-EntraIdApplication {
     Reuses the first display-name match or creates an application, and ensures its service principal.
     .OUTPUTS
     System.Management.Automation.PSCustomObject. Credential metadata including client ID,
-    application object ID, tenant, auth type and optional plaintext ClientSecret.
+    application object ID, tenant, auth type, CreatedDuringSetup and optional plaintext
+    ClientSecret.
     .NOTES
     WIF leaves ClientSecret null; other auth types create a new secret even for an
-    existing application. WhatIf returns nothing. Graph/secret failures propagate.
+    existing application. CreatedDuringSetup is true only when this call created the
+    application. WhatIf returns nothing. Graph/secret failures propagate.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -147,6 +149,7 @@ function New-EntraIdApplication {
     $existing = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
 
     $app = $null
+    $createdApplication = $false
     if ($existing.value.Count -gt 0) {
         $app = $existing.value[0]
         Write-Host "Found existing App Registration '$DisplayName' ($($app.appId))."
@@ -158,6 +161,7 @@ function New-EntraIdApplication {
             signInAudience = "AzureADMyOrg"
         }
         $app = Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/applications" -Headers $headers -Method Post -Body ($body | ConvertTo-Json)
+        $createdApplication = $true
         Write-Host "Created App Registration '$DisplayName' ($($app.appId))."
     }
 
@@ -171,6 +175,7 @@ function New-EntraIdApplication {
         TenantId = $TenantId
         AuthType = $AuthType
         IsExistingServiceConnection = $false
+        CreatedDuringSetup = $createdApplication
     }
 
     if ($AuthType -ne 'WIF') {
@@ -189,9 +194,10 @@ function Get-PowerPlatformSCCredential {
     .NOTES
     Returns credential metadata, not necessarily a secret: existing endpoints can be
     represented by IsExistingServiceConnection with a null ClientSecret. Explicit
-    rotation generates a secret and clears that marker. Cached objects are reused;
-    an existing environment credential is copied before rotation. Disabling extension
-    mode limits new/manual choices to secret auth. Cancellation throws.
+    rotation marks the credential for generation at Apply and clears that marker.
+    Cached objects are reused; an existing environment credential is copied before
+    rotation. Disabling extension mode limits new/manual choices to secret auth.
+    Cancellation throws.
     #>
     [CmdletBinding()]
     param(
@@ -332,11 +338,12 @@ function Get-PowerPlatformSCCredential {
         if ($selectedCredential.AuthType -eq 'Secret' -and $selectedCredential.HasExistingSecret) {
             $secretHandlingItems = @(
                 'Keep the existing client secret',
-                'Generate a new client secret now'
+                'Generate a new client secret when changes are applied'
             )
 
             $secretHandlingSelection = Select-FromMenu -Title "How should setup handle the existing client secret for '$EnvironmentName'?" -Items $secretHandlingItems -PromptGuidanceLines @(
-                'Choose whether to keep the existing secret or generate a new one now.',
+                'Choose whether to keep the existing secret or generate a new one when changes are applied.',
+                'Rotation is deferred until Apply so the preview can list it before any credential changes.',
                 'Rotate when policy requires renewal or when the existing secret is no longer trusted.'
             ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
             if ($null -eq $secretHandlingSelection) {
@@ -358,9 +365,16 @@ function Get-PowerPlatformSCCredential {
                     throw "Cannot generate a new client secret for '$($selectedCredential.ApplicationId)' because the App Registration object id could not be resolved."
                 }
 
-                Write-Host 'Generating a new client secret...' -ForegroundColor Yellow
-                $selectedCredential.ClientSecret = New-EntraIdApplicationSecret -ApplicationObjectId $selectedCredential.ApplicationObjectId -TenantId $selectedCredential.TenantId
+                # Defer the write to Apply so preview can list it and the user can
+                # still change their mind before any credential is rotated.
+                $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $true -Force
+                Write-Host 'A new client secret will be generated when changes are applied.' -ForegroundColor Yellow
                 $selectedCredential.IsExistingServiceConnection = $false
+            }
+            else {
+                # Revisiting the step copies the previous credential, so clear any
+                # rotation request the user has now declined.
+                $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $false -Force
             }
 
             return $selectedCredential

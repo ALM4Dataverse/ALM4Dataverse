@@ -7,6 +7,20 @@ what to do. Routine fixes and new optional features are in the
 [update procedure](updating.md#update-an-application) explains how to roll an upgrade
 out safely.
 
+## Setup
+
+### Guided Setup Defers More Writes Until Apply
+
+**You'll see:** shared workflow repository reconciliation, shared repository version
+updates, and client-secret rotation now wait for **Apply changes**, and creating a shared
+repository or Entra application asks for confirmation first. The preview marks changes
+already applied during setup as **Already applied**.
+
+**Do this:** review the preview before applying if you relied on the version step or
+credential step completing immediately. Declining a creation confirmation returns to the
+menu or repository-name prompt without creating anything. With `-ApplyConfig`, no
+repository version changes are made.
+
 ## Configuration
 
 ### `mappingFile` And Solution-Level `buildCommands` Were Removed
@@ -91,14 +105,27 @@ existing commands don't fail.
 
 ### Branch Environments Must Be Configured In `alm-config.psd1`
 
-**You'll see:** existing branch deployment and BUILD-validation settings are no longer
-inferred from workflow or pipeline files. If `alm-config.psd1` has no `branches` map,
-setup starts with the repository's default branch and empty environment mappings.
+**You'll see:** if `alm-config.psd1` has no `branches` map but the repository already has
+DEPLOY or BUILD workflows or pipelines, interactive setup shows a notice that it has
+converted those existing settings into `branches`. The branches are saved to
+`alm-config.psd1` when setup completes, and the file-change review shows the diff. This
+one-time conversion reads the committed workflow or pipeline files; it is the only time
+setup does so. After the `branches` map is committed, those files are no longer read for
+branch settings. If the conversion fails, setup says so and starts with empty branch
+mappings, so you re-enter the values.
 
-**Do this:** run interactive setup, configure the branch and its environments, then
-commit `alm-config.psd1`. To regenerate the caller files afterward, run
+Repositories without legacy evidence start with the repository's default branch and empty
+environment mappings.
+
+**Do this:** in interactive setup, check the converted branches and environments, then
+commit `alm-config.psd1`. If conversion failed, configure the branch and its environments
+again, then commit the file. To regenerate the caller files afterward, run
 `setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig` from the application
 repository. See [setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
+
+`-ApplyConfig` does not offer the branch, environment, solution, BUILD validation or OIDC
+editors. To change those settings, edit and commit `alm-config.psd1`, then run
+`-ApplyConfig` again to regenerate the caller files.
 
 ### Re-Running Setup Keeps More Of Your Files
 

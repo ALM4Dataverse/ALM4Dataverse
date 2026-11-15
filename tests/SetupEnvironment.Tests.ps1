@@ -101,14 +101,10 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
         $script:credentialParameters.ExistingCredential = $script:environmentCredential
         $result = & $CredentialHelper @script:credentialParameters
         $script:environmentCredential.ClientSecret | Should -BeNullOrEmpty
-        if ($Rotate) {
-            $result.ClientSecret | Should -Be 'fake-rotated-secret'
-            Should -Invoke New-EntraIdApplicationSecret -Times 1 -Exactly -ParameterFilter { $ApplicationObjectId -eq 'object-id' }
-        }
-        else {
-            $result.ClientSecret | Should -BeNullOrEmpty
-            Should -Invoke New-EntraIdApplicationSecret -Times 0 -Exactly
-        }
+        $result.ClientSecret | Should -BeNullOrEmpty
+        $result.RotateSecret | Should -Be ([bool]$Rotate)
+        # Rotation is deferred until Apply, so selection must not write a secret.
+        Should -Invoke New-EntraIdApplicationSecret -Times 0 -Exactly
     }
 
     It 'creates the explicitly selected new application authentication mode' -ForEach @(

@@ -30,6 +30,33 @@ function Set-BranchBuildValidationMapping {
     return $BranchMapping
 }
 
+function Write-AlmLegacyConfigurationConversionNotice {
+    <#
+    .SYNOPSIS
+        Explains the one-time conversion of branch settings from existing pipeline or workflow files.
+    .PARAMETER Conversion
+        LegacyConfigurationConversion from the repository setup state. NotRequired writes nothing.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][AllowNull()][object]$Conversion
+    )
+
+    $status = [string](Get-OptionalObjectPropertyValue -InputObject $Conversion -PropertyName 'Status')
+    if ($status -eq 'Converted') {
+        $branchNames = @(Get-OptionalObjectPropertyValue -InputObject $Conversion -PropertyName 'BranchNames')
+        Write-Host "Branch settings were read from this repository's existing pipeline or workflow files for: $($branchNames -join ', ')." -ForegroundColor Yellow
+        Write-Host 'They are saved to alm-config.psd1 when setup completes; the file-change review shows the exact change.' -ForegroundColor Yellow
+        Write-Host ''
+    }
+    elseif ($status -eq 'Failed') {
+        $errorMessage = [string](Get-OptionalObjectPropertyValue -InputObject $Conversion -PropertyName 'ErrorMessage')
+        Write-Warning "Sorry, setup could not read the existing branch settings automatically: $errorMessage"
+        Write-Host 'Continue and re-enter the branch, DEV, deployment and BUILD-validation values for this repository.' -ForegroundColor Yellow
+        Write-Host ''
+    }
+}
+
 function Select-BranchEnvironmentMapping {
     <#
     .SYNOPSIS
@@ -56,7 +83,8 @@ function Select-BranchEnvironmentMapping {
     .PARAMETER IsNewRepository
         Shows the branch-strategy prompt for a new repository only.
     .DESCRIPTION
-        Copies mapping records but shares nested environment objects. A sole empty
+        Copies mapping records but shares nested environment objects and retains any
+        existing PublishPlan so publication choices survive branch edits. A sole empty
         main mapping is initialized with the default branch. The branch strategy is
         prompted only when IsNewRepository is set. Environment callbacks run for
         bootstrap and added branches; existing branches are edited from their menu.
@@ -100,6 +128,7 @@ function Select-BranchEnvironmentMapping {
             BuildValidationBaselineRelease = [string]$(if ($mapping.PSObject.Properties.Name -contains 'BuildValidationBaselineRelease') { $mapping.BuildValidationBaselineRelease } else { '' })
             BuildValidationEnvironmentConfiguration = $(if ($mapping.PSObject.Properties.Name -contains 'BuildValidationEnvironmentConfiguration') { $mapping.BuildValidationEnvironmentConfiguration } else { $null })
             ExistingBuildValidationEnvironment = $(if ($mapping.PSObject.Properties.Name -contains 'ExistingBuildValidationEnvironment') { $mapping.ExistingBuildValidationEnvironment } else { $null })
+            PublishPlan                 = $(if ($mapping.PSObject.Properties.Name -contains 'PublishPlan') { $mapping.PublishPlan } else { $null })
         }
     }
 
@@ -116,6 +145,7 @@ function Select-BranchEnvironmentMapping {
                     BuildValidationBaselineRelease = ''
                     BuildValidationEnvironmentConfiguration = $null
                     ExistingBuildValidationEnvironment = $null
+                    PublishPlan = $null
                 }
             )
         }
@@ -151,6 +181,7 @@ function Select-BranchEnvironmentMapping {
                     BuildValidationBaselineRelease = ''
                     BuildValidationEnvironmentConfiguration = $null
                     ExistingBuildValidationEnvironment = $null
+                    PublishPlan = $null
                 },
                 [pscustomobject]@{
                     BranchName                  = 'develop'
@@ -162,6 +193,7 @@ function Select-BranchEnvironmentMapping {
                     BuildValidationBaselineRelease = ''
                     BuildValidationEnvironmentConfiguration = $null
                     ExistingBuildValidationEnvironment = $null
+                    PublishPlan = $null
                 }
             )
         }
@@ -242,7 +274,13 @@ function Select-BranchEnvironmentMapping {
             }
             $menuItems += 'Done'
 
-            $selection = Select-FromMenu -Title $Title -Items $menuItems -PreserveExistingContent -SkipPromptGuidance
+            $selection = Select-FromMenu `
+                -Title $Title `
+                -Items $menuItems `
+                -ActionItems @('Done') `
+                -ActionSectionTitle '---' `
+                -PreserveExistingContent `
+                -SkipPromptGuidance
             if ($null -eq $selection) {
                 return @($branchMappings)
             }
@@ -278,6 +316,7 @@ function Select-BranchEnvironmentMapping {
                     BuildValidationBaselineRelease = ''
                     BuildValidationEnvironmentConfiguration = $null
                     ExistingBuildValidationEnvironment = $null
+                    PublishPlan = $null
                 }
 
                 $branchMappings += $newBranchMapping
@@ -339,6 +378,9 @@ function Select-BranchEnvironmentMapping {
                 }
                 if ($EditBuildValidationScriptBlock) {
                     $mappingMenuItems += 'Edit BUILD validation'
+                    if ([bool]$currentMapping.BuildValidationEnabled) {
+                        $mappingMenuItems += 'Disable BUILD validation'
+                    }
                 }
                 if (-not $BranchOnly) {
                     $mappingMenuItems += 'Assign environments'
@@ -357,7 +399,12 @@ function Select-BranchEnvironmentMapping {
                     else {
                         Show-BranchEnvironmentMappingTable -BranchMappings @($currentMapping)
                         [Spectre.Console.AnsiConsole]::WriteLine()
-                        $mappingAction = Select-FromMenu -Title "Edit branch '$($currentMapping.BranchName)'" -Items $mappingMenuItems -PreserveExistingContent
+                        $mappingAction = Select-FromMenu `
+                            -Title "Edit branch '$($currentMapping.BranchName)'" `
+                            -Items $mappingMenuItems `
+                            -ActionItems @('Done') `
+                            -ActionSectionTitle '---' `
+                            -PreserveExistingContent
                     }
                     if ($null -eq $mappingAction) {
                         break
@@ -429,6 +476,16 @@ function Select-BranchEnvironmentMapping {
                                 $branchMappings[$editIndex] = $currentMapping
                             }
                         }
+                        'Disable BUILD validation' {
+                            [void](Set-BranchBuildValidationMapping -BranchMapping $currentMapping -BuildValidationSettings ([pscustomobject]@{
+                                BuildValidationEnabled = $false
+                                BuildValidationEnvironmentName = ''
+                                BuildValidationBaselineRelease = ''
+                                BuildValidationEnvironmentConfiguration = $null
+                                ExistingBuildValidationEnvironment = $currentMapping.ExistingBuildValidationEnvironment
+                            }))
+                            $branchMappings[$editIndex] = $currentMapping
+                        }
                         'Clear all deployment environments' {
                             $currentMapping.Environments = @()
                             $branchMappings[$editIndex] = $currentMapping
@@ -498,10 +555,16 @@ function Select-BranchEnvironmentMapping {
                                     break
                                 }
 
-                                $toggleSelection = Select-FromMenu -Title "Select environments for branch '$($currentMapping.BranchName)' (toggle one at a time)" -Items @($candidateItems + @('Done')) -PromptGuidanceLines @(
-                                    'Choose which configured environments should run in this branch-specific deploy pipeline/workflow.',
-                                    'Environment assignments are exclusive across branches in this setup flow.'
-                                ) -PreserveExistingContent
+                                $toggleSelection = Select-FromMenu `
+                                    -Title "Select environments for branch '$($currentMapping.BranchName)' (toggle one at a time)" `
+                                    -Items @($candidateItems + @('Done')) `
+                                    -ActionItems @('Done') `
+                                    -ActionSectionTitle '---' `
+                                    -PromptGuidanceLines @(
+                                        'Choose which configured environments should run in this branch-specific deploy pipeline/workflow.',
+                                        'Environment assignments are exclusive across branches in this setup flow.'
+                                    ) `
+                                    -PreserveExistingContent
                                 if ($null -eq $toggleSelection -or $toggleSelection -eq $candidateItems.Count) {
                                     break
                                 }

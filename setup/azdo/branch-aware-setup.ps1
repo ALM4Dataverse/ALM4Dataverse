@@ -5,6 +5,10 @@ function Invoke-AzDoBranchAwareSetup {
     .PARAMETER PostApplyAction
     Runs provider-specific pipeline and environment setup after repository publication.
     Failures return to the guided menu with selections retained.
+    .PARAMETER PreApplyAction
+    Runs after the user chooses Apply and before repository publication. Use it to
+    reconcile the shared repository, which setup must not change while the preview is
+    still being reviewed.
     .PARAMETER PrerequisiteSteps
     Initial guided steps displayed before branch configuration, including shared-repository
     selection and version reconciliation. Authentication and project/application-repository
@@ -48,6 +52,7 @@ function Invoke-AzDoBranchAwareSetup {
         [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{},
         [Parameter()][array]$PrerequisiteSteps = @(),
         [Parameter()][scriptblock]$PostApplyAction,
+        [Parameter()][scriptblock]$PreApplyAction,
         [Parameter()][switch]$ApplyConfig,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$PreviewOnly,
@@ -107,6 +112,7 @@ function Invoke-AzDoBranchAwareSetup {
     $wizardState = [pscustomobject]@{
         BranchStates         = @($branchStates)
         SolutionData         = $null
+        LegacyConfigurationConversion = (Get-OptionalObjectPropertyValue -InputObject $existingSetupState -PropertyName 'LegacyConfigurationConversion')
         SolutionSourceBranch = $null
         BuildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $existingSetupState -PropertyName 'BuildValidationEnabled')
         BuildValidationBaselineRelease = ''
@@ -137,9 +143,11 @@ function Invoke-AzDoBranchAwareSetup {
                         BuildValidationBaselineRelease = [string]$_.BuildValidationBaselineRelease
                         BuildValidationEnvironmentConfiguration = $_.BuildValidationEnvironmentConfiguration
                         ExistingBuildValidationEnvironment = $_.ExistingBuildValidationEnvironment
+                        PublishPlan                 = (Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'PublishPlan')
                     }
                 })
 
+                Write-AlmLegacyConfigurationConversionNotice -Conversion $wizardState.LegacyConfigurationConversion
                 $selectedBranchMappings = @(Select-BranchEnvironmentMapping `
                     -EnvironmentConfigurations $existingEnvironmentConfigurations `
                     -InitialBranchMappings $currentBranchMappings `
@@ -268,22 +276,18 @@ function Invoke-AzDoBranchAwareSetup {
                             $existingBuildValidationEnvironmentName = [string]$mappingToEdit.BuildValidationEnvironmentName
                         }
 
-                        if ([string]::IsNullOrWhiteSpace($environmentNameToEdit)) {
-                            $enableBuildValidation = if ([bool]$mappingToEdit.BuildValidationEnabled) {
-                                Read-YesNo `
-                                    -Prompt "Enable Dataverse deployment validation during BUILD for branch '$branchName'?" `
-                                    -PromptGuidanceLines $buildValidationGuidanceLines `
-                                    -PromptGuidanceDocRelativePath 'docs/usage/building-releases.md' `
-                                    -PromptGuidanceRef $ALM4DataverseRef
-                            }
-                            else {
-                                Read-YesNo `
-                                    -Prompt "Enable Dataverse deployment validation during BUILD for branch '$branchName'?" `
-                                    -PromptGuidanceLines $buildValidationGuidanceLines `
-                                    -PromptGuidanceDocRelativePath 'docs/usage/building-releases.md' `
-                                    -PromptGuidanceRef $ALM4DataverseRef `
-                                    -DefaultNo
-                            }
+                        if (
+                            [string]::IsNullOrWhiteSpace($environmentNameToEdit) -and
+                            -not [bool]$mappingToEdit.BuildValidationEnabled
+                        ) {
+                            # Already-enabled validation opens the detail editor directly;
+                            # disabling is the branch menu's separate explicit action.
+                            $enableBuildValidation = Read-YesNo `
+                                -Prompt "Enable Dataverse deployment validation during BUILD for branch '$branchName'?" `
+                                -PromptGuidanceLines $buildValidationGuidanceLines `
+                                -PromptGuidanceDocRelativePath 'docs/usage/building-releases.md' `
+                                -PromptGuidanceRef $ALM4DataverseRef `
+                                -DefaultNo
                             if (-not $enableBuildValidation) {
                                 return [pscustomobject]@{
                                     BuildValidationEnabled = $false
@@ -315,10 +319,15 @@ function Invoke-AzDoBranchAwareSetup {
                         $selectBaseline = {
                             param($environmentState)
                             $baselineEnvironments = @($allMappings | ForEach-Object { @($_.Environments) })
-                            Select-BuildValidationBaselineEnvironment `
-                                -DeploymentEnvironments $baselineEnvironments `
-                                -ExcludedEnvironmentName ([string]$environmentState.ShortName) `
-                                -ExcludedEnvironmentUrl ([string]$environmentState.Url)
+                            $baselineParameters = @{
+                                DeploymentEnvironments = $baselineEnvironments
+                                ExcludedEnvironmentName = [string]$environmentState.ShortName
+                                ExcludedEnvironmentUrl = [string]$environmentState.Url
+                            }
+                            if ([bool]$environmentState.BaselineConfigured) {
+                                $baselineParameters['CurrentBaselineRelease'] = [string]$environmentState.BaselineRelease
+                            }
+                            Select-BuildValidationBaselineEnvironment @baselineParameters
                         }.GetNewClosure()
                         $buildValidationConfiguration = Invoke-WithErrorHandling -OperationName "Configuring BUILD validation for branch '$branchName'" -ScriptBlock {
                             Invoke-AzDoEnvironmentConfigurationWizard `
@@ -406,25 +415,11 @@ function Invoke-AzDoBranchAwareSetup {
                         $existingBranchState = $existingSetupState.BranchStates | Where-Object { $_.BranchName -ieq $branchName } | Select-Object -First 1
                     }
 
-                    $publishPlan = Get-BranchTargetedRepoChangePublishPlan `
-                        -ProviderName 'Azure DevOps' `
-                        -RepositoryName $MainRepo.Name `
-                        -TargetBranch $branchName `
-                        -DefaultCommitMessage "Add ALM4Dataverse Azure DevOps pipelines for branch '$branchName'" `
-                        -DefaultPullRequestTitle "Add ALM4Dataverse Azure DevOps pipelines for branch '$branchName'" `
-                        -DefaultPullRequestDescription "This pull request adds or updates the ALM4Dataverse Azure DevOps pipeline YAML and repository configuration generated by setup-azdo.ps1 for branch '$branchName'." `
-                        -GuidanceLines @(
-                            'If branch protection or approvals apply, choose the pull-request path so the generated YAML and config changes can be reviewed before they land.',
-                            'If you commit directly, the target branch is updated immediately and the matching pipeline definitions can start using that branch as soon as the push completes.'
-                        ) `
-                        -DocRelativePath 'docs/setup/azdo-automated-setup.md' `
-                        -Ref $ALM4DataverseRef
-
                     $updatedBranchStates += New-AzDoBranchSetupState `
                         -BranchName $branchName `
                         -ExistingDevEnvironment $(if ($existingBranchState) { $existingBranchState.ExistingDevEnvironment } else { $null }) `
                         -DeploymentEnvironments @($(if ($existingBranchState) { $existingBranchState.DeploymentEnvironments } else { @() })) `
-                        -PublishPlan $publishPlan `
+                        -PublishPlan (Get-OptionalObjectPropertyValue -InputObject $selectedBranchMapping -PropertyName 'PublishPlan') `
                         -ExistingBuildValidationEnvironment $selectedBranchMapping.ExistingBuildValidationEnvironment `
                         -BuildValidationEnvironmentName ([string]$selectedBranchMapping.BuildValidationEnvironmentName) `
                         -BuildValidationBaselineRelease ([string]$selectedBranchMapping.BuildValidationBaselineRelease)
@@ -458,6 +453,7 @@ function Invoke-AzDoBranchAwareSetup {
                     $existingBranchState.BuildValidationEnvironmentName = [string]$mappedBranch.BuildValidationEnvironmentName
                     $existingBranchState.BuildValidationBaselineRelease = [string]$mappedBranch.BuildValidationBaselineRelease
                     $existingBranchState.BuildValidationEnvironmentConfiguration = $mappedBranch.BuildValidationEnvironmentConfiguration
+                    $existingBranchState.PublishPlan = Get-OptionalObjectPropertyValue -InputObject $mappedBranch -PropertyName 'PublishPlan'
                     $existingBranchState
                 })
 
@@ -468,8 +464,13 @@ function Invoke-AzDoBranchAwareSetup {
             }
         },
         [pscustomobject]@{
-            Name = 'Select solutions'
+            Name = 'Configure solutions'
             HelpDocRelativePath = 'docs/config/alm-config.md'
+            InputSignature = {
+                @($wizardState.BranchStates | ForEach-Object {
+                    "$($_.BranchName)|$([string](Get-OptionalObjectPropertyValue -InputObject $_.DevEnvironmentConfiguration -PropertyName 'Url'))"
+                }) -join ';'
+            }
             Summary = {
                 Get-SetupSolutionMenuSummary `
                     -SolutionData $wizardState.SolutionData `
@@ -477,7 +478,7 @@ function Invoke-AzDoBranchAwareSetup {
             }
             Action = {
                 Write-Section `
-                    -Message 'Select solutions from a configured DEV branch'
+                    -Message 'Configure solutions'
                 $solutionCandidateBranches = @($wizardState.BranchStates | Where-Object { $_.DevEnvironmentConfiguration })
                 if ($solutionCandidateBranches.Count -eq 0) {
                     [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No branch has a DEV environment configured, so solution selection will be skipped for now.[/]')
@@ -548,8 +549,9 @@ function Invoke-AzDoBranchAwareSetup {
                             -BranchStates @($wizardState.BranchStates) `
                             -SelectedProject $SelectedProject `
                             -MainRepo $MainRepo `
-                            -SharedRepositoryName $SharedRepositoryState.Name)
-                    'Only resource changes deferred until Apply are listed; prerequisites already created during setup are excluded.'
+                            -SharedRepositoryName $SharedRepositoryState.Name `
+                            -SharedRepositoryState $SharedRepositoryState)
+                    'Changes already applied during setup are marked; the remaining rows are deferred until Apply.'
                 }
 
                 $summaryAction = {
@@ -596,11 +598,12 @@ function Invoke-AzDoBranchAwareSetup {
                         }
                     })
                     foreach ($branchState in @($wizardState.BranchStates)) {
-                        $publishSummary = if ($branchState.PublishPlan -and $branchState.PublishPlan.Mode -eq 'PullRequest') {
-                            "Pull request into $($branchState.PublishPlan.TargetBranch) from $($branchState.PublishPlan.BranchName)"
+                        $publishPlan = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'PublishPlan'
+                        $publishSummary = if ($publishPlan -and $publishPlan.Mode -eq 'PullRequest') {
+                            "Pull request into $($publishPlan.TargetBranch) from $($publishPlan.BranchName)"
                         }
-                        elseif ($branchState.PublishPlan) {
-                            "Direct commit to $($branchState.PublishPlan.BranchName)"
+                        elseif ($publishPlan) {
+                            "Direct commit to $($publishPlan.BranchName)"
                         }
                         elseif ($PreviewOnly) {
                             '<not selected in preview-only mode>'
@@ -611,7 +614,7 @@ function Invoke-AzDoBranchAwareSetup {
                         Show-KeyValueSummaryTable -Heading "Branch '$($branchState.BranchName)'" -Values ([ordered]@{
                             'Publish mode'             = $publishSummary
                             'DEV environment'          = $(if ($branchState.DevEnvironmentConfiguration) { $branchState.DevEnvironmentConfiguration.ShortName } else { '<none>' })
-                            'BUILD validation'         = $(if ($branchState.BuildValidationEnabled) { [string]$branchState.BuildValidationEnvironmentName } else { '<disabled>' })
+                            'BUILD validation'         = $(if ($branchState.BuildValidationEnabled) { [string]$branchState.BuildValidationEnvironmentName } else { 'Disabled' })
                             'BUILD validation baseline' = $(if ([string]::IsNullOrWhiteSpace([string]$branchState.BuildValidationBaselineRelease)) { '<none>' } else { [string]$branchState.BuildValidationBaselineRelease })
                             'Deployment environments'  = [string]@($branchState.DeploymentEnvironments).Count
                         })
@@ -631,33 +634,51 @@ function Invoke-AzDoBranchAwareSetup {
     if (-not $previewStep) {
         throw 'The setup change preview action is unavailable.'
     }
-    $setupSteps = @($PrerequisiteSteps) + @($branchSetupSteps | Where-Object { $_.Name -ne 'Preview changes' })
-    if ($ApplyConfig) {
-        $publicationPlanStep = [pscustomobject]@{
-            Name = 'Choose publication methods'
-            HelpDocRelativePath = 'docs/setup/azdo-automated-setup.md'
-            Summary = {
-                Get-SetupPublishPlanMenuSummary -BranchStates @($wizardState.BranchStates)
-            }
-            Action = {
-                foreach ($branchState in @($wizardState.BranchStates)) {
-                    $branchName = [string]$branchState.BranchName
-                    $branchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
-                        -ProviderName 'Azure DevOps' `
-                        -RepositoryName $MainRepo.Name `
-                        -TargetBranch $branchName `
-                        -DefaultCommitMessage "Apply alm-config.psd1 settings for branch '$branchName'" `
-                        -DefaultPullRequestTitle "Apply alm-config.psd1 settings for branch '$branchName'" `
-                        -DefaultPullRequestDescription "This pull request regenerates the Azure DevOps pipeline files from the committed alm-config.psd1 settings for branch '$branchName'." `
-                        -GuidanceLines @(
-                            "Choose how the generated pipeline files for branch '$branchName' should be published.",
-                            'Use a pull request when branch protection or review is required.'
-                        ) `
-                        -DocRelativePath 'docs/setup/azdo-automated-setup.md' `
-                        -Ref $ALM4DataverseRef
+    $publicationPlanStep = [pscustomobject]@{
+        Name = 'Choose publication methods'
+        HelpDocRelativePath = 'docs/setup/azdo-automated-setup.md'
+        InputSignature = {
+            @($wizardState.BranchStates | ForEach-Object { [string]$_.BranchName }) -join ';'
+        }
+        Summary = {
+            Get-SetupPublishPlanMenuSummary -BranchStates @($wizardState.BranchStates)
+        }
+        Action = {
+            foreach ($branchState in @($wizardState.BranchStates)) {
+                $branchName = [string]$branchState.BranchName
+                $defaultCommitMessage = if ($ApplyConfig) {
+                    "Apply alm-config.psd1 settings for branch '$branchName'"
                 }
+                else {
+                    "Add ALM4Dataverse Azure DevOps pipelines for branch '$branchName'"
+                }
+                $defaultPullRequestDescription = if ($ApplyConfig) {
+                    "This pull request regenerates the Azure DevOps pipeline files from the committed alm-config.psd1 settings for branch '$branchName'."
+                }
+                else {
+                    "This pull request adds or updates the ALM4Dataverse Azure DevOps pipeline YAML and repository configuration generated by setup-azdo.ps1 for branch '$branchName'."
+                }
+                $branchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
+                    -ProviderName 'Azure DevOps' `
+                    -RepositoryName $MainRepo.Name `
+                    -TargetBranch $branchName `
+                    -DefaultCommitMessage $defaultCommitMessage `
+                    -DefaultPullRequestTitle $defaultCommitMessage `
+                    -DefaultPullRequestDescription $defaultPullRequestDescription `
+                    -ExistingPlan $branchState.PublishPlan `
+                    -GuidanceLines @(
+                        'If branch protection or approvals apply, choose the pull-request path so the generated YAML and config changes can be reviewed before they land.',
+                        'If you commit directly, the target branch is updated immediately and the matching pipeline definitions can start using that branch as soon as the push completes.'
+                    ) `
+                    -DocRelativePath 'docs/setup/azdo-automated-setup.md' `
+                    -Ref $ALM4DataverseRef
             }
         }
+    }
+    $setupSteps = @($PrerequisiteSteps) +
+        @($branchSetupSteps | Where-Object { $_.Name -ne 'Preview changes' }) +
+        @($publicationPlanStep)
+    if ($ApplyConfig) {
         $setupSteps = @($PrerequisiteSteps) + @($publicationPlanStep)
     }
 
@@ -680,6 +701,7 @@ function Invoke-AzDoBranchAwareSetup {
         -PreviewActionName $previewStep.Name `
         -HelpDocRelativePath 'docs/setup/azdo-automated-setup.md' `
         -HelpRef $ALM4DataverseRef `
+        -PreApplyAction $PreApplyAction `
         -ApplyAction {
         $applyResult = Invoke-AzDoBranchAwareSetupApply `
             -MainRepoWorkingRoot $MainRepoWorkingRoot `

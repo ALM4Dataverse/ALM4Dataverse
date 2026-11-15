@@ -374,10 +374,7 @@ else {
         -Title 'Choose setup type' `
         -ShowProductBrand `
         -Items @('Set up a new application repository', 'Configure an existing repository') `
-        -PromptGuidanceLines @(
-            'Choose whether this run should create a new application repository or configure one that already exists.',
-            'Existing-repository setup authenticates and selects its resources before opening the guided configuration menu.'
-        ) `
+        -PromptGuidanceLines @('Choose whether this run should create a new application repository or configure one that already exists.') `
         -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
         -PromptGuidanceRef $ALM4DataverseRef
     if ($null -eq $setupModeChoice) {
@@ -583,6 +580,8 @@ $script:sharedWorkflowRepositoryState = [ordered]@{
     Repository      = $sharedWorkflowRepository
     Reference       = $sharedWorkflowReference
     ValidationError = $sharedWorkflowRepositoryValidationError
+    PendingUpdate   = $false
+    UpdateStatus    = ''
 }
 $initialSetupSteps += [pscustomobject]@{
     Name = 'Select shared workflow repository'
@@ -618,18 +617,33 @@ $initialSetupSteps += [pscustomobject]@{
             'Skipped by -ApplyConfig'
         }
         else {
-            "Check against $ALM4DataverseRef"
+            $updateStatus = [string]$script:sharedWorkflowRepositoryState.UpdateStatus
+            if ([string]::IsNullOrWhiteSpace($updateStatus)) {
+                "Check against $ALM4DataverseRef"
+            }
+            else {
+                $updateStatus
+            }
         }
     }
     Action = {
+        # Preview and Apply use the local template copy, so the repository is only
+        # compared here. Reconciliation runs in PreApplyAction after the user applies.
         [void](Update-GitHubSharedWorkflowRepositoryState `
             -RepositoryState $script:sharedWorkflowRepositoryState `
             -UpstreamFullName $upstreamWorkflowRepoFullName `
             -DefaultOwner $repoOwner `
             -UpstreamGitSource $upstreamGitSource `
-            -Reference $ALM4DataverseRef)
+            -Reference $ALM4DataverseRef `
+            -CheckOnly)
         $script:sharedWorkflowRepository = [string]$script:sharedWorkflowRepositoryState.Repository
         $script:sharedWorkflowReference = [string]$script:sharedWorkflowRepositoryState.Reference
+        if ([bool]$script:sharedWorkflowRepositoryState.PendingUpdate) {
+            Write-Host "Shared workflow repository update pending: $($script:sharedWorkflowRepositoryState.UpdateStatus) It will run when you choose Apply changes." -ForegroundColor Yellow
+        }
+        else {
+            Write-Host "Shared workflow repository: $($script:sharedWorkflowRepositoryState.UpdateStatus)" -ForegroundColor Green
+        }
     }
     IsComplete = [bool]$ApplyConfig
     IsLocked = [bool]$ApplyConfig
@@ -813,6 +827,22 @@ if (-not $ApplyConfig) {
     }
 }
 
+$preApplyAction = $null
+if (-not $ApplyConfig) {
+    # The shared workflow repository is reconciled only when the user applies, so
+    # preview and the menu leave its content and access policy untouched.
+    $preApplyAction = {
+        [void](Update-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $script:sharedWorkflowRepositoryState `
+            -UpstreamFullName $upstreamWorkflowRepoFullName `
+            -DefaultOwner $repoOwner `
+            -UpstreamGitSource $upstreamGitSource `
+            -Reference $ALM4DataverseRef)
+        $script:sharedWorkflowRepository = [string]$script:sharedWorkflowRepositoryState.Repository
+        $script:sharedWorkflowReference = [string]$script:sharedWorkflowRepositoryState.Reference
+    }
+}
+
 try {
     $githubSetupResult = Invoke-GitHubBranchAwareSetup `
         -CloneRoot $cloneRoot `
@@ -833,6 +863,7 @@ try {
         -ProviderOptions $providerOptions `
         -PrerequisiteSteps $initialSetupSteps `
         -PostApplyAction $postApplyAction `
+        -PreApplyAction $preApplyAction `
         -ApplyConfig:$ApplyConfig `
         -IsNewRepository:$isNewRepository `
         -PreviewOnly:$PreviewOnly `

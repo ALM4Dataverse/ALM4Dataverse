@@ -55,6 +55,55 @@ function ConvertFrom-AlmConfigContentForSetup {
     }
 }
 
+function ConvertTo-AlmLegacyBranchConfiguration {
+    <#
+    .SYNOPSIS
+        Builds a branches map from facts discovered in a repository configured before branch settings were committed.
+    .DESCRIPTION
+        Each discovered branch becomes an entry, even when it has no settings, so its name is retained.
+        Only non-empty settings are written. buildValidation is written only when BUILD names an
+        environment, and it carries the legacy global baselineRelease when one is set. Providers decide
+        which discovered facts count as evidence.
+    .PARAMETER BranchFacts
+        Objects with BranchName, DevEnvironmentName, DeploymentEnvironmentNames and BuildEnvironmentName.
+    .PARAMETER LegacyBaselineRelease
+        Global buildValidation.baselineRelease from the legacy file, or empty.
+    .OUTPUTS
+        System.Collections.Hashtable keyed by branch name.
+    #>
+    [CmdletBinding()]
+    [OutputType([hashtable])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$BranchFacts,
+        [Parameter()][string]$LegacyBaselineRelease = ''
+    )
+
+    $branches = @{}
+    foreach ($fact in $BranchFacts) {
+        $branchEntry = @{}
+        if (-not [string]::IsNullOrWhiteSpace([string]$fact.DevEnvironmentName)) {
+            $branchEntry['developmentEnvironment'] = [string]$fact.DevEnvironmentName
+        }
+
+        $deploymentEnvironments = @($fact.DeploymentEnvironmentNames | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($deploymentEnvironments.Count -gt 0) {
+            $branchEntry['deploymentEnvironments'] = $deploymentEnvironments
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace([string]$fact.BuildEnvironmentName)) {
+            $buildValidation = @{ environmentName = [string]$fact.BuildEnvironmentName }
+            if (-not [string]::IsNullOrWhiteSpace($LegacyBaselineRelease)) {
+                $buildValidation['baselineRelease'] = $LegacyBaselineRelease
+            }
+            $branchEntry['buildValidation'] = $buildValidation
+        }
+
+        $branches[[string]$fact.BranchName] = $branchEntry
+    }
+
+    return $branches
+}
+
 function Get-AlmSetupBranchConfiguration {
     <#
     .SYNOPSIS
@@ -178,6 +227,8 @@ function Get-AlmSetupConfiguration {
     .DESCRIPTION
         Serializes shared provider/repository/ref keys, flat provider-specific options,
         and each branch's development, deployment and BUILD validation environments.
+        A missing DevEnvironmentConfiguration falls back to ExistingDevEnvironment so a
+        discovered or previously committed DEV target is not dropped from the file.
         Disabled BUILD validation is written explicitly to prevent legacy global
         selectors from being inherited by that branch.
     #>
@@ -208,6 +259,9 @@ function Get-AlmSetupConfiguration {
         }
 
         $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DevEnvironmentConfiguration'
+        if ($null -eq $devEnvironment) {
+            $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'ExistingDevEnvironment'
+        }
         $developmentEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'ShortName')
         $deploymentEnvironmentNames = @(
             Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments' |

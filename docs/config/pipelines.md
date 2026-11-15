@@ -162,7 +162,7 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 | --- | --- | --- | --- |
 | `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. Ignored by GitHub `-ApplyConfig`, which does not sign in to Azure. |
 | `ALM4DataverseRef` | String | Embedded release ref | Choose the shared code ref used during setup. Repository-source scripts resolve the local branch/commit, falling back to `stable`. |
-| `ApplyConfig` | Switch | Off | Select an existing repository and review then regenerate/publish caller files from its committed `alm-config.psd1`; skips settings editors and provider-resource provisioning. Its external-resource plan is empty. Requires provider, repository, ref, and a non-empty branches map. |
+| `ApplyConfig` | Switch | Off | Select an existing repository and review then regenerate/publish caller files from its committed `alm-config.psd1`; skips settings editors and provider-resource provisioning. Branch, environment, solution, BUILD validation and OIDC changes are made only by editing and committing `alm-config.psd1`. Its external-resource plan is empty. Requires provider, repository, ref, and a non-empty branches map. |
 | `PreviewOnly` | Switch | Off | With `ApplyConfig`, show the setup summary and select individual changed files to preview without publishing or modifying files. The selected file diff is written without paging. Requires `ApplyConfig`. |
 
 `UseDeviceAuthentication` is still accepted so older invocations keep working, but it
@@ -178,7 +178,9 @@ Download a released script to review it and pass parameters. For example, after 
 To regenerate files from configuration that has already been committed to the
 application repository, run `.\setup-github.ps1 -ApplyConfig` or
 `.\setup-azdo.ps1 -ApplyConfig`. The scripts require an existing repository and do not
-create or provision provider resources in this mode.
+create or provision provider resources in this mode. Branches, environments, solutions,
+BUILD validation and OIDC settings are not editable in this mode: change them in
+`alm-config.psd1`, commit it, then run the command again.
 
 Add `-PreviewOnly` to either command to show the generated change summary and select
 individual file diffs without publishing; the selected file is written without paging.

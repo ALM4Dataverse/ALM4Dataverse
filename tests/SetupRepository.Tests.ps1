@@ -66,6 +66,7 @@ Describe 'Azure DevOps repository selection and working trees' {
         Mock Invoke-WithSpectreStatus { & $ScriptBlock }
         Mock Select-FromMenu { $script:repoMenuIndex }
         Mock Read-TextWithDefault { 'newrepo' }
+        Mock Read-YesNo { $true }
         Mock Get-VSTeamGitRepository { $script:workingRepository; [pscustomobject]@{ Id = 'main-id'; Name = 'main'; remoteUrl = 'https://example.invalid/main'; defaultBranch = 'refs/heads/main' } }
         Mock Add-VSTeamGitRepository { [pscustomobject]@{ Id = 'new-id'; Name = $Name } }
         Mock git {
@@ -372,6 +373,22 @@ Describe 'Azure DevOps repository selection and working trees' {
         $result = Select-AzDoSharedRepository -ProjectName project -PreferredRepositoryName shared -ExcludeRepositoryName main
         $result.Name | Should -Be newrepo
         Should -Invoke Add-VSTeamGitRepository -Times 1 -Exactly -ParameterFilter { $ProjectName -eq 'project' -and $Name -eq 'newrepo' }
+    }
+
+    It 'asks before creating a shared repository and retries the name when declined' {
+        $script:repoMenuIndex = 1
+        $script:repositoryNames = [System.Collections.Generic.Queue[string]]::new()
+        @('newrepo', 'otherrepo') | ForEach-Object { $script:repositoryNames.Enqueue($_) }
+        Mock Read-TextWithDefault { $script:repositoryNames.Dequeue() }
+        $script:createConfirmations = [System.Collections.Generic.Queue[bool]]::new()
+        @($false, $true) | ForEach-Object { $script:createConfirmations.Enqueue($_) }
+        Mock Read-YesNo { $script:createConfirmations.Dequeue() }
+
+        $result = Select-AzDoSharedRepository -ProjectName project -PreferredRepositoryName shared -ExcludeRepositoryName main
+
+        $result.Name | Should -Be otherrepo
+        Should -Invoke Read-YesNo -Times 2 -Exactly
+        Should -Invoke Add-VSTeamGitRepository -Times 1 -Exactly -ParameterFilter { $ProjectName -eq 'project' -and $Name -eq 'otherrepo' }
     }
 
     It 'creates and selects the main repository or respects a cancelled choice' {
@@ -765,6 +782,43 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         Should -Invoke Initialize-GitHubSharedWorkflowAccessPolicy -Times 0 -Exactly
     }
 
+    It 'checks the selected GitHub repository without changing it' -Skip:($Provider -ne 'GitHub') {
+        $script:selectedSharedWorkflowRepo = [pscustomobject]@{
+            nameWithOwner = 'owner/current'
+            defaultBranchRef = [pscustomobject]@{ name = 'main' }
+        }
+        $script:sharedWorkflowRepositoryStateForTest = [ordered]@{
+            Repository = 'owner/current'
+            Reference = 'saved'
+        }
+        $script:sync = [pscustomobject]@{
+            LocalHash = 'local'
+            UpstreamHash = 'upstream'
+            UpstreamRef = 'upstream/stable'
+            CanFastForward = $true
+            IsAhead = $false
+            MatchesCanonicalUpstreamDefault = $false
+        }
+        Mock Initialize-GitHubSharedWorkflowFork { $script:selectedSharedWorkflowRepo }
+        Mock Initialize-GitHubSharedWorkflowAccessPolicy {}
+
+        $result = Update-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $script:sharedWorkflowRepositoryStateForTest `
+            -UpstreamFullName upstream/shared `
+            -DefaultOwner owner `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -CheckOnly
+
+        $result.Repository | Should -Be owner/current
+        $result.PendingUpdate | Should -BeTrue
+        $result.UpdateStatus | Should -Match 'Fast-forward'
+        Should -Invoke Initialize-GitHubSharedWorkflowFork -Times 1 -Exactly -ParameterFilter {
+            $PreferredRepositoryFullName -eq 'owner/current' -and $SelectOnly -and $UsePreferredRepository
+        }
+        Should -Invoke Initialize-GitHubSharedWorkflowAccessPolicy -Times 0 -Exactly
+    }
+
     It 'reselects and reconciles only the shared repository when given existing Azure DevOps context' -Skip:($Provider -ne 'Azure DevOps') {
         $selectedProject = [pscustomobject]@{ Name = 'project'; Id = 'project-id' }
         $mainRepository = [pscustomobject]@{ Name = 'mainrepo'; Id = 'main-id'; IsNewRepository = $false }
@@ -992,6 +1046,46 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             $script:sharedRepoCreateArgs | Should -Contain 'main-org/shared'
             $script:sharedRepoCreateArgs | Should -Contain '--private'
         }
+    }
+
+    It 'confirms before creating a GitHub shared workflow repository' -Skip:($Provider -ne 'GitHub') {
+        Mock Get-GitHubAccessibleForksOfRepository { @() }
+        Mock Get-GitHubAccessibleRepository { @() }
+        Mock Read-TextWithDefault {
+            if ($Prompt -eq 'Shared workflow repository owner (user or organization)') { return $DefaultValue }
+            return 'shared'
+        }
+        Mock Select-FromMenu {
+            if ($Title -like 'How should*') { 1 }
+            else { 0 }
+        }
+        $script:creationConfirmed = $false
+        Mock Read-YesNo { $script:creationConfirmed = $true; $true }
+        Mock gh { $global:LASTEXITCODE = 0 }
+
+        $result = Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner main-org -UpstreamGitSource $repoRoot -Reference stable
+
+        $result.nameWithOwner | Should -Be 'main-org/shared'
+        $script:creationConfirmed | Should -BeTrue
+        Should -Invoke Read-YesNo -Times 1 -Exactly -ParameterFilter { $Prompt -like 'Create private repository*' }
+    }
+
+    It 'cancels GitHub shared workflow repository creation when the confirmation is declined' -Skip:($Provider -ne 'GitHub') {
+        Mock Get-GitHubAccessibleForksOfRepository { @() }
+        Mock Get-GitHubAccessibleRepository { @() }
+        Mock Read-TextWithDefault {
+            if ($Prompt -eq 'Shared workflow repository owner (user or organization)') { return $DefaultValue }
+            return 'shared'
+        }
+        Mock Select-FromMenu {
+            if ($Title -like 'How should*') { 1 }
+            else { 0 }
+        }
+        Mock Read-YesNo { $false }
+
+        { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner main-org -UpstreamGitSource $repoRoot -Reference stable } |
+            Should -Throw '*__ALM4DATAVERSE_WIZARD_BACK__*'
+        Should -Invoke gh -Times 0 -Exactly
     }
 
     It 'fast-forwards only after approval and restores command state' {
@@ -1314,6 +1408,78 @@ Describe 'Repository configuration and synchronization in <Provider>' -ForEach @
             $initialMapping.BuildValidationEnvironmentName | Should -BeNullOrEmpty
         }
         Should -Invoke Get-GitRepoFileContentFromRemoteBranch -Times 2 -Exactly -ParameterFilter { $RelativePath -eq 'alm-config.psd1' }
+    }
+
+    It 'converts legacy pipeline facts into branch settings when alm-config.psd1 has no branches' {
+        Mock Get-GitRepoFileContentFromRemoteBranch {
+            if ($RelativePath -eq 'alm-config.psd1') { return $script:discoveryAlmConfig }
+            $key = "$Branch|$RelativePath"
+            if ($script:legacyFiles.ContainsKey($key)) { return $script:legacyFiles[$key] }
+            if ($script:legacyFiles.ContainsKey($RelativePath)) { return $script:legacyFiles[$RelativePath] }
+            ''
+        }
+        if ($Provider -eq 'GitHub') {
+            $script:legacyFiles = @{
+                'main|.github/workflows/BUILD.yml'             = "uses: owner/shared/.github/actions/build@stable`nenvironment-name: 'Build-main'"
+                'release|.github/workflows/BUILD.yml'          = 'uses: owner/shared/.github/actions/build@stable'
+                '.github/workflows/DEPLOY-main.yml'            = "environment-name: 'TEST'`nenvironment-name: 'PROD'"
+                '.github/workflows/DEPLOY-release.yml'         = "environment-name: 'UAT'"
+            }
+            $result = Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main
+            $result.SharedWorkflowRepository | Should -Be 'owner/shared'
+            $result.SharedWorkflowReference | Should -Be 'stable'
+            $releaseEnvironments = ($result.DeploymentBranchMappings | Where-Object BranchName -eq 'release').Environments.ShortName
+            ($result.DeploymentBranchMappings | Where-Object BranchName -eq 'main').Environments.ShortName | Should -Be @('TEST', 'PROD')
+        }
+        else {
+            $script:legacyFiles = @{
+                'main|pipelines/BUILD.yml'             = "buildEnvironmentName: 'Build-main'"
+                'pipelines/DEPLOY-main.yml'            = "environmentName: 'TEST'`nenvironmentName: 'PROD'"
+                'pipelines/DEPLOY-release.yml'         = "environmentName: 'UAT'"
+            }
+            $result = Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main
+            $releaseEnvironments = ($result.BranchStates | Where-Object BranchName -eq 'release').DeploymentEnvironments.ShortName
+            ($result.BranchStates | Where-Object BranchName -eq 'main').DeploymentEnvironments.ShortName | Should -Be @('TEST', 'PROD')
+        }
+
+        $result.LegacyConfigurationConversion.Status | Should -Be 'Converted'
+        $result.LegacyConfigurationConversion.BranchNames | Should -Be @('main', 'release')
+        $result.BuildValidationEnvironmentName | Should -Be 'Build-main'
+        $releaseEnvironments | Should -Be @('UAT')
+    }
+
+    It 'keeps first-run defaults when no legacy evidence exists' {
+        Mock Get-GitRepoFileContentFromRemoteBranch {
+            if ($RelativePath -eq 'alm-config.psd1') { return $script:discoveryAlmConfig }
+            ''
+        }
+        $script:discoveryEmpty = $true
+        if ($Provider -eq 'GitHub') {
+            $result = Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main
+            $result.DeploymentBranchMappings.Count | Should -Be 0
+        }
+        else {
+            $result = Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main
+            $result.BranchStates.Count | Should -Be 0
+        }
+        $result.LegacyConfigurationConversion.Status | Should -Be 'NotRequired'
+    }
+
+    It 'reports a failed legacy conversion and continues with empty branch state' {
+        Mock Get-GitRepoFileContentFromRemoteBranch {
+            if ($RelativePath -eq 'alm-config.psd1') { return $script:discoveryAlmConfig }
+            throw 'Simulated read failure'
+        }
+        if ($Provider -eq 'GitHub') {
+            $result = Get-GitHubRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -RepoOwner owner -RepoName repo -DefaultBranch main
+            $result.DeploymentBranchMappings.Count | Should -Be 0
+        }
+        else {
+            $result = Get-AzDoRepositoryExistingSetupState -RepoRoot $script:discoveryRoot -ProjectName project -DefaultBranch main
+            $result.BranchStates.Count | Should -Be 0
+        }
+        $result.LegacyConfigurationConversion.Status | Should -Be 'Failed'
+        $result.LegacyConfigurationConversion.ErrorMessage | Should -Be 'Simulated read failure'
     }
 
     It 'classifies divergent, fast-forward and ahead repository histories' -ForEach @(

@@ -6,15 +6,21 @@ function Select-BuildValidationBaselineEnvironment {
         Deduplicates nonblank short names case-insensitively. Exclusions match either
         short name or URL ignoring case and trailing slashes, not full URL normalization.
         Returns empty for no eligible environments or an explicit no-baseline choice;
-        cancelling returns to the environment-detail menu. This chooses a selector,
-        not a release artifact.
+        cancelling returns to the environment-detail menu. CurrentBaselineRelease marks
+        the current choice, including an empty no-baseline choice, and lists it first
+        because the selection prompt has no default-index setting. This chooses a
+        selector, not a release artifact.
+    .PARAMETER CurrentBaselineRelease
+        The configured @shortName baseline, an empty string for no baseline, or null
+        when no baseline has been configured yet.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
         [Parameter()][array]$DeploymentEnvironments,
         [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentName = '',
-        [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentUrl = ''
+        [Parameter()][AllowEmptyString()][string]$ExcludedEnvironmentUrl = '',
+        [Parameter()][AllowNull()][AllowEmptyString()][string]$CurrentBaselineRelease = $null
     )
 
     $uniqueEnvironments = @()
@@ -45,19 +51,63 @@ function Select-BuildValidationBaselineEnvironment {
         return ''
     }
 
-    $items = @('No baseline release') + @($uniqueEnvironments | ForEach-Object {
+    $environmentEntries = @($uniqueEnvironments | ForEach-Object {
         $friendlyName = if ([string]::IsNullOrWhiteSpace($_.FriendlyName)) { $_.ShortName } else { $_.FriendlyName }
-        "$friendlyName ($($_.ShortName))"
+        [pscustomobject]@{
+            Label     = "$friendlyName ($($_.ShortName))"
+            ShortName = [string]$_.ShortName
+            Value     = "@$($_.ShortName)"
+        }
     })
-    $selectedIndex = Select-FromMenu -Title 'Select the separate deployment environment whose latest successful deployment should be used as the BUILD validation baseline' -Items $items
+
+    $currentBaselineShortName = ''
+    if (-not [string]::IsNullOrWhiteSpace($CurrentBaselineRelease)) {
+        $currentBaselineShortName = $CurrentBaselineRelease.Trim()
+        if ($currentBaselineShortName.StartsWith('@')) {
+            $currentBaselineShortName = $currentBaselineShortName.Substring(1)
+        }
+    }
+
+    $entries = @()
+    if ($null -ne $CurrentBaselineRelease) {
+        $currentEntry = $environmentEntries | Where-Object { $_.ShortName -ieq $currentBaselineShortName } | Select-Object -First 1
+        if ($currentEntry) {
+            $entries += [pscustomobject]@{
+                Label = "$($currentEntry.Label) (current)"
+                Value = $currentEntry.Value
+            }
+        }
+        elseif ([string]::IsNullOrWhiteSpace($currentBaselineShortName)) {
+            $entries += [pscustomobject]@{
+                Label = 'No baseline release (current)'
+                Value = ''
+            }
+        }
+    }
+
+    if (@($entries | Where-Object { [string]::IsNullOrEmpty($_.Value) }).Count -eq 0) {
+        $entries += [pscustomobject]@{
+            Label = 'No baseline release'
+            Value = ''
+        }
+    }
+
+    foreach ($environmentEntry in $environmentEntries) {
+        if (@($entries | Where-Object { $_.Value -eq $environmentEntry.Value }).Count -gt 0) {
+            continue
+        }
+        $entries += [pscustomobject]@{
+            Label = $environmentEntry.Label
+            Value = $environmentEntry.Value
+        }
+    }
+
+    $selectedIndex = Select-FromMenu -Title 'Select the separate deployment environment whose latest successful deployment should be used as the BUILD validation baseline' -Items @($entries.Label)
     if ($null -eq $selectedIndex) {
         Request-SetupWizardBack
     }
-    if ($selectedIndex -eq 0) {
-        return ''
-    }
 
-    return "@$($uniqueEnvironments[$selectedIndex - 1].ShortName)"
+    return [string]$entries[$selectedIndex].Value
 }
 
 function Select-ConfiguredDeploymentEnvironment {
@@ -74,9 +124,11 @@ function Select-ConfiguredDeploymentEnvironment {
         Opens the edit callback directly for the matching short or friendly name, then
         returns the updated list.
     .DESCRIPTION
-        Initial objects are retained, not deep-cloned. Done or a null management
-        selection emits the current list. Callbacks own validation and side effects;
-        exceptions, including wizard navigation, propagate without rollback.
+        Initial objects are retained, not deep-cloned. Move earlier and later reorder
+        existing entries without reopening their detail editor, so promotion order can
+        change without re-entering credentials. Done or a null management selection
+        emits the current list. Callbacks own validation and side effects; exceptions,
+        including wizard navigation, propagate without rollback.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -96,6 +148,14 @@ function Select-ConfiguredDeploymentEnvironment {
     if ($InitialEnvironments) {
         $selectedEnvironments += @($InitialEnvironments)
     }
+
+    $formatEnvironmentMenuLabel = {
+        param($Environment)
+        $shortName = [string]$Environment.ShortName
+        $friendlyName = if ([string]::IsNullOrWhiteSpace($Environment.FriendlyName)) { $shortName } else { [string]$Environment.FriendlyName }
+        $url = if ([string]::IsNullOrWhiteSpace($Environment.Url)) { '<not set>' } else { [string]$Environment.Url }
+        "$shortName - $friendlyName ($url)"
+    }.GetNewClosure()
 
     while ($true) {
         $effectiveGuidanceLines = if ($GuidanceLines -and @($GuidanceLines).Count -gt 0) {
@@ -155,6 +215,10 @@ function Select-ConfiguredDeploymentEnvironment {
             if ($EditEnvironmentScriptBlock) {
                 $menuItems += 'Edit an environment'
             }
+            if ($selectedEnvironments.Count -gt 1) {
+                $menuItems += 'Move an environment earlier'
+                $menuItems += 'Move an environment later'
+            }
             $menuItems += 'Remove an environment'
             $menuItems += 'Clear list'
             $menuItems += 'Done'
@@ -163,7 +227,13 @@ function Select-ConfiguredDeploymentEnvironment {
             $menuItems += 'Done'
         }
 
-        $selection = Select-FromMenu -Title $Title -Items $menuItems -PreserveExistingContent -SkipPromptGuidance
+        $selection = Select-FromMenu `
+            -Title $Title `
+            -Items $menuItems `
+            -ActionItems @('Done') `
+            -ActionSectionTitle '---' `
+            -PreserveExistingContent `
+            -SkipPromptGuidance
         if ($null -eq $selection) {
             return @($selectedEnvironments)
         }
@@ -175,15 +245,30 @@ function Select-ConfiguredDeploymentEnvironment {
                     $selectedEnvironments += $newEnvironment
                 }
             }
-            'Remove an environment' {
-                $environmentMenuItems = @()
-                for ($i = 0; $i -lt $selectedEnvironments.Count; $i++) {
-                    $environment = $selectedEnvironments[$i]
-                    $shortName = [string]$environment.ShortName
-                    $friendlyName = if ([string]::IsNullOrWhiteSpace($environment.FriendlyName)) { $shortName } else { [string]$environment.FriendlyName }
-                    $url = if ([string]::IsNullOrWhiteSpace($environment.Url)) { '<not set>' } else { [string]$environment.Url }
-                    $environmentMenuItems += "$shortName - $friendlyName ($url)"
+            'Move an environment earlier' {
+                $moveIndexes = @(1..($selectedEnvironments.Count - 1))
+                $environmentMenuItems = @($moveIndexes | ForEach-Object { & $formatEnvironmentMenuLabel $selectedEnvironments[$_] })
+                $moveSelection = Select-FromMenu -Title 'Select the environment to move earlier' -Items $environmentMenuItems
+                if ($null -ne $moveSelection) {
+                    $moveIndex = $moveIndexes[$moveSelection]
+                    $movedEnvironment = $selectedEnvironments[$moveIndex]
+                    $selectedEnvironments[$moveIndex] = $selectedEnvironments[$moveIndex - 1]
+                    $selectedEnvironments[$moveIndex - 1] = $movedEnvironment
                 }
+            }
+            'Move an environment later' {
+                $moveIndexes = @(0..($selectedEnvironments.Count - 2))
+                $environmentMenuItems = @($moveIndexes | ForEach-Object { & $formatEnvironmentMenuLabel $selectedEnvironments[$_] })
+                $moveSelection = Select-FromMenu -Title 'Select the environment to move later' -Items $environmentMenuItems
+                if ($null -ne $moveSelection) {
+                    $moveIndex = $moveIndexes[$moveSelection]
+                    $movedEnvironment = $selectedEnvironments[$moveIndex]
+                    $selectedEnvironments[$moveIndex] = $selectedEnvironments[$moveIndex + 1]
+                    $selectedEnvironments[$moveIndex + 1] = $movedEnvironment
+                }
+            }
+            'Remove an environment' {
+                $environmentMenuItems = @($selectedEnvironments | ForEach-Object { & $formatEnvironmentMenuLabel $_ })
 
                 $removeSelection = Select-FromMenu -Title 'Select the environment to remove' -Items $environmentMenuItems
                 if ($null -ne $removeSelection) {
@@ -201,14 +286,7 @@ function Select-ConfiguredDeploymentEnvironment {
                 [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]Environment list cleared.[/]')
             }
             'Edit an environment' {
-                $environmentMenuItems = @()
-                for ($i = 0; $i -lt $selectedEnvironments.Count; $i++) {
-                    $environment = $selectedEnvironments[$i]
-                    $shortName = [string]$environment.ShortName
-                    $friendlyName = if ([string]::IsNullOrWhiteSpace($environment.FriendlyName)) { $shortName } else { [string]$environment.FriendlyName }
-                    $url = if ([string]::IsNullOrWhiteSpace($environment.Url)) { '<not set>' } else { [string]$environment.Url }
-                    $environmentMenuItems += "$shortName - $friendlyName ($url)"
-                }
+                $environmentMenuItems = @($selectedEnvironments | ForEach-Object { & $formatEnvironmentMenuLabel $_ })
 
                 $editSelection = Select-FromMenu -Title 'Select the environment to edit' -Items $environmentMenuItems
                 if ($null -eq $editSelection) {
@@ -387,7 +465,7 @@ function Show-BranchEnvironmentMappingTable {
             return [string]$_.FriendlyName
         } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
 
-        $buildValidationLabel = '<disabled>'
+        $buildValidationLabel = 'Disabled'
         if ($mapping.PSObject.Properties.Name -contains 'BuildValidationEnabled' -and $mapping.BuildValidationEnabled) {
             $buildValidationLabel = [string]$mapping.BuildValidationEnvironmentName
             if ([string]::IsNullOrWhiteSpace($buildValidationLabel)) {
@@ -784,6 +862,18 @@ function Get-SetupBranchMenuItem {
                     Kind            = 'BuildValidation'
                     BranchName      = $branchName
                     EnvironmentName = $buildValidationName
+                }
+            }
+        }
+        else {
+            # An empty target name opens the BUILD editor's enable prompt rather than the environment editor.
+            $menuItems += [pscustomobject]@{
+                Label  = "BUILD validation: Disabled ($branchName) - select to enable"
+                Depth  = 2
+                Target = [pscustomobject]@{
+                    Kind            = 'BuildValidation'
+                    BranchName      = $branchName
+                    EnvironmentName = ''
                 }
             }
         }

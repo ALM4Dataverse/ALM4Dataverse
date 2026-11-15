@@ -267,7 +267,6 @@ function Write-SetupDashboard {
         $brandVersionMarkup = '[grey]' +
             (ConvertTo-SpectreMarkupLiteral -Text $productVersion) +
             '[/]'
-        [Spectre.Console.AnsiConsole]::WriteLine()
         for ($brandRowIndex = 0; $brandRowIndex -lt $brandIconRows.Count; $brandRowIndex++) {
             $brandRowMarkup = '[bold green]' + $brandIconRows[$brandRowIndex] + '[/]'
             if ($brandRowIndex -eq $brandNameRowIndex) {
@@ -309,6 +308,30 @@ function Test-IsUserInterruptException {
     return $false
 }
 
+function Get-SetupWizardStepInputSignature {
+    # Only steps that opt in using an InputSignature property have a signature.
+    # A scriptblock is evaluated on demand; a static value is returned as text.
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][object]$Step
+    )
+
+    if (@($Step.PSObject.Properties.Name) -notcontains 'InputSignature') {
+        return $null
+    }
+
+    $signature = $Step.InputSignature
+    if ($signature -is [scriptblock]) {
+        $signature = & $signature
+    }
+    if ($null -eq $signature) {
+        return ''
+    }
+
+    return [string]$signature
+}
+
 function Invoke-SetupWizard {
     <#
     .SYNOPSIS
@@ -322,7 +345,10 @@ function Invoke-SetupWizard {
         Depth, and Target properties. These rows appear indented beneath their parent,
         and selecting one passes Target as the Action's first argument. Steps may provide
         HelpDocRelativePath and HelpRef to select their own help page and documentation
-        revision. Steps without a summary show Complete or Not configured.
+        revision. InputSignature may be a scriptblock or value identifying the inputs a
+        completed step depends on; when an earlier step changes, later completed steps
+        with an unchanged signature remain complete. Steps without a summary show
+        Complete or Not configured.
     .PARAMETER PreviewAction
         Adds an optional preview action, separate from required setup steps. It is
         available only after every setup step is complete and selecting it does not
@@ -333,12 +359,18 @@ function Invoke-SetupWizard {
         When supplied, adds an Apply changes action in a separate menu group. It is
         ready only after all setup steps are complete. Failed applies are reported and
         return to the menu without discarding step state.
+    .PARAMETER PreApplyAction
+        Optional callback invoked immediately before ApplyAction, after the wizard
+        context switches to the apply step. Use it to reconcile resources that setup
+        must not change while the user is still reviewing the preview. A failure is
+        reported like an apply failure and returns to the menu; a preview never runs it.
     .PARAMETER IsNewRepository
         Restricts new repositories to the furthest step reached, while still allowing
         users to revisit earlier steps.
     .PARAMETER RequireSequentialSteps
         Restricts navigation to the furthest step reached for workflows that must
-        complete prerequisite steps in order.
+        complete prerequisite steps in order. Later steps are dimmed; selecting one
+        keeps the menu open and displays a reminder to complete earlier steps.
     .PARAMETER ReturnToCaller
         Requires ApplyAction, hides the whole-setup exit action, and returns null when
         the navigation menu is cancelled. Use this for nested editors.
@@ -354,10 +386,14 @@ function Invoke-SetupWizard {
         PreviewAction is optional and does not change setup completion. Setup and action
         choices are grouped separately in the menu. Exit without applying changes is
         always available with ApplyAction and asks for confirmation before leaving.
-        Escape in a step returns to the navigation menu; Escape on that menu cancels
+        PreApplyAction runs only after the user chooses Apply, so reconciliation that
+        depends on the final selection is deferred until then. Escape in a step returns
+        to the navigation menu; Escape on that menu cancels
         setup. F1 opens the active help page without leaving the prompt. Re-running a
         step invalidates completion of later steps; locked prerequisite steps remain
-        complete. No action side effects are rolled back.
+        complete. Selecting an unavailable step or not-ready action keeps the menu open
+        and displays guidance about its prerequisite or lock. No action side effects are
+        rolled back.
     #>
     [CmdletBinding()]
     param(
@@ -367,6 +403,7 @@ function Invoke-SetupWizard {
         [Parameter()][string]$PreviewActionName = 'Preview changes',
         [Parameter()][scriptblock]$ApplyAction,
         [Parameter()][string]$ApplyActionName = 'Apply changes',
+        [Parameter()][scriptblock]$PreApplyAction,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$RequireSequentialSteps,
         [Parameter()][switch]$ReturnToCaller,
@@ -405,6 +442,7 @@ function Invoke-SetupWizard {
         }
         $completedSteps = [bool[]]::new($Steps.Count)
         $lockedSteps = [bool[]]::new($Steps.Count)
+        $completedStepSignatures = [object[]]::new($Steps.Count)
         for ($stepIndex = 0; $stepIndex -lt $Steps.Count; $stepIndex++) {
             $stepProperties = @($Steps[$stepIndex].PSObject.Properties.Name)
             $lockedSteps[$stepIndex] = $stepProperties -contains 'IsLocked' -and [bool]$Steps[$stepIndex].IsLocked
@@ -412,6 +450,9 @@ function Invoke-SetupWizard {
                 $lockedSteps[$stepIndex] -or
                 ($stepProperties -contains 'IsComplete' -and [bool]$Steps[$stepIndex].IsComplete)
             )
+            if ($completedSteps[$stepIndex]) {
+                $completedStepSignatures[$stepIndex] = Get-SetupWizardStepInputSignature -Step $Steps[$stepIndex]
+            }
         }
         $furthestStepIndex = -1
         while (($furthestStepIndex + 1) -lt $Steps.Count -and $completedSteps[$furthestStepIndex + 1]) {
@@ -419,12 +460,14 @@ function Invoke-SetupWizard {
         }
         $requireSequentialSteps = $IsNewRepository -or $RequireSequentialSteps
         $currentStepIndex = 0
+        $promptNotice = $null
 
         try {
             while ($true) {
                 $stepMenuItems = @()
                 $stepMenuIndexes = @()
                 $stepMenuTargets = @()
+                $dimMenuItems = @()
                 $hasSubItems = $false
                 for ($stepIndex = 0; $stepIndex -lt $Steps.Count; $stepIndex++) {
                     $completionLabel = if ($completedSteps[$stepIndex]) { '[✓]' } else { '[ ]' }
@@ -467,20 +510,20 @@ function Invoke-SetupWizard {
                         [bool]$Steps[$stepIndex].LockAfterCompletion -and
                         $completedSteps[$stepIndex]
                     )
-                    $lockedLabel = if ($lockedSteps[$stepIndex] -or $lockedAfterCompletion) {
-                        ' (locked)'
-                    }
-                    elseif ($requireSequentialSteps -and $stepIndex -gt ($furthestStepIndex + 1)) {
-                        ' (locked; complete earlier steps first)'
-                    }
-                    else {
-                        ''
-                    }
-                    $stepMenuItems += if ($subItems.Count -gt 0) {
-                        "$completionLabel $($stepNames[$stepIndex])$lockedLabel"
+                    $isStepUnavailable = (
+                        $lockedSteps[$stepIndex] -or
+                        $lockedAfterCompletion -or
+                        ($requireSequentialSteps -and $stepIndex -gt ($furthestStepIndex + 1))
+                    )
+                    $stepMenuItem = if ($subItems.Count -gt 0) {
+                        "$completionLabel $($stepNames[$stepIndex])"
                     }
                     else {
-                        "$completionLabel $($stepNames[$stepIndex]) - $summaryText$lockedLabel"
+                        "$completionLabel $($stepNames[$stepIndex]) - $summaryText"
+                    }
+                    $stepMenuItems += $stepMenuItem
+                    if ($isStepUnavailable) {
+                        $dimMenuItems += $stepMenuItem
                     }
                     $stepMenuIndexes += $stepIndex
                     $stepMenuTargets += [pscustomobject]@{
@@ -509,6 +552,9 @@ function Invoke-SetupWizard {
                         }
 
                         $stepMenuItems += ('  ' * $subItemDepth) + $subItemLabel
+                        if ($isStepUnavailable) {
+                            $dimMenuItems += ('  ' * $subItemDepth) + $subItemLabel
+                        }
                         $stepMenuIndexes += $stepIndex
                         $stepMenuTargets += [pscustomobject]@{
                             HasTarget = $true
@@ -600,14 +646,19 @@ function Invoke-SetupWizard {
                 if (-not $ReturnToCaller) {
                     $promptGuidanceLines += "$exitActionName asks for confirmation before ending setup without applying the pending changes."
                 }
+                if (-not [string]::IsNullOrWhiteSpace($promptNotice)) {
+                    $promptGuidanceLines = @($promptNotice) + $promptGuidanceLines
+                }
 
                 $selection = Select-FromMenu `
                     -Title "$Title menu" `
                     -Items $menuItems `
+                    -DimItems $dimMenuItems `
                     -ActionItems $actionMenuItems `
                     -ActionSectionTitle '---' `
                     -ActionSectionFirst:$allStepsCompleted `
                     -PromptGuidanceLines $promptGuidanceLines
+                $promptNotice = $null
 
                 if ($null -eq $selection) {
                     if ($ReturnToCaller) {
@@ -652,7 +703,7 @@ function Invoke-SetupWizard {
 
                 if ($selectedStepIndex -eq $applyActionIndex) {
                     if (-not $allStepsCompleted) {
-                        Write-Host 'Complete every setup step before applying changes.' -ForegroundColor Yellow
+                        $promptNotice = 'Complete every setup step before applying changes.'
                         continue
                     }
 
@@ -664,6 +715,9 @@ function Invoke-SetupWizard {
                             -CurrentStepIndex $applyActionIndex `
                             -HelpDocRelativePath $HelpDocRelativePath `
                             -HelpRef $HelpRef
+                        if ($PreApplyAction) {
+                            & $PreApplyAction
+                        }
                         return (& $ApplyAction)
                     }
                     catch {
@@ -681,7 +735,7 @@ function Invoke-SetupWizard {
 
                 if ($selectedStepIndex -eq $previewActionIndex) {
                     if (-not $allStepsCompleted) {
-                        Write-Host 'Complete every setup step before previewing changes.' -ForegroundColor Yellow
+                        $promptNotice = 'Complete every setup step before previewing changes.'
                         continue
                     }
 
@@ -711,12 +765,12 @@ function Invoke-SetupWizard {
                     $completedSteps[$selectedStepIndex]
                 )
                 if ($lockedSteps[$selectedStepIndex] -or $lockedAfterCompletion) {
-                    Write-Host 'This setup step is locked because it has already been completed.' -ForegroundColor Yellow
+                    $promptNotice = 'This setup step is locked because it has already been completed.'
                     continue
                 }
 
                 if ($requireSequentialSteps -and $selectedStepIndex -gt ($furthestStepIndex + 1)) {
-                    Write-Host 'Complete the earlier setup steps before moving forward.' -ForegroundColor Yellow
+                    $promptNotice = 'Complete the earlier setup steps before moving forward.'
                     continue
                 }
 
@@ -757,13 +811,28 @@ function Invoke-SetupWizard {
                 }
 
                 $completedSteps[$selectedStepIndex] = $true
+                $completedStepSignatures[$selectedStepIndex] = Get-SetupWizardStepInputSignature -Step $Steps[$selectedStepIndex]
                 if ($selectedStepIndex -gt $furthestStepIndex) {
                     $furthestStepIndex = $selectedStepIndex
                 }
                 for ($laterStepIndex = $selectedStepIndex + 1; $laterStepIndex -lt $Steps.Count; $laterStepIndex++) {
-                    if (-not $lockedSteps[$laterStepIndex]) {
-                        $completedSteps[$laterStepIndex] = $false
+                    if ($lockedSteps[$laterStepIndex]) {
+                        continue
                     }
+
+                    # A completed step with an unchanged input signature is independent
+                    # of the edited step, so retain it. Steps without a signature keep the
+                    # conservative invalidate-everything-after behavior.
+                    $laterStepProperties = @($Steps[$laterStepIndex].PSObject.Properties.Name)
+                    if ($laterStepProperties -contains 'InputSignature' -and $completedSteps[$laterStepIndex]) {
+                        $currentSignature = Get-SetupWizardStepInputSignature -Step $Steps[$laterStepIndex]
+                        if ($currentSignature -ceq [string]$completedStepSignatures[$laterStepIndex]) {
+                            continue
+                        }
+                    }
+
+                    $completedSteps[$laterStepIndex] = $false
+                    $completedStepSignatures[$laterStepIndex] = $null
                 }
             }
         }
@@ -839,24 +908,22 @@ function Write-SetupWizardApplyFailure {
 }
 
 function Confirm-SetupReviewAction {
-    # Returns no value on approval; cancellation, including a null menu result, throws.
+    # Returns no value on approval; declining the confirmation throws.
     [CmdletBinding()]
     param(
         [Parameter()][string]$ApplyLabel = 'Apply changes',
-        [Parameter()][string]$CancelLabel = 'Cancel setup',
-        [Parameter()][string]$Title = 'Review complete. Apply the configuration or cancel setup.'
+        [Parameter()][string]$Title = 'Review complete. Apply the configuration?'
     )
 
-    $selection = Select-FromMenu -Title $Title -Items @($ApplyLabel, $CancelLabel) -PromptGuidanceLines @(
-                'Are you ready to apply the changes?'
-            ) `
-            -PromptGuidanceDocRelativePath 'docs/config/alm-config.md'
+    $selection = Select-FromMenu `
+        -Title $Title `
+        -Items @($ApplyLabel) `
+        -ActionItems @($ApplyLabel) `
+        -ActionSectionTitle '---' `
+        -PromptGuidanceLines @('Are you ready to apply the changes?') `
+        -PromptGuidanceDocRelativePath 'docs/config/alm-config.md'
 
     if ($null -eq $selection) {
-        throw 'Setup cancelled by user.'
-    }
-
-    if ($selection -ne 0) {
         throw 'Setup cancelled by user.'
     }
 }

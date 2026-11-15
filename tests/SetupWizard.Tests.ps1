@@ -387,7 +387,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
                 "$($_.Action) $($_.Resource) $($_.Target) $($_.Details)"
             }) -join ' '
         $resourceSummary | Should -Not -Match 'must-not-be-shown'
-        $script:reviewResourceChangeNote | Should -Match 'prerequisites already created during setup are excluded'
+        $script:reviewResourceChangeNote | Should -Match 'already applied during setup are marked'
 
         if ($Provider -eq 'GitHub') {
             $script:reviewResourceChanges.Resource | Should -Contain 'GitHub environment'
@@ -524,7 +524,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $result.BuildValidationEnabled | Should -BeTrue
         $result.BuildValidationEnvironmentConfiguration.ShortName | Should -Be 'Build-main'
         $result.BuildValidationBaselineRelease | Should -Be '@TEST'
-        Should -Invoke Read-YesNo -Times 1 -Exactly
+        Should -Invoke Read-YesNo -Times 0 -Exactly
         $script:environmentWizardBaselineCalls | Should -Be 1
     }
 

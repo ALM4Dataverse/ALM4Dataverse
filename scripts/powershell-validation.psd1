@@ -50,6 +50,13 @@
             Reason = 'This is existing authentication configuration including non-secret identity metadata; changing its object contract requires a separate audit.'
         }
         @{
+            Path = 'setup/github/identity-provisioning.ps1'
+            Rule = 'PSAvoidUsingPlainTextForPassword'
+            Function = 'Get-GitHubCredentialSecretForApply'
+            Source = '[Parameter(Mandatory)][object]$Credentials'
+            Reason = 'This reads structured authentication configuration to return the secret value Apply should store; it does not accept a plaintext credential string.'
+        }
+        @{
             Path = 'setup/github/dataverse-environment-and-configuration.ps1'
             Rule = 'PSAvoidUsingPlainTextForPassword'
             Function = 'Get-GitHubEnvironmentConfiguration'

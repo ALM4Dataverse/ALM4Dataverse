@@ -447,10 +447,11 @@ function Initialize-GitHubSharedWorkflowFork {
         owner and repository name.
         Newly created repositories and canonical-default matches are force-aligned
         with lease protection to Reference; other repositories follow ancestry-based
-        update prompts. SelectOnly returns repository details without checking or
-        changing its version. UsePreferredRepository skips the selection prompt and
-        resolves PreferredRepositoryFullName directly. This interactive operation is
-        not guarded by ShouldProcess.
+        update prompts. Creating a repository requires an explicit confirmation because
+        the write happens during selection, before preview and Apply. SelectOnly returns
+        repository details without checking or changing its version. UsePreferredRepository
+        skips the selection prompt and resolves PreferredRepositoryFullName directly.
+        This interactive operation is not guarded by ShouldProcess.
     .PARAMETER PreferredRepositoryFullName
         Existing repository offered first during selection, or resolved directly with
         UsePreferredRepository.
@@ -608,6 +609,19 @@ function Initialize-GitHubSharedWorkflowFork {
         ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
         if ($null -eq $creationModeSelection) {
             throw 'No shared workflow repository type selected.'
+        }
+
+        $creationLabel = if ($creationModeSelection -eq 0) { 'public fork' } else { 'private repository' }
+        $confirmCreation = Read-YesNo `
+            -Prompt "Create $creationLabel '$selectedSharedRepositoryFullName' now?" `
+            -PromptGuidanceLines @(
+                'Creating the shared workflow repository is an immediate write; it is not deferred until Apply.',
+                'Choose No to return to the repository selection menu without creating anything.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+        if (-not $confirmCreation) {
+            Request-SetupWizardBack
         }
 
         if ($creationModeSelection -eq 0) {

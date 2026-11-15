@@ -668,8 +668,10 @@ function Set-GitHubEnvironmentConfiguration {
         writes either environment variables or repository variables, then ensures
         both Dataverse identities. UseImmutableWifSubject must match GitHub's effective
         setting. Missing secret values preserve existing secrets rather than clearing
-        them. Repository-variable mode can still create an environment for a secret.
-        Writes are ordered but not transactional; a later failure leaves earlier changes.
+        them. A rotation requested during environment configuration is generated here,
+        during Apply, before the secret is stored. Repository-variable mode can still
+        create an environment for a secret. Writes are ordered but not transactional; a
+        later failure leaves earlier changes.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -722,9 +724,10 @@ function Set-GitHubEnvironmentConfiguration {
         Set-GitHubEnvironmentVariable -Owner $RepoOwner -Repo $RepoName -EnvironmentName $EnvironmentConfiguration.ShortName `
             -VariableName 'AZURE_TENANT_ID' -VariableValue $creds.TenantId
 
-        if ($creds.AuthType -eq 'Secret' -and $creds.ClientSecret) {
+        $clientSecret = Get-GitHubCredentialSecretForApply -Credentials $creds
+        if ($creds.AuthType -eq 'Secret' -and $clientSecret) {
             Set-GitHubEnvironmentSecret -Owner $RepoOwner -Repo $RepoName -EnvironmentName $EnvironmentConfiguration.ShortName `
-                -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $creds.ClientSecret
+                -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $clientSecret
         }
 
         Set-GitHubEnvironmentVariable -Owner $RepoOwner -Repo $RepoName -EnvironmentName $EnvironmentConfiguration.ShortName `

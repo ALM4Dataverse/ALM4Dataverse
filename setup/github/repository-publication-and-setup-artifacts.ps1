@@ -627,6 +627,8 @@ function Get-GitHubSetupResourceChange {
         Describes GitHub and Dataverse changes deferred until setup is applied.
     .DESCRIPTION
         The plan contains resource names and settings only; credential values are omitted.
+        When SharedWorkflowRepositoryState is supplied, its check result is disclosed as
+        a repository reconciliation that Apply performs.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -638,10 +640,28 @@ function Get-GitHubSetupResourceChange {
         [Parameter(Mandatory)][bool]$UseGitHubEnvironments,
         [Parameter(Mandatory)][bool]$UseRepositoryVariablePrefix,
         [Parameter(Mandatory)][bool]$EnableEnvironmentApprovals,
-        [Parameter()][int[]]$RequiredReviewerIds = @()
+        [Parameter()][int[]]$RequiredReviewerIds = @(),
+        [Parameter()][System.Collections.IDictionary]$SharedWorkflowRepositoryState
     )
 
     $changes = [System.Collections.Generic.List[object]]::new()
+    if ($SharedWorkflowRepositoryState) {
+        $sharedRepository = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'Repository')
+        $sharedReference = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'Reference')
+        $updateStatus = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'UpdateStatus')
+        $pendingUpdate = [bool](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'PendingUpdate')
+        $changes.Add([pscustomobject]@{
+                Action   = if ($pendingUpdate) { 'Reconcile' } else { 'Verify' }
+                Resource = 'Shared workflow repository'
+                Target   = "$sharedRepository@$sharedReference"
+                Details  = if ($pendingUpdate) {
+                    "$updateStatus This repository update runs when you apply changes."
+                }
+                else {
+                    "$updateStatus No repository update is required."
+                }
+            })
+    }
     $currentImmutableSubject = [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject')
     if ($UseImmutableWifSubject -and -not $currentImmutableSubject) {
         $changes.Add([pscustomobject]@{
@@ -689,6 +709,7 @@ function Get-GitHubSetupResourceChange {
     }
 
     $requiredReviewerCount = @($RequiredReviewerIds | Where-Object { $_ -gt 0 }).Count
+    $annotatedCredentialTargets = @{}
     foreach ($environmentTarget in $environmentTargets) {
         $environment = $environmentTarget.EnvironmentConfiguration
         $environmentName = [string]$environment.ShortName
@@ -699,6 +720,20 @@ function Get-GitHubSetupResourceChange {
 
         $authType = [string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'AuthType')
         $hasClientSecret = -not [string]::IsNullOrWhiteSpace([string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'ClientSecret'))
+        $rotateSecret = [bool](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'RotateSecret')
+        $createdDuringSetup = [bool](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'CreatedDuringSetup')
+        if ($createdDuringSetup) {
+            $credentialTarget = "$($credentials.Name) ($($credentials.ApplicationId))"
+            if (-not $annotatedCredentialTargets.ContainsKey($credentialTarget)) {
+                $annotatedCredentialTargets[$credentialTarget] = $true
+                $changes.Add([pscustomobject]@{
+                        Action   = 'Already applied'
+                        Resource = 'Entra application'
+                        Target   = $credentialTarget
+                        Details  = 'Created during setup before preview; Apply reuses it and does not create another.'
+                    })
+            }
+        }
         if ($authType -eq 'WIF' -and -not [string]::IsNullOrWhiteSpace([string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'ApplicationObjectId'))) {
             $changes.Add([pscustomobject]@{
                     Action   = 'Create or update'
@@ -713,6 +748,9 @@ function Get-GitHubSetupResourceChange {
             if ($authType -eq 'Secret') {
                 if ($hasClientSecret) {
                     $environmentDetails += ' Set AZURE_CLIENT_SECRET; its value is hidden.'
+                }
+                elseif ($rotateSecret) {
+                    $environmentDetails += ' Generate and set a new AZURE_CLIENT_SECRET when you apply; its value is hidden.'
                 }
                 else {
                     $environmentDetails += ' No client-secret value was supplied, so any existing AZURE_CLIENT_SECRET is retained.'
@@ -750,6 +788,14 @@ function Get-GitHubSetupResourceChange {
                             Resource = 'GitHub environment secret'
                             Target   = "$RepoFullName/$environmentName"
                             Details  = 'Ensure the environment and set AZURE_CLIENT_SECRET; its value is hidden.'
+                        })
+                }
+                elseif ($rotateSecret) {
+                    $changes.Add([pscustomobject]@{
+                            Action   = 'Create or update'
+                            Resource = 'GitHub environment secret'
+                            Target   = "$RepoFullName/$environmentName"
+                            Details  = 'Generate and set a new AZURE_CLIENT_SECRET when you apply; its value is hidden.'
                         })
                 }
                 else {

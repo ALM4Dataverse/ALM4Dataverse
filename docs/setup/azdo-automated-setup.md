@@ -116,7 +116,9 @@ installed by `installdependencies.ps1` (the templates keep PPBT `AddToolsToPath`
 disabled). Normal setup can select or create the shared ALM4Dataverse repository.
 `-ApplyConfig` skips the setup-type choice, project/repository creation, extension
 installation and shared-repository updates; it selects existing resources and reads
-the shared repository/ref from committed config.
+the shared repository/ref from committed config. Branches, environments, solutions,
+BUILD validation and OIDC settings are not editable in this mode: change them in
+`alm-config.psd1`, commit it, then run the command again.
 
 The shared repository appears as a separate, editable menu step. For an existing
 repository, setup uses the shared repository and ref from `alm-config.psd1` and marks
@@ -126,10 +128,13 @@ summary explains why; select that row to choose an accessible repository. Select
 different repository changes the source used by preview and apply but does not check or
 update its version. The separate **Check and update shared repository version** step
 seeds an empty repository or checks the selected repository against the running
-ALM4Dataverse ref and offers the appropriate reconciliation options. Re-running
-selection marks that later step incomplete. With `-ApplyConfig`, selection is locked to
-committed config and the version-update step is marked as skipped; no shared repository
-is changed.
+ALM4Dataverse ref and offers the appropriate reconciliation options. Because this step
+can rewrite shared repository history before you review the preview, it asks for
+confirmation naming the write; declining returns to the menu without changing the
+repository. The preview marks repository creation and version reconciliation already
+performed during setup as **Already applied**. Re-running selection marks that later
+step incomplete. With `-ApplyConfig`, selection is locked to committed config and the
+version-update step is marked as skipped; no shared repository is changed.
 
 ### Guided setup menu
 
@@ -165,7 +170,8 @@ credential type and name, service-account UPN, and BUILD baseline when applicabl
 secret values are never shown. Selecting a branch opens its editor; selecting an
 environment opens its detail menu with separate Dataverse, target-name, credentials,
 and service-account steps, plus a BUILD-baseline step when applicable. Completed parts
-are marked done, and later parts stay locked until earlier steps are complete. New and
+are marked done, and later parts stay locked until earlier steps are complete. Selecting
+a greyed-out step keeps the menu open and reminds you to complete earlier steps. New and
 existing environments use the same editor. Progress markers describe completion in the
 current run. Preview, Apply, and Exit are actions, not progress rows. Every prompt and
 menu shows a setup header for its active section (or prompt title) and keeps one guidance
@@ -186,11 +192,28 @@ menu. **Esc** on the main menu cancels setup without confirmation; **Exit withou
 applying changes** asks for confirmation first.
 
 The screenshots below are actual terminal output from the setup display helpers used by
-the released setup scripts. They were captured with a local sample environment catalog
-and reserved example values such as `example-org` and `example.com`; no Azure DevOps,
-Dataverse, or tenant resources were accessed. The preview generators are the same ones
-used by Apply. Prompt text is shown as it appears in setup; environment and provider-side
-choices depend on the signed-in account.
+the released setup scripts. They were captured with a local sample catalog using
+fictional Contoso environment names and Dataverse-shaped URLs, plus reserved example
+values for repository and identity data; no Azure DevOps, Dataverse, or tenant resources
+were accessed. The preview generators are the same ones used by Apply. Prompt text is
+shown as it appears in setup; environment and provider-side choices depend on the
+signed-in account.
+
+#### Prerequisite steps
+
+Authentication, project selection, and repository selection run before the guided
+menu and are not listed there. Setup reuses an existing Azure login when one is
+available, asks for the Azure DevOps project, then lets you select or create the
+application repository and the shared ALM4Dataverse repository. Creating a shared
+repository asks for confirmation because that resource is created before preview.
+
+![Azure DevOps authentication choices](./screenshots/azdo-authentication.png)
+
+![Azure DevOps project selection](./screenshots/azdo-project-selection.png)
+
+![Azure DevOps application repository selection](./screenshots/azdo-main-repository-selection.png)
+
+![Azure DevOps shared repository selection](./screenshots/azdo-shared-repository-selection.png)
 
 #### Setup menu examples
 
@@ -212,11 +235,11 @@ the current run, not whether configuration is saved.
 
 ![Guided setup menu for a new Azure DevOps repository](./screenshots/azdo-menu-new-repository.png)
 
-![Guided setup menu for an existing, fully configured Azure DevOps repository](./screenshots/azdo-menu-existing-repository.png)
+![Guided setup menu for an existing Azure DevOps repository with saved branch mappings](./screenshots/azdo-menu-existing-repository.png)
 
 ![Guided setup menu when the configured Azure DevOps shared repository is unavailable](./screenshots/azdo-menu-unavailable-shared-repository.png)
 
-The first screen shows the green Unicode-art product mark beside the ALM4Dataverse
+The setup type choice shows the green Unicode-art product mark beside the ALM4Dataverse
 name and version below the setup header. The name and version are on separate lines
 with a blank line between them. The version is shown as Development when running
 from a source checkout.
@@ -281,7 +304,11 @@ and its configured environments as selectable nested rows.
    The service account is a licensed user for process ownership, not the application
    identity used to authenticate deployment. A manually entered UPN is format-checked;
    setup does not verify its licensing or Dataverse roles. Keep client secrets out of
-   `alm-config.psd1` and source control.
+   `alm-config.psd1` and source control. Creating a shared repository asks for
+   confirmation because the repository is created during selection, before preview.
+   Choosing to rotate an existing client secret records the request for **Apply
+   changes** instead of generating it during setup, so the preview lists the pending
+   rotation before any credential changes.
 
 5. **Add deployment targets for the branch.** Choose **Add an environment** to open its
    detail menu. Complete the Dataverse environment, short name (for example, `TEST`,
@@ -293,7 +320,7 @@ and its configured environments as selectable nested rows.
    offered for reuse. Choose **Done** when the list is complete. A branch may have no
    deployment targets.
 
-   ![Per-environment detail menu showing completed setup and locked later steps](./screenshots/environment-detail-menu.png)
+   ![Per-environment detail menu with completed prerequisites and the service-account step ready to configure](./screenshots/environment-detail-menu.png)
 
    ![Azure DevOps deployment environment selection](./screenshots/azdo-deployment-environment-selection.png)
 
@@ -312,7 +339,9 @@ and its configured environments as selectable nested rows.
    credentials, service account, and BUILD baseline into ordered rows. Configure the
    baseline row even when no baseline is needed; choosing no baseline is valid. When a
    baseline is selected, it must be a deployment environment. This is separate from
-   the branch's DEV and deployment targets.
+   the branch's DEV and deployment targets. A branch with BUILD validation off shows
+   `BUILD validation: Disabled (<branch>) - select to enable`. To turn it off later, open
+   the branch's edit menu and choose **Disable BUILD validation**.
 
    ![Azure DevOps BUILD validation environment selection for a branch](./screenshots/azdo-build-validation.png)
 
@@ -324,7 +353,7 @@ and its configured environments as selectable nested rows.
 
    ![Azure DevOps branch-to-environment mapping table](./screenshots/branch-mapping.png)
 
-#### Step 2 — Select solutions
+#### Step 2 — Configure solutions
 
 Choose a branch with a DEV environment as the solution discovery source, then select
 and order the solutions. The selected-solution summary is rendered in dependency order:
@@ -349,22 +378,25 @@ pipeline definitions and permissions, service connections and federated credenti
 environments, variable groups and checks, and Dataverse application and service-account
 users/roles. This is a plan based on the selected setup, not a live before/after
 resource diff; an **Ensure** operation may find the resource already in its desired
-state. Prerequisites already applied to let setup proceed are excluded, and secret
-values are never displayed. Existing service connections are marked for reuse, existing
-variable values are not overwritten, and existing approval checks are retained when
-no new approval is requested.
+state. Rows for changes already applied during setup, such as a created shared
+repository or Entra application, are marked **Already applied**; the remaining rows
+are deferred until Apply. Pending client-secret rotation is listed as an Apply
+operation, and secret values are never displayed. Existing service connections are
+marked for reuse, existing variable values are not overwritten, and existing approval
+checks are retained when no new approval is requested.
 
-The review menu separates the config-only diff from the diff of every repository file
-that setup will change:
+The review menu lists `alm-config.psd1` alongside every other changed repository file:
 
 ![Azure DevOps setup change summary and review menu](./screenshots/azdo-setup-change-review.png)
 
-The file list labels each change as added, modified, or deleted. Select
-**View alm-config.psd1 diff** for the separate config view, or select a status-labeled
-repository file to open its diff. Only one file is shown at a time. The diff is colored
-and side by side; scroll with Up/Down or Page Up/Down, jump with Home/End, and press Q
-or Esc to return to the file list. These previews are generated in a temporary tree
-and leave the selected repository unchanged.
+The file list labels each change, including `alm-config.psd1`, as added, modified, or
+deleted. Select a file to open its diff, or choose **Done reviewing** in the separate
+`---` action section to return to setup. Only one file is shown at a time. The
+interactive diff has a centered filename heading, distinct BEFORE and AFTER columns,
+and a footer with the visible row range and controls. Scroll with Up/Down or Page
+Up/Down, jump with Home/End, and press Enter, Q, or Esc to return to the file list.
+These previews are generated in a temporary tree and leave the selected repository
+unchanged.
 
 ![Scrollable colored side-by-side setup diff](./screenshots/setup-change-side-by-side-diff.png)
 
@@ -381,6 +413,9 @@ are not rolled back.
 The bold cyan **Apply changes** action is unavailable until all required setup steps
 are complete. **Preview changes** also becomes available then, but remains optional.
 When ready, Apply moves to the first position in its action group and is highlighted.
+
+![Guided setup menu with Apply changes ready](./screenshots/azdo-apply-changes.png)
+
 Selecting it publishes the generated files according to each branch's
 publication plan and applies the listed Azure DevOps, Entra ID, and Dataverse
 operations; you do not have to preview first. These external changes happen during
@@ -441,7 +476,7 @@ To inspect committed config changes without publishing:
 
 3. The shared-repository row appears first and is locked to committed config.
    **Choose publication methods** is a required step. **Preview changes** is optional in
-   the separate action group and becomes available after all required steps are complete;
+   the separate `---` action section and becomes available after all required steps are complete;
    it can be used to inspect the config and generated-file diffs. **Apply changes**
    becomes ready at the same time and may be selected without previewing. The config has
    a separate diff, and each repository file is selectable from the status-labeled change list.

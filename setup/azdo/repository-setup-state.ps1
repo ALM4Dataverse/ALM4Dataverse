@@ -545,6 +545,192 @@ function Resolve-GitExistingBranchRef {
     return $null
 }
 
+function Get-AzDoDeploymentEnvironmentNamesFromPipelineContent {
+    # Scaffold-only line parsing: distinct literal environmentName values in encounter
+    # order, or no output for empty content. YAML expressions/structure are not evaluated.
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter()][string]$PipelineContent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PipelineContent)) {
+        return @()
+    }
+
+    $envMatches = [regex]::Matches($PipelineContent, '(?mi)^\s*environmentName:\s*([^\s\r\n]+)\s*$')
+    $environmentNames = @()
+    foreach ($envMatch in $envMatches) {
+        $environmentName = $envMatch.Groups[1].Value.Trim().Trim('"', "'")
+        if (-not [string]::IsNullOrWhiteSpace($environmentName) -and $environmentNames -notcontains $environmentName) {
+            $environmentNames += $environmentName
+        }
+    }
+
+    return @($environmentNames)
+}
+
+function Get-AzDoBuildEnvironmentNameFromPipelineContent {
+    # Return the first buildEnvironmentName scalar, trimming optional quotes/whitespace;
+    # missing or empty association is null, not a default BUILD environment.
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$PipelineContent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($PipelineContent)) {
+        return $null
+    }
+
+    $match = [regex]::Match($PipelineContent, '(?mi)^\s*buildEnvironmentName\s*:\s*[''\"]?(?<name>[^''\"\r\n]*)[''\"]?\s*$')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    $value = [string]$match.Groups['name'].Value
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $null
+    }
+
+    return $value.Trim()
+}
+
+function Get-AzDoDeployPipelineBranchMappingsFromRepoClone {
+    # Inspects fetched origin branches for DEPLOY YAML. BranchName comes from the filename;
+    # SourceBranch is where that file was found. Duplicate copies collapse by BranchName.
+    [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $branchRefs = @(& git -C $RepoRoot for-each-ref --format='%(refname:short)' refs/remotes/origin 2>$null)
+    $branches = @($branchRefs | ForEach-Object {
+        ConvertTo-NormalizedGitBranchName -Branch ([string]$_)
+    } | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'HEAD' -and $_ -ne 'origin'
+    } | Select-Object -Unique)
+
+    $mappings = @()
+    foreach ($branch in $branches) {
+        $branchRef = Resolve-GitExistingBranchRef -RepoRoot $RepoRoot -Branch $branch
+        if ([string]::IsNullOrWhiteSpace($branchRef)) {
+            continue
+        }
+
+        $pipelineFiles = @(& git -C $RepoRoot ls-tree -r --name-only $branchRef 'pipelines' 2>$null)
+        foreach ($pipelineFile in $pipelineFiles) {
+            if ($pipelineFile -notmatch '^pipelines/DEPLOY-(.+)\.yml$') {
+                continue
+            }
+
+            $pipelineContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $branch -RelativePath $pipelineFile
+            $mappings += [pscustomobject]@{
+                BranchName       = [string]$Matches[1]
+                SourceBranch     = $branch
+                PipelinePath     = $pipelineFile
+                EnvironmentNames = @(Get-AzDoDeploymentEnvironmentNamesFromPipelineContent -PipelineContent $pipelineContent)
+            }
+        }
+    }
+
+    return @($mappings | Sort-Object BranchName -Unique)
+}
+
+function Get-AzDoRegisteredDeployPipelineBranch {
+    # Include branches named by project build definitions even if clone discovery misses
+    # their YAML; DEPLOY definition names take precedence over their YAML filename.
+    [CmdletBinding()]
+    [OutputType([string], [object[]])]
+    param(
+        [Parameter(Mandatory)][string]$ProjectName
+    )
+
+    $branches = @()
+    $definitions = @(Get-VSTeamBuildDefinition -ProjectName $ProjectName)
+    foreach ($definition in @($definitions)) {
+        if ($definition.name -match '^DEPLOY-(.+)$') {
+            $branchName = [string]$Matches[1]
+            if (-not [string]::IsNullOrWhiteSpace($branchName) -and $branches -notcontains $branchName) {
+                $branches += $branchName
+            }
+        }
+        elseif ($definition.process -and $definition.process.PSObject.Properties.Name -contains 'yamlFilename' -and $definition.process.yamlFilename -match '^pipelines/DEPLOY-(.+)\.yml$') {
+            $branchName = [string]$Matches[1]
+            if (-not [string]::IsNullOrWhiteSpace($branchName) -and $branches -notcontains $branchName) {
+                $branches += $branchName
+            }
+        }
+    }
+
+    return @($branches | Sort-Object -Unique)
+}
+
+function Get-AzDoLegacyConfigurationConversion {
+    # Derives branches from committed pipelines and registered DEPLOY definitions for
+    # projects whose alm-config.psd1 has no branches map. Without legacy evidence the
+    # repository is treated as new. Failures return Status Failed so setup can continue.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$ProjectName,
+        [Parameter(Mandatory)][string]$DefaultBranch,
+        [Parameter()][string]$TenantId,
+        [Parameter()][string]$LegacyBaselineRelease = ''
+    )
+
+    try {
+        $deployMappings = @(Get-AzDoDeployPipelineBranchMappingsFromRepoClone -RepoRoot $RepoRoot)
+        $registeredBranches = @(Get-AzDoRegisteredDeployPipelineBranch -ProjectName $ProjectName)
+        $defaultBuildContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $DefaultBranch -RelativePath 'pipelines/BUILD.yml'
+        $defaultBuildEnvironmentName = Get-AzDoBuildEnvironmentNameFromPipelineContent -PipelineContent $defaultBuildContent
+
+        if ($deployMappings.Count -eq 0 -and $registeredBranches.Count -eq 0 -and [string]::IsNullOrWhiteSpace($defaultBuildEnvironmentName)) {
+            return [pscustomobject]@{ Status = 'NotRequired'; BranchNames = @(); ErrorMessage = ''; Branches = @{} }
+        }
+
+        $branchNames = @($DefaultBranch) + @($deployMappings | ForEach-Object { $_.BranchName }) + $registeredBranches | Select-Object -Unique
+        $branchFacts = @()
+        foreach ($branchName in $branchNames) {
+            $deployMapping = $deployMappings | Where-Object { $_.BranchName -ieq $branchName } | Select-Object -First 1
+
+            $buildEnvironmentName = $defaultBuildEnvironmentName
+            if ($branchName -ine $DefaultBranch) {
+                $buildContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $branchName -RelativePath 'pipelines/BUILD.yml'
+                $buildEnvironmentName = Get-AzDoBuildEnvironmentNameFromPipelineContent -PipelineContent $buildContent
+            }
+
+            # The default branch always receives Dev-<default>; other branches only count if
+            # that environment exists, so an unused name is not reintroduced.
+            $devEnvironmentName = "Dev-$DefaultBranch"
+            if ($branchName -ine $DefaultBranch) {
+                $devEnvironmentName = ''
+                if (Get-AzDoExistingEnvironmentState -ProjectName $ProjectName -EnvironmentName "Dev-$branchName" -TenantId $TenantId) {
+                    $devEnvironmentName = "Dev-$branchName"
+                }
+            }
+
+            $branchFacts += [pscustomobject]@{
+                BranchName                 = $branchName
+                DevEnvironmentName         = $devEnvironmentName
+                DeploymentEnvironmentNames = @(if ($deployMapping) { $deployMapping.EnvironmentNames } else { @() })
+                BuildEnvironmentName       = $(if ($null -eq $buildEnvironmentName) { '' } else { [string]$buildEnvironmentName })
+            }
+        }
+
+        $branches = ConvertTo-AlmLegacyBranchConfiguration -BranchFacts $branchFacts -LegacyBaselineRelease $LegacyBaselineRelease
+        return [pscustomobject]@{
+            Status       = 'Converted'
+            BranchNames  = @($branches.Keys | Sort-Object)
+            ErrorMessage = ''
+            Branches     = $branches
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Status = 'Failed'; BranchNames = @(); ErrorMessage = $_.Exception.Message; Branches = @{} }
+    }
+}
+
 function Get-AzDoRepositoryExistingSetupState {
     <#
     .SYNOPSIS
@@ -553,8 +739,9 @@ function Get-AzDoRepositoryExistingSetupState {
     System.Management.Automation.PSCustomObject. BranchStates plus default-branch BUILD
     validation flag, environment name and provider environment metadata.
     .NOTES
-    Pipeline YAML and registered pipeline definitions are not configuration sources.
-    ApplyConfig skips remote environment lookups.
+    Pipeline YAML and registered pipeline definitions are not configuration sources once
+    alm-config.psd1 has a branches map. Legacy repositories without one are converted once
+    from those sources in interactive setup; ApplyConfig skips the conversion and remote lookups.
     #>
     [CmdletBinding()]
     param(
@@ -570,6 +757,16 @@ function Get-AzDoRepositoryExistingSetupState {
     $configuredProvider = [string](Get-OptionalObjectPropertyValue -InputObject $existingConfiguration -PropertyName 'provider')
     if (-not [string]::IsNullOrWhiteSpace($configuredProvider) -and $configuredProvider -ine 'azDO') {
         throw "alm-config.psd1 specifies provider '$configuredProvider'; use the matching setup script."
+    }
+
+    $legacyConfigurationConversion = [pscustomobject]@{ Status = 'NotRequired'; BranchNames = @(); ErrorMessage = '' }
+    $needsLegacyConversion = -not $SkipProviderState -and (-not $existingConfiguration.Contains('branches') -or ($existingConfiguration.branches -is [System.Collections.IDictionary] -and $existingConfiguration.branches.Count -eq 0))
+    if ($needsLegacyConversion) {
+        $legacyBaselineRelease = [string](Get-OptionalObjectPropertyValue -InputObject (Get-OptionalObjectPropertyValue -InputObject $existingConfiguration -PropertyName 'buildValidation') -PropertyName 'baselineRelease')
+        $legacyConfigurationConversion = Get-AzDoLegacyConfigurationConversion -RepoRoot $RepoRoot -ProjectName $ProjectName -DefaultBranch $DefaultBranch -TenantId $TenantId -LegacyBaselineRelease $legacyBaselineRelease
+        if ($legacyConfigurationConversion.Status -eq 'Converted') {
+            $existingConfiguration['branches'] = $legacyConfigurationConversion.Branches
+        }
     }
 
     $hasConfiguredBranches = $existingConfiguration.Contains('branches')
@@ -691,6 +888,7 @@ function Get-AzDoRepositoryExistingSetupState {
             BuildValidationEnvironmentName = $(if ($defaultBranchState) { [string]$defaultBranchState.BuildValidationEnvironmentName } else { '' })
             ExistingBuildValidationEnvironment = $(if ($defaultBranchState) { $defaultBranchState.ExistingBuildValidationEnvironment } else { $null })
             ExistingConfiguration = $existingConfiguration
+            LegacyConfigurationConversion = $legacyConfigurationConversion
         }
     }
 
@@ -700,5 +898,6 @@ function Get-AzDoRepositoryExistingSetupState {
         BuildValidationEnvironmentName = ''
         ExistingBuildValidationEnvironment = $null
         ExistingConfiguration = $existingConfiguration
+        LegacyConfigurationConversion = $legacyConfigurationConversion
     }
 }

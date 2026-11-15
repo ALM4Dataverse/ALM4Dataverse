@@ -117,8 +117,12 @@ function Get-BranchTargetedRepoChangePublishPlan {
     .DESCRIPTION
         Returns the publication fields used by Get-RepoChangePublishPlan, but never
         offers another target: TargetBranch stays fixed in both modes. BranchName
-        is the direct target or the entered PR source. Cancellation throws; this
-        helper prompts only and does not contact the provider or validate branches.
+        is the direct target or the entered PR source. When ExistingPlan supplies a
+        current mode, that choice is listed first and marked current while its branch
+        and title values seed the editable defaults. Cancellation throws; this helper
+        prompts only and does not contact the provider or validate branches.
+    .PARAMETER ExistingPlan
+        A previously selected publication plan, or null when no choice has been made.
     #>
     [CmdletBinding()]
     param(
@@ -128,6 +132,7 @@ function Get-BranchTargetedRepoChangePublishPlan {
         [Parameter(Mandatory)][string]$DefaultCommitMessage,
         [Parameter(Mandatory)][string]$DefaultPullRequestTitle,
         [Parameter()][string]$DefaultPullRequestDescription,
+        [Parameter()][AllowNull()][object]$ExistingPlan,
         [Parameter()][string[]]$GuidanceLines,
         [Parameter()][string]$DocRelativePath,
         [Parameter()][string]$Ref
@@ -139,14 +144,34 @@ function Get-BranchTargetedRepoChangePublishPlan {
         "Branch + pull request adds review/check gates and is best when '$TargetBranch' must be controlled before changes land."
     )
 
-    $menuItems = @(
-        "Commit directly to '$TargetBranch'",
-        "Push a branch and open a pull request into '$TargetBranch'"
-    )
+    $existingMode = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingPlan -PropertyName 'Mode')
+    $existingBranchName = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingPlan -PropertyName 'BranchName')
+    $existingCommitMessage = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingPlan -PropertyName 'CommitMessage')
+    $existingPullRequestTitle = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingPlan -PropertyName 'PullRequestTitle')
+    $existingPullRequestDescription = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingPlan -PropertyName 'PullRequestDescription')
+
+    $effectiveCommitMessage = if ([string]::IsNullOrWhiteSpace($existingCommitMessage)) { $DefaultCommitMessage } else { $existingCommitMessage }
+    $directLabel = "Commit directly to '$TargetBranch'"
+    $pullRequestLabel = "Push a branch and open a pull request into '$TargetBranch'"
+
+    # SelectionPrompt has no default-index API, so the current mode is placed first
+    # and labeled instead. Steps without an existing plan keep the original order.
+    $modeOptions = if ($existingMode -eq 'PullRequest') {
+        @(
+            [pscustomobject]@{ Mode = 'PullRequest'; Label = "$pullRequestLabel (current)" }
+            [pscustomobject]@{ Mode = 'Direct'; Label = $directLabel }
+        )
+    }
+    else {
+        @(
+            [pscustomobject]@{ Mode = 'Direct'; Label = $(if ($existingMode -eq 'Direct') { "$directLabel (current)" } else { $directLabel }) }
+            [pscustomobject]@{ Mode = 'PullRequest'; Label = $pullRequestLabel }
+        )
+    }
 
     $selection = Select-FromMenu `
         -Title "How should the $ProviderName changes for branch '$TargetBranch' be published?" `
-        -Items $menuItems `
+        -Items @($modeOptions.Label) `
         -PromptGuidanceLines @($defaultGuidance + @($GuidanceLines) + @(
                 "Choose whether branch '$TargetBranch' updates should be applied directly or via a pull request.",
                 'Use direct commit for immediate branch updates, or branch + PR when checks and review gates are needed.'
@@ -157,31 +182,47 @@ function Get-BranchTargetedRepoChangePublishPlan {
         throw "No repository publish option selected for branch '$TargetBranch'."
     }
 
-    switch ($selection) {
-        0 {
-            return [pscustomobject]@{
-                Mode                   = 'Direct'
-                BranchName             = $TargetBranch
-                TargetBranch           = $TargetBranch
-                CommitMessage          = $DefaultCommitMessage
-                PullRequestTitle       = $null
-                PullRequestDescription = $null
-            }
+    $selectedMode = $modeOptions[$selection].Mode
+    if ($selectedMode -eq 'Direct') {
+        return [pscustomobject]@{
+            Mode                   = 'Direct'
+            BranchName             = $TargetBranch
+            TargetBranch           = $TargetBranch
+            CommitMessage          = $effectiveCommitMessage
+            PullRequestTitle       = $null
+            PullRequestDescription = $null
         }
-        1 {
-            $defaultBranchName = Get-DefaultSetupBranchName -BaseBranch $TargetBranch -Context $RepositoryName
-            $sourceBranch = Read-TextWithDefault -Prompt 'Branch to push for the pull request' -DefaultValue $defaultBranchName
-            $prTitle = Read-TextWithDefault -Prompt 'Pull request title' -DefaultValue $DefaultPullRequestTitle
+    }
 
-            return [pscustomobject]@{
-                Mode                   = 'PullRequest'
-                BranchName             = $sourceBranch
-                TargetBranch           = $TargetBranch
-                CommitMessage          = $DefaultCommitMessage
-                PullRequestTitle       = $prTitle
-                PullRequestDescription = $DefaultPullRequestDescription
-            }
-        }
+    $defaultBranchName = if ($existingMode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($existingBranchName)) {
+        $existingBranchName
+    }
+    else {
+        Get-DefaultSetupBranchName -BaseBranch $TargetBranch -Context $RepositoryName
+    }
+    $defaultPullRequestTitle = if ($existingMode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($existingPullRequestTitle)) {
+        $existingPullRequestTitle
+    }
+    else {
+        $DefaultPullRequestTitle
+    }
+    $defaultPullRequestDescription = if ($existingMode -eq 'PullRequest' -and -not [string]::IsNullOrWhiteSpace($existingPullRequestDescription)) {
+        $existingPullRequestDescription
+    }
+    else {
+        $DefaultPullRequestDescription
+    }
+
+    $sourceBranch = Read-TextWithDefault -Prompt 'Branch to push for the pull request' -DefaultValue $defaultBranchName
+    $prTitle = Read-TextWithDefault -Prompt 'Pull request title' -DefaultValue $defaultPullRequestTitle
+
+    return [pscustomobject]@{
+        Mode                   = 'PullRequest'
+        BranchName             = $sourceBranch
+        TargetBranch           = $TargetBranch
+        CommitMessage          = $effectiveCommitMessage
+        PullRequestTitle       = $prTitle
+        PullRequestDescription = $defaultPullRequestDescription
     }
 }
 

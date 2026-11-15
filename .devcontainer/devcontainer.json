@@ -8,6 +8,7 @@
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install --no-install-recommends -y ffmpeg fonts-noto-mono",
   "customizations": {
     "vscode": {
       "extensions": [

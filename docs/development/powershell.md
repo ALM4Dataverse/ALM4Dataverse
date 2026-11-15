@@ -70,6 +70,25 @@ Tests use temporary repositories and mocked Dataverse/package operations.
 They do not provision resources, contact Dataverse, or push Git changes.
 Release packaging tests generate and parse both standalone setup installers.
 
+## Setup Screenshot Capture
+
+The full capture regenerates the setup PNGs and the interactive walkthrough GIF
+embedded in the [README](../../README.md). It requires PowerShell 7.6 on .NET 10,
+NuGet access on first use, the platform font listed in the
+[repository instructions](../../AGENTS.md), and ffmpeg with drawtext and
+fontconfig support. The Dev Container installs ffmpeg and Noto Sans Mono.
+The GIF holds setup checkpoints for six seconds, types characters one at a time,
+and uses a semi-transparent caption footer below a raised green divider.
+
+Run the full capture from the repository root:
+
+```powershell
+pwsh -NoLogo -NoProfile -File ./tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1
+```
+
+Use `-Scene <name>` to capture one PNG without creating the GIF, or
+`-SkipAnimation` to regenerate the complete PNG set without ffmpeg.
+
 ## Test Organisation
 
 Suites live under `tests/`, grouped by the behaviour they own:

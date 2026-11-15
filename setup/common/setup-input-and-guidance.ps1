@@ -99,13 +99,14 @@ function Select-FromMenu {
 
     .DESCRIPTION
         Arrow keys move, Enter selects, and search is enabled automatically for long lists.
-        Returns a zero-based index into Items, or null for no items, the injected
-        cancel choice, or an unrecognized prompt result. Back choices throw the
-        wizard navigation marker rather than returning an index. Escape returns to the
-        previous setup menu or step, or cancels when there is no parent. Literal labels
-        are escaped for display; duplicate labels resolve to their first match. A
-        single guidance panel is always visible; nested menus preserve an existing panel.
-        Console input mode restoration is attempted after selection, including prompt failure.
+        Returns a zero-based index into Items, or null for no items, a declined
+        single-item confirmation, or an unrecognized prompt result. Explicit Back
+        choices throw the wizard navigation marker rather than returning an index.
+        Escape returns to the previous setup menu or step, or cancels when there is no
+        parent. Literal labels are escaped for display; duplicate labels resolve to
+        their first match. A single guidance panel is always visible; nested menus
+        preserve an existing panel. Console input mode restoration is attempted after
+        selection, including prompt failure.
     .PARAMETER ShowProductBrand
         Displays the green Unicode-art product mark beside the ALM4Dataverse name and
         version below the setup header. The name and version are on separate lines
@@ -117,15 +118,20 @@ function Select-FromMenu {
         Skips prompt-specific guidance when a section panel is already visible. If no
         panel is present, concise default menu guidance is still shown.
     .PARAMETER ActionItems
-        Places matching choices in a separate, bold cyan action group. The choices
-        remain selectable and results still map to their original Items indexes.
+        Places matching choices in a separate, bold cyan action group after a grey
+        separator. The choices remain selectable and results still map to their
+        original Items indexes.
+    .PARAMETER DimItems
+        Displays matching choices in grey. Callers remain responsible for preventing
+        unavailable choices from running.
     .PARAMETER ActionSectionTitle
-        Heading for the optional action group.
+        Separator text preceding the optional action group.
     .PARAMETER ActionSectionFirst
         Renders the action group before the normal choices.
     #>
 
     [CmdletBinding()]
+    [OutputType([int])]
     param(
         [Parameter(Mandatory)][string]$Title,
         [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$Items,
@@ -136,8 +142,9 @@ function Select-FromMenu {
         [Parameter()][switch]$PreserveExistingContent,
         [Parameter()][switch]$SkipPromptGuidance,
         [Parameter()][string[]]$ActionItems = @(),
-        [Parameter()][string]$ActionSectionTitle = 'Actions',
-        [Parameter()][switch]$ActionSectionFirst
+        [Parameter()][string]$ActionSectionTitle = '---',
+        [Parameter()][switch]$ActionSectionFirst,
+        [Parameter()][string[]]$DimItems = @()
     )
 
     if ($Items.Count -eq 0) { return $null }
@@ -155,9 +162,11 @@ function Select-FromMenu {
         $canRestoreTreatControlCAsInput = $false
     }
 
+    $isSingleChoiceConfirmation = $Items.Count -eq 1
+    $promptKind = if ($isSingleChoiceConfirmation) { 'YesNo' } else { 'Menu' }
     Write-SetupPromptFrame `
         -PromptText $Title `
-        -PromptKind 'Menu' `
+        -PromptKind $promptKind `
         -PromptGuidanceLines $PromptGuidanceLines `
         -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
         -PromptGuidanceRef $PromptGuidanceRef `
@@ -166,124 +175,132 @@ function Select-FromMenu {
         -SkipPromptGuidance:$SkipPromptGuidance
 
     $effectiveItems = @($Items)
-    $wizardContext = Get-SetupWizardContext
-    $hasGenericBack = $false
-    $singleChoiceCancelLabel = $null
-    if (
-        $wizardContext -and
-        -not $wizardContext.IsNavigationMenu -and
-        $wizardContext.CurrentStepIndex -gt 0 -and
-        -not ($effectiveItems -contains 'Back') -and
-        -not ($effectiveItems -contains '< Back to previous step')
-    ) {
-        $effectiveItems += '< Back to previous step'
-        $hasGenericBack = $true
-    }
-
-    # Some hosts render a one-item SelectionPrompt incorrectly (duplicate highlighted rows).
-    # Keep the standard menu interaction by injecting an explicit cancel option when only one item exists.
-    if ($effectiveItems.Count -eq 1 -and $Items.Count -eq 1 -and -not $hasGenericBack) {
-        $singleChoiceCancelLabel = '< Cancel setup'
-        $effectiveItems += $singleChoiceCancelLabel
-        Write-SetupDebug -Message "Single-item menu workaround active for title='$Title'; added '$singleChoiceCancelLabel'."
-    }
-
-    Write-SetupDebug -Message "Select-FromMenu title='$Title' items=$($Items.Count) effectiveItems=$($effectiveItems.Count) hasGenericBack=$hasGenericBack"
+    Write-SetupDebug -Message "Select-FromMenu title='$Title' items=$($Items.Count) singleChoiceConfirmation=$isSingleChoiceConfirmation"
     if (Test-SetupDebugEnabled) {
         for ($debugIndex = 0; $debugIndex -lt $effectiveItems.Count; $debugIndex++) {
             Write-SetupDebug -Message "  [$debugIndex] $($effectiveItems[$debugIndex])"
         }
     }
 
-    $prompt = [Spectre.Console.SelectionPrompt[string]]::new()
-    $prompt.MoreChoicesText = ''
-    $prompt.WrapAround = ($effectiveItems.Count -gt 1)
-    $hasActionSection = @($effectiveItems | Where-Object { $ActionItems -contains $_ }).Count -gt 0
-    $hasSetupSection = $hasActionSection -and @($effectiveItems | Where-Object { $ActionItems -notcontains $_ }).Count -gt 0
-    $sectionCount = if ($hasActionSection) {
-        1 + [int]$hasSetupSection
+    if ($isSingleChoiceConfirmation) {
+        $confirmationLabel = [string](ConvertTo-SpectreMarkupLiteral -Text $effectiveItems[0])
+        if ($DimItems -contains $effectiveItems[0]) {
+            $confirmationLabel = "[grey]$confirmationLabel[/]"
+        }
+        elseif ($ActionItems -contains $effectiveItems[0]) {
+            [Spectre.Console.AnsiConsole]::MarkupLine('[grey]---[/]')
+            $confirmationLabel = "[bold deepskyblue1]$confirmationLabel[/]"
+        }
+
+        $prompt = [Spectre.Console.ConfirmationPrompt]::new($confirmationLabel)
+        $prompt.DefaultValue = $true
     }
     else {
-        0
-    }
-    $displayItemCount = $effectiveItems.Count + $sectionCount
+        $prompt = [Spectre.Console.SelectionPrompt[string]]::new()
+        $prompt.MoreChoicesText = ''
+        $prompt.WrapAround = ($effectiveItems.Count -gt 1)
+        $hasActionSection = @($effectiveItems | Where-Object { $ActionItems -contains $_ }).Count -gt 0
+        $hasSetupSection = $hasActionSection -and @($effectiveItems | Where-Object { $ActionItems -notcontains $_ }).Count -gt 0
+        $sectionCount = if ($hasActionSection) {
+            1 + [int]$hasSetupSection
+        }
+        else {
+            0
+        }
+        $displayItemCount = $effectiveItems.Count + $sectionCount
 
-    $availableMenuRows = 10
-    try {
-        $windowTop = [Console]::WindowTop
-        $windowHeight = [Console]::WindowHeight
-        $cursorTop = [Console]::CursorTop
-        $visibleWindowBottom = $windowTop + [Math]::Max($windowHeight, 1)
-        $reservedRows = 4
-        $availableMenuRows = [Math]::Max($visibleWindowBottom - $cursorTop - $reservedRows, 1)
-    }
-    catch {
         $availableMenuRows = 10
-    }
-
-    $prompt.PageSize = [Math]::Min([Math]::Max($displayItemCount, 1), $availableMenuRows)
-
-    if ($effectiveItems.Count -gt 8) {
-        $prompt.SearchEnabled = $true
-        $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
-    }
-
-    $effectiveDisplayItems = @()
-    $setupDisplayItems = @()
-    $actionDisplayItems = @()
-    foreach ($item in $effectiveItems) {
-        $displayItem = [string](ConvertTo-SpectreMarkupLiteral -Text $item)
-        if ($hasActionSection -and $ActionItems -contains $item) {
-            $displayItem = "[bold deepskyblue1]$displayItem[/]"
-            $actionDisplayItems += $displayItem
+        try {
+            $windowTop = [Console]::WindowTop
+            $windowHeight = [Console]::WindowHeight
+            $cursorTop = [Console]::CursorTop
+            $visibleWindowBottom = $windowTop + [Math]::Max($windowHeight, 1)
+            $reservedRows = 4
+            $availableMenuRows = [Math]::Max($visibleWindowBottom - $cursorTop - $reservedRows, 1)
         }
-        else {
-            $setupDisplayItems += $displayItem
+        catch {
+            $availableMenuRows = 10
         }
-        $effectiveDisplayItems += $displayItem
-    }
 
-    if ($hasActionSection) {
-        $actionGroupTitle = "[bold deepskyblue1]$(ConvertTo-SpectreMarkupLiteral -Text $ActionSectionTitle)[/]"
-        $setupGroupTitle = '[bold]Setup steps[/]'
-        if ($ActionSectionFirst) {
-            $actionGroup = $prompt.AddChoice($actionGroupTitle)
-            foreach ($displayItem in $actionDisplayItems) {
-                [void]$actionGroup.AddChild($displayItem)
+        $prompt.PageSize = [Math]::Min([Math]::Max($displayItemCount, 1), $availableMenuRows)
+
+        if ($effectiveItems.Count -gt 8) {
+            $prompt.SearchEnabled = $true
+            $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
+        }
+
+        $effectiveDisplayItems = @()
+        $setupDisplayItems = @()
+        $actionDisplayItems = @()
+        foreach ($item in $effectiveItems) {
+            $displayItem = [string](ConvertTo-SpectreMarkupLiteral -Text $item)
+            if ($DimItems -contains $item) {
+                $displayItem = "[grey]$displayItem[/]"
             }
-            if ($hasSetupSection) {
-                $setupGroup = $prompt.AddChoice($setupGroupTitle)
-                foreach ($displayItem in $setupDisplayItems) {
-                    [void]$setupGroup.AddChild($displayItem)
+            if ($hasActionSection -and $ActionItems -contains $item) {
+                $displayItem = "[bold deepskyblue1]$displayItem[/]"
+                $actionDisplayItems += $displayItem
+            }
+            else {
+                $setupDisplayItems += $displayItem
+            }
+            $effectiveDisplayItems += $displayItem
+        }
+
+        if ($hasActionSection) {
+            $actionGroupTitle = "[grey]$(ConvertTo-SpectreMarkupLiteral -Text $ActionSectionTitle)[/]"
+            $setupGroupTitle = '[bold]Setup steps[/]'
+            if ($ActionSectionFirst) {
+                $actionGroup = $prompt.AddChoice($actionGroupTitle)
+                foreach ($displayItem in $actionDisplayItems) {
+                    [void]$actionGroup.AddChild($displayItem)
+                }
+                if ($hasSetupSection) {
+                    $setupGroup = $prompt.AddChoice($setupGroupTitle)
+                    foreach ($displayItem in $setupDisplayItems) {
+                        [void]$setupGroup.AddChild($displayItem)
+                    }
+                }
+            }
+            else {
+                if ($hasSetupSection) {
+                    $setupGroup = $prompt.AddChoice($setupGroupTitle)
+                    foreach ($displayItem in $setupDisplayItems) {
+                        [void]$setupGroup.AddChild($displayItem)
+                    }
+                }
+                $actionGroup = $prompt.AddChoice($actionGroupTitle)
+                foreach ($displayItem in $actionDisplayItems) {
+                    [void]$actionGroup.AddChild($displayItem)
                 }
             }
         }
         else {
-            if ($hasSetupSection) {
-                $setupGroup = $prompt.AddChoice($setupGroupTitle)
-                foreach ($displayItem in $setupDisplayItems) {
-                    [void]$setupGroup.AddChild($displayItem)
-                }
-            }
-            $actionGroup = $prompt.AddChoice($actionGroupTitle)
-            foreach ($displayItem in $actionDisplayItems) {
-                [void]$actionGroup.AddChild($displayItem)
+            foreach ($displayItem in $effectiveDisplayItems) {
+                [void]$prompt.AddChoice($displayItem)
             }
         }
+    }
+
+    if ($isSingleChoiceConfirmation) {
+        Show-SetupStatusBarAtBottom -PromptKind 'YesNo'
     }
     else {
-        foreach ($displayItem in $effectiveDisplayItems) {
-            [void]$prompt.AddChoice($displayItem)
-        }
+        Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
     }
 
-    Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
-
     try {
-        $selectedDisplayValue = Show-SelectionPromptWithInterruptHandling `
+        $selectedDisplayValue = Show-SetupPromptWithInterruptHandling `
             -Prompt $prompt `
             -ReturnNullAtNavigationMenuOnEscape
-        Write-SetupDebug -Message "SelectionPrompt selected display value: '$selectedDisplayValue'"
+        Write-SetupDebug -Message "Interactive setup prompt returned: '$selectedDisplayValue'"
+
+        if ($isSingleChoiceConfirmation) {
+            if ($selectedDisplayValue) {
+                return 0
+            }
+            return $null
+        }
 
         $selectedEffectiveIndex = -1
         for ($effectiveIndex = 0; $effectiveIndex -lt $effectiveDisplayItems.Count; $effectiveIndex++) {
@@ -301,13 +318,8 @@ function Select-FromMenu {
         $selectedValue = [string]$effectiveItems[$selectedEffectiveIndex]
         Write-SetupDebug -Message "SelectionPrompt selected value: '$selectedValue'"
 
-        if ($singleChoiceCancelLabel -and $selectedValue -ceq $singleChoiceCancelLabel) {
-            Write-SetupDebug -Message "Single-item menu cancel option selected; returning null."
-            return $null
-        }
-
         $isBackSelection = ($selectedValue -eq 'Back' -or $selectedValue -like '< Back*')
-        if ($isBackSelection -and ($effectiveItems -contains '< Back to previous step' -or $effectiveItems -contains 'Back')) {
+        if ($isBackSelection) {
             Request-SetupWizardBack
         }
 

@@ -300,10 +300,12 @@
     # Increase this value if solution imports time out in large or complex environments.
     # importTimeoutSeconds = 10800
 
-    # Optional BUILD validation baseline.
+    # Legacy BUILD validation baseline. Set baselines per branch with
+    # branches.<branch>.buildValidation.baselineRelease instead. This value applies
+    # only to branches whose entry has no baselineRelease key; setup migrates it
+    # into branch settings for repositories that predate the branches map.
     # Empty string deploys only the current build; an Azure DevOps BUILD run ID
     # or build number, or GitHub BUILD run ID/release tag selects a fixed baseline.
-    # GitHub run IDs resolve to Release assets, not expiring Actions artifacts.
     # '@environment-name' selects the most recently successful BUILD release
     # deployed to that environment.
     buildValidation = @{

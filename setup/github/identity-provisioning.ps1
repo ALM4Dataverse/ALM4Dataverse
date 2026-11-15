@@ -166,9 +166,10 @@ function New-EntraIdApplication {
         Reuses or creates a tenant app registration and ensures its service principal.
     .DESCRIPTION
         Reuses the first exact display-name query result. Returns Name, ApplicationId,
-        ApplicationObjectId, TenantId, AuthType and ClientSecret. AuthType Secret
-        creates a fresh secret even for a reused application; other values leave
-        ClientSecret null. ShouldProcess guards the entire operation.
+        ApplicationObjectId, TenantId, AuthType, ClientSecret and CreatedDuringSetup.
+        AuthType Secret creates a fresh secret even for a reused application; other
+        values leave ClientSecret null. CreatedDuringSetup is true only when this call
+        created the application. ShouldProcess guards the entire operation.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -191,6 +192,7 @@ function New-EntraIdApplication {
     $existing = Invoke-RestMethod -Uri $uri -Headers $headers -Method Get
 
     $app = $null
+    $createdApplication = $false
     if ($existing.value.Count -gt 0) {
         $app = $existing.value[0]
         Write-Host "Found existing App Registration '$DisplayName' ($($app.appId))."
@@ -202,6 +204,7 @@ function New-EntraIdApplication {
             signInAudience = "AzureADMyOrg"
         }
         $app = Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/applications" -Headers $headers -Method Post -Body ($body | ConvertTo-Json)
+        $createdApplication = $true
         Write-Host "Created App Registration '$DisplayName' ($($app.appId))."
     }
 
@@ -214,6 +217,7 @@ function New-EntraIdApplication {
         ClientSecret        = $null
         TenantId            = $TenantId
         AuthType            = $AuthType
+        CreatedDuringSetup  = $createdApplication
     }
 
     if ($AuthType -eq 'Secret') {
@@ -233,9 +237,11 @@ function Get-GitHubCredentialsForEnvironment {
         ExistingCredential is copied before optional secret rotation, while cached
         credentials are returned as supplied. Keeping an existing secret leaves its
         unreadable value null and retains HasExistingSecret for later storage.
-        New/manual paths return app client/object IDs, tenant, auth type and optional
-        secret; they can create Graph resources before final wizard review.
-        Cancelled required menus throw rather than returning partial credentials.
+        Requesting rotation marks the credential for generation at Apply instead of
+        writing a secret during setup. New/manual paths return app client/object IDs,
+        tenant, auth type and optional secret; they can create Graph resources before
+        final wizard review. Cancelled required menus throw rather than returning
+        partial credentials.
     #>
     [CmdletBinding()]
     param(
@@ -288,11 +294,12 @@ function Get-GitHubCredentialsForEnvironment {
         if ($selectedCredential.AuthType -eq 'Secret' -and $selectedCredential.HasExistingSecret) {
             $secretHandlingItems = @(
                 'Keep the existing client secret',
-                'Generate a new client secret now'
+                'Generate a new client secret when changes are applied'
             )
 
             $secretHandlingSelection = Select-FromMenu -Title "How should setup handle the existing client secret for '$EnvironmentName'?" -Items $secretHandlingItems -PromptGuidanceLines @(
-                'Choose whether to keep the existing secret or rotate it now.',
+                'Choose whether to keep the existing secret or rotate it when changes are applied.',
+                'Rotation is deferred until Apply so the preview can list it before any credential changes.',
                 'Rotate when policy requires periodic renewal or the current secret is no longer trusted.'
             ) -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' -PromptGuidanceRef $ALM4DataverseRef
             if ($null -eq $secretHandlingSelection) {
@@ -314,8 +321,15 @@ function Get-GitHubCredentialsForEnvironment {
                     throw "Cannot generate a new client secret for '$($selectedCredential.ApplicationId)' because the App Registration object id could not be resolved."
                 }
 
-                Write-Host 'Generating a new client secret...' -ForegroundColor Yellow
-                $selectedCredential.ClientSecret = New-EntraIdApplicationSecret -ApplicationObjectId $selectedCredential.ApplicationObjectId -TenantId $selectedCredential.TenantId
+                # Defer the write to Apply so preview can list it and the user can
+                # still change their mind before any credential is rotated.
+                $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $true -Force
+                Write-Host 'A new client secret will be generated when changes are applied.' -ForegroundColor Yellow
+            }
+            else {
+                # Revisiting the step copies the previous credential, so clear any
+                # rotation request the user has now declined.
+                $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $false -Force
             }
 
             return $selectedCredential
@@ -411,6 +425,42 @@ function Get-GitHubCredentialsForEnvironment {
             AuthType            = $authType
         }
     }
+}
+
+function Get-GitHubCredentialSecretForApply {
+    <#
+    .SYNOPSIS
+        Returns the client-secret value to store, performing a deferred rotation first.
+    .DESCRIPTION
+        Returns an already-supplied ClientSecret unchanged. When environment
+        configuration only requested rotation (RotateSecret), creates the new secret
+        now, during Apply, and returns it. Returns null when neither applies so callers
+        can leave an existing stored secret untouched.
+    .PARAMETER Credentials
+        Environment credential metadata captured by Get-GitHubCredentialsForEnvironment.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][object]$Credentials
+    )
+
+    $clientSecret = [string](Get-OptionalObjectPropertyValue -InputObject $Credentials -PropertyName 'ClientSecret')
+    if (-not [string]::IsNullOrWhiteSpace($clientSecret)) {
+        return $clientSecret
+    }
+    if (-not [bool](Get-OptionalObjectPropertyValue -InputObject $Credentials -PropertyName 'RotateSecret')) {
+        return $null
+    }
+
+    $applicationObjectId = [string](Get-OptionalObjectPropertyValue -InputObject $Credentials -PropertyName 'ApplicationObjectId')
+    $tenantId = [string](Get-OptionalObjectPropertyValue -InputObject $Credentials -PropertyName 'TenantId')
+    if ([string]::IsNullOrWhiteSpace($applicationObjectId) -or [string]::IsNullOrWhiteSpace($tenantId)) {
+        throw 'Deferred client-secret rotation requires ApplicationObjectId and TenantId.'
+    }
+
+    Write-Host 'Generating the client secret requested during setup...' -ForegroundColor Yellow
+    return (New-EntraIdApplicationSecret -ApplicationObjectId $applicationObjectId -TenantId $tenantId)
 }
 
 function Initialize-GitHubSetupAuthentication {

@@ -357,8 +357,10 @@ function Select-AzDoSharedRepository {
     .NOTES
     PreferredRepositoryName is promoted when available and otherwise seeds the new-name
     prompt. UsePreferredIfAvailable avoids the prompt when the preferred repository exists.
-    ValidatePreferredOnly checks accessibility without prompting. Blank names are reprompted
-    during selection; cancellation or a missing created ID throws.
+    ValidatePreferredOnly checks accessibility without prompting. Creating a repository asks
+    for explicit confirmation because the write happens during selection, before preview and
+    Apply. Blank names are reprompted during selection; cancellation or a missing created ID
+    throws.
     #>
     [CmdletBinding()]
     param(
@@ -461,6 +463,18 @@ function Select-AzDoSharedRepository {
             continue
         }
 
+        $confirmCreation = Read-YesNo `
+            -Prompt "Create shared repository '$newRepoName' in project '$ProjectName' now?" `
+            -PromptGuidanceLines @(
+                'Creating the shared repository is an immediate write; it is not deferred until Apply.',
+                'Choose No to enter a different repository name.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+        if (-not $confirmCreation) {
+            continue
+        }
+
         $createdRepo = Invoke-WithSpectreStatus -Status "Creating Git repository '$newRepoName' in project '$ProjectName'..." -ScriptBlock {
             Add-VSTeamGitRepository -ProjectName $ProjectName -Name $newRepoName
         }
@@ -468,6 +482,7 @@ function Select-AzDoSharedRepository {
             throw "Failed to create Git repository '$newRepoName'."
         }
 
+        $createdRepo | Add-Member -NotePropertyName CreatedDuringSetup -NotePropertyValue $true -Force
         Write-Host "Created shared repository '$newRepoName'."
         return $createdRepo
     }

@@ -64,8 +64,9 @@ function Get-AzDoInitialBranchMapping {
 }
 
 function New-AzDoBranchSetupState {
-    # Keep discovery separate from later interactive DEV configuration and publication plan.
-    # Drop null deployment entries but preserve the supplied environment objects and order.
+    # Discovered DEV starts as the current configuration so revisit prompts retain known
+    # values. Publication remains a separate wizard choice. Drop null deployment entries
+    # but preserve the supplied environment objects and order.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$BranchName,
@@ -82,7 +83,7 @@ function New-AzDoBranchSetupState {
     return [pscustomobject]@{
         BranchName                  = $BranchName
         ExistingDevEnvironment      = $ExistingDevEnvironment
-        DevEnvironmentConfiguration = $null
+        DevEnvironmentConfiguration = $ExistingDevEnvironment
         DeploymentEnvironments      = $normalizedDeploymentEnvironments
         ExistingBuildValidationEnvironment = $ExistingBuildValidationEnvironment
         BuildValidationEnvironmentName = $BuildValidationEnvironmentName

@@ -137,13 +137,13 @@ function Write-SetupConsoleBar {
 }
 
 function Show-SetupStatusBarAtBottom {
-    # Menu hints describe filtering only when enabled. F1 appears only when the
-    # active prompt has a documentation URL; Escape follows wizard navigation.
-    # Cursor-host failures render an inline line that cleanup cannot erase.
+    # Menu hints describe filtering only when enabled. Diff controls and optional
+    # row-range details share the same bottom bar as other prompt hints.
     [CmdletBinding()]
     param(
-        [Parameter()][ValidateSet('Menu', 'Text', 'YesNo', 'Secret')][string]$PromptKind = 'Text',
-        [Parameter()][switch]$SearchEnabled
+        [Parameter()][ValidateSet('Menu', 'Text', 'YesNo', 'Secret', 'Diff')][string]$PromptKind = 'Text',
+        [Parameter()][switch]$SearchEnabled,
+        [Parameter()][string]$StatusDetail
     )
 
     Initialize-SpectreConsole
@@ -163,6 +163,15 @@ function Show-SetupStatusBarAtBottom {
     }
 
     $segments = switch ($PromptKind) {
+        'Diff' {
+            @(
+                'Up/Down=scroll',
+                'PgUp/PgDn=page',
+                'Home/End=jump',
+                'Enter/Q/Esc=close',
+                'Ctrl+C=exit'
+            )
+        }
         'Menu' {
             @(
                 'Up/Down=move',
@@ -201,6 +210,9 @@ function Show-SetupStatusBarAtBottom {
     }
 
     $segments = @($segments | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (-not [string]::IsNullOrWhiteSpace($StatusDetail)) {
+        $segments = @($StatusDetail) + $segments
+    }
     if ($segments.Count -eq 0) {
         return
     }
@@ -280,14 +292,14 @@ function Remove-SetupConsoleCancelHandler {
     }
 }
 
-function Show-SelectionPromptWithInterruptHandling {
+function Show-SetupPromptWithInterruptHandling {
     <#
     .SYNOPSIS
-        Runs an async Spectre selection prompt synchronously with Escape and Ctrl+C handling.
+        Runs an async Spectre prompt synchronously with Escape and Ctrl+C handling.
     .DESCRIPTION
-        Returns the prompt's selected value. Uses the compiled console-event bridge
-        when supported, otherwise a local token source. Cancellation is normalized
-        to OperationCanceledException; other failures propagate. The source and any
+        Returns the prompt's result. Uses the compiled console-event bridge when
+        supported, otherwise a local token source. Cancellation is normalized to
+        OperationCanceledException; other failures propagate. The source and any
         attached handler are released in finally, including on prompt failure.
         Escape requests back-navigation, or cancels when no parent menu or step exists.
     .PARAMETER ReturnNullAtNavigationMenuOnEscape
@@ -490,7 +502,9 @@ function Write-SetupPromptFrame {
         $script:SetupGuidancePanelVisible = $false
         [Spectre.Console.AnsiConsole]::Clear()
         Write-SetupDashboard -Message $dashboardMessage -ShowProductBrand:$ShowProductBrand
-        [Spectre.Console.AnsiConsole]::MarkupLine('')
+        if (-not $ShowProductBrand) {
+            [Spectre.Console.AnsiConsole]::MarkupLine('')
+        }
     }
 
     $guidancePanelVisible = [bool](Get-Variable -Name 'SetupGuidancePanelVisible' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
@@ -523,7 +537,7 @@ function Write-SetupPromptFrame {
                     @('Enter the requested value. Press Enter to accept the shown default, if one is available.')
                 }
                 'YesNo' {
-                    @('Choose Yes or No. Press Enter to accept the default shown in the status bar.')
+                    @('Choose Yes or No. Press Enter to accept the displayed default.')
                 }
                 'Secret' {
                     @('Input is masked while typing and is not included in setup summaries.')
@@ -542,14 +556,14 @@ function Write-SetupPromptFrame {
 }
 
 function Wait-ForUserAcknowledgement {
-    # The only successful result is choosing the first item; no value is emitted.
+    # A default-yes confirmation keeps the acknowledgement dismissible without a cancel menu item.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Message,
         [Parameter()][string]$ContinueLabel = 'Continue'
     )
 
-    $choice = Select-FromMenu -Title $Message -Items @($ContinueLabel, 'Cancel setup')
+    $choice = Select-FromMenu -Title $Message -Items @($ContinueLabel)
     if ($choice -ne 0) {
         throw 'Setup cancelled by user.'
     }

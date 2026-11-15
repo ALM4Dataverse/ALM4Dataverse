@@ -49,7 +49,20 @@ function Set-AzDoEnvironmentConfiguration {
             $endpointParams.AuthType = 'WIF'
         }
         else {
-            $endpointParams.ClientSecret = $creds.ClientSecret
+            $clientSecret = [string](Get-OptionalObjectPropertyValue -InputObject $creds -PropertyName 'ClientSecret')
+            if (
+                [string]::IsNullOrWhiteSpace($clientSecret) -and
+                [bool](Get-OptionalObjectPropertyValue -InputObject $creds -PropertyName 'RotateSecret')
+            ) {
+                $rotationApplicationObjectId = [string](Get-OptionalObjectPropertyValue -InputObject $creds -PropertyName 'ApplicationObjectId')
+                $rotationTenantId = [string](Get-OptionalObjectPropertyValue -InputObject $creds -PropertyName 'TenantId')
+                if ([string]::IsNullOrWhiteSpace($rotationApplicationObjectId) -or [string]::IsNullOrWhiteSpace($rotationTenantId)) {
+                    throw 'Deferred client-secret rotation requires ApplicationObjectId and TenantId.'
+                }
+                Write-Host 'Generating the client secret requested during setup...' -ForegroundColor Yellow
+                $clientSecret = New-EntraIdApplicationSecret -ApplicationObjectId $rotationApplicationObjectId -TenantId $rotationTenantId
+            }
+            $endpointParams.ClientSecret = $clientSecret
             $endpointParams.AuthType = 'Secret'
         }
 
@@ -287,6 +300,8 @@ function Get-AzDoSetupResourceChange {
     Describes Azure DevOps and Dataverse changes deferred until setup is applied.
     .DESCRIPTION
     The plan contains resource names and settings only; credential values are omitted.
+    When SharedRepositoryState is supplied, shared-repository creation and version
+    reconciliation already performed during setup are disclosed as applied.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -294,10 +309,35 @@ function Get-AzDoSetupResourceChange {
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$BranchStates,
         [Parameter(Mandatory)][object]$SelectedProject,
         [Parameter(Mandatory)][object]$MainRepo,
-        [Parameter(Mandatory)][string]$SharedRepositoryName
+        [Parameter(Mandatory)][string]$SharedRepositoryName,
+        [Parameter()][System.Collections.IDictionary]$SharedRepositoryState
     )
 
     $changes = [System.Collections.Generic.List[object]]::new()
+    if ($SharedRepositoryState) {
+        $sharedName = if ([string]::IsNullOrWhiteSpace([string](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'Name'))) {
+            $SharedRepositoryName
+        }
+        else {
+            [string](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'Name')
+        }
+        if ([bool](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'CreatedDuringSetup')) {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Already applied'
+                    Resource = 'Shared repository'
+                    Target   = $sharedName
+                    Details  = 'Created during setup before preview; Apply reuses it and does not create another.'
+                })
+        }
+        if ([bool](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'VersionUpdatedDuringSetup')) {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Already applied'
+                    Resource = 'Shared repository history'
+                    Target   = $sharedName
+                    Details  = 'Checked and reconciled during setup before preview; Apply uses the updated template source.'
+                })
+        }
+    }
     $yamlFiles = @(
         'pipelines/BUILD.yml',
         'pipelines/EXPORT.yml',
@@ -364,6 +404,7 @@ function Get-AzDoSetupResourceChange {
         }
     }
 
+    $annotatedCredentialTargets = @{}
     foreach ($environmentTarget in $environmentTargets) {
         $environment = $environmentTarget.EnvironmentConfiguration
         $environmentName = [string]$environment.ShortName
@@ -374,6 +415,20 @@ function Get-AzDoSetupResourceChange {
 
         $isExistingServiceConnection = [bool](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'IsExistingServiceConnection')
         $authType = [string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'AuthType')
+        $rotateSecret = [bool](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'RotateSecret')
+        $createdDuringSetup = [bool](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'CreatedDuringSetup')
+        if ($createdDuringSetup) {
+            $credentialTarget = "$($credentials.Name) ($($credentials.ApplicationId))"
+            if (-not $annotatedCredentialTargets.ContainsKey($credentialTarget)) {
+                $annotatedCredentialTargets[$credentialTarget] = $true
+                $changes.Add([pscustomobject]@{
+                        Action   = 'Already applied'
+                        Resource = 'Entra application'
+                        Target   = $credentialTarget
+                        Details  = 'Created during setup before preview; Apply reuses it and does not create another.'
+                    })
+            }
+        }
         if ($isExistingServiceConnection) {
             $connectionDetails = 'Reuse the selected existing service connection; do not replace its credentials.'
             $connectionAction = 'Reuse'
@@ -381,7 +436,12 @@ function Get-AzDoSetupResourceChange {
         else {
             $connectionDetails = "Create or reconcile the Power Platform service connection using $authType authentication."
             if ($authType -eq 'Secret') {
-                $connectionDetails += ' The client-secret value is hidden.'
+                if ($rotateSecret) {
+                    $connectionDetails += ' Generate and store a new client secret when you apply; its value is hidden.'
+                }
+                else {
+                    $connectionDetails += ' The client-secret value is hidden.'
+                }
             }
             $connectionAction = 'Create or reconcile'
         }

@@ -105,7 +105,7 @@ Release assets and can fall back to a retained Actions artifact. Azure DevOps us
 selected pipeline artifact. An identity tag alone is not a downloadable package.
 
 > [!NOTE]
-> **Advanced: baseline pointers.** For `buildValidation.baselineRelease = '@PROD'`, inspect
+> **Advanced: baseline pointers.** For a branch with `buildValidation.baselineRelease = '@PROD'`, inspect
 > the annotated `deployed/PROD` pointer. No pointer means candidate-only validation with
 > a warning. A pointer to an unavailable/invalid build is a different failure: restore
 > the required artifact/Release or intentionally update the baseline configuration.

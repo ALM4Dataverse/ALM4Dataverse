@@ -513,6 +513,187 @@ function Get-GitHubExistingEnvironmentState {
     }
 }
 
+function Get-GitHubDeploymentEnvironmentNamesFromWorkflowContent {
+    # Recognize generated environment-name input lines, not general YAML. Duplicate names
+    # are removed in encounter order; blank content yields no names.
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter()][string]$WorkflowContent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkflowContent)) {
+        return @()
+    }
+
+    $names = @()
+    foreach ($match in [regex]::Matches($WorkflowContent, '(?m)^\s*environment-name:\s*["'']?([^"''\r\n]+)["'']?\s*$')) {
+        $name = $match.Groups[1].Value.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($name) -and $names -notcontains $name) {
+            $names += $name
+        }
+    }
+
+    return @($names)
+}
+
+function Get-GitHubBuildEnvironmentNameFromWorkflowContent {
+    # The first environment-name input is the BUILD association; a job environment
+    # declaration alone is not enough. Blank or unrecognized content returns null.
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$WorkflowContent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkflowContent)) {
+        return $null
+    }
+
+    $match = [regex]::Match($WorkflowContent, '(?mi)^\s*environment-name\s*:\s*[''\"]?(?<name>[^''\"\r\n]*)[''\"]?\s*$')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    $value = [string]$match.Groups['name'].Value
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return $null
+    }
+
+    return $value.Trim()
+}
+
+function Get-GitHubSharedWorkflowReferenceFromWorkflowContent {
+    # Recognizes the installer's uses: line for a shared workflow or action, which carries
+    # the repository and ref needed for repository/ref in alm-config.psd1.
+    [CmdletBinding()]
+    param(
+        [Parameter()][string]$WorkflowContent
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WorkflowContent)) {
+        return $null
+    }
+
+    $match = [regex]::Match($WorkflowContent, 'uses:\s*([^/\s]+/[^/\s]+)/\.github/(?:workflows/[A-Za-z0-9._-]+|actions/[A-Za-z0-9._-]+)@([^\s''"`]+)')
+    if (-not $match.Success) {
+        return $null
+    }
+
+    return [pscustomobject]@{
+        Repository = $match.Groups[1].Value
+        Reference  = $match.Groups[2].Value
+    }
+}
+
+function Get-GitHubDeployWorkflowBranchMappingsFromRepoClone {
+    # DEPLOY-<branch>.yml files on fetched origin refs define legacy branches. The name in
+    # the filename is authoritative; SourceBranch only records where it was found.
+    [CmdletBinding()]
+    [OutputType([pscustomobject], [object[]])]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $branches = @(& git -C $RepoRoot for-each-ref --format='%(refname:short)' refs/remotes/origin/* 2>$null | ForEach-Object {
+        ([string]$_) -replace '^origin/', ''
+    } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'HEAD' } | Select-Object -Unique)
+
+    $mappings = @()
+    foreach ($branch in $branches) {
+        $workflowFiles = @(& git -C $RepoRoot ls-tree -r --name-only "origin/$branch" '.github/workflows' 2>$null)
+        foreach ($workflowFile in $workflowFiles) {
+            if ($workflowFile -notmatch '^\.github/workflows/DEPLOY-(.+)\.yml$') {
+                continue
+            }
+
+            $workflowContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $branch -RelativePath $workflowFile
+            $mappings += [pscustomobject]@{
+                BranchName       = [string]$Matches[1]
+                SourceBranch     = $branch
+                WorkflowPath     = $workflowFile
+                EnvironmentNames = @(Get-GitHubDeploymentEnvironmentNamesFromWorkflowContent -WorkflowContent $workflowContent)
+            }
+        }
+    }
+
+    return @($mappings | Sort-Object BranchName -Unique)
+}
+
+function Get-GitHubLegacyConfigurationConversion {
+    # Derives branches from committed workflows for repositories whose alm-config.psd1 has
+    # no branches map. Without legacy evidence the repository is treated as new. Failures
+    # return Status Failed so setup can continue with empty state and re-entered values.
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$RepoOwner,
+        [Parameter(Mandatory)][string]$RepoName,
+        [Parameter(Mandatory)][string]$DefaultBranch,
+        [Parameter()][string]$TenantId,
+        [Parameter()][string]$LegacyBaselineRelease = ''
+    )
+
+    try {
+        $deployMappings = @(Get-GitHubDeployWorkflowBranchMappingsFromRepoClone -RepoRoot $RepoRoot)
+        $defaultBuildContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $DefaultBranch -RelativePath '.github/workflows/BUILD.yml'
+        $defaultBuildEnvironmentName = Get-GitHubBuildEnvironmentNameFromWorkflowContent -WorkflowContent $defaultBuildContent
+
+        if ($deployMappings.Count -eq 0 -and [string]::IsNullOrWhiteSpace($defaultBuildEnvironmentName)) {
+            return [pscustomobject]@{ Status = 'NotRequired'; BranchNames = @(); ErrorMessage = ''; Branches = @{}; SharedWorkflowRepository = ''; SharedWorkflowReference = '' }
+        }
+
+        $branchNames = @($DefaultBranch) + @($deployMappings | ForEach-Object { $_.BranchName }) | Select-Object -Unique
+        $branchFacts = @()
+        foreach ($branchName in $branchNames) {
+            $deployMapping = $deployMappings | Where-Object { $_.BranchName -ieq $branchName } | Select-Object -First 1
+
+            $buildEnvironmentName = $defaultBuildEnvironmentName
+            if ($branchName -ine $DefaultBranch) {
+                $buildContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $branchName -RelativePath '.github/workflows/BUILD.yml'
+                $buildEnvironmentName = Get-GitHubBuildEnvironmentNameFromWorkflowContent -WorkflowContent $buildContent
+            }
+
+            # The default branch always receives Dev-<default>; other branches only count if
+            # that environment exists, so an unused name is not reintroduced.
+            $devEnvironmentName = "Dev-$DefaultBranch"
+            if ($branchName -ine $DefaultBranch) {
+                $devEnvironmentName = ''
+                if (Get-GitHubExistingEnvironmentState -Owner $RepoOwner -Repo $RepoName -EnvironmentName "Dev-$branchName" -TenantId $TenantId) {
+                    $devEnvironmentName = "Dev-$branchName"
+                }
+            }
+
+            $branchFacts += [pscustomobject]@{
+                BranchName                 = $branchName
+                DevEnvironmentName         = $devEnvironmentName
+                DeploymentEnvironmentNames = @(if ($deployMapping) { $deployMapping.EnvironmentNames } else { @() })
+                BuildEnvironmentName       = $(if ($null -eq $buildEnvironmentName) { '' } else { [string]$buildEnvironmentName })
+            }
+        }
+
+        $reference = $null
+        foreach ($workflowPath in @('.github/workflows/BUILD.yml', ".github/workflows/DEPLOY-$DefaultBranch.yml", '.github/workflows/EXPORT.yml', '.github/workflows/IMPORT.yml')) {
+            $reference = Get-GitHubSharedWorkflowReferenceFromWorkflowContent -WorkflowContent (Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $DefaultBranch -RelativePath $workflowPath)
+            if ($reference) {
+                break
+            }
+        }
+
+        $branches = ConvertTo-AlmLegacyBranchConfiguration -BranchFacts $branchFacts -LegacyBaselineRelease $LegacyBaselineRelease
+        return [pscustomobject]@{
+            Status                   = 'Converted'
+            BranchNames              = @($branches.Keys | Sort-Object)
+            ErrorMessage             = ''
+            Branches                 = $branches
+            SharedWorkflowRepository = $(if ($reference) { $reference.Repository } else { '' })
+            SharedWorkflowReference  = $(if ($reference) { $reference.Reference } else { '' })
+        }
+    }
+    catch {
+        return [pscustomobject]@{ Status = 'Failed'; BranchNames = @(); ErrorMessage = $_.Exception.Message; Branches = @{}; SharedWorkflowRepository = ''; SharedWorkflowReference = '' }
+    }
+}
+
 function Get-GitHubRepositoryExistingSetupState {
     <#
     .SYNOPSIS
@@ -537,6 +718,24 @@ function Get-GitHubRepositoryExistingSetupState {
     $configuredProvider = [string](Get-OptionalObjectPropertyValue -InputObject $existingConfiguration -PropertyName 'provider')
     if (-not [string]::IsNullOrWhiteSpace($configuredProvider) -and $configuredProvider -ine 'GitHub') {
         throw "alm-config.psd1 specifies provider '$configuredProvider'; use the matching setup script."
+    }
+
+    # Interactive setup converts legacy branch settings from committed workflows once;
+    # ApplyConfig never reads provider or workflow state.
+    $legacyConfigurationConversion = [pscustomobject]@{ Status = 'NotRequired'; BranchNames = @(); ErrorMessage = '' }
+    $needsLegacyConversion = -not $SkipProviderState -and (-not $existingConfiguration.Contains('branches') -or ($existingConfiguration.branches -is [System.Collections.IDictionary] -and $existingConfiguration.branches.Count -eq 0))
+    if ($needsLegacyConversion) {
+        $legacyBaselineRelease = [string](Get-OptionalObjectPropertyValue -InputObject (Get-OptionalObjectPropertyValue -InputObject $existingConfiguration -PropertyName 'buildValidation') -PropertyName 'baselineRelease')
+        $legacyConfigurationConversion = Get-GitHubLegacyConfigurationConversion -RepoRoot $RepoRoot -RepoOwner $RepoOwner -RepoName $RepoName -DefaultBranch $DefaultBranch -TenantId $TenantId -LegacyBaselineRelease $legacyBaselineRelease
+        if ($legacyConfigurationConversion.Status -eq 'Converted') {
+            $existingConfiguration['branches'] = $legacyConfigurationConversion.Branches
+            if (-not $existingConfiguration.Contains('repository') -and $legacyConfigurationConversion.SharedWorkflowRepository) {
+                $existingConfiguration['repository'] = $legacyConfigurationConversion.SharedWorkflowRepository
+            }
+            if (-not $existingConfiguration.Contains('ref') -and $legacyConfigurationConversion.SharedWorkflowReference) {
+                $existingConfiguration['ref'] = $legacyConfigurationConversion.SharedWorkflowReference
+            }
+        }
     }
 
     $hasConfiguredBranches = $existingConfiguration.Contains('branches')
@@ -689,6 +888,7 @@ function Get-GitHubRepositoryExistingSetupState {
             BuildValidationEnvironmentName = $(if ($defaultBranchState) { [string]$defaultBranchState.BuildValidationEnvironmentName } else { '' })
             ExistingBuildValidationEnvironment = $(if ($defaultBranchState) { $defaultBranchState.ExistingBuildValidationEnvironment } else { $null })
             ExistingConfiguration    = $existingConfiguration
+            LegacyConfigurationConversion = $legacyConfigurationConversion
             BranchStates             = @($branchStates)
             CredentialStorageScope   = $storageScope
             DevEnvironment           = $(if ($defaultBranchState) { $defaultBranchState.ExistingDevEnvironment } else { $null })
@@ -710,6 +910,7 @@ function Get-GitHubRepositoryExistingSetupState {
         BuildValidationEnvironmentName = ''
         ExistingBuildValidationEnvironment = $null
         ExistingConfiguration    = $existingConfiguration
+        LegacyConfigurationConversion = $legacyConfigurationConversion
         CredentialStorageScope   = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'StorageScope')
         DevEnvironment           = $devEnvironment
         DeploymentEnvironments   = @()
@@ -796,8 +997,9 @@ function Get-GitHubInitialBranchMapping {
 }
 
 function New-GitHubBranchSetupState {
-    # Mutable wizard record: null configuration/plan means not selected yet, while
-    # an empty DeploymentEnvironments array is a valid DEV-only branch.
+    # Mutable wizard record: discovered DEV starts as the current configuration so
+    # revisit prompts retain known values. An empty DeploymentEnvironments array is
+    # a valid DEV-only branch and a null PublishPlan means no choice yet.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$BranchName,
@@ -814,7 +1016,7 @@ function New-GitHubBranchSetupState {
     return [pscustomobject]@{
         BranchName                  = $BranchName
         ExistingDevEnvironment      = $ExistingDevEnvironment
-        DevEnvironmentConfiguration = $null
+        DevEnvironmentConfiguration = $ExistingDevEnvironment
         DeploymentEnvironments      = $normalizedDeploymentEnvironments
         ExistingBuildValidationEnvironment = $ExistingBuildValidationEnvironment
         BuildValidationEnvironmentName = $BuildValidationEnvironmentName

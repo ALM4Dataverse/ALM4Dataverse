@@ -478,6 +478,16 @@ namespace Spectre.Console {
             return System.Threading.Tasks.Task.FromResult((T)AnsiConsole.Answers.Dequeue());
         }
     }
+    public class ConfirmationPrompt {
+        public string Message;
+        public bool DefaultValue;
+        public ConfirmationPrompt(string message) { Message = message; }
+        public System.Threading.Tasks.Task<bool> ShowAsync(object console, System.Threading.CancellationToken token) {
+            token.ThrowIfCancellationRequested();
+            ((IAnsiConsole)console).Input.ReadKeyAsync(true, token).GetAwaiter().GetResult();
+            return System.Threading.Tasks.Task.FromResult((bool)AnsiConsole.Answers.Dequeue());
+        }
+    }
     public class TextPrompt<T> {
         public bool IsSecret, AllowEmpty;
         public TextPrompt(string text) {}
@@ -830,13 +840,17 @@ Describe 'Setup wizard navigation menu' {
         Mock Initialize-SpectreConsole {}
         $script:wizardSelections = [System.Collections.Generic.Queue[int]]::new()
         $script:wizardMenuItems = @()
+        $script:wizardDimMenuItems = @()
         $script:wizardActionMenuItems = @()
         $script:wizardActionSectionsFirst = @()
+        $script:wizardPromptGuidanceLines = @()
         [Spectre.Console.AnsiConsole]::Keys.Clear()
         Mock Select-FromMenu {
             $script:wizardMenuItems += ,@($Items)
+            $script:wizardDimMenuItems += ,@($DimItems)
             $script:wizardActionMenuItems += ,@($ActionItems)
             $script:wizardActionSectionsFirst += [bool]$ActionSectionFirst
+            $script:wizardPromptGuidanceLines += ,@($PromptGuidanceLines)
             if ($script:wizardSelections.Count -eq 0) {
                 throw "Unexpected setup menu: $Title"
             }
@@ -866,6 +880,32 @@ Describe 'Setup wizard navigation menu' {
         $script:stepCalls.Apply | Should -Be 1
         $script:wizardMenuItems.Count | Should -Be 4
         $script:wizardSelections.Count | Should -Be 0
+    }
+
+    It 'runs the pre-apply callback only when Apply is chosen' {
+        foreach ($selection in @(0, 1, 1, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:stepCalls = @{ Preview = 0; PreApply = 0; Apply = 0 }
+        $steps = @(
+            [pscustomobject]@{ Name = 'First'; Action = {} }
+            [pscustomobject]@{ Name = 'Second'; Action = {} }
+        )
+
+        $result = Invoke-SetupWizard `
+            -Title 'Setup' `
+            -Steps $steps `
+            -PreviewAction { $script:stepCalls.Preview++ } `
+            -PreApplyAction { $script:stepCalls.PreApply++ } `
+            -ApplyAction {
+                $script:stepCalls.Apply++
+                'applied'
+            }
+
+        $script:stepCalls.Preview | Should -Be 1
+        $script:stepCalls.PreApply | Should -Be 1
+        $script:stepCalls.Apply | Should -Be 1
+        $result | Should -Be applied
     }
 
     It 'limits new repositories to the furthest step reached' {
@@ -959,9 +999,13 @@ Describe 'Setup wizard navigation menu' {
         $result.Credentials | Should -Be $credential
         $result.ServiceAccountUPN | Should -Be 'service@example.com'
         $result.BaselineRelease | Should -Be '@PROD'
-        $script:wizardMenuItems[0] | Should -Contain '[ ] Target name - Not configured (locked; complete earlier steps first)'
+        $script:wizardMenuItems[0] | Should -Contain '[ ] Target name - Not configured'
         $script:wizardMenuItems[1] | Should -Contain '[✓] Dataverse environment - Test (https://test.example.com)'
-        $script:wizardMenuItems[1] | Should -Contain '[ ] Credentials - Not configured (locked; complete earlier steps first)'
+        $script:wizardMenuItems[1] | Should -Contain '[ ] Credentials - Not configured'
+        $script:wizardDimMenuItems[0] | Should -Contain '[ ] Target name - Not configured'
+        $script:wizardDimMenuItems[1] | Should -Contain '[ ] Credentials - Not configured'
+        (($script:wizardMenuItems | ForEach-Object { $_ -join ' ' }) -join "`n") |
+            Should -Not -Match '\(locked'
         (($script:wizardMenuItems | ForEach-Object { $_ -join ' ' }) -join "`n") |
             Should -Not -Match 'must-not-be-displayed'
         $script:wizardSelections.Count | Should -Be 0
@@ -970,13 +1014,14 @@ Describe 'Setup wizard navigation menu' {
     It 'shows branch-generated DEV target names as complete and locked' {
         Mock Select-FromMenu {
             $script:wizardMenuItems += ,@($Items)
+            $script:wizardDimMenuItems += ,@($DimItems)
             $script:wizardActionMenuItems += ,@($ActionItems)
             return $null
         }
         $configuration = [pscustomobject]@{
             ShortName = 'Dev-main'
-            FriendlyName = 'Example Development'
-            Url = 'https://development.example.invalid'
+            FriendlyName = 'Contoso Development'
+            Url = 'https://contoso-development.crm.dynamics.com'
             Credentials = [pscustomobject]@{ Name = 'Example DEV app'; ApplicationId = 'example-dev'; AuthType = 'WIF' }
             ServiceAccountUPN = 'automation@example.invalid'
         }
@@ -990,7 +1035,8 @@ Describe 'Setup wizard navigation menu' {
             -SelectServiceAccountAction { $configuration.ServiceAccountUPN }
 
         $result | Should -BeNullOrEmpty
-        $script:wizardMenuItems[0] | Should -Contain '[✓] Target name - Dev-main (generated from branch) (locked)'
+        $script:wizardMenuItems[0] | Should -Contain '[✓] Target name - Dev-main (generated from branch)'
+        $script:wizardDimMenuItems[0] | Should -Contain '[✓] Target name - Dev-main (generated from branch)'
     }
 
     It 'clears credentials and service-account ownership when the Dataverse environment changes' {
@@ -1133,6 +1179,29 @@ Describe 'Setup wizard navigation menu' {
         $script:wizardMenuItems[1][3] | Should -Be 'Exit without applying changes'
         $script:wizardMenuItems[2][0] | Should -Be 'Apply changes - Ready'
         $script:wizardMenuItems[2][1] | Should -Be 'Exit without applying changes'
+        $script:stepCalls.First | Should -Be 1
+        $script:stepCalls.Second | Should -Be 1
+        $script:stepCalls.Apply | Should -Be 1
+    }
+
+    It 'keeps the reason for an unavailable sequential step visible after the menu redraws' {
+        foreach ($selection in @(1, 0, 1, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:stepCalls = @{ First = 0; Second = 0; Apply = 0 }
+        $steps = @(
+            [pscustomobject]@{ Name = 'First'; Action = { $script:stepCalls.First++ } }
+            [pscustomobject]@{ Name = 'Second'; Action = { $script:stepCalls.Second++ } }
+        )
+
+        Invoke-SetupWizard -Title 'Setup' -Steps $steps -RequireSequentialSteps -ApplyAction {
+            $script:stepCalls.Apply++
+        }
+
+        $script:wizardPromptGuidanceLines[1] |
+            Should -Contain 'Complete the earlier setup steps before moving forward.'
+        $script:wizardPromptGuidanceLines[2] |
+            Should -Not -Contain 'Complete the earlier setup steps before moving forward.'
         $script:stepCalls.First | Should -Be 1
         $script:stepCalls.Second | Should -Be 1
         $script:stepCalls.Apply | Should -Be 1
@@ -1337,17 +1406,19 @@ Describe 'Setup menu branch items' {
         $items.Label | Should -Be @(
             'main'
             'Deployment: PROD (main) - Dataverse: Production (https://prod.example.com); Credentials: WIF - Prod deployment; Service account: deploy@example.com'
+            'BUILD validation: Disabled (main) - select to enable'
             'develop'
             'DEV: Dev-develop (develop) - Dataverse: Development (https://dev.example.com); Credentials: WIF - Dev app; Service account: dev@example.com'
             'Deployment: TEST (develop) - Dataverse: Testing (https://test.example.com); Credentials: Secret - Test app; Service account: test@example.com'
             'BUILD validation: Build-develop (develop) - Dataverse: Validation (https://build.example.com); Credentials: WIF - Build app; Service account: build@example.com; Baseline: @PROD'
         )
         ($items.Label -join "`n") | Should -Not -Match 'must-not-be-displayed'
-        $items.Depth | Should -Be @(1, 2, 1, 2, 2, 2)
-        $items.Target.Kind | Should -Be @('Branch', 'DeploymentEnvironment', 'Branch', 'DevEnvironment', 'DeploymentEnvironment', 'BuildValidation')
+        $items.Depth | Should -Be @(1, 2, 2, 1, 2, 2, 2)
+        $items.Target.Kind | Should -Be @('Branch', 'DeploymentEnvironment', 'BuildValidation', 'Branch', 'DevEnvironment', 'DeploymentEnvironment', 'BuildValidation')
         $items[1].Target.EnvironmentName | Should -Be PROD
-        $items[4].Target.EnvironmentName | Should -Be TEST
-        $items[5].Target.EnvironmentName | Should -Be 'Build-develop'
+        $items[2].Target.EnvironmentName | Should -Be ''
+        $items[5].Target.EnvironmentName | Should -Be TEST
+        $items[6].Target.EnvironmentName | Should -Be 'Build-develop'
         @(Get-SetupBranchMenuItem -BranchStates @()).Count | Should -Be 0
         $emptyBranchItems = @(Get-SetupBranchMenuItem -BranchStates @(
             [pscustomobject]@{
@@ -1356,9 +1427,20 @@ Describe 'Setup menu branch items' {
                 BuildValidationEnabled = $false
             }
         ))
-        $emptyBranchItems.Count | Should -Be 1
+        $emptyBranchItems.Count | Should -Be 2
         $emptyBranchItems[0].Label | Should -Be main
         $emptyBranchItems[0].Depth | Should -Be 1
+        $emptyBranchItems[1].Label | Should -Be 'BUILD validation: Disabled (main) - select to enable'
+        $emptyBranchItems[1].Depth | Should -Be 2
+    }
+
+    It 'apologises for a failed legacy conversion and stays silent when none is needed' {
+        $failed = @(Write-AlmLegacyConfigurationConversionNotice -Conversion ([pscustomobject]@{ Status = 'Failed'; ErrorMessage = 'boom' }) 3>&1 |
+            Where-Object { $_ -is [System.Management.Automation.WarningRecord] })
+        $failed.Message | Should -Match 'Sorry, setup could not read the existing branch settings automatically: boom'
+
+        $notRequired = @(Write-AlmLegacyConfigurationConversionNotice -Conversion ([pscustomobject]@{ Status = 'NotRequired' }) *>&1)
+        $notRequired | Should -BeNullOrEmpty
     }
 
     It 'lists selected direct and pull-request publication plans' {
@@ -1493,6 +1575,13 @@ Describe 'Shared setup prompt and rendering contracts' {
             $brandIconIndex = $renderedDashboard.IndexOf('⢀⣠⣤⣶')
             $brandNameRowIndex = [Array]::IndexOf($renderedDashboardLines, $brandNameRows[0])
             $brandVersionRowIndex = [Array]::IndexOf($renderedDashboardLines, $brandVersionRows[0])
+            $headerLineIndex = -1
+            for ($lineIndex = 0; $lineIndex -lt $renderedDashboardLines.Count; $lineIndex++) {
+                if ($renderedDashboardLines[$lineIndex] -match 'ALM4Dataverse Setup - Choose setup type') {
+                    $headerLineIndex = $lineIndex
+                    break
+                }
+            }
             $brandNameIndex = $renderedDashboard.IndexOf('[bold]ALM4Dataverse[/]')
             $brandVersionIndex = $renderedDashboard.IndexOf('[grey]v1.2.3[/]')
             (
@@ -1503,6 +1592,8 @@ Describe 'Shared setup prompt and rendering contracts' {
                 ($brandVersionRowIndex - $brandNameRowIndex) -eq 2
             ) |
                 Should -BeTrue
+            $headerLineIndex | Should -BeGreaterOrEqual 0
+            $renderedDashboardLines[$headerLineIndex + 1] | Should -Not -Be ''
         }
         finally {
             if ($null -eq $previousVersion) {
@@ -1514,7 +1605,7 @@ Describe 'Shared setup prompt and rendering contracts' {
         }
     }
 
-    It 'leaves a blank line below the product mark before prompt content' {
+    It 'places prompt content immediately below the product mark' {
         Mock Show-SetupPromptGuidance {
             [Spectre.Console.AnsiConsole]::MarkupLine('PROMPT CONTENT')
         }
@@ -1534,8 +1625,8 @@ Describe 'Shared setup prompt and rendering contracts' {
         $contentLineIndex = [Array]::IndexOf($renderedLines, 'PROMPT CONTENT')
 
         ($logoLineIndex -ge 0) | Should -BeTrue
-        $renderedLines[$logoLineIndex + 1] | Should -Be ''
-        ($contentLineIndex - $logoLineIndex) | Should -Be 2
+        $renderedLines[$logoLineIndex + 1] | Should -Be 'PROMPT CONTENT'
+        ($contentLineIndex - $logoLineIndex) | Should -Be 1
     }
 
     It 'keeps the active section in the setup header when rendering a prompt' {
@@ -1587,6 +1678,21 @@ Describe 'Shared setup prompt and rendering contracts' {
         Set-SetupWizardContext -Title Test -StepNames @('Step') -CurrentStepIndex 0
         Show-SetupStatusBarAtBottom -PromptKind Text
         ([Spectre.Console.AnsiConsole]::Output -join "`n") | Should -Match 'Esc=back'
+    }
+
+    It 'renders diff navigation in the shared bottom status bar' {
+        Show-SetupStatusBarAtBottom -PromptKind Diff -StatusDetail 'Rows 1-10 of 25'
+
+        Should -Invoke Write-SetupConsoleBar -Times 1 -Exactly -ParameterFilter {
+            $AtBottom -and $RestoreCursorPosition -and
+            $Text -match 'Rows 1-10 of 25' -and
+            $Text -match 'Up/Down=scroll'
+        }
+        $renderedStatusBar = [Spectre.Console.AnsiConsole]::Output -join "`n"
+        $renderedStatusBar | Should -Match 'Rows 1-10 of 25'
+        $renderedStatusBar | Should -Match 'Up/Down=scroll'
+        $renderedStatusBar | Should -Match 'Enter/Q/Esc=close'
+        $renderedStatusBar | Should -Match 'Ctrl\+C=exit'
     }
 
     It 'shows F1 help in prompt guidance and the status bar using the selected documentation ref' {
@@ -1725,17 +1831,41 @@ Describe 'Shared setup prompt and rendering contracts' {
         $script:stepHelpContext.Ref | Should -Be 'selected-ref'
     }
 
-    It 'maps markup-safe menu values and supports single-choice cancellation' {
+    It 'maps markup-safe menu values and confirms single-item choices without a cancel option' {
         [Spectre.Console.AnsiConsole]::Answers.Enqueue('[[One]]')
         Select-FromMenu -Title Test -Items @('[One]', 'Two') | Should -Be 0
-        [Spectre.Console.AnsiConsole]::Answers.Enqueue('< Cancel setup')
-        Select-FromMenu -Title Test -Items @('One') | Should -BeNullOrEmpty
+
+        $script:singleChoicePromptTypes = @()
+        $script:singleChoiceResults = [System.Collections.Generic.Queue[bool]]::new()
+        $script:singleChoiceResults.Enqueue($true)
+        $script:singleChoiceResults.Enqueue($false)
+        Mock Show-SetupPromptWithInterruptHandling {
+            $script:singleChoicePromptTypes += $Prompt.GetType().Name
+            return $script:singleChoiceResults.Dequeue()
+        }
+
+        Select-FromMenu -Title Test -Items @('Continue') | Should -Be 0
+        Select-FromMenu -Title Test -Items @('Continue') | Should -BeNullOrEmpty
+        $script:singleChoicePromptTypes | Should -Be @('ConfirmationPrompt', 'ConfirmationPrompt')
         Select-FromMenu -Title Test -Items @() | Should -BeNullOrEmpty
+    }
+
+    It 'uses confirmations instead of visible cancel options for acknowledgement and apply actions' {
+        $script:singleActionPromptTypes = @()
+        Mock Show-SetupPromptWithInterruptHandling {
+            $script:singleActionPromptTypes += $Prompt.GetType().Name
+            return $true
+        }
+
+        Wait-ForUserAcknowledgement -Message 'Continue setup'
+        Confirm-SetupReviewAction
+
+        $script:singleActionPromptTypes | Should -Be @('ConfirmationPrompt', 'ConfirmationPrompt')
     }
 
     It 'groups action choices separately, styles them, and preserves their item indexes' {
         $script:actionPromptChoices = @()
-        Mock Show-SelectionPromptWithInterruptHandling {
+        Mock Show-SetupPromptWithInterruptHandling {
             $script:actionPromptChoices = @($Prompt.Choices)
             $script:actionPromptChoices | Where-Object { $_ -like '*Preview changes*' } | Select-Object -First 1
         }
@@ -1749,19 +1879,41 @@ Describe 'Shared setup prompt and rendering contracts' {
 
         $script:actionPromptChoices[0] | Should -Be '[bold]Setup steps[/]'
         $script:actionPromptChoices[1] | Should -Be 'Configure branches, dev and deployment envs'
-        $script:actionPromptChoices[2] | Should -Be '[bold deepskyblue1]---[/]'
+        $script:actionPromptChoices[2] | Should -Be '[grey]---[/]'
         $script:actionPromptChoices[3] | Should -Be '[bold deepskyblue1]Preview changes[/]'
         $script:actionPromptChoices[4] | Should -Be '[bold deepskyblue1]Apply changes - Not ready[/]'
         $script:actionPromptChoices[5] | Should -Be '[bold deepskyblue1]Exit without applying changes[/]'
+    }
+
+    It 'dims unavailable choices and preserves their item indexes' {
+        $script:dimPromptChoices = @()
+        Mock Show-SetupPromptWithInterruptHandling {
+            $script:dimPromptChoices = @($Prompt.Choices)
+            $script:dimPromptChoices | Where-Object { $_ -like '*Locked step*' } | Select-Object -First 1
+        }
+
+        Select-FromMenu `
+            -Title Test `
+            -Items @('Available step', 'Locked step') `
+            -DimItems @('Locked step') |
+            Should -Be 1
+
+        $script:dimPromptChoices | Should -Be @('Available step', '[grey]Locked step[/]')
     }
 
     It 'supports searchable menus and requests back navigation from later wizard steps' {
         $items = @(1..10 | ForEach-Object { "Item $_" })
         [Spectre.Console.AnsiConsole]::Answers.Enqueue('Item 10')
         Select-FromMenu -Title Test -Items $items | Should -Be 9
+
         Set-SetupWizardContext -Title Test -StepNames @('First', 'Second') -CurrentStepIndex 1
-        [Spectre.Console.AnsiConsole]::Answers.Enqueue('< Back to previous step')
-        { Select-FromMenu -Title Test -Items @('One', 'Two') } | Should -Throw '*__ALM4DATAVERSE_WIZARD_BACK__*'
+        $script:laterStepPromptChoices = @()
+        Mock Show-SetupPromptWithInterruptHandling {
+            $script:laterStepPromptChoices = @($Prompt.Choices)
+            return 'One'
+        }
+        Select-FromMenu -Title Test -Items @('One', 'Two') | Should -Be 0
+        $script:laterStepPromptChoices | Should -Be @('One', 'Two')
     }
 
     It 'routes Escape from menus and every prompt type to the setup menu' {
@@ -1985,7 +2137,7 @@ Describe 'Setup repository change review' {
     }
 
     It 'renders deleted and added lines with distinct colors' {
-        Show-SetupSideBySideDiff -Title 'Modified: pipelines/BUILD.yml' -FileChanges @([pscustomobject]@{
+        Show-SetupSideBySideDiff -Title 'Repository file changes' -FileChanges @([pscustomobject]@{
                 Path          = 'pipelines/BUILD.yml'
                 Status        = 'Modified'
                 BeforeContent = "old line`n"
@@ -1995,9 +2147,13 @@ Describe 'Setup repository change review' {
         $renderedOutput = [Spectre.Console.AnsiConsole]::Output -join "`n"
         $renderedOutput | Should -Match '\[red3_1\]'
         $renderedOutput | Should -Match '\[green3_1\]'
-        $renderedOutput | Should -Match 'BEFORE'
-        $renderedOutput | Should -Match 'AFTER'
-        $renderedOutput | Should -Match 'ALM4Dataverse Setup - Modified: pipelines/BUILD.yml'
+        $renderedOutput | Should -Match '\[bold dodgerblue1\]BEFORE\[/\]'
+        $renderedOutput | Should -Match '\[bold gold1\]AFTER\[/\]'
+        $renderedOutput | Should -Match 'ALM4Dataverse Setup - Repository file changes'
+        $renderedOutput.IndexOf('[yellow]Modified: pipelines/BUILD.yml[/]') |
+            Should -BeLessThan $renderedOutput.IndexOf('[bold dodgerblue1]BEFORE[/]')
+        ([regex]::Matches($renderedOutput, [regex]::Escape('Modified: pipelines/BUILD.yml'))).Count |
+            Should -Be 1
     }
 
     It 'rejects attempts to render multiple files in a single diff view' {
@@ -2009,7 +2165,7 @@ Describe 'Setup repository change review' {
         { Show-SetupSideBySideDiff -FileChanges $changes } | Should -Throw '*one file at a time*'
     }
 
-    It 'offers a separate config diff and selects one status-labeled file at a time' {
+    It 'lists config with other changed files and separates the done action' {
         Mock Show-SetupSideBySideDiff {}
         Mock Show-SetupResourceChangeSummary {
             $script:reviewedResourceChanges = @($ResourceChanges)
@@ -2030,6 +2186,8 @@ Describe 'Setup repository change review' {
         $script:reviewSelections.Enqueue(2)
         Mock Select-FromMenu {
             $script:lastReviewMenuItems = @($Items)
+            $script:lastReviewActionItems = @($ActionItems)
+            $script:lastReviewActionSectionTitle = $ActionSectionTitle
             $script:reviewSelections.Dequeue()
         }
 
@@ -2039,11 +2197,15 @@ Describe 'Setup repository change review' {
             -ResourceChangeNote 'Prerequisite resources are excluded.' `
             -SummaryAction {}
 
+        $script:lastReviewMenuItems | Should -Contain 'Modified: alm-config.psd1'
         $script:lastReviewMenuItems | Should -Contain 'Added: pipelines/BUILD.yml'
+        $script:lastReviewMenuItems[-1] | Should -Be 'Done reviewing'
+        $script:lastReviewActionItems | Should -Be @('Done reviewing')
+        $script:lastReviewActionSectionTitle | Should -Be '---'
         $script:reviewedResourceChanges[0].Resource | Should -Be 'GitHub environment'
         $script:reviewedResourceChangeNote | Should -Be 'Prerequisite resources are excluded.'
         Should -Invoke Show-SetupSideBySideDiff -Times 1 -Exactly -ParameterFilter {
-            $Title -eq 'alm-config.psd1 diff' -and
+            $Title -eq 'Repository file changes' -and
             $FileChanges.Count -eq 1 -and
             $FileChanges[0].Path -eq 'alm-config.psd1'
         }
@@ -2054,7 +2216,7 @@ Describe 'Setup repository change review' {
         Show-SetupChangeReview -FileChanges $changes -SummaryAction { $script:previewSummaryCalls++ } -PreviewOnly
         $script:previewSummaryCalls | Should -Be 2
         Should -Invoke Show-SetupSideBySideDiff -Times 1 -Exactly -ParameterFilter {
-            $Title -eq 'Added: pipelines/BUILD.yml' -and
+            $Title -eq 'Repository file changes' -and
             $FileChanges.Count -eq 1 -and
             $FileChanges[0].Path -eq 'pipelines/BUILD.yml' -and
             $NoPaging
@@ -2067,7 +2229,7 @@ Describe 'Setup repository change review' {
         }
         Mock Show-SetupResourceChangeSummary {}
         Mock Show-SetupFileChangeSummary {}
-        Mock Select-FromMenu { 1 }
+        Mock Select-FromMenu { 0 }
 
         & {
             $reviewHeading = 'Review setup changes'
@@ -2094,6 +2256,29 @@ Describe 'Setup configuration and validation helpers' {
             Should -Throw '*Could not import committed alm-config.psd1 content*'
         { Get-AlmSetupBranchConfiguration -Config @{ branches = @('main') } -BranchName main } |
             Should -Throw '*branches setting in alm-config.psd1 must be a hashtable*'
+    }
+
+    It 'converts legacy branch facts, keeping only evidenced settings and copying baseline to BUILD branches' {
+        $facts = @(
+            [pscustomobject]@{ BranchName = 'main'; DevEnvironmentName = 'Dev-main'; DeploymentEnvironmentNames = @('TEST', 'PROD'); BuildEnvironmentName = 'Build-main' }
+            [pscustomobject]@{ BranchName = 'release'; DevEnvironmentName = ''; DeploymentEnvironmentNames = @(); BuildEnvironmentName = '' }
+        )
+        $branches = ConvertTo-AlmLegacyBranchConfiguration -BranchFacts $facts -LegacyBaselineRelease '1.2.3'
+
+        $branches.Keys | Should -HaveCount 2
+        $branches['main'].developmentEnvironment | Should -Be 'Dev-main'
+        $branches['main'].deploymentEnvironments | Should -Be @('TEST', 'PROD')
+        $branches['main'].buildValidation.environmentName | Should -Be 'Build-main'
+        $branches['main'].buildValidation.baselineRelease | Should -Be '1.2.3'
+        $branches['release'].Count | Should -Be 0
+    }
+
+    It 'does not write baselineRelease for branches without BUILD validation' {
+        $facts = @([pscustomobject]@{ BranchName = 'main'; DevEnvironmentName = ''; DeploymentEnvironmentNames = @('TEST'); BuildEnvironmentName = '' })
+        $branches = ConvertTo-AlmLegacyBranchConfiguration -BranchFacts $facts -LegacyBaselineRelease '1.2.3'
+
+        $branches['main'].Contains('buildValidation') | Should -BeFalse
+        $branches['main'].deploymentEnvironments | Should -Be @('TEST')
     }
 
     It 'requires committed provider, source, and branch metadata before applying config' {
@@ -2334,6 +2519,32 @@ Describe 'Setup configuration and validation helpers' {
         (Import-PowerShellDataFile $configPath).solutionCheck.enabled | Should -BeFalse
         Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $false | Should -BeFalse
         (Import-PowerShellDataFile $configPath).assets | Should -Be @('data')
+    }
+
+    It 'updates solutionCheck.enabled without discarding checker subsettings' {
+        $configPath = Join-Path $TestDrive ([guid]::NewGuid().ToString('N') + '.psd1')
+        Set-Content $configPath -Value @'
+@{
+    solutionCheck = @{
+        enabled = $false
+        geo = 'unitedkingdom'
+        failThreshold = 'high'
+        ruleSet = '0ad702fe-42e4-4dd1-b2c2-9e3d4a0ef1e6'
+    }
+}
+'@
+        Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $true | Should -BeTrue
+        $solutionCheck = (Import-PowerShellDataFile $configPath).solutionCheck
+        $solutionCheck.enabled | Should -BeTrue
+        $solutionCheck.geo | Should -Be 'unitedkingdom'
+        $solutionCheck.failThreshold | Should -Be 'high'
+        $solutionCheck.ruleSet | Should -Be '0ad702fe-42e4-4dd1-b2c2-9e3d4a0ef1e6'
+
+        Set-Content $configPath -Value '@{ solutionCheck = @{ geo = "europe" } }'
+        Set-AlmConfigSolutionCheckEnabledInFile -ConfigPath $configPath -Enabled $false | Should -BeTrue
+        $solutionCheck = (Import-PowerShellDataFile $configPath).solutionCheck
+        $solutionCheck.enabled | Should -BeFalse
+        $solutionCheck.geo | Should -Be 'europe'
     }
 
     It 'detects active solution-check settings but ignores commented examples' {

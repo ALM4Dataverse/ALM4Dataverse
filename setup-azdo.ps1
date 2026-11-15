@@ -203,10 +203,7 @@ else {
         -Title 'Choose setup type' `
         -ShowProductBrand `
         -Items @('Set up a new application repository', 'Configure an existing repository') `
-        -PromptGuidanceLines @(
-            'Choose whether this run should create a new application repository or configure one that already exists.',
-            'Existing-repository setup authenticates and selects its resources before opening the guided configuration menu.'
-        ) `
+        -PromptGuidanceLines @('Choose whether this run should create a new application repository or configure one that already exists.') `
         -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
         -PromptGuidanceRef $ALM4DataverseRef
     if ($null -eq $setupModeChoice) {
@@ -447,6 +444,8 @@ $script:sharedRepositoryState = [ordered]@{
     ClonePath = $null
     UsesLocalCopyRoot = [bool]$localCopyRoot
     ValidationError = [string](Get-OptionalObjectPropertyValue -InputObject $initialization -PropertyName 'SharedRepositorySelectionError')
+    CreatedDuringSetup = $false
+    VersionUpdatedDuringSetup = $false
 }
 [void](Set-AzDoSharedRepositoryState `
     -RepositoryState $script:sharedRepositoryState `
@@ -491,6 +490,7 @@ $initialSetupSteps += [pscustomobject]@{
             -Initialization $updatedInitialization `
             -AccessToken $azDevOpsAccessToken `
             -UpstreamGitSource $upstreamRepo)
+        $script:sharedRepositoryState.CreatedDuringSetup = [bool](Get-OptionalObjectPropertyValue -InputObject $script:sharedRepositoryState.Repository -PropertyName 'CreatedDuringSetup')
     }
     IsComplete = [string]::IsNullOrWhiteSpace([string]$script:sharedRepositoryState.ValidationError)
     IsLocked = [bool]$ApplyConfig
@@ -511,6 +511,20 @@ $initialSetupSteps += [pscustomobject]@{
             throw 'The shared repository version cannot be updated while applying committed configuration.'
         }
 
+        # This step can seed or rewrite the shared repository history before the
+        # preview is reviewed. Name the write explicitly so it is a deliberate choice.
+        $confirmSharedRepositoryUpdate = Read-YesNo `
+            -Prompt "Check and update shared repository '$($script:sharedRepositoryState.Name)' now, before preview?" `
+            -PromptGuidanceLines @(
+                'This step can create, seed, fast-forward, rebase, or reset the shared repository history immediately.',
+                'Choose No to defer the update until you are ready; the preview lists the shared repository state as updated during setup.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+        if (-not $confirmSharedRepositoryUpdate) {
+            Request-SetupWizardBack
+        }
+
         $updatedInitialization = Initialize-AzDoProjectAndRepository `
             -SharedRepositoryOnly `
             -UsePreferredSharedRepository `
@@ -526,6 +540,7 @@ $initialSetupSteps += [pscustomobject]@{
             -Initialization $updatedInitialization `
             -AccessToken $azDevOpsAccessToken `
             -UpstreamGitSource $upstreamRepo)
+        $script:sharedRepositoryState.VersionUpdatedDuringSetup = $true
     }
     IsComplete = [bool]$ApplyConfig
     IsLocked = [bool]$ApplyConfig

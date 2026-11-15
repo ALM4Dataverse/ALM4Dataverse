@@ -380,7 +380,8 @@ function Set-GitHubPrefixedEnvironmentCredential {
         UseEnvironmentPrefix controls repository variable names only. A supplied
         Secret credential is always stored as AZURE_CLIENT_SECRET in a GitHub
         environment, which this helper creates even in repository-variable mode.
-        An absent ClientSecret leaves any existing secret untouched.
+        An absent ClientSecret leaves any existing secret untouched, except that a
+        rotation requested during environment configuration is generated here.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     param(
@@ -402,10 +403,11 @@ function Set-GitHubPrefixedEnvironmentCredential {
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_CLIENT_ID" -VariableValue $Credentials.ApplicationId
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}AZURE_TENANT_ID" -VariableValue $Credentials.TenantId
 
-    if ($Credentials.AuthType -eq 'Secret' -and $Credentials.ClientSecret) {
+    $clientSecret = Get-GitHubCredentialSecretForApply -Credentials $Credentials
+    if ($Credentials.AuthType -eq 'Secret' -and $clientSecret) {
         [void](Initialize-GitHubEnvironment -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName)
         Set-GitHubEnvironmentSecret -Owner $Owner -Repo $Repo -EnvironmentName $EnvironmentName `
-            -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $Credentials.ClientSecret
+            -SecretName 'AZURE_CLIENT_SECRET' -SecretValue $clientSecret
     }
 
     Set-GitHubRepoVariable -Owner $Owner -Repo $Repo -VariableName "${prefix}DATAVERSE_URL" -VariableValue $DataverseUrl

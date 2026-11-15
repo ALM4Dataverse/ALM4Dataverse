@@ -5,6 +5,10 @@ function Invoke-GitHubBranchAwareSetup {
     .PARAMETER PostApplyAction
         Runs provider-specific settings after repository publication. Failures return
         to the guided menu so the user can retry with the current selections.
+    .PARAMETER PreApplyAction
+        Runs after the user chooses Apply and before repository publication. Use it to
+        reconcile the selected shared workflow repository, which setup must not change
+        while the preview is still being reviewed.
     .PARAMETER PrerequisiteSteps
         Initial guided steps displayed before branch configuration, including shared workflow
         repository selection and version reconciliation. Authentication and application-repository
@@ -53,6 +57,7 @@ function Invoke-GitHubBranchAwareSetup {
         [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{},
         [Parameter()][array]$PrerequisiteSteps = @(),
         [Parameter()][scriptblock]$PostApplyAction,
+        [Parameter()][scriptblock]$PreApplyAction,
         [Parameter()][switch]$ApplyConfig,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$PreviewOnly,
@@ -136,12 +141,14 @@ function Invoke-GitHubBranchAwareSetup {
         $wizardState = [pscustomobject]@{
             BranchStates        = @($branchStates)
             SolutionResult      = $null
+            LegacyConfigurationConversion = (Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'LegacyConfigurationConversion')
             SolutionSourceBranch = $null
             BuildValidationEnabled = [bool](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnabled')
             BuildValidationEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnvironmentName')
             BuildValidationBaselineRelease = ''
             BuildValidationEnvironmentConfiguration = (Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'ExistingBuildValidationEnvironment')
             UseImmutableWifSubject = $(if ($ApplyConfig) { [bool]$ProviderOptions['GitHubUseImmutableWifSubject'] } else { [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject') })
+            UseImmutableWifSubjectChosen = [bool]$ApplyConfig
         }
 
         $branchSetupSteps = @(
@@ -166,9 +173,11 @@ function Invoke-GitHubBranchAwareSetup {
                             BuildValidationBaselineRelease = [string]$_.BuildValidationBaselineRelease
                             BuildValidationEnvironmentConfiguration = $_.BuildValidationEnvironmentConfiguration
                             ExistingBuildValidationEnvironment = $_.ExistingBuildValidationEnvironment
+                            PublishPlan                 = (Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'PublishPlan')
                         }
                     })
 
+                    Write-AlmLegacyConfigurationConversionNotice -Conversion $wizardState.LegacyConfigurationConversion
                     $selectedBranchMappings = @(Invoke-WithErrorHandling -OperationName 'Selecting deployment branches' -ScriptBlock {
                         Select-BranchEnvironmentMapping `
                             -InitialBranchMappings $currentBranchMappings `
@@ -421,22 +430,18 @@ function Invoke-GitHubBranchAwareSetup {
                                     $existingBuildValidationEnvironmentName = [string]$mappingToEdit.BuildValidationEnvironmentName
                                 }
 
-                                if ([string]::IsNullOrWhiteSpace($environmentNameToEdit)) {
-                                    $enableBuildValidation = if ([bool]$mappingToEdit.BuildValidationEnabled) {
-                                        Read-YesNo `
-                                            -Prompt "Enable Dataverse deployment validation during BUILD for branch '$branchName'?" `
-                                            -PromptGuidanceLines $buildValidationGuidanceLines `
-                                            -PromptGuidanceDocRelativePath 'docs/usage/building-releases.md' `
-                                            -PromptGuidanceRef $ALM4DataverseRef
-                                    }
-                                    else {
-                                        Read-YesNo `
-                                            -Prompt "Enable Dataverse deployment validation during BUILD for branch '$branchName'?" `
-                                            -PromptGuidanceLines $buildValidationGuidanceLines `
-                                            -PromptGuidanceDocRelativePath 'docs/usage/building-releases.md' `
-                                            -PromptGuidanceRef $ALM4DataverseRef `
-                                            -DefaultNo
-                                    }
+                                if (
+                                    [string]::IsNullOrWhiteSpace($environmentNameToEdit) -and
+                                    -not [bool]$mappingToEdit.BuildValidationEnabled
+                                ) {
+                                    # Already-enabled validation opens the detail editor directly;
+                                    # disabling is the branch menu's separate explicit action.
+                                    $enableBuildValidation = Read-YesNo `
+                                        -Prompt "Enable Dataverse deployment validation during BUILD for branch '$branchName'?" `
+                                        -PromptGuidanceLines $buildValidationGuidanceLines `
+                                        -PromptGuidanceDocRelativePath 'docs/usage/building-releases.md' `
+                                        -PromptGuidanceRef $ALM4DataverseRef `
+                                        -DefaultNo
                                     if (-not $enableBuildValidation) {
                                         return [pscustomobject]@{
                                             BuildValidationEnabled = $false
@@ -475,10 +480,15 @@ function Invoke-GitHubBranchAwareSetup {
                                 $selectBaseline = {
                                     param($environmentState)
                                     $baselineEnvironments = @($allMappings | ForEach-Object { @($_.Environments) })
-                                    Select-BuildValidationBaselineEnvironment `
-                                        -DeploymentEnvironments $baselineEnvironments `
-                                        -ExcludedEnvironmentName ([string]$environmentState.ShortName) `
-                                        -ExcludedEnvironmentUrl ([string]$environmentState.Url)
+                                    $baselineParameters = @{
+                                        DeploymentEnvironments = $baselineEnvironments
+                                        ExcludedEnvironmentName = [string]$environmentState.ShortName
+                                        ExcludedEnvironmentUrl = [string]$environmentState.Url
+                                    }
+                                    if ([bool]$environmentState.BaselineConfigured) {
+                                        $baselineParameters['CurrentBaselineRelease'] = [string]$environmentState.BaselineRelease
+                                    }
+                                    Select-BuildValidationBaselineEnvironment @baselineParameters
                                 }.GetNewClosure()
                                 $buildValidationConfiguration = Invoke-GitHubEnvironmentConfigurationWizard `
                                     -Title "Configure BUILD validation for branch '$branchName'" `
@@ -556,6 +566,7 @@ function Invoke-GitHubBranchAwareSetup {
                             $existingBranchState.BuildValidationEnvironmentName = [string]$selectedBranchMapping.BuildValidationEnvironmentName
                             $existingBranchState.BuildValidationBaselineRelease = [string]$selectedBranchMapping.BuildValidationBaselineRelease
                             $existingBranchState.BuildValidationEnvironmentConfiguration = $selectedBranchMapping.BuildValidationEnvironmentConfiguration
+                            $existingBranchState.PublishPlan = Get-OptionalObjectPropertyValue -InputObject $selectedBranchMapping -PropertyName 'PublishPlan'
                             $updatedBranchStates += $existingBranchState
                             continue
                         }
@@ -582,6 +593,7 @@ function Invoke-GitHubBranchAwareSetup {
                         $newBranchState.BuildValidationEnvironmentName = [string]$selectedBranchMapping.BuildValidationEnvironmentName
                         $newBranchState.BuildValidationBaselineRelease = [string]$selectedBranchMapping.BuildValidationBaselineRelease
                         $newBranchState.BuildValidationEnvironmentConfiguration = $selectedBranchMapping.BuildValidationEnvironmentConfiguration
+                        $newBranchState.PublishPlan = Get-OptionalObjectPropertyValue -InputObject $selectedBranchMapping -PropertyName 'PublishPlan'
                         $updatedBranchStates += $newBranchState
                     }
 
@@ -619,6 +631,7 @@ function Invoke-GitHubBranchAwareSetup {
                         $existingBranchState.BuildValidationEnvironmentName = [string]$mappedBranch.BuildValidationEnvironmentName
                         $existingBranchState.BuildValidationBaselineRelease = [string]$mappedBranch.BuildValidationBaselineRelease
                         $existingBranchState.BuildValidationEnvironmentConfiguration = $mappedBranch.BuildValidationEnvironmentConfiguration
+                        $existingBranchState.PublishPlan = Get-OptionalObjectPropertyValue -InputObject $mappedBranch -PropertyName 'PublishPlan'
                         $existingBranchState
                     })
 
@@ -681,27 +694,16 @@ function Invoke-GitHubBranchAwareSetup {
                         # Return to the navigation menu without completing this step; each environment remains directly selectable.
                         Request-SetupWizardBack
                     }
-
-                    foreach ($branchState in @($wizardState.BranchStates)) {
-                        $branchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
-                            -ProviderName 'GitHub' `
-                            -RepositoryName $RepoFullName `
-                            -TargetBranch $branchState.BranchName `
-                            -DefaultCommitMessage "Add ALM4Dataverse GitHub Actions workflows for branch '$($branchState.BranchName)'" `
-                            -DefaultPullRequestTitle "Add ALM4Dataverse GitHub Actions workflows for branch '$($branchState.BranchName)'" `
-                            -DefaultPullRequestDescription "This pull request adds or updates the ALM4Dataverse GitHub Actions workflow and repository configuration for branch '$($branchState.BranchName)'." `
-                            -GuidanceLines @(
-                                "Choose how the generated files for branch '$($branchState.BranchName)' should be published.",
-                                'Use pull-request mode when reviews or branch protection must happen before the branch becomes active.'
-                            ) `
-                            -DocRelativePath 'docs/setup/github-setup.md' `
-                            -Ref $ALM4DataverseRef
-                    }
                 }
             },
             [pscustomobject]@{
                 Name = 'Configure solutions'
                 HelpDocRelativePath = 'docs/config/alm-config.md'
+                InputSignature = {
+                    @($wizardState.BranchStates | ForEach-Object {
+                        "$($_.BranchName)|$([string](Get-OptionalObjectPropertyValue -InputObject $_.DevEnvironmentConfiguration -PropertyName 'Url'))"
+                    }) -join ';'
+                }
                 Summary = {
                     Get-SetupSolutionMenuSummary `
                         -SolutionData $wizardState.SolutionResult `
@@ -709,7 +711,7 @@ function Invoke-GitHubBranchAwareSetup {
                 }
                 Action = {
                     Write-Section `
-                        -Message 'Configure Solutions (alm-config.psd1)'
+                        -Message 'Configure solutions'
 
                     $candidateBranches = @($wizardState.BranchStates | Where-Object { $_.DevEnvironmentConfiguration })
                     if ($candidateBranches.Count -eq 0) {
@@ -756,6 +758,24 @@ function Invoke-GitHubBranchAwareSetup {
             [pscustomobject]@{
                 Name = 'Configure GitHub OIDC identity'
                 HelpDocRelativePath = 'docs/config/github-secrets.md'
+                InputSignature = {
+                    $credentialParts = @(
+                        foreach ($branchState in @($wizardState.BranchStates)) {
+                            foreach ($environmentConfiguration in @($branchState.DevEnvironmentConfiguration) +
+                                @($branchState.DeploymentEnvironments) +
+                                @($branchState.BuildValidationEnvironmentConfiguration)) {
+                                $credentials = Get-OptionalObjectPropertyValue -InputObject $environmentConfiguration -PropertyName 'Credentials'
+                                if ($null -eq $credentials) {
+                                    continue
+                                }
+                                "$([string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'AuthType'))|" +
+                                    "$([string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'ApplicationId'))|" +
+                                    "$([string](Get-OptionalObjectPropertyValue -InputObject $credentials -PropertyName 'TenantId'))"
+                            }
+                        }
+                    )
+                    "$([bool]$wizardState.UseImmutableWifSubject)|$($credentialParts -join ';')"
+                }
                 Summary = {
                     $hasWifCredential = $false
                     foreach ($branchState in @($wizardState.BranchStates)) {
@@ -796,7 +816,13 @@ function Invoke-GitHubBranchAwareSetup {
                         }
                     }
 
-                    $wizardState.UseImmutableWifSubject = [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject')
+                    # Re-deriving from the repository identity on every revisit discarded an
+                    # explicit earlier choice, so only initialize until the user decides.
+                    if (-not $wizardState.UseImmutableWifSubjectChosen) {
+                        $wizardState.UseImmutableWifSubject = [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject')
+                        $wizardState.UseImmutableWifSubjectChosen = $true
+                    }
+
                     if ($hasWifCredential -and -not $wizardState.UseImmutableWifSubject) {
                         $immutableSubjectChangelogUrl = 'https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories'
                         $enableImmutableSubject = Read-YesNo `
@@ -849,8 +875,9 @@ function Invoke-GitHubBranchAwareSetup {
                                 -UseGitHubEnvironments $UseGitHubEnvironments `
                                 -UseRepositoryVariablePrefix $UseRepositoryVariablePrefix `
                                 -EnableEnvironmentApprovals $EnableEnvironmentApprovals `
-                                -RequiredReviewerIds $RequiredReviewerIds)
-                        'Only resource changes deferred until Apply are listed; prerequisites already created during setup are excluded.'
+                                -RequiredReviewerIds $RequiredReviewerIds `
+                                -SharedWorkflowRepositoryState $SharedWorkflowRepositoryState)
+                        'Changes already applied during setup are marked; the remaining rows are deferred until Apply.'
                     }
 
                     $summaryAction = {
@@ -901,11 +928,12 @@ function Invoke-GitHubBranchAwareSetup {
                         Show-BranchEnvironmentMappingTable -BranchMappings $branchMappingsForReview
                         [Spectre.Console.AnsiConsole]::WriteLine()
                         foreach ($branchState in @($wizardState.BranchStates)) {
-                            $publishSummary = if ($branchState.PublishPlan -and $branchState.PublishPlan.Mode -eq 'PullRequest') {
-                                "Pull request into $($branchState.PublishPlan.TargetBranch) from $($branchState.PublishPlan.BranchName)"
+                            $publishPlan = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'PublishPlan'
+                            $publishSummary = if ($publishPlan -and $publishPlan.Mode -eq 'PullRequest') {
+                                "Pull request into $($publishPlan.TargetBranch) from $($publishPlan.BranchName)"
                             }
-                            elseif ($branchState.PublishPlan) {
-                                "Direct commit to $($branchState.PublishPlan.BranchName)"
+                            elseif ($publishPlan) {
+                                "Direct commit to $($publishPlan.BranchName)"
                             }
                             elseif ($PreviewOnly) {
                                 '<not selected in preview-only mode>'
@@ -917,7 +945,7 @@ function Invoke-GitHubBranchAwareSetup {
                                 'Publish mode'             = $publishSummary
                                 'DEV environment'          = $(if ($branchState.DevEnvironmentConfiguration) { $branchState.DevEnvironmentConfiguration.ShortName } else { '<none>' })
                                 'Deployment environments'  = [string]@($branchState.DeploymentEnvironments).Count
-                                'BUILD validation'         = $(if ($branchState.BuildValidationEnabled) { [string]$branchState.BuildValidationEnvironmentName } else { '<disabled>' })
+                                'BUILD validation'         = $(if ($branchState.BuildValidationEnabled) { [string]$branchState.BuildValidationEnvironmentName } else { 'Disabled' })
                                 'BUILD validation baseline' = $(if ([string]::IsNullOrWhiteSpace([string]$branchState.BuildValidationBaselineRelease)) { '<none>' } else { [string]$branchState.BuildValidationBaselineRelease })
                             })
                         }
@@ -939,33 +967,51 @@ function Invoke-GitHubBranchAwareSetup {
         if (-not $previewStep) {
             throw 'The setup change preview action is unavailable.'
         }
-        $setupSteps = @($PrerequisiteSteps) + @($branchSetupSteps | Where-Object { $_.Name -ne 'Preview changes' })
-        if ($ApplyConfig) {
-            $publicationPlanStep = [pscustomobject]@{
-                Name = 'Choose publication methods'
-                HelpDocRelativePath = 'docs/setup/github-setup.md'
-                Summary = {
-                    Get-SetupPublishPlanMenuSummary -BranchStates @($wizardState.BranchStates)
-                }
-                Action = {
-                    foreach ($branchState in @($wizardState.BranchStates)) {
-                        $branchName = [string]$branchState.BranchName
-                        $branchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
-                            -ProviderName 'GitHub' `
-                            -RepositoryName $RepoFullName `
-                            -TargetBranch $branchName `
-                            -DefaultCommitMessage "Apply alm-config.psd1 settings for branch '$branchName'" `
-                            -DefaultPullRequestTitle "Apply alm-config.psd1 settings for branch '$branchName'" `
-                            -DefaultPullRequestDescription "This pull request regenerates the GitHub workflow files from the committed alm-config.psd1 settings for branch '$branchName'." `
-                            -GuidanceLines @(
-                                "Choose how the generated workflow files for branch '$branchName' should be published.",
-                                'Use a pull request when branch protection or review is required.'
-                            ) `
-                            -DocRelativePath 'docs/setup/github-setup.md' `
-                            -Ref $ALM4DataverseRef
+        $publicationPlanStep = [pscustomobject]@{
+            Name = 'Choose publication methods'
+            HelpDocRelativePath = 'docs/setup/github-setup.md'
+            InputSignature = {
+                @($wizardState.BranchStates | ForEach-Object { [string]$_.BranchName }) -join ';'
+            }
+            Summary = {
+                Get-SetupPublishPlanMenuSummary -BranchStates @($wizardState.BranchStates)
+            }
+            Action = {
+                foreach ($branchState in @($wizardState.BranchStates)) {
+                    $branchName = [string]$branchState.BranchName
+                    $defaultCommitMessage = if ($ApplyConfig) {
+                        "Apply alm-config.psd1 settings for branch '$branchName'"
                     }
+                    else {
+                        "Add ALM4Dataverse GitHub Actions workflows for branch '$branchName'"
+                    }
+                    $defaultPullRequestDescription = if ($ApplyConfig) {
+                        "This pull request regenerates the GitHub workflow files from the committed alm-config.psd1 settings for branch '$branchName'."
+                    }
+                    else {
+                        "This pull request adds or updates the ALM4Dataverse GitHub Actions workflow and repository configuration for branch '$branchName'."
+                    }
+                    $branchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
+                        -ProviderName 'GitHub' `
+                        -RepositoryName $RepoFullName `
+                        -TargetBranch $branchName `
+                        -DefaultCommitMessage $defaultCommitMessage `
+                        -DefaultPullRequestTitle $defaultCommitMessage `
+                        -DefaultPullRequestDescription $defaultPullRequestDescription `
+                        -ExistingPlan $branchState.PublishPlan `
+                        -GuidanceLines @(
+                            "Choose how the generated workflow files for branch '$branchName' should be published.",
+                            'Use a pull request when branch protection or review is required.'
+                        ) `
+                        -DocRelativePath 'docs/setup/github-setup.md' `
+                        -Ref $ALM4DataverseRef
                 }
             }
+        }
+        $setupSteps = @($PrerequisiteSteps) +
+            @($branchSetupSteps | Where-Object { $_.Name -ne 'Preview changes' }) +
+            @($publicationPlanStep)
+        if ($ApplyConfig) {
             $setupSteps = @($PrerequisiteSteps) + @($publicationPlanStep)
         }
 
@@ -988,6 +1034,7 @@ function Invoke-GitHubBranchAwareSetup {
             -PreviewActionName $previewStep.Name `
             -HelpDocRelativePath 'docs/setup/github-setup.md' `
             -HelpRef $ALM4DataverseRef `
+            -PreApplyAction $PreApplyAction `
             -ApplyAction {
             $applyResult = Invoke-GitHubBranchAwareSetupApply `
                 -CloneRoot $CloneRoot `

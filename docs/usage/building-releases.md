@@ -149,7 +149,11 @@ deployment pointer yet, BUILD warns and validates only the candidate. Other
 baseline resolution, download, or deployment failures fail BUILD before the
 candidate is deployed.
 
-Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
+Configure `branches.<branch>.buildValidation.baselineRelease` in `alm-config.psd1`
+for each branch that BUILD validates. A branch-level value takes precedence over the
+legacy top-level `buildValidation.baselineRelease`, which applies only to branches
+without that key. Setup copies the legacy value into branch settings when it converts
+a repository that predates the `branches` map:
 
 - Leave it empty to deploy only the current candidate.
 - Use `@<environment-name>` to resolve the most recently successfully
