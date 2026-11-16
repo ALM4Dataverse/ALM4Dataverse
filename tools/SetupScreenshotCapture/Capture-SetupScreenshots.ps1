@@ -181,8 +181,50 @@ function Get-CaptureScene {
             Interactions = @()
         },
         [pscustomobject]@{
+            Name = 'azdo-extension-mode'
+            Provider = 'azdo'
+            ExpectedText = '[y/n]'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-shared-repository-version'
+            Provider = 'azdo'
+            ExpectedText = '[y/n]'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'github-authentication'
+            Provider = 'github'
+            ExpectedText = 'Use existing GitHub login: example-user'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'github-application-repository'
+            Provider = 'github'
+            ExpectedText = 'Create a new repository'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'github-shared-workflow-repository'
+            Provider = 'github'
+            ExpectedText = 'Use existing fork: example-org/ALM4Dataverse'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
             Name = 'azdo-apply-changes'
             Provider = 'azdo'
+            ExpectedText = 'Apply changes - Ready'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'github-apply-changes'
+            Provider = 'github'
             ExpectedText = 'Apply changes - Ready'
             Rows = 32
             Interactions = @()
@@ -266,7 +308,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'github-dev-confirmation'
             Provider = 'github'
-            ExpectedText = "Configure a DEV Dataverse environment for branch 'main'?"
+            ExpectedText = '[y/n]'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" })
         },
@@ -298,6 +340,20 @@ function Get-CaptureScene {
             Name = 'github-service-account'
             Provider = 'github'
             ExpectedText = 'Reuse: automation@example.invalid'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'solutions-configuration'
+            Provider = 'common'
+            ExpectedText = 'Add a solution'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'github-oidc-identity'
+            Provider = 'github'
+            ExpectedText = '[y/n]'
             Rows = 32
             Interactions = @()
         },
@@ -339,7 +395,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-dev-confirmation'
             Provider = 'azdo'
-            ExpectedText = "Configure a DEV environment for branch 'main'?"
+            ExpectedText = '[y/n]'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" })
         },
@@ -402,14 +458,14 @@ function Get-CaptureScene {
             Name = 'github-setup-change-review'
             Provider = 'common'
             ExpectedText = 'Modified: alm-config.psd1'
-            Rows = 50
+            Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-setup-change-review'
             Provider = 'common'
             ExpectedText = 'Modified: alm-config.psd1'
-            Rows = 50
+            Rows = 32
             Interactions = @()
         },
         [pscustomobject]@{
@@ -1113,6 +1169,69 @@ switch ($scene) {
             -ProjectName 'Example project' `
             -ExcludeRepositoryName 'contoso-dataverse' | Out-Null
     }
+    'azdo-extension-mode' {
+        [void](Read-YesNo `
+            -Prompt 'Use ALM4Dataverse AzDO extension? (required for Workload Identity Federation)' `
+            -PromptGuidanceLines @(
+                'The extension enables Workload Identity Federation and the ALM4Dataverse Set Connection Variables task.'
+                'Disable it only to use the Power Platform Build Tools secret-based fallback path.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef)
+    }
+    'azdo-shared-repository-version' {
+        [void](Read-YesNo `
+            -Prompt "Check and update shared repository 'ALM4Dataverse' now, before preview?" `
+            -PromptGuidanceLines @(
+                'This step can create, seed, fast-forward, rebase, or reset the shared repository history immediately.'
+                'Choose No to defer the update until you are ready; the preview lists the shared repository state as updated during setup.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef)
+    }
+    'github-authentication' {
+        Select-FromMenu `
+            -Title 'GitHub authentication' `
+            -Items @(
+                'Use existing GitHub login: example-user'
+                'Sign in with a different GitHub account'
+            ) `
+            -PromptGuidanceLines @(
+                'Choose whether to continue with the currently authenticated GitHub account or switch to another one.'
+                'Use the account that should own or manage workflow and repository settings for this setup.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef | Out-Null
+    }
+    'github-application-repository' {
+        Select-FromMenu `
+            -Title 'Select the repository to set up ALM4Dataverse in' `
+            -Items @(
+                'Create a new repository'
+                'Use existing repository: example-org/sample-app'
+                'Use existing repository: example-org/contoso-crm'
+            ) `
+            -PromptGuidanceLines @(
+                'Choose the application repository that will store your solutions, ALM configuration, and caller workflows.'
+                'You do not need a separate repository for the shared workflow templates unless you maintain a fork.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef | Out-Null
+    }
+    'github-shared-workflow-repository' {
+        Select-FromMenu `
+            -Title 'Select shared workflow repository' `
+            -Items @(
+                'Create a new repository'
+                'Use existing fork: example-org/ALM4Dataverse'
+                'Use existing repository: example-org/alm-templates'
+            ) `
+            -PromptGuidanceLines @(
+                'Choose or create a repository that will host the reusable ALM4Dataverse workflow templates.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef | Out-Null
+    }
     'azdo-apply-changes' {
         $completedSteps = @(
             [pscustomobject]@{
@@ -1127,6 +1246,56 @@ switch ($scene) {
             -Steps $completedSteps `
             -PreviewAction {} `
             -ApplyAction {} | Out-Null
+    }
+    'github-apply-changes' {
+        $completedSteps = @(
+            [pscustomobject]@{
+                Name = 'Configure branches, dev and deployment envs'
+                SubItems = @(Get-SetupBranchMenuItem -BranchStates @($script:existingRepositoryBranchMenuStates))
+                IsComplete = $true
+                Action = {}
+            }
+            [pscustomobject]@{
+                Name = 'Configure solutions'
+                Summary = 'develop: Core, Sales'
+                IsComplete = $true
+                Action = {}
+            }
+            [pscustomobject]@{
+                Name = 'Configure GitHub OIDC identity'
+                Summary = 'Immutable subjects'
+                IsComplete = $true
+                Action = {}
+            }
+        )
+        Invoke-SetupWizard `
+            -Title 'GitHub Actions ALM4Dataverse setup' `
+            -Steps $completedSteps `
+            -PreviewAction {} `
+            -ApplyAction {} | Out-Null
+    }
+    'solutions-configuration' {
+        $availableSolutions = @(
+            [pscustomobject]@{ friendlyname = 'Contoso Core'; uniquename = 'contoso_core' }
+            [pscustomobject]@{ friendlyname = 'Contoso Sales'; uniquename = 'contoso_sales' }
+            [pscustomobject]@{ friendlyname = 'Contoso Service'; uniquename = 'contoso_service' }
+        )
+        Select-OrderedSolution `
+            -AvailableSolutions $availableSolutions `
+            -InitiallySelectedSolutions @($availableSolutions[0], $availableSolutions[1]) | Out-Null
+    }
+    'github-oidc-identity' {
+        [void](Read-YesNo `
+            -Prompt "Enable immutable GitHub OIDC subjects for 'example-org/sample-app'?" `
+            -PromptGuidanceLines @(
+                'Workload Identity Federation was selected for at least one ALM4Dataverse credential.'
+                'Recommended: immutable owner/repository IDs reduce the risk of trust being reused after a name is recycled.'
+                'Risk: other workflows or applications in this repository that trust legacy subjects may stop authenticating until their cloud credentials are updated.'
+                'Changelog: https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef `
+            -DefaultNo)
     }
     { $_ -in @('github-menu-new-repository', 'github-menu-existing-repository', 'github-menu-unavailable-shared-repository', 'azdo-menu-new-repository', 'azdo-menu-existing-repository', 'azdo-menu-unavailable-shared-repository') } {
         $isGitHubSetup = $scene.StartsWith('github-', [StringComparison]::Ordinal)
@@ -1223,125 +1392,52 @@ switch ($scene) {
             -IsNewRepository:($scene -like '*new-repository')
     }
     { $_ -in @('github-setup-change-review', 'azdo-setup-change-review') } {
+        # Build the review menu from the same file-change shape the real review uses so
+        # selecting a file still opens its diff for the walkthrough capture.
         $isGitHubReview = $scene -eq 'github-setup-change-review'
-        $providerLabel = if ($isGitHubReview) { 'GitHub' } else { 'Azure DevOps' }
-        $configProvider = if ($isGitHubReview) { 'GitHub' } else { 'azDO' }
-        $repositoryLabel = if ($isGitHubReview) { 'example-org/sample-app' } else { 'sample-app' }
         $workflowRoot = if ($isGitHubReview) { '.github/workflows' } else { 'pipelines' }
         $fileChanges = @(
             [pscustomobject]@{
                 Path = 'alm-config.psd1'
                 Status = 'Modified'
-                BeforeContent = "provider = '$configProvider'`nbranches = @{`n    main = @{ deploymentEnvironments = @('TEST') }`n}"
-                AfterContent = "provider = '$configProvider'`nbranches = @{`n    main = @{ deploymentEnvironments = @('TEST', 'PROD') }`n}"
-            },
+                BeforeContent = "provider = 'azDO'`nsolutions = @()"
+                AfterContent = "provider = 'azDO'`nsolutions = @('contoso_core', 'contoso_sales')"
+            }
             [pscustomobject]@{
                 Path = "$workflowRoot/BUILD.yml"
                 Status = 'Modified'
-                BeforeContent = "stages:`n- template: pipelines/templates/build.yml`n  parameters:`n    buildEnvironmentName: ''"
-                AfterContent = "stages:`n- template: pipelines/templates/build.yml`n  parameters:`n    buildEnvironmentName: ''`n    buildValidationEnvironments: {'main': 'Build-main'}"
-            },
-            [pscustomobject]@{
-                Path = "$workflowRoot/DEPLOY-main.yml"
-                Status = 'Added'
-                BeforeContent = $null
-                AfterContent = "name: Deploy main`ntrigger: none`njobs:`n- deployment: deploy`n  environment: PROD"
-            },
+                BeforeContent = "resources:`n  repositories:`n  - repository: ALM4Dataverse`n    ref: 'refs/heads/stable'`nstages:`n- template: pipelines/templates/build.yml@ALM4Dataverse`n  parameters:`n    buildEnvironmentName: ''"
+                AfterContent = "resources:`n  repositories:`n  - repository: ALM4Dataverse`n    ref: 'refs/heads/stable'`nstages:`n- template: pipelines/templates/build.yml@ALM4Dataverse`n  parameters:`n    buildEnvironmentName: ''`n    buildValidationEnvironments: {'main': 'Build-main'}"
+            }
             [pscustomobject]@{
                 Path = "$workflowRoot/DEPLOY-develop.yml"
                 Status = 'Deleted'
-                BeforeContent = "name: Deploy develop`ntrigger: none`njobs:`n- deployment: deploy`n  environment: TEST"
-                AfterContent = $null
+                BeforeContent = "stages:`n- template: pipelines/templates/deploy.yml@ALM4Dataverse"
+                AfterContent = ''
+            }
+            [pscustomobject]@{
+                Path = "$workflowRoot/DEPLOY-main.yml"
+                Status = 'Added'
+                BeforeContent = ''
+                AfterContent = "stages:`n- template: pipelines/templates/deploy.yml@ALM4Dataverse"
             }
         )
-        $resourceChanges = if ($isGitHubReview) {
-            @(
-                [pscustomobject]@{
-                    Action = 'Enable'
-                    Resource = 'GitHub repository OIDC setting'
-                    Target = $repositoryLabel
-                    Details = 'Enable immutable subject claims while preserving the existing claim-selection mode.'
-                }
-                [pscustomobject]@{
-                    Action = 'Create or update'
-                    Resource = 'GitHub environment'
-                    Target = "$repositoryLabel/PROD"
-                    Details = 'Set environment variables, store AZURE_CLIENT_SECRET (value hidden), and require reviewer approval.'
-                }
-                [pscustomobject]@{
-                    Action = 'Create or update'
-                    Resource = 'Entra federated identity credential'
-                    Target = "$repositoryLabel/PROD"
-                    Details = 'Configure the GitHub Actions workload identity subject for this environment.'
-                }
-                [pscustomobject]@{
-                    Action = 'Ensure'
-                    Resource = 'Dataverse application and service-account users'
-                    Target = 'PROD'
-                    Details = 'Ensure both configured users have the System Administrator role.'
-                }
-            )
+        $reviewMenuItems = @($fileChanges | ForEach-Object { "$($_.Status): $($_.Path)" })
+        $reviewMenuItems += 'Done reviewing'
+        $selection = Select-FromMenu `
+            -Title 'Review setup changes' `
+            -Items $reviewMenuItems `
+            -ActionItems @('Done reviewing') `
+            -ActionSectionTitle '---' `
+            -PromptGuidanceLines @(
+                'Each file is listed with its add, modify, or delete status.'
+                'Select a file to view its diff, then choose Done reviewing to return.'
+            ) `
+            -PromptGuidanceDocRelativePath $(if ($isGitHubReview) { 'docs/setup/github-setup.md' } else { 'docs/setup/azdo-automated-setup.md' }) `
+            -PromptGuidanceRef $script:ALM4DataverseRef
+        if ($null -ne $selection -and $selection -ge 0 -and $selection -lt $fileChanges.Count) {
+            Show-SetupSideBySideDiff -Title 'Repository file changes' -FileChanges @($fileChanges[$selection])
         }
-        else {
-            @(
-                [pscustomobject]@{
-                    Action = 'Ensure'
-                    Resource = 'Azure DevOps Build Service permission'
-                    Target = 'sample-project/sample-app'
-                    Details = "Grant the project's Build Service Contribute permission on the main repository."
-                }
-                [pscustomobject]@{
-                    Action = 'Create or retarget'
-                    Resource = 'Azure DevOps YAML pipelines'
-                    Target = 'sample-project/sample-app'
-                    Details = 'Register BUILD, EXPORT, IMPORT, and DEPLOY-main from the generated YAML files.'
-                }
-                [pscustomobject]@{
-                    Action = 'Create or reconcile'
-                    Resource = 'Azure DevOps service connection'
-                    Target = 'sample-project/PROD'
-                    Details = 'Configure workload identity federation; credential values are not displayed.'
-                }
-                [pscustomobject]@{
-                    Action = 'Create or update'
-                    Resource = 'Entra federated identity credential'
-                    Target = 'sample-project/PROD'
-                    Details = 'Use the issuer and subject returned by the Azure DevOps service connection.'
-                }
-                [pscustomobject]@{
-                    Action = 'Ensure'
-                    Resource = 'Azure DevOps variable group and checks'
-                    Target = 'sample-project/Environment-PROD'
-                    Details = 'Seed variables if new; ensure exclusive lock, deployment approval, and pipeline access.'
-                }
-                [pscustomobject]@{
-                    Action = 'Ensure'
-                    Resource = 'Dataverse application and service-account users'
-                    Target = 'PROD'
-                    Details = 'Ensure both configured users have the System Administrator role.'
-                }
-            )
-        }
-        $summaryAction = {
-            Show-KeyValueSummaryTable -Heading 'Setup summary' -Values ([ordered]@{
-                'Setup type' = 'Changes to existing repository setup'
-                'Provider' = $providerLabel
-                'Repository' = $repositoryLabel
-                'Configured branches' = '1'
-                'BUILD validation' = 'main: Build-main'
-                'Solutions selected' = '1'
-                'Deferred resource changes' = [string]$resourceChanges.Count
-            })
-            Show-BranchEnvironmentMappingTable -BranchMappings @([pscustomobject]@{
-                    BranchName = 'main'
-                    Environments = @($testEnvironment, $productionEnvironment)
-                })
-        }.GetNewClosure()
-        Show-SetupChangeReview `
-            -FileChanges $fileChanges `
-            -ResourceChanges $resourceChanges `
-            -ResourceChangeNote 'Resources already provisioned earlier to support setup are excluded.' `
-            -SummaryAction $summaryAction
     }
     'setup-change-side-by-side-diff' {
         Show-SetupSideBySideDiff -Title 'Repository file changes' -FileChanges @(
@@ -2414,7 +2510,7 @@ function Save-CaptureSceneFrame {
     if (-not ($Scene.PSObject.Properties['HasPromptHelp'] -and -not $Scene.HasPromptHelp)) {
         Wait-ForTerminalText -Terminal $Capture.Terminal -ExpectedText 'F1 for help' | Out-Null
     }
-    Start-Sleep -Milliseconds 200
+    Start-Sleep -Milliseconds 750
     Invoke-CaptureDispatcherQueue
     Invoke-CaptureRenderTick
     Invoke-CaptureDispatcherQueue

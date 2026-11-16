@@ -1062,8 +1062,8 @@ function Initialize-GitHubApplicationRepositoryContext {
     }
 
     $repoSelection = Select-FromMenu -Title 'Select the repository to set up ALM4Dataverse in' -Items $repoMenuItems -PromptGuidanceLines @(
-        'Choose the target repository for ALM4Dataverse shared workflows.',
-        'This must be a separate repository from your main application repository.'
+        'Choose the application repository that will store your solutions, ALM configuration, and caller workflows.'
+        'You do not need a separate repository for the shared workflow templates unless you maintain a fork.'
     ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
     if ($null -eq $repoSelection) {
         Request-SetupWizardBack

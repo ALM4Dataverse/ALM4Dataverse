@@ -98,6 +98,8 @@ whether to use the ALM4Dataverse extension. Keep it enabled unless you must use 
 tooling only; workload identity federation requires it. See
 [service connections](../config/azdo-environment-service-connection.md).
 
+![Azure DevOps extension confirmation with Workload Identity Federation guidance](./screenshots/azdo-extension-mode.png)
+
 ### 3. Select the shared repository
 
 The shared `ALM4Dataverse` repository holds the templates your pipelines use. Select an
@@ -108,6 +110,8 @@ ALM4Dataverse ref you are running. That step can rewrite shared history, so setu
 for confirmation before changing it.
 
 ![Azure DevOps shared repository selection and creation confirmation](./screenshots/azdo-shared-repository-selection.png)
+
+![Confirmation before checking and updating the shared repository version](./screenshots/azdo-shared-repository-version.png)
 
 ### 4. Configure branches and environments
 
@@ -179,6 +183,8 @@ its deployment targets and its BUILD validation. Select the row to start.
 Choose a branch with a DEV environment as the discovery source, then select and order the
 solutions. The summary shows them in dependency order. See
 [solutions configuration](../config/alm-config.md#solutions).
+
+![Selecting and ordering managed solutions](./screenshots/solutions-configuration.png)
 
 ### 6. Preview and apply
 

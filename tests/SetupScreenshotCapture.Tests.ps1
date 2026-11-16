@@ -27,7 +27,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'defines all documented setup scenes and waits for visible content' {
         $scenes = @(Get-CaptureScene)
 
-        $scenes.Count | Should -Be 37
+        $scenes.Count | Should -Be 45
         foreach ($scene in $scenes) {
             $scene.Name | Should -Not -BeNullOrEmpty
             $scene.Provider | Should -BeIn @('common', 'github', 'azdo')
@@ -49,7 +49,15 @@ Describe 'Setup screenshot capture infrastructure' {
         $scenes.Name | Should -Contain 'azdo-project-selection'
         $scenes.Name | Should -Contain 'azdo-main-repository-selection'
         $scenes.Name | Should -Contain 'azdo-shared-repository-selection'
+        $scenes.Name | Should -Contain 'azdo-extension-mode'
+        $scenes.Name | Should -Contain 'azdo-shared-repository-version'
+        $scenes.Name | Should -Contain 'github-authentication'
+        $scenes.Name | Should -Contain 'github-application-repository'
+        $scenes.Name | Should -Contain 'github-shared-workflow-repository'
+        $scenes.Name | Should -Contain 'solutions-configuration'
+        $scenes.Name | Should -Contain 'github-oidc-identity'
         $scenes.Name | Should -Contain 'azdo-apply-changes'
+        $scenes.Name | Should -Contain 'github-apply-changes'
         $scenes.Name | Should -Contain 'github-build-validation'
         $scenes.Name | Should -Contain 'azdo-build-validation'
         ($scenes | Where-Object Name -eq 'github-menu-new-repository').ExpectedText |
@@ -681,7 +689,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'runs scene listing without installing or loading the capture runtime' {
         $listedScenes = @(& (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1') -ListScenes)
 
-        $listedScenes.Count | Should -Be 37
+        $listedScenes.Count | Should -Be 45
         $listedScenes | Should -Contain 'branch-mapping'
         $listedScenes | Should -Contain 'environment-detail-menu'
         $listedScenes | Should -Contain 'setup-mode-choice'
@@ -699,5 +707,13 @@ Describe 'Setup screenshot capture infrastructure' {
         $listedScenes | Should -Contain 'github-setup-change-review'
         $listedScenes | Should -Contain 'azdo-setup-change-review'
         $listedScenes | Should -Contain 'setup-change-side-by-side-diff'
+        $listedScenes | Should -Contain 'azdo-extension-mode'
+        $listedScenes | Should -Contain 'azdo-shared-repository-version'
+        $listedScenes | Should -Contain 'github-authentication'
+        $listedScenes | Should -Contain 'github-application-repository'
+        $listedScenes | Should -Contain 'github-shared-workflow-repository'
+        $listedScenes | Should -Contain 'solutions-configuration'
+        $listedScenes | Should -Contain 'github-oidc-identity'
+        $listedScenes | Should -Contain 'github-apply-changes'
     }
 }

@@ -89,6 +89,10 @@ Setup signs in to GitHub and Azure, then asks for the application repository. Ex
 repository choices include repositories you own, repositories in your organizations, and
 repositories shared with you as a collaborator.
 
+![GitHub authentication choices](./screenshots/github-authentication.png)
+
+![Selecting the GitHub application repository](./screenshots/github-application-repository.png)
+
 #### 3. Select the shared workflow repository
 
 The shared workflow repository contains the composite actions and reusable workflows.
@@ -100,6 +104,8 @@ The separate **Check and update shared workflow repository version** step compar
 selected repository with the ALM4Dataverse ref you are running. If it needs a fast-forward
 or reconciliation, setup records the update and performs it only when you choose
 **Apply changes**.
+
+![Selecting or creating the shared workflow repository](./screenshots/github-shared-workflow-repository.png)
 
 #### 4. Configure branches and environments
 
@@ -177,12 +183,16 @@ Choose a branch with a DEV environment as the discovery source, then select and 
 solutions. The summary shows them in dependency order. See
 [solutions configuration](../config/alm-config.md#solutions).
 
+![Selecting and ordering managed solutions](./screenshots/solutions-configuration.png)
+
 #### 6. Configure GitHub OIDC identity
 
 When a selected credential uses workload identity federation and immutable subjects are
 not already enabled, setup asks whether to enable them for the repository. The setting is
 changed during Apply. Review other applications that trust the repository before changing
 this repository-wide setting.
+
+![GitHub OIDC immutable-subject confirmation](./screenshots/github-oidc-identity.png)
 
 #### 7. Preview and apply
 
@@ -200,6 +210,8 @@ When the menu shows **Apply changes** as ready, select it to publish the files a
 the listed settings. You do not have to preview first. If Apply fails, setup keeps your
 selections so you can correct the problem and retry. Operations that already succeeded are
 not rolled back.
+
+![Guided setup menu with Apply changes ready](./screenshots/github-apply-changes.png)
 
 ### Apply A Committed Config
 
