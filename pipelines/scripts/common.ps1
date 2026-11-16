@@ -203,7 +203,7 @@ function Merge-AlmConfigValue {
     }
 
     if ($DefaultValue -is [array] -and $OverrideValue -is [array]) {
-        return @(@($DefaultValue) + @($OverrideValue))
+        return ,@(@($DefaultValue) + @($OverrideValue))
     }
 
     if ($DefaultValue -is [hashtable] -and $OverrideValue -is [hashtable]) {
