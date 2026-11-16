@@ -279,6 +279,12 @@ Describe 'Configuration merging' {
         $merged.items | Should -Be @('default', 'custom')
     }
 
+    It 'keeps empty arrays as arrays rather than null' {
+        Set-StrictMode -Version Latest
+        $merged = @{ items = (Merge-AlmConfigValue -DefaultValue @() -OverrideValue @()) }
+        $merged.items.Length | Should -Be 0 -Because 'strict mode throws on a null value, so this also proves the array survived'
+    }
+
     It 'preserves defaults for null overrides' {
         Merge-AlmConfigValue -DefaultValue 'default' -OverrideValue $null | Should -Be 'default'
     }
