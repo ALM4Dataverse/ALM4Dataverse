@@ -537,7 +537,9 @@ function Get-CaptureWalkthroughStep {
                 }
             )
             CaptureInitialFrame = $true
-            CaptureFinalFrame = $true
+            # A single mocked organization renders as a bare '[y/n]' confirmation,
+            # which is not the authentication screen this step documents.
+            CaptureFinalFrame = $false
         },
         [pscustomobject]@{
             SceneName = 'azdo-project-selection'
