@@ -171,8 +171,9 @@ or discarding an otherwise successful result.
 
 > [!WARNING]
 > The legacy `-UseDeviceAuthentication` installer switch remains accepted for
-> compatibility but does not select device-code authentication. Setup continues
-> to use its existing authentication flow.
+> compatibility but does not select the sign-in flow. Setup signs in with a browser
+> when the host can open one and shows a device code when it cannot, such as in a
+> Dev Container, SSH session or CI.
 
 ## Coverage Gate
 

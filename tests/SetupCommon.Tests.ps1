@@ -2,6 +2,8 @@
     $repoRoot = Split-Path $PSScriptRoot -Parent
     . (Join-Path $repoRoot 'pipelines/scripts/common.ps1')
     . (Join-Path $repoRoot 'setup/setup-common.ps1')
+    $script:originalDisplay = $env:DISPLAY
+    $script:originalWaylandDisplay = $env:WAYLAND_DISPLAY
     if (-not ('Alm4DataverseSetupAccessTokenTestRunner' -as [type])) {
         Add-Type -TypeDefinition @'
 using System.Collections.ObjectModel;
@@ -184,33 +186,54 @@ Describe 'Setup authentication helpers' {
         if (-not ('Microsoft.Identity.Client.PublicClientApplicationBuilder' -as [type])) {
             Add-Type -TypeDefinition 'namespace Microsoft.Identity.Client { public class PublicClientApplicationBuilder {} }'
         }
+        if (-not ('Microsoft.Identity.Client.DeviceCodeResult' -as [type])) {
+            Add-Type -TypeDefinition 'namespace Microsoft.Identity.Client { public class DeviceCodeResult { public string Message { get; set; } } }'
+        }
+        if (-not ('Alm4DataverseSetupTests.MsalTestException' -as [type])) {
+            Add-Type -TypeDefinition 'namespace Alm4DataverseSetupTests { public class MsalTestException : System.Exception { public string ErrorCode { get; private set; } public MsalTestException(string message, string errorCode) : base(message) { this.ErrorCode = errorCode; } } }'
+        }
+
+        function New-SetupTestMsalTask {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory MSAL test double and does not change external state.')]
+            param(
+                [Parameter()][object]$Result
+            )
+
+            $task = [pscustomobject]@{ Result = $Result }
+            $task | Add-Member -MemberType ScriptMethod -Name GetAwaiter -Value { return $this }
+            $task | Add-Member -MemberType ScriptMethod -Name GetResult -Value { return $this.Result }
+            return $task
+        }
 
         function New-SetupTestMsalApplication {
             [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Builds an in-memory MSAL test double and does not change external state.')]
             param(
-                [Parameter(Mandatory)][object[]]$Accounts,
-                [Parameter()][object]$AuthenticationResult
+                [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Accounts,
+                [Parameter()][object]$AuthenticationResult,
+                [Parameter()][object]$InteractiveResult,
+                [Parameter()][object]$InteractiveException,
+                [Parameter()][object]$DeviceCodeAuthenticationResult,
+                [Parameter()][string]$DeviceCodeMessage = 'Device code instructions'
             )
 
             $cache = [pscustomobject]@{}
             $cache | Add-Member -MemberType ScriptMethod -Name SerializeMsalV3 -Value { return [byte[]]@() }
 
-            $accountTask = [pscustomobject]@{ Result = $Accounts }
-            $accountTask | Add-Member -MemberType ScriptMethod -Name GetAwaiter -Value { return $this }
-            $accountTask | Add-Member -MemberType ScriptMethod -Name GetResult -Value { return $this.Result }
+            $accountTask = New-SetupTestMsalTask -Result $Accounts
             $accountTaskAccessor = { return $accountTask }.GetNewClosure()
 
             $application = [pscustomobject]@{
-                UserTokenCache = $cache
-                LastScopes     = @()
-                LastAccount    = $null
+                UserTokenCache   = $cache
+                LastScopes       = @()
+                LastAccount      = $null
+                InteractiveCalls = 0
+                DeviceCodeCalls  = 0
+                DeviceCodeScopes = @()
             }
             $application | Add-Member -MemberType ScriptMethod -Name GetAccountsAsync -Value $accountTaskAccessor
 
             if ($null -ne $AuthenticationResult) {
-                $authenticationTask = [pscustomobject]@{ Result = $AuthenticationResult }
-                $authenticationTask | Add-Member -MemberType ScriptMethod -Name GetAwaiter -Value { return $this }
-                $authenticationTask | Add-Member -MemberType ScriptMethod -Name GetResult -Value { return $this.Result }
+                $authenticationTask = New-SetupTestMsalTask -Result $AuthenticationResult
 
                 $silentBuilder = [pscustomobject]@{}
                 $silentBuilder | Add-Member -MemberType ScriptMethod -Name ExecuteAsync -Value {
@@ -225,6 +248,46 @@ Describe 'Setup authentication helpers' {
                 $application | Add-Member -MemberType ScriptMethod -Name AcquireTokenSilent -Value $acquireTokenSilent
             }
 
+            if ($null -ne $InteractiveResult -or $null -ne $InteractiveException) {
+                $interactiveTask = New-SetupTestMsalTask -Result $InteractiveResult
+                $interactiveBuilder = [pscustomobject]@{}
+                $interactiveBuilder | Add-Member -MemberType ScriptMethod -Name WithPrompt -Value { return $this }
+                $interactiveBuilder | Add-Member -MemberType ScriptMethod -Name WithLoginHint -Value { return $this }
+                $interactiveBuilder | Add-Member -MemberType ScriptMethod -Name ExecuteAsync -Value {
+                    if ($null -ne $InteractiveException) {
+                        throw $InteractiveException
+                    }
+
+                    return $interactiveTask
+                }.GetNewClosure()
+                $acquireTokenInteractive = {
+                    param($Scopes)
+                    $this.InteractiveCalls++
+                    $this.LastScopes = @($Scopes)
+                    return $interactiveBuilder
+                }.GetNewClosure()
+                $application | Add-Member -MemberType ScriptMethod -Name AcquireTokenInteractive -Value $acquireTokenInteractive
+            }
+
+            if ($null -ne $DeviceCodeAuthenticationResult) {
+                $deviceCodeTask = New-SetupTestMsalTask -Result $DeviceCodeAuthenticationResult
+                $deviceCodeBuilder = [pscustomobject]@{}
+                $deviceCodeBuilder | Add-Member -MemberType ScriptMethod -Name ExecuteAsync -Value {
+                    return $deviceCodeTask
+                }.GetNewClosure()
+                $deviceCodeMessage = $DeviceCodeMessage
+                $acquireTokenWithDeviceCode = {
+                    param($Scopes, $Callback)
+                    $this.DeviceCodeCalls++
+                    $this.DeviceCodeScopes = @($Scopes)
+                    $deviceCodeResult = [Microsoft.Identity.Client.DeviceCodeResult]::new()
+                    $deviceCodeResult.Message = $deviceCodeMessage
+                    $null = $Callback.Invoke($deviceCodeResult)
+                    return $deviceCodeBuilder
+                }.GetNewClosure()
+                $application | Add-Member -MemberType ScriptMethod -Name AcquireTokenWithDeviceCode -Value $acquireTokenWithDeviceCode
+            }
+
             return $application
         }
     }
@@ -234,6 +297,8 @@ Describe 'Setup authentication helpers' {
         Mock Initialize-SetupMsalAssembly {}
         Mock New-DirectoryIfMissing {}
         Mock Test-Path { $false }
+        $env:DISPLAY = $null
+        $env:WAYLAND_DISPLAY = $null
         $script:entraApplicationCache = @{}
         Remove-Variable -Name MsalApp -Scope Script -ErrorAction SilentlyContinue
     }
@@ -265,6 +330,128 @@ Describe 'Setup authentication helpers' {
         $result.ResultName | Should -Be 'silent-result'
         $script:MsalApp.LastScopes | Should -Be @('https://api.example.invalid/.default')
         $script:MsalApp.LastAccount.Username | Should -Be 'second@example.invalid'
+    }
+
+    It 'uses a device code when no browser can be launched' {
+        Mock Get-SetupHostPlatform { 'Linux' }
+        Mock Get-Command { $null }
+        $script:MsalApp = New-SetupTestMsalApplication -Accounts @() -DeviceCodeAuthenticationResult ([pscustomobject]@{ ResultName = 'device-result' })
+        $originalOut = [System.Console]::Out
+        $output = [System.IO.StringWriter]::new()
+        [System.Console]::SetOut($output)
+        try {
+            $result = Get-AuthToken -ResourceUrl 'https://api.example.invalid/'
+        }
+        finally {
+            [System.Console]::SetOut($originalOut)
+        }
+
+        $result.ResultName | Should -Be 'device-result'
+        $script:MsalApp.InteractiveCalls | Should -Be 0
+        $script:MsalApp.DeviceCodeCalls | Should -Be 1
+        $script:MsalApp.DeviceCodeScopes | Should -Be @('https://api.example.invalid/.default')
+        $output.ToString() | Should -BeLike '*Device code instructions*'
+    }
+
+    It 'retries with a device code when the browser cannot be opened' {
+        $env:DISPLAY = ':0'
+        Mock Get-SetupHostPlatform { 'Linux' }
+        Mock Get-Command { [pscustomobject]@{ Name = $Name } }
+        Mock Write-Host {}
+        Mock Write-Warning {}
+        $interactiveException = [Alm4DataverseSetupTests.MsalTestException]::new('Unable to open a web page using xdg-open', 'linux_xdg_open_failed')
+        $script:MsalApp = New-SetupTestMsalApplication -Accounts @() -InteractiveException $interactiveException -DeviceCodeAuthenticationResult ([pscustomobject]@{ ResultName = 'device-result' })
+
+        $result = Get-AuthToken -ResourceUrl 'https://api.example.invalid/'
+
+        $result.ResultName | Should -Be 'device-result'
+        $script:MsalApp.InteractiveCalls | Should -Be 1
+        $script:MsalApp.DeviceCodeCalls | Should -Be 1
+        Should -Invoke Write-Warning -Times 1 -Exactly
+    }
+
+    It 'does not use a device code for other sign-in failures' {
+        Mock Get-SetupAuthenticationMode { 'Interactive' }
+        Mock Write-Error {}
+        $interactiveException = [Alm4DataverseSetupTests.MsalTestException]::new('User cancelled', 'authentication_canceled')
+        $script:MsalApp = New-SetupTestMsalApplication -Accounts @() -InteractiveException $interactiveException
+
+        { Get-AuthToken -ResourceUrl 'https://api.example.invalid/' } |
+            Should -Throw -ExpectedMessage '*User cancelled*'
+
+        $script:MsalApp.DeviceCodeCalls | Should -Be 0
+    }
+}
+
+Describe 'Setup sign-in mode selection' {
+    BeforeEach {
+        $env:DISPLAY = $null
+        $env:WAYLAND_DISPLAY = $null
+    }
+
+    It 'uses browser sign-in on Windows' {
+        Mock Get-SetupHostPlatform { 'Windows' }
+        Get-SetupAuthenticationMode | Should -Be 'Interactive'
+    }
+
+    It 'uses browser sign-in on macOS' {
+        Mock Get-SetupHostPlatform { 'macOS' }
+        Get-SetupAuthenticationMode | Should -Be 'Interactive'
+    }
+
+    It 'uses device code on an unknown platform that cannot open a browser' {
+        Mock Get-SetupHostPlatform { 'Unknown' }
+        Get-SetupAuthenticationMode | Should -Be 'DeviceCode'
+    }
+
+    It 'uses device code on Linux without a graphical session or launcher' {
+        Mock Get-SetupHostPlatform { 'Linux' }
+        Mock Get-Command { $null }
+        Get-SetupAuthenticationMode | Should -Be 'DeviceCode'
+    }
+
+    It 'uses browser sign-in on Linux with a graphical session and launcher' {
+        $env:DISPLAY = ':0'
+        Mock Get-SetupHostPlatform { 'Linux' }
+        Mock Get-Command { [pscustomobject]@{ Name = $Name } }
+        Get-SetupAuthenticationMode | Should -Be 'Interactive'
+    }
+
+    It 'uses device code when a launcher exists without a graphical session' {
+        Mock Get-SetupHostPlatform { 'Linux' }
+        Mock Get-Command { [pscustomobject]@{ Name = $Name } } -ParameterFilter { $Name -ne 'wslview' }
+        Mock Get-Command { $null } -ParameterFilter { $Name -eq 'wslview' }
+        Get-SetupAuthenticationMode | Should -Be 'DeviceCode'
+    }
+
+    It 'uses browser sign-in in WSL because wslview opens the Windows browser' {
+        Mock Get-SetupHostPlatform { 'Linux' }
+        Mock Get-Command { $null } -ParameterFilter { $Name -ne 'wslview' }
+        Mock Get-Command { [pscustomobject]@{ Name = $Name } } -ParameterFilter { $Name -eq 'wslview' }
+        Get-SetupAuthenticationMode | Should -Be 'Interactive'
+    }
+}
+
+Describe 'Setup browser launch failure detection' {
+    It 'treats the MSAL browser error code as a launch failure' {
+        $exception = [Alm4DataverseSetupTests.MsalTestException]::new('browser error', 'linux_xdg_open_failed')
+        $record = [System.Management.Automation.ErrorRecord]::new($exception, 'id', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+
+        Test-SetupBrowserLaunchFailure -ErrorRecord $record | Should -BeTrue
+    }
+
+    It 'treats the MSAL browser error message as a launch failure' {
+        $exception = [System.Exception]::new('Unable to open a web page using xdg-open ...')
+        $record = [System.Management.Automation.ErrorRecord]::new($exception, 'id', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+
+        Test-SetupBrowserLaunchFailure -ErrorRecord $record | Should -BeTrue
+    }
+
+    It 'does not treat other sign-in failures as browser launch failures' {
+        $exception = [Alm4DataverseSetupTests.MsalTestException]::new('User cancelled', 'authentication_canceled')
+        $record = [System.Management.Automation.ErrorRecord]::new($exception, 'id', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)
+
+        Test-SetupBrowserLaunchFailure -ErrorRecord $record | Should -BeFalse
     }
 }
 
@@ -2712,4 +2899,9 @@ Describe 'Development ALM4Dataverse reference resolution' {
         Resolve-DevelopmentDefaultAlm4DataverseRef -PrimaryRepositoryPath $worktreePath -FallbackRef stable |
             Should -Be $expectedCommit
     }
+}
+
+AfterAll {
+    $env:DISPLAY = $script:originalDisplay
+    $env:WAYLAND_DISPLAY = $script:originalWaylandDisplay
 }

@@ -946,8 +946,9 @@ function Initialize-AzDoAuthentication {
     .SYNOPSIS
         Authenticates Azure and returns the Azure DevOps access token.
     .DESCRIPTION
-        Interactive device-code flow by default. HeadlessAccessToken skips all prompts
-        and adapts a caller-supplied token to the standard result contract.
+        Signs in with a browser when the host can open one and with a device code
+        otherwise. HeadlessAccessToken skips all prompts and adapts a caller-supplied
+        token to the standard result contract.
     #>
     [CmdletBinding()]
     param(

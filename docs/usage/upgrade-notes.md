@@ -127,10 +127,12 @@ immutable format. See
 
 ### `-UseDeviceAuthentication` Is Ignored
 
-**You'll see:** setup opens its normal browser sign-in even though you passed the switch.
+**You'll see:** setup chooses browser or device-code sign-in automatically even though
+you passed the switch.
 
-**Do this:** run setup on a workstation with a browser. The switch is still accepted so
-existing commands don't fail.
+**Do this:** nothing. Setup signs in with a browser when the host can open one and shows
+a device code when it cannot, such as in a Dev Container, SSH session or CI. The switch
+is still accepted so existing commands don't fail.
 
 ### Branch Environments Must Be Configured In `alm-config.psd1`
 

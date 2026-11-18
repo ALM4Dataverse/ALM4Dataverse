@@ -31,7 +31,8 @@ with the [GitHub quickstart](../getting-started/quickstart-github.md).
 > **Optional Dev Container.** The repository includes a
 > [Dev Container](../../.devcontainer/devcontainer.json) with PowerShell 7, Git and
 > GitHub CLI. It is not a security boundary; setup still acts with the permissions of the
-> authenticated accounts. Use least-privilege identities.
+> authenticated accounts. Use least-privilege identities. The container has no browser,
+> so sign-in shows a device code to enter at the printed URL in a browser on your machine.
 
 > [!CAUTION]
 > Use separate application identities for production and non-production. The application

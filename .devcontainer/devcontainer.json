@@ -8,12 +8,30 @@
     "ghcr.io/devcontainers/features/git:1": {},
     "ghcr.io/devcontainers/features/github-cli:1": {}
   },
+  // The setup container is not a security boundary, and its bind mounts must
+  // stay readable on SELinux hosts such as Fedora.
+  "securityOpt": ["label=disable"],
+  // Runs on the host before the workspace is mounted. It links the checkout's
+  // Git common directory into .devcontainer/git-common, which the mount below
+  // exposes at the absolute path a worktree's .git file records.
+  "initializeCommand": "sh .devcontainer/prepare-git-worktree.sh || cmd /c .devcontainer\\prepare-git-worktree.cmd",
+  "mounts": [
+    "source=${localWorkspaceFolder}/.devcontainer/git-common,target=${containerWorkspaceFolder}/.devcontainer/git-common,type=bind"
+  ],
   "postCreateCommand": "sudo apt-get update && sudo apt-get install --no-install-recommends -y ffmpeg fonts-noto-mono",
   "customizations": {
     "vscode": {
       "extensions": [
         "ms-vscode.powershell"
-      ]
+      ],
+      "settings": {
+        "files.watcherExclude": {
+          "**/.devcontainer/git-common/**": true
+        },
+        "search.exclude": {
+          "**/.devcontainer/git-common": true
+        }
+      }
     }
   }
 }

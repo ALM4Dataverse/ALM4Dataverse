@@ -208,8 +208,11 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 | `RepositoryName` | String | Empty | Azure DevOps only: application repository used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `Build.Repository.Name`. |
 
 `UseDeviceAuthentication` is still accepted so older invocations keep working, but it
-is ignored: setup always uses its normal interactive sign-in. On a machine without a
-browser, run setup from a workstation that has one.
+does not select the sign-in flow. Setup uses browser sign-in when the host can open a
+browser, and a device code when it cannot, such as in a Dev Container, SSH session or
+CI. A device code shows a verification URL and code to enter in a browser on any
+device; the token arrives over outbound polling. Cached silent sign-in is tried first,
+so an existing login does not prompt either way.
 
 Download a released script to review it and pass parameters. For example, after reviewing the downloaded GitHub setup script:
 

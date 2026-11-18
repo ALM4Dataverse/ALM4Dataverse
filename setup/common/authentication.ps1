@@ -155,6 +155,162 @@ function Initialize-SetupMsalAssembly {
     }
 }
 
+function Get-SetupHostPlatform {
+    <#
+    .SYNOPSIS
+        Identifies the host operating system for sign-in mode selection.
+    .DESCRIPTION
+        Returns Windows, macOS, Linux or Unknown. Windows PowerShell predates the
+        $IsWindows family, so its desktop edition is reported as Windows first;
+        the automatic variables are only read on PowerShell Core.
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    if ($PSVersionTable.PSEdition -eq 'Desktop') {
+        return 'Windows'
+    }
+    if ($IsWindows) {
+        return 'Windows'
+    }
+    if ($IsMacOS) {
+        return 'macOS'
+    }
+    if ($IsLinux) {
+        return 'Linux'
+    }
+
+    return 'Unknown'
+}
+
+function Get-SetupAuthenticationMode {
+    <#
+    .SYNOPSIS
+        Chooses browser or device-code sign-in for setup MSAL requests.
+    .DESCRIPTION
+        MSAL opens the system browser on Windows and macOS. On Linux it starts a
+        launcher found on PATH and does not check that a browser appeared, so a
+        launcher alone cannot prove that sign-in is possible. Browser sign-in is
+        selected only for a graphical session, or for WSL where wslview opens the
+        Windows browser. Containers, SSH sessions and CI use device code, where
+        the user enters a code in a browser on any device and the token arrives
+        over outbound polling instead of a local redirect.
+    .OUTPUTS
+        System.String
+        Interactive or DeviceCode.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $platform = Get-SetupHostPlatform
+
+    if ($platform -in @('Windows', 'macOS')) {
+        return 'Interactive'
+    }
+
+    if ($platform -ne 'Linux') {
+        return 'DeviceCode'
+    }
+
+    $hasGraphicalSession =
+        -not [string]::IsNullOrWhiteSpace($env:DISPLAY) -or
+        -not [string]::IsNullOrWhiteSpace($env:WAYLAND_DISPLAY)
+
+    # Mirrors the launchers MSAL probes before it starts the first one found.
+    foreach ($launcher in @('xdg-open', 'gnome-open', 'kfmclient', 'microsoft-edge', 'wslview')) {
+        if (-not (Get-Command -Name $launcher -CommandType Application -ErrorAction SilentlyContinue)) {
+            continue
+        }
+
+        if ($hasGraphicalSession -or $launcher -eq 'wslview') {
+            return 'Interactive'
+        }
+    }
+
+    return 'DeviceCode'
+}
+
+function Test-SetupBrowserLaunchFailure {
+    <#
+    .SYNOPSIS
+        Reports whether an interactive MSAL failure means no browser could start.
+    .DESCRIPTION
+        MSAL raises linux_xdg_open_failed when a launcher exists but cannot open
+        the page. PowerShell can wrap the MSAL exception, and older releases only
+        provide the message, so the complete exception chain is inspected before
+        deciding whether a device-code retry is safe.
+    .PARAMETER ErrorRecord
+        Error raised while executing the interactive MSAL request.
+    .OUTPUTS
+        System.Boolean
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)]$ErrorRecord
+    )
+
+    $exception = $ErrorRecord.Exception
+    while ($exception) {
+        if ($exception.PSObject.Properties['ErrorCode'] -and $exception.ErrorCode -eq 'linux_xdg_open_failed') {
+            return $true
+        }
+        if ($exception.Message -match 'Unable to open a web page using xdg-open|linux_xdg_open_failed') {
+            return $true
+        }
+
+        $exception = $exception.InnerException
+    }
+
+    return $false
+}
+
+function Invoke-SetupDeviceCodeAuthentication {
+    <#
+    .SYNOPSIS
+        Acquires a setup token with the OAuth device-code flow.
+    .DESCRIPTION
+        MSAL prints the verification URL and user code through the callback while
+        setup waits for the browser session to complete. MSAL invokes that callback
+        on a thread without a PowerShell runspace, where a ScriptBlock delegate
+        fails, so the callback is compiled to write the message with Console.WriteLine
+        and return a completed task.
+    .PARAMETER Application
+        MSAL public client used for the request.
+    .PARAMETER Scopes
+        Resource scopes for the requested token.
+    .OUTPUTS
+        Microsoft.Identity.Client.AuthenticationResult
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$Application,
+        [Parameter(Mandatory)][string[]]$Scopes
+    )
+
+    $deviceCodeParameter = [System.Linq.Expressions.Expression]::Parameter([Microsoft.Identity.Client.DeviceCodeResult], 'deviceCodeResult')
+    $deviceCodeMessage = [System.Linq.Expressions.Expression]::Property($deviceCodeParameter, 'Message')
+    $writeLineMethod = [System.Console].GetMethod('WriteLine', [Type[]]@([string]))
+    $deviceCodeBody = [System.Linq.Expressions.Expression]::Block(
+        [System.Linq.Expressions.Expression]::Call($writeLineMethod, [System.Linq.Expressions.Expression]::Constant('')),
+        [System.Linq.Expressions.Expression]::Call($writeLineMethod, $deviceCodeMessage),
+        [System.Linq.Expressions.Expression]::Call($writeLineMethod, [System.Linq.Expressions.Expression]::Constant('')),
+        [System.Linq.Expressions.Expression]::Constant([System.Threading.Tasks.Task]::CompletedTask)
+    )
+    $deviceCodeLambda = [System.Linq.Expressions.Expression]::Lambda(
+        [System.Func[Microsoft.Identity.Client.DeviceCodeResult, System.Threading.Tasks.Task]],
+        $deviceCodeBody,
+        $deviceCodeParameter
+    )
+    $deviceCodeCallback = [System.Func[Microsoft.Identity.Client.DeviceCodeResult, System.Threading.Tasks.Task]]($deviceCodeLambda.Compile())
+
+    return $Application.AcquireTokenWithDeviceCode($Scopes, $deviceCodeCallback).ExecuteAsync().GetAwaiter().GetResult()
+}
+
 function Get-AuthToken {
     <#
     .SYNOPSIS
@@ -177,8 +333,9 @@ function Get-AuthToken {
         is reused: ClientId and TenantId only affect its first construction.
         Loads/saves serialized MSAL V3 bytes under local app data without additional
         encryption here; cache read/write failures warn. Silent failure falls back
-        interactively; interactive acquisition errors throw. The normal result is
-        MSAL AuthenticationResult, not just its access-token text.
+        to browser or device-code sign-in as the host allows, and a browser that
+        cannot open retries with device code; other sign-in errors throw. The
+        normal result is MSAL AuthenticationResult, not just its access-token text.
     #>
     param(
         [Parameter(Mandatory)][string]$ResourceUrl,
@@ -274,20 +431,36 @@ function Get-AuthToken {
 
     if (-not $authResult) {
         try {
-            $interactiveBuilder = $app.AcquireTokenInteractive($scopes)
-
-            if ($ForceInteractive) {
-                $interactiveBuilder = $interactiveBuilder.WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount)
+            if ((Get-SetupAuthenticationMode) -eq 'DeviceCode') {
+                Write-Host 'No browser is available on this host; setup will show a device code for sign-in.' -ForegroundColor Yellow
+                $authResult = Invoke-SetupDeviceCodeAuthentication -Application $app -Scopes $scopes
             }
+            else {
+                try {
+                    $interactiveBuilder = $app.AcquireTokenInteractive($scopes)
 
-            if (-not [string]::IsNullOrWhiteSpace($PreferredUsername)) {
-                $interactiveBuilder = $interactiveBuilder.WithLoginHint($PreferredUsername)
+                    if ($ForceInteractive) {
+                        $interactiveBuilder = $interactiveBuilder.WithPrompt([Microsoft.Identity.Client.Prompt]::SelectAccount)
+                    }
+
+                    if (-not [string]::IsNullOrWhiteSpace($PreferredUsername)) {
+                        $interactiveBuilder = $interactiveBuilder.WithLoginHint($PreferredUsername)
+                    }
+
+                    $authResult = $interactiveBuilder.ExecuteAsync().GetAwaiter().GetResult()
+                }
+                catch {
+                    if (-not (Test-SetupBrowserLaunchFailure -ErrorRecord $_)) {
+                        throw
+                    }
+
+                    Write-Warning 'The browser could not be opened; retrying with device-code sign-in.'
+                    $authResult = Invoke-SetupDeviceCodeAuthentication -Application $app -Scopes $scopes
+                }
             }
-
-            $authResult = $interactiveBuilder.ExecuteAsync().GetAwaiter().GetResult()
         }
         catch {
-            Write-Error "Failed to acquire token interactively: $_"
+            Write-Error "Failed to acquire a sign-in token: $_"
             throw
         }
     }
