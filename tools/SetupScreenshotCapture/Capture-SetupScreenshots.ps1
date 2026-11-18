@@ -16,9 +16,9 @@
     text appears one character at a time. Captions sit over a semi-transparent
     white footer beneath a raised green divider. The tool downloads its pinned
     NuGet dependencies on first use. It requires PowerShell 7.6 or newer on .NET
-    10 and a platform monospaced font: Consolas on Windows, Noto Sans Mono on
-    Linux, or Menlo on macOS. Full captures require ffmpeg with drawtext and
-    fontconfig support; use -SkipAnimation for PNG-only captures.
+    10 or newer and a platform monospaced font: Consolas on Windows, Noto Sans
+    Mono on Linux, or Menlo on macOS. Full captures require ffmpeg with drawtext
+    and fontconfig support; use -SkipAnimation for PNG-only captures.
 .NOTES
     Provider API calls are stubbed and all displayed values are reserved examples.
     No GitHub, Azure DevOps, Entra ID, or Dataverse resources are accessed.
@@ -1140,7 +1140,7 @@ $deploymentEnvironmentEditor = {
 switch ($scene) {
     'setup-mode-choice' {
         Select-FromMenu `
-            -Title 'Choose setup type' `
+            -Title 'New or existing repository' `
             -ShowProductBrand `
             -Items @('Set up a new application repository', 'Configure an existing repository') `
             -PromptGuidanceLines @(
@@ -1713,10 +1713,10 @@ function Assert-CaptureRuntimePrerequisite {
     )
 
     if ($PowerShellVersion -lt [version]'7.6') {
-        throw 'Screenshot capture requires PowerShell 7.6 or newer, which runs on .NET 10.'
+        throw 'Screenshot capture requires PowerShell 7.6 or newer, which runs on .NET 10 or newer.'
     }
-    if ($FrameworkDescription -notmatch '^\.NET 10\.') {
-        throw "Screenshot capture requires .NET 10; the current runtime is '$FrameworkDescription'."
+    if ($FrameworkDescription -notmatch '^\.NET (10|11)\.') {
+        throw "Screenshot capture requires .NET 10 or newer; the current runtime is '$FrameworkDescription'."
     }
 }
 

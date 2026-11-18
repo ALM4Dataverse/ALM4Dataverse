@@ -360,9 +360,9 @@ $secretsInput
     # Contents/actions writes support release publication and downstream dispatch;
     # id-token permits WIF. Validation environment association is not a deployment.
     $newContent = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-github.ps1 -ApplyConfig) to regenerate this workflow.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG workflow
+# or setup-github.ps1 -ApplyConfig) to regenerate this workflow.
 
 name: BUILD
 
@@ -425,9 +425,9 @@ function Update-ExportWorkflowInRepoClone {
 
     $templateVersion = Get-AlmSharedTemplateVersion
     $newContent = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-github.ps1 -ApplyConfig) to regenerate this workflow.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG workflow
+# or setup-github.ps1 -ApplyConfig) to regenerate this workflow.
 
 name: EXPORT
 
@@ -522,9 +522,9 @@ function Update-ImportWorkflowInRepoClone {
 
     $templateVersion = Get-AlmSharedTemplateVersion
     $newContent = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-github.ps1 -ApplyConfig) to regenerate this workflow.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG workflow
+# or setup-github.ps1 -ApplyConfig) to regenerate this workflow.
 
 name: IMPORT
 
@@ -630,9 +630,9 @@ function Update-DeployWorkflowInRepoClone {
 
     $lines = New-Object System.Collections.Generic.List[string]
 
-    $lines.Add('# Automated setup generates this file from alm-config.psd1: direct edits are not')
-    $lines.Add('# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or')
-    $lines.Add('# setup-github.ps1 -ApplyConfig) to regenerate this workflow.')
+    $lines.Add('# Setup generates this file from alm-config.psd1: direct edits are not supported.')
+    $lines.Add('# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG workflow')
+    $lines.Add('# or setup-github.ps1 -ApplyConfig) to regenerate this workflow.')
     $lines.Add('')
     $lines.Add("name: DEPLOY-$Branch")
     if ($PromotionMode -eq 'environment-approval') {

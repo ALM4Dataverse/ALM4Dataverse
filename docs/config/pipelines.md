@@ -4,14 +4,14 @@ Use this reference when customizing the supplied callers. For ordinary operation
 
 ## GitHub Composite Actions
 
-Automated setup generates the caller workflows in the application repository's
+Setup generates the caller workflows in the application repository's
 `.github/workflows/` from `alm-config.psd1`; the shared actions own the steps inside
 each job. These are composite actions invoked from `steps`, not reusable workflows
 invoked directly from `jobs`. Only `CLEANUP-RELEASES` is copied as-is from the shared
 repository's `copy-to-your-repo` scaffold.
 
 The templates reference `ALM4Dataverse/ALM4Dataverse/.github/actions/<action>@main`.
-Automated setup substitutes its selected ALM4Dataverse ref.
+Setup substitutes its selected ALM4Dataverse ref.
 
 > [!TIP]
 > Pin a tested release tag or commit for controlled upgrades. Update all four action
@@ -110,9 +110,10 @@ The selector accepts a Release tag, exact BUILD name, or numeric BUILD run ID; b
 
 ### Caller Settings And Permissions
 
-Each caller workflow starts with a notice that automated setup generates it from
+Each caller workflow starts with a notice that it is generated from
 `alm-config.psd1` and that direct edits are unsupported: change `alm-config.psd1`,
-commit it, and re-run setup to regenerate the workflow.
+commit it, and apply it again (the APPLY-CONFIG workflow or `-ApplyConfig`) to
+regenerate the workflow.
 
 | Caller | Trigger | Declared token permissions |
 | --- | --- | --- |
@@ -136,7 +137,7 @@ The cleanup caller invokes a **reusable workflow**, unlike the four actions. Its
 
 ## Azure DevOps Templates
 
-Automated setup generates the caller pipelines in the application repository's
+Setup generates the caller pipelines in the application repository's
 `pipelines/` from `alm-config.psd1`. They declare the shared repository resource using
 the alias `ALM4Dataverse`; keep this alias because templates also check it out by
 name. They run PowerShell 7 on `windows-2022` and request 360-minute jobs, subject to
@@ -179,7 +180,7 @@ environment under the same name, for example:
       - DataverseEnvVar_contoso_APIKey
 ```
 
-Non-secret group variables need no entry. Re-running automated setup keeps existing
+Non-secret group variables need no entry. Re-running setup keeps existing
 `secretVariables` lists in BUILD, EXPORT and IMPORT, and keeps `secretVariables` and
 other extra stage parameters for DEPLOY environments that are still selected.
 

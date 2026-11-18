@@ -1,29 +1,29 @@
 # Quickstart: GitHub Actions
 
-This is the shortest path from nothing to a first deployment with GitHub Actions
-(PREVIEW). It uses automated setup and defaults throughout; each step links to the
-detail if you need it. For Azure DevOps, use the
+This is the shortest path from nothing to a first deployment with GitHub Actions. It
+uses automated setup and defaults throughout; each step links to the detail if you need
+it. For Azure DevOps, use the
 [Azure DevOps quickstart](quickstart-azdo.md).
 
 Expect about an hour, most of it answering setup prompts and waiting for the first
 EXPORT, BUILD and DEPLOY.
 
-## Before You Start
+## Choose A Setup Route
 
-Check that you have all of these. Setup stops when it needs something you don't have.
+Both routes end the same way: the caller workflows in `.github/workflows/` are generated
+automatically from `alm-config.psd1` — you never edit them by hand. The difference is who
+creates everything else.
 
-- [ ] A Windows computer with Windows PowerShell 5.1 or PowerShell 7, Git, and a browser.
-- [ ] A GitHub account that can create or administer the application repository. Use a
-      **public** repository, or a private one on a plan with environments; see
-      [plan limitations](../setup/github-manual-setup.md#github-licence-limitations).
-- [ ] A **development** Dataverse environment containing your unmanaged solutions, and at
-      least one **test** Dataverse environment to deploy to.
-- [ ] The **unique names** of the solutions to manage, in dependency order (a solution
-      comes after every solution it depends on).
-- [ ] An existing, licensed **user account** in each environment to own and activate flows
-      and other processes (the "process owner").
-- [ ] Permission to create Entra ID app registrations and Dataverse application users, or
-      an administrator who can do it with you.
+| | Automated setup | Manual setup |
+| --- | --- | --- |
+| Who does the work | One guided script, run in PowerShell on your computer with internet access | You create the repository settings, environments and credentials yourself, step by step |
+| `alm-config.psd1` | Setup writes it from your answers | You write and commit it yourself |
+| Caller workflows | Generated from `alm-config.psd1` by setup at the end | Generated from `alm-config.psd1` by the APPLY-CONFIG workflow (or `-ApplyConfig` locally) |
+| Choose when | Recommended: every Windows computer can run it | Running PowerShell locally is restricted, or you want to create each resource yourself |
+
+The automated route is the default. Its prerequisites and guided steps are in
+[GitHub automated setup](../setup/github-setup.md); the manual route's prerequisites and
+steps are in [GitHub manual setup](../setup/github-manual-setup.md).
 
 New to the vocabulary? The [glossary](../concepts/glossary.md) explains the terms used
 below.
@@ -38,18 +38,10 @@ Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/lates
 .\setup-github.ps1
 ```
 
-When setup asks, choose:
-
-| Prompt | Recommended answer |
-| --- | --- |
-| Repository | Create a new repository for this application, or select its existing one. |
-| Solutions | Your solutions, in dependency order. |
-| Development environment | Your development Dataverse environment. |
-| Deployment environments | Your test environment first. Add production later, once the first deployment works. |
-| Application identity | Let setup create one per environment. Use **workload identity federation**, which needs no secret. |
-| Process owner | The user account from the checklist. |
-| BUILD validation | Skip it for now. You can enable it later; see [BUILD validation](../usage/building-releases.md#build-validation). |
-
+Follow the [guided setup steps](../setup/github-setup.md#guided-setup). For a first
+deployment, choose your solutions in dependency order, your test environment first, a
+workload identity federated application identity, and skip BUILD validation; you can
+enable it later (see [BUILD validation](../usage/building-releases.md#build-validation)).
 At the end, setup lists what it changed. If it opened pull requests, review and merge
 them before continuing.
 

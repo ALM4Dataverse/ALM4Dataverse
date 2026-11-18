@@ -1,11 +1,13 @@
-# GitHub Actions Setup
+# GitHub Automated Setup
 
-GitHub Actions support is **PREVIEW**. Automated setup configures the application
-repository, workflows, GitHub environments, variables, secrets and OIDC settings that the
-supplied workflows need. It does not create Dataverse environments.
+Automated setup is the recommended GitHub Actions route (PREVIEW): one guided script that
+creates or selects the application repository, configures GitHub environments, variables,
+secrets and OIDC settings, and generates the caller workflows from `alm-config.psd1`. It
+does not create Dataverse environments. Both routes generate the caller workflows
+automatically from `alm-config.psd1`; the difference is who creates everything else.
 
-For Azure DevOps, use the [Azure DevOps setup guide](azdo-automated-setup.md). To create
-the GitHub and Dataverse resources yourself, use
+For Azure DevOps, use the [Azure DevOps automated setup guide](azdo-automated-setup.md).
+To create the GitHub and Dataverse resources yourself, use
 [manual setup](github-manual-setup.md). For the shortest path to a first deployment, start
 with the [GitHub quickstart](../getting-started/quickstart-github.md).
 
@@ -74,14 +76,14 @@ step. After each step you return to the menu. **Preview changes** is optional, a
 
 ![Guided setup menu when the configured shared workflow repository is inaccessible](./screenshots/github-menu-unavailable-shared-repository.png)
 
-#### 1. Choose the setup type
+#### 1. New or existing repository
 
 Choose **Set up a new application repository** to create the repository and its first
 branch, or **Configure an existing repository** to use one that already exists. An
 existing repository can be empty; setup creates its initial branch and commit when it
 publishes files. The choice appears before authentication.
 
-![Setup type choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
+![New or existing repository choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
 
 #### 2. Sign in and select the application repository
 

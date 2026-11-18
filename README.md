@@ -3,7 +3,7 @@
 ![ALM4Dataverse](logo.png)
 
 Source-controlled application lifecycle management for Microsoft Dataverse, using
-**Azure DevOps** or **GitHub Actions (PREVIEW)**. Export maker changes, build a numbered
+**Azure DevOps** or **GitHub Actions**. Export maker changes, build a numbered
 deployment package, and promote that same package through your environments.
 
 This repository contains the shared PowerShell automation, pipeline and action

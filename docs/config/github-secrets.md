@@ -40,7 +40,7 @@ steps.
 
 ---
 
-## Automated setup behavior (`setup-github.ps1`)
+## Setup behavior (`setup-github.ps1`)
 
 `setup-github.ps1` automatically detects whether the selected repository supports
 GitHub environment approvals and configures credentials accordingly:
@@ -146,7 +146,7 @@ to the corresponding App Registration:
 
 The numeric IDs are the GitHub `repository_owner_id` and `repository_id` values.
 They are included when the repository uses GitHub's immutable subject claims. The
-automated setup script reads the repository setting and configures the matching subject;
+setup script reads the repository setting and configures the matching subject;
 existing repositories retain the legacy format unless immutable subjects are enabled.
 
 For an existing legacy repository, setup offers to enable immutable subjects when WIF

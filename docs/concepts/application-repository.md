@@ -25,7 +25,7 @@ pipelines/                      # Azure DevOps callers: BUILD, EXPORT, IMPORT, D
 ```
 
 Only one platform's callers run: `.github/workflows/` on GitHub, `pipelines/` on Azure
-DevOps. Automated setup generates them from `alm-config.psd1`; the other platform's
+DevOps. Setup generates them from `alm-config.psd1`; the other platform's
 folder is inert, and you can delete it. Setup adds it back on a re-run.
 Additional folders are yours to add, for example `plugins/`, `webresources/` or
 `code-apps/` for components built from source; see

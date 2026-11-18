@@ -208,9 +208,9 @@ function Update-AzDoBuildPipelineInWorkingTree {
         if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
 
         $newContent = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG pipeline
+# or setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
 
 trigger:
   branches:
@@ -273,9 +273,9 @@ function Update-AzDoExportPipelineInWorkingTree {
     if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
 
     $newContent = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG pipeline
+# or setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
 
 trigger: none # Run manually when you want to capture changes from dev
 name: Export from Dev-`${{ variables['Build.SourceBranchName'] }}
@@ -346,9 +346,9 @@ function Update-AzDoImportPipelineInWorkingTree {
     if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
 
     $newContent = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG pipeline
+# or setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
 
 trigger: none # Run manually when you want to import changes from source control
 

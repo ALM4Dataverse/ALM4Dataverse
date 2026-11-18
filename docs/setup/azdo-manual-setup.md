@@ -1,8 +1,10 @@
 # Azure DevOps Manual Setup
 
 Use this guide to create the Azure DevOps resources yourself. The
-[automated setup](azdo-automated-setup.md) performs the same steps interactively. For
-GitHub, use [GitHub setup](github-setup.md).
+[automated setup](azdo-automated-setup.md) performs the same steps interactively. Both
+routes generate the caller pipelines automatically from `alm-config.psd1` at the end;
+this guide covers the resource creation only. For GitHub, use
+[GitHub automated setup](github-setup.md).
 
 ## Before You Start
 
@@ -71,10 +73,10 @@ release:
 | [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the root |
 | [Data hook examples](../../copy-to-your-repo/data) | `data/` |
 
-The caller pipelines are generated, not copied or edited by hand: automated setup writes
-`pipelines/BUILD.yml`, `pipelines/EXPORT.yml`, `pipelines/IMPORT.yml` and
-`pipelines/DEPLOY-<branch>.yml` from `alm-config.psd1` (the static `APPLY-CONFIG.yml`
-caller is the only pipeline copied from the shared scaffold). Set the setup metadata in
+The caller pipelines are generated from `alm-config.psd1`, not copied or edited by hand:
+applying the configuration writes `pipelines/BUILD.yml`, `pipelines/EXPORT.yml`,
+`pipelines/IMPORT.yml` and `pipelines/DEPLOY-<branch>.yml` (the static
+`APPLY-CONFIG.yml` caller is the only pipeline copied from the shared scaffold). Set the setup metadata in
 `alm-config.psd1` — `provider = 'azDO'`, the shared repository name in `repository`, its
 branch in `ref`, and the application branches with their environments under `branches` —
 commit it, then create the APPLY-CONFIG pipeline described in

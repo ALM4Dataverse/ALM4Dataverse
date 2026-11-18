@@ -52,9 +52,9 @@ function Update-DeployPipelineInWorkingTree {
         }
 
         $deployScaffold = @"
-# Automated setup generates this file from alm-config.psd1: direct edits are not
-# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
-# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+# Setup generates this file from alm-config.psd1: direct edits are not supported.
+# Change alm-config.psd1, commit it, and apply it again (the APPLY-CONFIG pipeline
+# or setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
 
 trigger: none # Triggered by build completion or manually
 

@@ -395,7 +395,7 @@ if ($ApplyConfig) {
 }
 else {
     $setupModeChoice = Select-FromMenu `
-        -Title 'Choose setup type' `
+        -Title 'New or existing repository' `
         -ShowProductBrand `
         -Items @('Set up a new application repository', 'Configure an existing repository') `
         -PromptGuidanceLines @('Choose whether this run should create a new application repository or configure one that already exists.') `

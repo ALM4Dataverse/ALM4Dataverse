@@ -73,8 +73,8 @@ Release packaging tests generate and parse both standalone setup installers.
 ## Setup Screenshot Capture
 
 The full capture regenerates the setup PNGs and the interactive walkthrough GIF
-embedded in the [README](../../README.md). It requires PowerShell 7.6 on .NET 10,
-NuGet access on first use, the platform font listed in the
+embedded in the [README](../../README.md). It requires PowerShell 7.6 on .NET 10 or
+newer, NuGet access on first use, the platform font listed in the
 [repository instructions](../../AGENTS.md), and ffmpeg with drawtext and
 fontconfig support. The Dev Container installs ffmpeg and Noto Sans Mono.
 The GIF holds setup checkpoints for six seconds, types characters one at a time,

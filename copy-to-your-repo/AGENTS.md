@@ -35,10 +35,9 @@ To read a page for a ref, replace `blob/main` with `blob/<ref>` in its link.
 - Caller workflows and pipelines (`.github/workflows/` and `pipelines/`) are generated
   from `alm-config.psd1`; editing them directly is not supported and they carry a shared
   template version that stops stale files. Change `alm-config.psd1`, commit it, and
-  re-run setup (guided setup or `setup-github.ps1 -ApplyConfig` /
-  `setup-azdo.ps1 -ApplyConfig`) to regenerate them. The repository's APPLY-CONFIG
-  pipeline or workflow applies the committed `alm-config.psd1` and commits the
-  regenerated files, so prefer it for configuration-only changes; see
+  apply it again to regenerate them: the repository's APPLY-CONFIG pipeline or workflow
+  commits the regenerated files for you, or run `setup-github.ps1 -ApplyConfig` /
+  `setup-azdo.ps1 -ApplyConfig` locally. See
   [re-running setup](https://github.com/ALM4Dataverse/ALM4Dataverse/blob/main/docs/usage/updating.md#re-run-setup-carefully).
 
 The [repository layout](https://github.com/ALM4Dataverse/ALM4Dataverse/blob/main/docs/concepts/application-repository.md)

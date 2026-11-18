@@ -115,7 +115,7 @@ solutions using the configured deployment and upgrade behavior and runs
 configured deployment hooks. A failure to import, upgrade, or complete a hook
 fails the BUILD run.
 
-Automated setup can configure one shared validation environment for generated
+Setup can configure one shared validation environment for generated
 BUILD pipelines/workflows, so builds from different branches deploy to that
 same environment. It is separate from each branch's `Dev-<branchname>`
 environment and from the environments in `DEPLOY-<branchname>`.
@@ -129,7 +129,7 @@ environment and from the environments in `DEPLOY-<branchname>`.
 >
 > Successful validation proves deployment completed, not that end-user behavior is correct.
 
-Automated setup wires the validation environment into BUILD from the branch settings in
+Setup wires the validation environment into BUILD from the branch settings in
 `alm-config.psd1`. For manual
 configuration, set `branches.<branch>.buildValidation.environmentName` in
 `alm-config.psd1` to a matching Power Platform service connection and
@@ -165,7 +165,7 @@ a repository that predates the `branches` map:
   its Release and downloads the durable `artifacts.zip` asset, not the
   expiring Actions artifact.
 
-Automated setup asks for a baseline source deployment environment separately
+Setup asks for a baseline source deployment environment separately
 from the Dataverse validation target. It also offers a no-baseline choice.
 On initial use, the selected source may not yet have a successful deployment;
 the first BUILD then warns and deploys only the candidate. After a successful

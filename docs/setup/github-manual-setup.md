@@ -1,8 +1,10 @@
 # GitHub Actions Manual Setup
 
 Use this guide to create the GitHub and Dataverse resources yourself. The
-[automated setup](github-setup.md) performs the same steps interactively. For Azure DevOps,
-use [Azure DevOps manual setup](azdo-manual-setup.md).
+[automated setup](github-setup.md) performs the same steps interactively. Both routes
+generate the caller workflows automatically from `alm-config.psd1` at the end; this guide
+covers the resource creation only. For Azure DevOps, use
+[Azure DevOps manual setup](azdo-manual-setup.md).
 
 ## Before You Start
 
@@ -60,9 +62,9 @@ Copy these items from a consistent ALM4Dataverse release into your application r
 | [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the repository root |
 | [data](../../copy-to-your-repo/data) | `data/` |
 
-The caller workflows are generated, not copied or edited by hand: automated setup writes
-BUILD, EXPORT, IMPORT and DEPLOY-<branch> into `.github/workflows/` from
-`alm-config.psd1` (CLEANUP-RELEASES and the static APPLY-CONFIG caller are the only
+The caller workflows are generated from `alm-config.psd1`, not copied or edited by hand:
+applying the configuration writes BUILD, EXPORT, IMPORT and DEPLOY-<branch> into
+`.github/workflows/` (CLEANUP-RELEASES and the static APPLY-CONFIG caller are the only
 workflows copied from the shared scaffold). Set the setup metadata in `alm-config.psd1` —
 `provider = 'GitHub'`, the shared repository name in `repository`, its ref in `ref`, the
 application branches with their environments under `branches`, and the GitHub options
@@ -72,8 +74,8 @@ such as `GitHubDeploymentPromotionMode` — commit it, and then apply the config
    (`workflow_dispatch`). It runs the shared setup source at the ref this workflow
    references, regenerates every caller workflow for every configured branch, and
    commits the changes to the default branch. Enable the **preview** input to see the
-   generated file diffs in the run output without committing them. This is the primary
-   route for manual setup.
+   generated file diffs in the run output without committing them. This is how manual
+   setup generates the caller workflows.
 2. Alternatively, run `setup-github.ps1 -ApplyConfig` from the application repository
    root on a workstation. Add `-PreviewOnly` to review the generated file diffs without
    publishing.

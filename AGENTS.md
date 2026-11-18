@@ -67,8 +67,9 @@ Regenerate the full screenshot set with
 use `-Scene <name>` for one image and `-ListScenes` to list scene names. This
 PowerShell-only tool runs the real helpers in a PTY-backed terminal, captures the
 rendered terminal frames with an explicit monospaced font, and downloads pinned
-NuGet libraries on first use. It requires PowerShell 7.6/.NET 10 and NuGet access
-on first use. A full run also requires ffmpeg with drawtext and fontconfig support
+NuGet libraries on first use. It requires PowerShell 7.6/.NET 10 or newer and
+NuGet access on first use. A full run also requires ffmpeg with drawtext and
+fontconfig support
 and regenerates the interactive `setup-walkthrough.gif` embedded in the README,
 using real setup input and captured terminal checkpoints. The GIF holds setup
 checkpoints for six seconds, types characters one at a time, and uses a

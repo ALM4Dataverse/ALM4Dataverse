@@ -1,10 +1,11 @@
 # Azure DevOps Automated Setup
 
-Automated setup configures ALM4Dataverse interactively. It creates or selects the
-application repository, imports the shared `ALM4Dataverse` repository, creates the caller
-pipelines, and configures service connections, variable groups, environments and
-approvals. It does not create Dataverse environments or replace your backup and recovery
-plan.
+Automated setup is the recommended route: a guided interactive script that creates or
+selects the application repository, imports the shared `ALM4Dataverse` repository,
+creates the caller pipelines, and configures service connections, variable groups,
+environments and approvals. It does not create Dataverse environments or replace your
+backup and recovery plan. Both routes generate the caller pipelines automatically from
+`alm-config.psd1`; the difference is who creates everything else.
 
 > [!TIP]
 > Prefer to create each resource yourself? Use [manual setup](azdo-manual-setup.md). For
@@ -73,13 +74,13 @@ the current step's help page; Esc returns to the previous prompt or menu.
 
 ![Guided setup menu when the configured Azure DevOps shared repository is unavailable](./screenshots/azdo-menu-unavailable-shared-repository.png)
 
-### 1. Choose the setup type
+### 1. New or existing repository
 
 Choose **Set up a new application repository** to create the repository and its first
 branch, or **Configure an existing repository** to use one that already exists. The
 choice appears before authentication.
 
-![Setup type choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
+![New or existing repository choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
 
 ### 2. Sign in and select resources
 
