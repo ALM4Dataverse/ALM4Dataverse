@@ -106,10 +106,28 @@ function New-AzDoProject {
 }
 
 function Initialize-AzDoOrganization {
+    <#
+    .SYNOPSIS
+        Selects or resolves the Azure DevOps organization and connects VSTeam.
+    .DESCRIPTION
+        OrganizationName skips the discovery menu and connects VSTeam directly.
+    #>
     [CmdletBinding()]
-    param()
+    param([Parameter()][string]$OrganizationName)
 
     Write-Section -Message "Select Azure DevOps organization"
+
+    if (-not [string]::IsNullOrWhiteSpace($OrganizationName)) {
+        $orgName = $OrganizationName
+        $orgUri = "https://dev.azure.com/$orgName"
+        $secureToken = ConvertTo-SecureString -String $adoAccessToken.Token -AsPlainText -Force
+        Set-VSTeamAccount -Account $orgName -SecurePersonalAccessToken $secureToken -UseBearerToken -Force
+        Write-Host "VSTeam configured for organization '$orgName' using a bearer token."
+        return [pscustomobject]@{
+            Name = $orgName
+            Uri  = $orgUri
+        }
+    }
 
 # Use direct REST API to get organizations (VSTeam requires an org to connect to first)
 $orgData = Invoke-WithErrorHandling -OperationName "Discovering Azure DevOps Organizations" -ScriptBlock {

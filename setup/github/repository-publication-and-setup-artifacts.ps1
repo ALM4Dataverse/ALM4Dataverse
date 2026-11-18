@@ -125,10 +125,8 @@ function Invoke-GitHubSetupArtifactGeneration {
     Copy-WorkflowTemplatesToRepo `
         -SourceRoot $CopyRoot `
         -TargetRoot $RepoRoot `
-        -Branch $ConfiguredBranch `
         -SharedWorkflowRepository $SharedWorkflowRepository `
-        -SharedWorkflowRef $SharedWorkflowReference `
-        -SkipDeployWorkflow:$SkipDeployWorkflow | Out-Null
+        -SharedWorkflowRef $SharedWorkflowReference | Out-Null
 
     Update-AlmConfigInRepoClone `
         -Solutions $Solutions `
@@ -145,6 +143,16 @@ function Invoke-GitHubSetupArtifactGeneration {
         -BuildEnvironmentName $buildEnvironmentName `
         -BuildValidationEnabled $BuildValidationEnabled `
         -BuildValidationEnvironments $BuildValidationEnvironments | Out-Null
+
+    Update-ExportWorkflowInRepoClone `
+        -RepoRoot $RepoRoot `
+        -SharedWorkflowRepository $SharedWorkflowRepository `
+        -SharedWorkflowRef $SharedWorkflowReference | Out-Null
+
+    Update-ImportWorkflowInRepoClone `
+        -RepoRoot $RepoRoot `
+        -SharedWorkflowRepository $SharedWorkflowRepository `
+        -SharedWorkflowRef $SharedWorkflowReference | Out-Null
 
     if (-not $SkipDeployWorkflow) {
         $effectiveDeployWorkflowDefinitions = @()
@@ -486,61 +494,16 @@ function Invoke-GitHubBranchAwareSetupApply {
         [Parameter(Mandatory)][object]$ExistingSetupState,
         [Parameter(Mandatory)][string]$SharedWorkflowRepository,
         [Parameter(Mandatory)][string]$SharedWorkflowReference,
-        [Parameter(Mandatory)][string]$ALM4DataverseRef,
         [Parameter(Mandatory)][string]$PromotionMode,
         [Parameter(Mandatory)][object]$WizardState,
         [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{}
     )
 
     $branchStates = @($WizardState.BranchStates)
-    $selectedBranchNames = @($branchStates | ForEach-Object { [string]$_.BranchName })
     $removedBranchNames = @(Get-GitHubSetupRemovedBranchName `
             -BranchStates $branchStates `
             -ExistingSetupState $ExistingSetupState `
             -DefaultBranch $DefaultBranch)
-    $publishBranchStates = @($branchStates)
-    $defaultBranchState = $publishBranchStates | Where-Object { $_.BranchName -ieq $DefaultBranch } | Select-Object -First 1
-    if (-not $defaultBranchState) {
-        $defaultBranchState = New-GitHubBranchSetupState `
-            -BranchName $DefaultBranch `
-            -ExistingDevEnvironment $ExistingSetupState.DevEnvironment `
-            -DeploymentEnvironments @()
-        $defaultBranchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
-            -ProviderName 'GitHub' `
-            -RepositoryName $RepoFullName `
-            -TargetBranch $DefaultBranch `
-            -DefaultCommitMessage "Sync ALM4Dataverse workflow availability updates on '$DefaultBranch'" `
-            -DefaultPullRequestTitle "Sync ALM4Dataverse workflow availability updates on '$DefaultBranch'" `
-            -DefaultPullRequestDescription "This pull request ensures ALM4Dataverse workflow availability updates are present on '$DefaultBranch', including deploy workflow definitions for configured branches." `
-            -GuidanceLines @(
-                "GitHub requires workflows to be present on '$DefaultBranch' for availability.",
-                'Choose how to publish these default-branch workflow availability updates.'
-            ) `
-            -DocRelativePath 'docs/setup/github-setup.md' `
-            -Ref $ALM4DataverseRef
-        $publishBranchStates += $defaultBranchState
-    }
-
-    foreach ($removedBranchName in $removedBranchNames) {
-        $removedBranchState = New-GitHubBranchSetupState `
-            -BranchName $removedBranchName `
-            -ExistingDevEnvironment $null `
-            -DeploymentEnvironments @()
-        $removedBranchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
-            -ProviderName 'GitHub' `
-            -RepositoryName $RepoFullName `
-            -TargetBranch $removedBranchName `
-            -DefaultCommitMessage "Sync non-deploy ALM4Dataverse workflow updates for branch '$removedBranchName'" `
-            -DefaultPullRequestTitle "Sync non-deploy ALM4Dataverse workflow updates for branch '$removedBranchName'" `
-            -DefaultPullRequestDescription "This pull request updates non-deploy ALM4Dataverse workflow files on '$removedBranchName' so shared workflow changes stay aligned across long-lived branches." `
-            -GuidanceLines @(
-                "Branch '$removedBranchName' is no longer mapped for deployment, but shared non-deploy workflow updates still need to be merged.",
-                'Choose how to publish these synchronization updates.'
-            ) `
-            -DocRelativePath 'docs/setup/github-setup.md' `
-            -Ref $ALM4DataverseRef
-        $publishBranchStates += $removedBranchState
-    }
 
     $buildValidationEnvironments = Get-AlmSetupBuildValidationEnvironmentMap -BranchStates $branchStates
     $buildValidationEnabled = $buildValidationEnvironments.Count -gt 0
@@ -564,46 +527,46 @@ function Invoke-GitHubBranchAwareSetupApply {
         -RemovedBranchNames $removedBranchNames
     $solutions = if ($WizardState.SolutionResult) { @($WizardState.SolutionResult.Solutions) } else { $null }
     $publishResults = @()
+    $publishPlan = Get-OptionalObjectPropertyValue -InputObject $WizardState -PropertyName 'PublishPlan'
+    if ($null -eq $publishPlan) {
+        throw 'No repository publication plan was recorded. Revisit the publication method step before applying.'
+    }
 
-    foreach ($branchState in $publishBranchStates) {
-        $branchName = [string]$branchState.BranchName
-        $isSelectedBranch = $selectedBranchNames -contains $branchName
-        $isRemovedBranch = $removedBranchNames -contains $branchName
-        $deployDefinitionsForBranch = if ($branchName -ieq $DefaultBranch) { $deployDefinitions } else { @() }
-        $solutionsForBranch = if ($isSelectedBranch) { $solutions } else { $null }
+    $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'TargetBranch')
+    if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+        throw 'The repository publication plan has no target branch. Revisit the publication method step before applying.'
+    }
 
-        $publishResult = Invoke-WithErrorHandling `
-            -OperationName "Publishing repository changes for branch '$branchName'" `
-            -StatusMessage "Publishing repository changes for branch '$branchName'..." `
-            -CaptureOutputInPanel `
-            -ScriptBlock {
-                Publish-GitHubBranchSetupChange `
-                    -RepoRoot $CloneRoot `
-                    -ConfiguredBranch $branchName `
-                    -PublishPlan $branchState.PublishPlan `
-                    -DefaultBranch $DefaultBranch `
-                    -CopyRoot $CopyRoot `
-                    -SharedWorkflowRepository $SharedWorkflowRepository `
-                    -SharedWorkflowReference $SharedWorkflowReference `
-                    -PromotionMode $PromotionMode `
-                    -Solutions $solutionsForBranch `
-                    -DeploymentEnvironments @($branchState.DeploymentEnvironments) `
-                    -DeployWorkflowBranchDefinitions $deployDefinitionsForBranch `
-                    -BuildValidationEnabled $buildValidationEnabled `
-                    -BuildValidationEnvironmentName $buildValidationEnvironmentName `
-                    -BuildValidationEnvironments $buildValidationEnvironments `
-                    -SetupSettings $setupSettings `
-                    -SkipDeployWorkflow:$isRemovedBranch
-            }
-
-        $publishResults += [pscustomobject]@{
-            ConfiguredBranch = $branchName
-            BranchName       = $publishResult.BranchName
-            TargetBranch     = $publishResult.TargetBranch
-            PullRequestUrl   = $publishResult.PullRequestUrl
-            Mode             = $publishResult.Mode
-            HasChanges       = $publishResult.HasChanges
+    $publishResult = Invoke-WithErrorHandling `
+        -OperationName "Publishing repository changes for all branches on '$targetBranch'" `
+        -StatusMessage "Publishing repository changes for all branches on '$targetBranch'..." `
+        -CaptureOutputInPanel `
+        -ScriptBlock {
+            Publish-GitHubBranchSetupChange `
+                -RepoRoot $CloneRoot `
+                -ConfiguredBranch $targetBranch `
+                -PublishPlan $publishPlan `
+                -DefaultBranch $DefaultBranch `
+                -CopyRoot $CopyRoot `
+                -SharedWorkflowRepository $SharedWorkflowRepository `
+                -SharedWorkflowReference $SharedWorkflowReference `
+                -PromotionMode $PromotionMode `
+                -Solutions $solutions `
+                -DeploymentEnvironments @() `
+                -DeployWorkflowBranchDefinitions $deployDefinitions `
+                -BuildValidationEnabled $buildValidationEnabled `
+                -BuildValidationEnvironmentName $buildValidationEnvironmentName `
+                -BuildValidationEnvironments $buildValidationEnvironments `
+                -SetupSettings $setupSettings
         }
+
+    $publishResults += [pscustomobject]@{
+        ConfiguredBranch = $targetBranch
+        BranchName       = $publishResult.BranchName
+        TargetBranch     = $publishResult.TargetBranch
+        PullRequestUrl   = $publishResult.PullRequestUrl
+        Mode             = $publishResult.Mode
+        HasChanges       = $publishResult.HasChanges
     }
 
     $enabledBuildBranches = @($branchStates | Where-Object { $_.BuildValidationEnabled -and $_.BuildValidationEnvironmentConfiguration })

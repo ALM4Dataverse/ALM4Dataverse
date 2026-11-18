@@ -69,14 +69,15 @@ settings:
 
 - `alm-config.psd1`, which is merged with your solution selection rather than replaced.
 - `AGENTS.md` and everything under `data/`, which are created only when missing.
-- On GitHub: the existing `DEPLOY-<branch>` workflow (only its environment jobs are
-  updated) and `secrets-json` mappings in every workflow.
+- On GitHub: `secrets-json` mappings in every workflow.
 - On Azure DevOps: `secretVariables` lists in BUILD, EXPORT and IMPORT, and extra stage
   parameters for DEPLOY environments that remain selected.
 
 Other scaffold files that differ from the release are replaced. That includes BUILD,
-which setup regenerates on both platforms, and any other edits to EXPORT, IMPORT or
-CLEANUP-RELEASES callers.
+EXPORT and IMPORT, which setup regenerates from `alm-config.psd1` on both platforms, and
+every `DEPLOY-<branch>` caller. To apply committed configuration changes, run
+`setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig`, or run the APPLY-CONFIG
+pipeline or workflow in the repository, which commits the regenerated files for you.
 
 > [!CAUTION]
 > Setup is not a generic merge tool for arbitrary customization. If interrupted, inspect
@@ -86,7 +87,7 @@ CLEANUP-RELEASES callers.
 
 - **Application configuration:** solution order/options, assets, checker settings, module versions, and import timeout belong in the application data file.
 - **Hooks:** use the documented lifecycle points for data or organization changes. Package deployment scripts as assets, fail clearly, and make retries safe.
-- **Caller customization:** choose branches, environments, permissions, approvals, concurrency, and runtime secret mappings in the platform caller.
+- **Caller customization:** choose permissions, approvals, concurrency, and runtime secret mappings in the platform. Branches, environments and deployment targets belong in `alm-config.psd1`; setup regenerates the callers from it.
 - **Shared fork:** change reusable behavior only when configuration/hooks are insufficient, and regression-test all affected consumers.
 
 > [!NOTE]

@@ -4,6 +4,11 @@ parameters:
   - name: useAlm4DataverseExtension
     type: boolean
     default: true
+  # Version of the shared templates this caller was generated for. The first step
+  # rejects stale caller files and instructs setup regeneration.
+  - name: sharedTemplateVersion
+    type: string
+    default: ''
   - name: timeoutInMinutes
     type: number
     default: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
@@ -35,6 +40,11 @@ stages:
           runOnce:
             deploy:
               steps:
+                # Reject stale caller files before any checkout or connection work runs.
+                - template: ../steps/validate-shared-template-version.yml
+                  parameters:
+                    sharedTemplateVersion: ${{ parameters.sharedTemplateVersion }}
+
                 - checkout: self
                   persistCredentials: true
                   fetchDepth: 1

@@ -171,13 +171,16 @@ function Update-AlmConfigInWorkingTree {
 function Update-AzDoBuildPipelineInWorkingTree {
     <#
     .SYNOPSIS
-    Replaces an existing BUILD scaffold with the shared build-template invocation.
+    Writes the shared build-template invocation as pipelines/BUILD.yml.
     .NOTES
-    The generated CI trigger includes every branch. BuildValidationEnvironments maps
-    each source branch to its validation environment; BuildEnvironmentName remains a
-    compatibility input when no map is supplied. This is a whole-file replacement, not
-    a merge of custom YAML, except that an existing template-level secretVariables
-    parameter block is carried over unchanged.
+    Creates the file when the repository has no existing BUILD caller. The generated
+    CI trigger includes every branch. BuildValidationEnvironments maps each source
+    branch to its validation environment; BuildEnvironmentName remains a compatibility
+    input when no map is supplied. This is a whole-file replacement, not a merge of
+    custom YAML, except that an existing template-level secretVariables parameter block
+    is carried over unchanged. The generated file starts with a notice that direct
+    edits are unsupported, points at alm-config.psd1 plus setup, and passes the current
+    shared template version.
     WhatIf skips the write.
     #>
         [CmdletBinding(SupportsShouldProcess = $true)]
@@ -194,19 +197,21 @@ function Update-AzDoBuildPipelineInWorkingTree {
         if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update Azure DevOps BUILD pipeline')) { return $false }
 
         $buildPipelinePath = Join-Path $RepoRoot 'pipelines/BUILD.yml'
-        if (-not (Test-Path -LiteralPath $buildPipelinePath)) {
-                throw "Build pipeline file not found: $buildPipelinePath"
-        }
 
         $extensionLiteral = if ($UseAlm4DataverseExtension) { 'true' } else { 'false' }
         $escapedBuildEnvironmentName = ([string]$BuildEnvironmentName).Replace("'", "''")
         $escapedSharedRepositoryRef = ([string]$SharedRepositoryRef).Replace("'", "''")
+        $templateVersion = Get-AlmSharedTemplateVersion
         $validationEnvironmentsJson = ConvertTo-Json -InputObject $BuildValidationEnvironments -Depth 5 -Compress
 
         $secretVariableBlock = Get-AzDoCallerSecretVariableBlock -Path $buildPipelinePath
         if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
 
         $newContent = @"
+# Automated setup generates this file from alm-config.psd1: direct edits are not
+# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
+# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+
 trigger:
   branches:
     include:
@@ -224,10 +229,155 @@ stages:
   parameters:
     useAlm4DataverseExtension: $extensionLiteral
     buildEnvironmentName: '$escapedBuildEnvironmentName'
-    buildValidationEnvironments: $validationEnvironmentsJson$secretVariableBlock
+    buildValidationEnvironments: $validationEnvironmentsJson
+    sharedTemplateVersion: '$templateVersion'$secretVariableBlock
 "@
 
+        $buildPipelineDirectory = Split-Path -Parent $buildPipelinePath
+        if (-not (Test-Path -LiteralPath $buildPipelineDirectory)) {
+            New-Item -ItemType Directory -Path $buildPipelineDirectory -Force | Out-Null
+        }
         Set-Content -LiteralPath $buildPipelinePath -Value $newContent.TrimStart("`r", "`n") -NoNewline
+}
+
+function Update-AzDoExportPipelineInWorkingTree {
+    <#
+    .SYNOPSIS
+    Writes the shared export-template invocation as pipelines/EXPORT.yml.
+    .NOTES
+    Creates the file when the repository has no existing EXPORT caller. This is a
+    whole-file replacement, not a merge of custom YAML, except that an existing
+    template-level secretVariables parameter block is carried over unchanged. The
+    generated file starts with a notice that direct edits are unsupported, points at
+    alm-config.psd1 plus setup, and passes the current shared template version.
+    WhatIf skips the write.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$SharedRepositoryName,
+        [Parameter()][string]$SharedRepositoryRef = 'main',
+        [Parameter()][bool]$UseAlm4DataverseExtension = $true
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update Azure DevOps EXPORT pipeline')) { return $false }
+
+    $exportPipelinePath = Join-Path $RepoRoot 'pipelines/EXPORT.yml'
+
+    $extensionLiteral = if ($UseAlm4DataverseExtension) { 'true' } else { 'false' }
+    $escapedSharedRepositoryRef = ([string]$SharedRepositoryRef).Replace("'", "''")
+    $templateVersion = Get-AlmSharedTemplateVersion
+
+    $secretVariableBlock = Get-AzDoCallerSecretVariableBlock -Path $exportPipelinePath
+    if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
+
+    $newContent = @"
+# Automated setup generates this file from alm-config.psd1: direct edits are not
+# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
+# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+
+trigger: none # Run manually when you want to capture changes from dev
+name: Export from Dev-`${{ variables['Build.SourceBranchName'] }}
+appendCommitMessageToRunName: false
+
+resources:
+  repositories:
+    - repository: ALM4Dataverse
+      type: git
+      name: $SharedRepositoryName
+      ref: 'refs/heads/$escapedSharedRepositoryRef'
+
+parameters:
+- name: commitMessage
+  type: string
+  displayName: 'Commit message for exported changes'
+
+variables:
+# Keep the variable group and Dev service connection named for the selected branch.
+# This convention uses Build.SourceBranchName, not the complete refs/heads/... ref.
+- group: Environment-Dev-`${{ variables['Build.SourceBranchName'] }}
+
+stages:
+- template: pipelines/templates/export.yml@ALM4Dataverse
+  parameters:
+    commitMessage: `${{ parameters.commitMessage }}
+    useAlm4DataverseExtension: $extensionLiteral
+    sharedTemplateVersion: '$templateVersion'$secretVariableBlock
+"@
+
+    $exportPipelineDirectory = Split-Path -Parent $exportPipelinePath
+    if (-not (Test-Path -LiteralPath $exportPipelineDirectory)) {
+        New-Item -ItemType Directory -Path $exportPipelineDirectory -Force | Out-Null
+    }
+    Set-Content -LiteralPath $exportPipelinePath -Value $newContent.TrimStart("`r", "`n") -NoNewline
+}
+
+function Update-AzDoImportPipelineInWorkingTree {
+    <#
+    .SYNOPSIS
+    Writes the shared import-template invocation as pipelines/IMPORT.yml.
+    .NOTES
+    Creates the file when the repository has no existing IMPORT caller. This is a
+    whole-file replacement, not a merge of custom YAML, except that an existing
+    template-level secretVariables parameter block is carried over unchanged. The
+    generated file starts with a notice that direct edits are unsupported, points at
+    alm-config.psd1 plus setup, and passes the current shared template version.
+    WhatIf skips the write.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter(Mandatory)][string]$SharedRepositoryName,
+        [Parameter()][string]$SharedRepositoryRef = 'main',
+        [Parameter()][bool]$UseAlm4DataverseExtension = $true
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update Azure DevOps IMPORT pipeline')) { return $false }
+
+    $importPipelinePath = Join-Path $RepoRoot 'pipelines/IMPORT.yml'
+
+    $extensionLiteral = if ($UseAlm4DataverseExtension) { 'true' } else { 'false' }
+    $escapedSharedRepositoryRef = ([string]$SharedRepositoryRef).Replace("'", "''")
+    $templateVersion = Get-AlmSharedTemplateVersion
+
+    $secretVariableBlock = Get-AzDoCallerSecretVariableBlock -Path $importPipelinePath
+    if ($secretVariableBlock) { $secretVariableBlock = [Environment]::NewLine + $secretVariableBlock }
+
+    $newContent = @"
+# Automated setup generates this file from alm-config.psd1: direct edits are not
+# supported. Change alm-config.psd1, commit it, and re-run setup (guided setup or
+# setup-azdo.ps1 -ApplyConfig) to regenerate this pipeline.
+
+trigger: none # Run manually when you want to import changes from source control
+
+name: Import to Dev-`${{ variables['Build.SourceBranchName'] }}
+
+resources:
+  repositories:
+    - repository: ALM4Dataverse
+      type: git
+      name: $SharedRepositoryName
+      ref: 'refs/heads/$escapedSharedRepositoryRef'
+
+variables:
+# Supplies branch-specific hook/settings values; the shared template chooses the
+# matching Dev service connection and imports freshly built unmanaged packages.
+- group: Environment-Dev-`${{ variables['Build.SourceBranchName'] }}
+
+stages:
+- template: pipelines/templates/import.yml@ALM4Dataverse
+  parameters:
+    useAlm4DataverseExtension: $extensionLiteral
+    sharedTemplateVersion: '$templateVersion'$secretVariableBlock
+"@
+
+    $importPipelineDirectory = Split-Path -Parent $importPipelinePath
+    if (-not (Test-Path -LiteralPath $importPipelineDirectory)) {
+        New-Item -ItemType Directory -Path $importPipelineDirectory -Force | Out-Null
+    }
+    Set-Content -LiteralPath $importPipelinePath -Value $newContent.TrimStart("`r", "`n") -NoNewline
 }
 
 function Initialize-DataverseApplicationUser {

@@ -428,6 +428,33 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         }
     }
 
+    It 'commits generated changes directly without prompts or the wizard when Commit is used' {
+        $script:wizardParameters.ApplyConfig = $true
+        $script:wizardParameters.Commit = $true
+        $script:postApplyCalled = $false
+        $script:wizardParameters.PostApplyAction = {
+            $script:postApplyCalled = $true
+        }
+        Mock Get-BranchTargetedRepoChangePublishPlan { throw 'Publication prompts must not run in Commit mode.' }
+        Mock Select-FromMenu { throw 'Menus must not run in Commit mode.' }
+
+        $result = & $Wizard @script:wizardParameters
+
+        $result.PublishResults.ConfiguredBranch | Should -Be 'main'
+        $script:postApplyCalled | Should -BeTrue
+        if ($Provider -eq 'GitHub') {
+            Should -Invoke Publish-GitHubBranchSetupChange -Times 1 -Exactly -ParameterFilter {
+                $PublishPlan.Mode -eq 'Direct' -and $ConfiguredBranch -eq 'main'
+            }
+        }
+        else {
+            Should -Invoke Publish-AzDoBranchSetupChange -Times 1 -Exactly -ParameterFilter {
+                $PublishPlan.Mode -eq 'Direct' -and $ConfiguredBranch -eq 'main'
+            }
+        }
+        Should -Invoke Get-BranchTargetedRepoChangePublishPlan -Times 0 -Exactly
+    }
+
     It 'runs provider-specific setup as part of the final Apply action' {
         $script:postApplyCalled = $false
         $script:wizardParameters.PostApplyAction = {
@@ -723,9 +750,10 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $script:wizardParameters.UseGitHubEnvironments = $false
         $result = & $Wizard @script:wizardParameters
         $result.BranchStates[0].BranchName | Should -Be release
-        $result.PublishResults.ConfiguredBranch | Should -Be @('release', 'main', 'retired')
-        Should -Invoke Publish-GitHubBranchSetupChange -Times 1 -Exactly -ParameterFilter { $ConfiguredBranch -eq 'retired' -and $SkipDeployWorkflow }
-        Should -Invoke Publish-GitHubBranchSetupChange -Times 1 -Exactly -ParameterFilter { $ConfiguredBranch -eq 'main' -and @($DeployWorkflowBranchDefinitions).Count -eq 2 }
+        $result.PublishResults.ConfiguredBranch | Should -Be 'main'
+        Should -Invoke Publish-GitHubBranchSetupChange -Times 1 -Exactly -ParameterFilter {
+            $ConfiguredBranch -eq 'main' -and @($DeployWorkflowBranchDefinitions).Count -eq 2
+        }
     }
 }
 

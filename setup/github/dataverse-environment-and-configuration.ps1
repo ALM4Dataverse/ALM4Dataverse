@@ -812,15 +812,85 @@ function Get-SecretJsonInputBlock {
     return $blocks.ToArray()
 }
 
+function Get-SecretJsonBlockContent {
+    <#
+    .SYNOPSIS
+        Reads keys from a secrets-json block without evaluating its expressions.
+    .DESCRIPTION
+        Returns the zero-based brace-line indexes relative to the block lines and
+        one record per single-line key between the braces. HasBody is false for
+        flow scalars, single-line JSON bodies and missing braces; Clean is false
+        when a body line did not parse as a key, so callers can fall back to
+        verbatim replacement instead of misreading customized content.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$Lines
+    )
+
+    $bodyStart = -1
+    $bodyEnd = -1
+    for ($lineIndex = 0; $lineIndex -lt $Lines.Count; $lineIndex++) {
+        $line = $Lines[$lineIndex]
+        if ($bodyStart -lt 0) {
+            if ($line.Trim() -match '^\{') {
+                $bodyStart = $lineIndex
+            }
+            continue
+        }
+        if ($line.Trim() -match '^\}') {
+            $bodyEnd = $lineIndex
+            break
+        }
+    }
+
+    if ($bodyStart -lt 0 -or $bodyEnd -le $bodyStart) {
+        return [pscustomobject]@{ HasBody = $false; Clean = $false; BodyStart = -1; BodyEnd = -1; Entries = @() }
+    }
+
+    $entries = New-Object System.Collections.Generic.List[object]
+    $clean = $true
+    for ($lineIndex = $bodyStart + 1; $lineIndex -lt $bodyEnd; $lineIndex++) {
+        $line = $Lines[$lineIndex]
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            continue
+        }
+
+        $entryMatch = [regex]::Match($line, '^(?<indent>[\t ]*)"(?<key>[^"]+)"\s*:\s*(?<value>.*?)\s*(?<comma>,)?\s*$')
+        if (-not $entryMatch.Success) {
+            $clean = $false
+            continue
+        }
+
+        $entries.Add([pscustomobject]@{
+            Key    = $entryMatch.Groups['key'].Value
+            Indent = $entryMatch.Groups['indent'].Value.Length
+            Text   = $entryMatch.Groups['indent'].Value + '"' + $entryMatch.Groups['key'].Value + '": ' + $entryMatch.Groups['value'].Value + $entryMatch.Groups['comma'].Value
+        })
+    }
+
+    return [pscustomobject]@{
+        HasBody   = $true
+        Clean     = $clean
+        BodyStart = $bodyStart
+        BodyEnd   = $bodyEnd
+        Entries   = @($entries.ToArray())
+    }
+}
+
 function Merge-SecretJsonInput {
     <#
     .SYNOPSIS
         Carries existing secrets-json inputs into regenerated workflow text.
     .DESCRIPTION
-        Matches environment names first, then eligible positional fallbacks. Keeps
-        expression-bearing text rather than parsing JSON, adjusts indentation and
-        normalizes newlines to the current platform. Unmatched generated blocks stay
-        unchanged; no existing/generated blocks returns normalized GeneratedContent.
+        Matches environment names first, then eligible positional fallbacks. A single
+        existing block in a multi-block generated layout is the pre-split BUILD job,
+        so its custom entries are replicated into every generated job. Regenerated
+        keys always win; existing-only entries are appended at key level without
+        parsing JSON, so GitHub expressions survive. Unreadable existing blocks fall
+        back to verbatim replacement, except during split replication where they are
+        skipped rather than duplicated. Indentation and newlines are normalized.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -843,9 +913,19 @@ function Merge-SecretJsonInput {
     }
 
     $replacements = New-Object System.Collections.Generic.List[object]
+    $allGeneratedKeys = @()
+    foreach ($candidate in $generatedBlocks) {
+        $candidateLines = @($generatedLines[$candidate.StartLine..$candidate.EndLine])
+        $candidateEntries = Get-SecretJsonBlockContent -Lines $candidateLines
+        if ($candidateEntries.HasBody) {
+            $allGeneratedKeys += @($candidateEntries.Entries | ForEach-Object Key)
+        }
+    }
+
     for ($blockIndex = 0; $blockIndex -lt $generatedBlocks.Count; $blockIndex++) {
         $generatedBlock = $generatedBlocks[$blockIndex]
         $existingBlock = $null
+        $splitReplication = $false
 
         if (-not [string]::IsNullOrWhiteSpace($generatedBlock.EnvironmentName)) {
             foreach ($candidate in $existingBlocks) {
@@ -862,6 +942,12 @@ function Merge-SecretJsonInput {
         elseif ($null -eq $existingBlock -and [string]::IsNullOrWhiteSpace($generatedBlock.EnvironmentName) -and $blockIndex -lt $existingBlocks.Count) {
             $existingBlock = $existingBlocks[$blockIndex]
         }
+        elseif ($null -eq $existingBlock -and $existingBlocks.Count -eq 1 -and $generatedBlocks.Count -gt 1) {
+            # A single existing block predates the branch-aware BUILD split: its
+            # custom entries belong to every generated job.
+            $existingBlock = $existingBlocks[0]
+            $splitReplication = $true
+        }
 
         if ($null -eq $existingBlock) {
             continue
@@ -869,19 +955,78 @@ function Merge-SecretJsonInput {
 
         $generatedKeyMatch = [regex]::Match($generatedLines[$generatedBlock.StartLine], '^(?<indent>[\t ]*)(?<key>secrets-json:)(?<tail>.*)$')
         $existingKeyMatch = [regex]::Match($existingLines[$existingBlock.StartLine], '^(?<indent>[\t ]*)(?<key>secrets-json:)(?<tail>.*)$')
-        $replacementLines = New-Object System.Collections.Generic.List[string]
-        $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + $generatedKeyMatch.Groups['key'].Value + $existingKeyMatch.Groups['tail'].Value)
+        $generatedBlockLines = @($generatedLines[$generatedBlock.StartLine..$generatedBlock.EndLine])
+        $existingBlockLines = @($existingLines[$existingBlock.StartLine..$existingBlock.EndLine])
+        $generatedEntries = Get-SecretJsonBlockContent -Lines $generatedBlockLines
+        $existingEntries = Get-SecretJsonBlockContent -Lines $existingBlockLines
 
-        for ($oldLineIndex = $existingBlock.StartLine + 1; $oldLineIndex -le $existingBlock.EndLine; $oldLineIndex++) {
-            $oldLine = $existingLines[$oldLineIndex]
-            if ([string]::IsNullOrWhiteSpace($oldLine)) {
-                $replacementLines.Add('')
-                continue
+        $excludedKeys = if ($splitReplication) {
+            @($allGeneratedKeys | Select-Object -Unique)
+        }
+        else {
+            @($generatedEntries.Entries | ForEach-Object Key)
+        }
+        $carriedEntries = @($existingEntries.Entries | Where-Object { $excludedKeys -notcontains $_.Key })
+
+        $replacementLines = $null
+        if ($existingEntries.HasBody -and $existingEntries.Clean -and $generatedEntries.HasBody -and $carriedEntries.Count -gt 0) {
+            $newBodyLines = New-Object System.Collections.Generic.List[string]
+            for ($lineIndex = 1; $lineIndex -lt $generatedEntries.BodyStart; $lineIndex++) {
+                # Preserve any custom lines between the key and the opening brace;
+                # line zero is the secrets-json key itself and is added separately.
+                $newBodyLines.Add($generatedBlockLines[$lineIndex])
             }
+            for ($lineIndex = $generatedEntries.BodyStart; $lineIndex -lt $generatedEntries.BodyEnd; $lineIndex++) {
+                $bodyLine = $generatedBlockLines[$lineIndex]
+                if ($lineIndex -eq $generatedEntries.BodyEnd - 1 -and $bodyLine.Trim() -ne '{' -and $bodyLine -notmatch ',\s*$') {
+                    # The last generated entry precedes the carried entries and must
+                    # keep the object's comma separation.
+                    $bodyLine = $bodyLine + ','
+                }
+                $newBodyLines.Add($bodyLine)
+            }
+            for ($entryIndex = 0; $entryIndex -lt $carriedEntries.Count; $entryIndex++) {
+                $entryText = $carriedEntries[$entryIndex].Text.TrimStart()
+                if ($entryIndex -lt $carriedEntries.Count - 1) {
+                    if ($entryText -notmatch ',\s*$') { $entryText = $entryText + ',' }
+                }
+                elseif ($entryText -match ',\s*$') {
+                    $entryText = $entryText.TrimEnd().TrimEnd(',')
+                }
+                $relativeIndent = [Math]::Max(0, $carriedEntries[$entryIndex].Indent - $existingBlock.KeyIndent)
+                $newBodyLines.Add($generatedKeyMatch.Groups['indent'].Value + (' ' * $relativeIndent) + $entryText)
+            }
+            $newBodyLines.Add($generatedBlockLines[$generatedEntries.BodyEnd])
 
-            $oldIndent = [regex]::Match($oldLine, '^[\t ]*').Length
-            $relativeIndent = [Math]::Max(0, $oldIndent - $existingBlock.KeyIndent)
-            $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + (' ' * $relativeIndent) + $oldLine.Substring($oldIndent))
+            $replacementLines = New-Object System.Collections.Generic.List[string]
+            $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + $generatedKeyMatch.Groups['key'].Value + $generatedKeyMatch.Groups['tail'].Value)
+            foreach ($bodyLine in $newBodyLines) {
+                $replacementLines.Add($bodyLine)
+            }
+        }
+
+        if ($null -eq $replacementLines -and $splitReplication) {
+            # Unreadable existing JSON cannot be attributed to individual generated
+            # jobs; leave the generated blocks untouched rather than duplicating the
+            # single existing block into every job.
+            continue
+        }
+
+        if ($null -eq $replacementLines) {
+            $replacementLines = New-Object System.Collections.Generic.List[string]
+            $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + $generatedKeyMatch.Groups['key'].Value + $existingKeyMatch.Groups['tail'].Value)
+
+            for ($oldLineIndex = $existingBlock.StartLine + 1; $oldLineIndex -le $existingBlock.EndLine; $oldLineIndex++) {
+                $oldLine = $existingLines[$oldLineIndex]
+                if ([string]::IsNullOrWhiteSpace($oldLine)) {
+                    $replacementLines.Add('')
+                    continue
+                }
+
+                $oldIndent = [regex]::Match($oldLine, '^[\t ]*').Length
+                $relativeIndent = [Math]::Max(0, $oldIndent - $existingBlock.KeyIndent)
+                $replacementLines.Add($generatedKeyMatch.Groups['indent'].Value + (' ' * $relativeIndent) + $oldLine.Substring($oldIndent))
+            }
         }
 
         $replacements.Add([pscustomobject]@{

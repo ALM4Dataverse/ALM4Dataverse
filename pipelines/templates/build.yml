@@ -4,12 +4,22 @@ parameters:
 - name: useAlm4DataverseExtension
   type: boolean
   default: true
+# Validation service connection used only when no branch mapping is configured;
+# the branch map below is authoritative whenever it is non-empty.
 - name: buildEnvironmentName
   type: string
   default: ''
+# Maps branch names to validation service connection names. A matching branch
+# selects its own Environment-<name> variable group instead of the fallback;
+# branches without an entry do not validate.
 - name: buildValidationEnvironments
   type: object
   default: {}
+# Version of the shared templates this caller was generated for. The first step
+# rejects stale caller files and instructs setup regeneration.
+- name: sharedTemplateVersion
+  type: string
+  default: ''
 # Secret names from the validation variable group to expose to connected build
 # and validation-deployment scripts. Ignored when validation is disabled globally
 # and for every branch.
@@ -27,16 +37,25 @@ stages:
         displayName: 'Build'
         timeoutInMinutes: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
         variables:
-          - name: BuildValidationEnvironmentName
-            value: ${{ parameters.buildEnvironmentName }}
-          - ${{ if ne(parameters.buildEnvironmentName, '') }}:
-            - group: 'Environment-${{ parameters.buildEnvironmentName }}'
+          # The branch map is authoritative when present. The fallback variable and
+          # group are emitted only for an empty map, so a branch entry can never
+          # duplicate the fallback group or redefine its variable.
+          - ${{ if eq(convertToJson(parameters.buildValidationEnvironments), '{}') }}:
+            - ${{ if ne(parameters.buildEnvironmentName, '') }}:
+              - name: BuildValidationEnvironmentName
+                value: ${{ parameters.buildEnvironmentName }}
+              - group: 'Environment-${{ parameters.buildEnvironmentName }}'
           - ${{ each branch in parameters.buildValidationEnvironments }}:
             - ${{ if eq(variables['Build.SourceBranch'], format('refs/heads/{0}', branch.key)) }}:
               - name: BuildValidationEnvironmentName
                 value: ${{ branch.value }}
               - group: 'Environment-${{ branch.value }}'
         steps:
+        # Reject stale caller files before any checkout or connection work runs.
+        - template: steps/validate-shared-template-version.yml
+          parameters:
+            sharedTemplateVersion: ${{ parameters.sharedTemplateVersion }}
+
         # Fixed checkout paths are consumed by scripts and copied into artifact metadata.
         - checkout: self
           persistCredentials: true
@@ -71,7 +90,7 @@ stages:
 
         # Compile-time selection chooses the task provider; runtime output macros
         # from the unselected provider may remain literal and must be rejected.
-        - ${{ if or(ne(parameters.buildEnvironmentName, ''), gt(length(parameters.buildValidationEnvironments), 0)) }}:
+        - ${{ if or(ne(parameters.buildEnvironmentName, ''), ne(convertToJson(parameters.buildValidationEnvironments), '{}')) }}:
           - ${{ if eq(parameters.useAlm4DataverseExtension, true) }}:
             - task: ALM4Dataverse.alm4dataverse-azdo-extensions.alm4dataverse-set-connection-variables.ALM4DataverseSetConnectionVariables@1
               displayName: 'Set Connection Variables'
@@ -159,7 +178,7 @@ stages:
               ${{ each secretVariable in parameters.secretVariables }}:
                 ${{ secretVariable }}: $(${{ secretVariable }})
 
-        - ${{ if or(eq(parameters.buildEnvironmentName, ''), gt(length(parameters.buildValidationEnvironments), 0)) }}:
+        - ${{ if or(eq(parameters.buildEnvironmentName, ''), ne(convertToJson(parameters.buildValidationEnvironments), '{}')) }}:
           - pwsh: |
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/installdependencies.ps1" -ForBuild
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/build.ps1" `
@@ -187,7 +206,7 @@ stages:
 
         # Baseline resolution sets a runtime variable, so downloading uses a task
         # condition rather than a compile-time template expression.
-        - ${{ if or(ne(parameters.buildEnvironmentName, ''), gt(length(parameters.buildValidationEnvironments), 0)) }}:
+        - ${{ if or(ne(parameters.buildEnvironmentName, ''), ne(convertToJson(parameters.buildValidationEnvironments), '{}')) }}:
           - pwsh: |
               $ErrorActionPreference = 'Stop'
               & "$(Pipeline.Workspace)/alm/pipelines/scripts/resolvebuildvalidationbaseline.ps1" `

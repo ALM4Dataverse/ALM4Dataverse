@@ -464,10 +464,18 @@ function Get-GitHubCredentialSecretForApply {
 }
 
 function Initialize-GitHubSetupAuthentication {
+    <#
+    .SYNOPSIS
+        Authenticates GitHub (and, outside ApplyConfig, Azure) for guided setup.
+    .DESCRIPTION
+        Headless mode skips the account menu and requires the GitHub CLI to already be
+        authenticated, for example through a GH_TOKEN environment variable.
+    #>
     [CmdletBinding()]
     param(
         [Parameter()][string]$TenantId,
-        [Parameter()][switch]$ApplyConfig
+        [Parameter()][switch]$ApplyConfig,
+        [Parameter()][switch]$Headless
     )
 
     Write-Section -Message 'Authenticating with GitHub'
@@ -481,7 +489,13 @@ function Initialize-GitHubSetupAuthentication {
     }
     $hasExistingGitHubLogin = ($ghStatusProbe.ExitCode -eq 0)
 
-    if ($hasExistingGitHubLogin) {
+    if ($Headless) {
+        if (-not $hasExistingGitHubLogin) {
+            throw 'Headless apply requires the GitHub CLI to be authenticated, for example through a GH_TOKEN environment variable.'
+        }
+        Write-Host 'Using the authenticated GitHub CLI login.' -ForegroundColor Green
+    }
+    elseif ($hasExistingGitHubLogin) {
         $existingGhUser = (& gh api user --jq '.login' 2>&1 | Out-String).Trim()
 
         $ghMenuItems = @()

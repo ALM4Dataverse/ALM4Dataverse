@@ -25,8 +25,8 @@ pipelines/                      # Azure DevOps callers: BUILD, EXPORT, IMPORT, D
 ```
 
 Only one platform's callers run: `.github/workflows/` on GitHub, `pipelines/` on Azure
-DevOps. Automated setup copies the whole scaffold, so the other platform's folder is
-also present. It is inert, and you can delete it; setup adds it back on a re-run.
+DevOps. Automated setup generates them from `alm-config.psd1`; the other platform's
+folder is inert, and you can delete it. Setup adds it back on a re-run.
 Additional folders are yours to add, for example `plugins/`, `webresources/` or
 `code-apps/` for components built from source; see
 [Adding Dataverse components](../usage/adding-dataverse-components.md).
@@ -40,7 +40,7 @@ Additional folders are yours to add, for example `plugins/`, `webresources/` or
 | `alm-config.psd1` | You | Solution list and order, assets, hooks, mappings and options. See the [configuration reference](../config/alm-config.md). |
 | Hook scripts and their data folders | You, plus your export hooks | Export hooks typically write data files here, which EXPORT then commits. |
 | Source projects mapped into solutions | You | Built during BUILD by `buildCommand` mappings. |
-| Caller workflows/pipelines | Setup, then you | Re-running setup keeps secret mappings and deployment stage settings but can replace other edits; review the diff. See [re-running setup](../usage/updating.md#re-run-setup-carefully). |
+| Caller workflows/pipelines | **Setup** | Generated from `alm-config.psd1` and not edited by hand; each file carries a notice and a shared template version that stops stale files. Change `alm-config.psd1`, commit it, and re-run setup. See [re-running setup](../usage/updating.md#re-run-setup-carefully). |
 | `data/` and `AGENTS.md` | Setup creates them, then you | Setup never overwrites them once they exist. Add application-specific agent notes to `AGENTS.md`. |
 
 ## What Never Goes In The Repository

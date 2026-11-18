@@ -58,9 +58,11 @@ GitHub environment approvals and configures credentials accordingly:
   - Detects existing unprefixed repository credentials and keeps them unprefixed when setup is rerun
   - Generates deploy stages with `promotion-mode: manual-gate-tag` and manual dispatch from stage 1 onward
 
-You can still change either mode manually after setup by editing your workflow YAML
-and credential locations. Confirm that the resulting environments and protection rules
-really exist and are supported by your plan before treating a target as protected.
+You can still change either mode after setup by setting
+`GitHubDeploymentPromotionMode` in `alm-config.psd1`, committing it, and re-running setup;
+the caller workflows are generated from the configuration, not edited by hand. Confirm
+that the resulting environments and protection rules really exist and are supported by
+your plan before treating a target as protected.
 
 ---
 

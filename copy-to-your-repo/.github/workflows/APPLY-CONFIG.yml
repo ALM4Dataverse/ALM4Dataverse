@@ -1,0 +1,32 @@
+# Static caller: automated setup copies this file verbatim (rewriting only the
+# shared action reference to the selected repository and ref) and never needs to
+# regenerate it, because the shared apply-config action and setup source always
+# come from the same checkout ref. Run this workflow manually after committing
+# alm-config.psd1 changes; it regenerates every caller workflow and commits the
+# changes to the default branch.
+name: APPLY-CONFIG
+
+# Intentionally no automatic triggers: run manually when configuration changes
+# should be applied, or with preview enabled to inspect the changes first.
+on:
+  workflow_dispatch:
+    inputs:
+      preview:
+        description: Show the changes that would be committed without pushing them.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Apply configuration and commit changes
+        uses: ALM4Dataverse/ALM4Dataverse/.github/actions/apply-config@main
+        with:
+          github-token: ${{ github.token }}
+          preview: ${{ inputs.preview }}

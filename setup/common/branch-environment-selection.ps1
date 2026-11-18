@@ -882,76 +882,42 @@ function Get-SetupBranchMenuItem {
     return @($menuItems)
 }
 
-function Get-SetupPublishPlanMenuSummary {
+function Get-SetupSinglePublishPlanSummary {
     <#
     .SYNOPSIS
-        Formats selected repository publication methods for a guided setup menu.
+        Formats the single repository publication plan for a guided setup menu.
     .DESCRIPTION
-        Lists direct-commit and pull-request plans by target branch. At most three
-        plans are shown so the menu remains readable.
+        Setup publishes generated files for every configured branch in one change on
+        the selected target branch. Returns 'Not configured' when no plan exists.
     #>
     [CmdletBinding()]
     [OutputType([string])]
     param(
-        [Parameter()][AllowNull()][object[]]$BranchStates
+        [Parameter()][AllowNull()][object]$PublishPlan
     )
 
-    $planLabels = @()
-    foreach ($branchState in @($BranchStates)) {
-        if ($null -eq $branchState) {
-            continue
-        }
-
-        $publishPlan = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'PublishPlan'
-        if ($null -eq $publishPlan) {
-            continue
-        }
-
-        $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'TargetBranch')
-        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
-            $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BranchName')
-        }
-        if ([string]::IsNullOrWhiteSpace($targetBranch)) {
-            continue
-        }
-
-        $mode = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'Mode')
-        if ($mode -eq 'PullRequest') {
-            $sourceBranch = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'BranchName')
-            $planLabels += if ([string]::IsNullOrWhiteSpace($sourceBranch)) {
-                "$targetBranch`: pull request"
-            }
-            else {
-                "$targetBranch`: PR from $sourceBranch"
-            }
-        }
-        elseif ($mode -eq 'Direct') {
-            $planLabels += "$targetBranch`: direct"
-        }
-        else {
-            $planLabels += if ([string]::IsNullOrWhiteSpace($mode)) {
-                "$targetBranch`: not configured"
-            }
-            else {
-                "$targetBranch`: $mode"
-            }
-        }
-    }
-
-    if ($planLabels.Count -eq 0) {
+    if ($null -eq $PublishPlan) {
         return 'Not configured'
     }
 
-    $visiblePlanLabels = @($planLabels | Select-Object -First 3)
-    if ($planLabels.Count -gt $visiblePlanLabels.Count) {
-        $visiblePlanLabels += "+$($planLabels.Count - $visiblePlanLabels.Count) branches"
+    $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $PublishPlan -PropertyName 'TargetBranch')
+    $mode = [string](Get-OptionalObjectPropertyValue -InputObject $PublishPlan -PropertyName 'Mode')
+    if ($mode -eq 'PullRequest') {
+        $sourceBranch = [string](Get-OptionalObjectPropertyValue -InputObject $PublishPlan -PropertyName 'BranchName')
+        if ([string]::IsNullOrWhiteSpace($sourceBranch)) {
+            return "$targetBranch`: pull request for all branches"
+        }
+        return "$targetBranch`: PR from $sourceBranch for all branches"
     }
 
-    $summary = $visiblePlanLabels -join ', '
-    if ($summary.Length -gt 120) {
-        $summary = $summary.Substring(0, 117).TrimEnd() + '...'
+    if ($mode -eq 'Direct') {
+        return "$targetBranch`: direct commit for all branches"
     }
-    return $summary
+
+    if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+        return 'Not configured'
+    }
+    return "$targetBranch`: not configured"
 }
 
 function Get-SetupSolutionMenuSummary {

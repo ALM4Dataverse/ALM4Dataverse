@@ -4,7 +4,11 @@ Use this reference when customizing the supplied callers. For ordinary operation
 
 ## GitHub Composite Actions
 
-The [caller workflows](../../copy-to-your-repo/.github/workflows) own triggers, jobs, runners, permissions, environment selection, timeouts, concurrency, and secret selection. The shared actions own the steps inside each job. These are composite actions invoked from `steps`, not reusable workflows invoked directly from `jobs`.
+Automated setup generates the caller workflows in the application repository's
+`.github/workflows/` from `alm-config.psd1`; the shared actions own the steps inside
+each job. These are composite actions invoked from `steps`, not reusable workflows
+invoked directly from `jobs`. Only `CLEANUP-RELEASES` is copied as-is from the shared
+repository's `copy-to-your-repo` scaffold.
 
 The templates reference `ALM4Dataverse/ALM4Dataverse/.github/actions/<action>@main`.
 Automated setup substitutes its selected ALM4Dataverse ref.
@@ -18,6 +22,7 @@ Automated setup substitutes its selected ALM4Dataverse ref.
 
 | Input | Required | Default | Meaning |
 | --- | --- | --- | --- |
+| `shared-template-version` | No | `''` | Shared template version the caller workflow was generated for. A missing or stale value stops the workflow with an instruction to regenerate it with setup. |
 | `vars-json` | No | `{}` | Pass `${{ toJSON(vars) }}` to supply repository and selected environment variables. |
 | `secrets-json` | No | `{}` | JSON object of explicitly selected secrets mapped to runtime variable names. Use `toJSON(secrets.NAME)` for each value. |
 
@@ -25,6 +30,19 @@ Automated setup substitutes its selected ALM4Dataverse ref.
 > Action inputs do not select a GitHub job environment. For environment-scoped values,
 > set `jobs.<id>.environment` as well as the action's `environment-name`, using identical
 > names. See [credentials and value precedence](github-secrets.md).
+
+### Apply Config
+
+Source: [apply-config action](../../.github/actions/apply-config/action.yml). Runs the
+shared setup entrypoint from the action's own checkout ref and commits the regenerated
+callers, so the static `APPLY-CONFIG` caller workflow never needs regeneration. With
+`preview` enabled it shows the changes that would be committed without pushing them.
+
+| Input | Required | Default | Meaning |
+| --- | --- | --- | --- |
+| `github-token` | Yes | None | Token used to clone and push the application repository. The caller passes `${{ github.token }}` with `contents: write`. |
+| `repository` | No | `${{ github.repository }}` | Application repository as `owner/name`. |
+| `preview` | No | `false` | When `true`, applies the committed configuration and shows the resulting file changes without committing or pushing them. |
 
 ### Build
 
@@ -92,6 +110,10 @@ The selector accepts a Release tag, exact BUILD name, or numeric BUILD run ID; b
 
 ### Caller Settings And Permissions
 
+Each caller workflow starts with a notice that automated setup generates it from
+`alm-config.psd1` and that direct edits are unsupported: change `alm-config.psd1`,
+commit it, and re-run setup to regenerate the workflow.
+
 | Caller | Trigger | Declared token permissions |
 | --- | --- | --- |
 | `BUILD` | Branch pushes, manual dispatch, export dispatch | `contents: write`, `actions: write`, `id-token: write` |
@@ -114,23 +136,36 @@ The cleanup caller invokes a **reusable workflow**, unlike the four actions. Its
 
 ## Azure DevOps Templates
 
-The [caller pipelines](../../copy-to-your-repo/pipelines) declare the shared repository resource using the alias `ALM4Dataverse`. Keep this alias because templates also check it out by name. They run PowerShell 7 on `windows-2022` and request 360-minute jobs, subject to your hosted capacity limit.
+Automated setup generates the caller pipelines in the application repository's
+`pipelines/` from `alm-config.psd1`. They declare the shared repository resource using
+the alias `ALM4Dataverse`; keep this alias because templates also check it out by
+name. They run PowerShell 7 on `windows-2022` and request 360-minute jobs, subject to
+your hosted capacity limit. Each caller pipeline starts with a notice that automated
+setup generates it from `alm-config.psd1` and that direct edits are unsupported:
+change `alm-config.psd1`, commit it, and re-run setup to regenerate the pipeline.
 
 | Template | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- | --- |
-| [build](../../pipelines/templates/build.yml) | `buildEnvironmentName` | String | `''` | Fallback validation service connection and `Environment-<name>` variable group when no branch mapping applies. |
-| build | `buildValidationEnvironments` | Object map | `{}` | Maps application branch names to validation service connection names; the matching branch selects its `Environment-<name>` variable group. Setup generates this map from `branches.<branch>.buildValidation.environmentName`. |
+| [build](../../pipelines/templates/build.yml) | `buildEnvironmentName` | String | `''` | Validation service connection and `Environment-<name>` variable group used only when no branch mapping is configured. |
+| build | `buildValidationEnvironments` | Object map | `{}` | Maps application branch names to validation service connection names; the matching branch selects its `Environment-<name>` variable group. A non-empty map is authoritative: branches without an entry do not validate. Setup generates this map from `branches.<branch>.buildValidation.environmentName`. |
 | build | `useAlm4DataverseExtension` | Boolean | `true` | Use the ALM4Dataverse connection-variable task. |
+| build | `sharedTemplateVersion` | String | `''` | Shared template version this caller was generated for; a missing or stale value fails the pipeline's first step with a regeneration instruction. |
 | build | `secretVariables` | List of names | `[]` | Secret variables from the selected validation group to expose to connected build and validation-deployment steps. Ignored when validation is disabled globally and for every branch. |
 | [export](../../pipelines/templates/export.yml) | `commitMessage` | String | Required | Commit message for exported changes. |
 | export | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
+| export | `sharedTemplateVersion` | String | `''` | Shared template version this caller was generated for; a missing or stale value fails the pipeline's first step with a regeneration instruction. |
 | export | `secretVariables` | List of names | `[]` | Secret variables from the development group to expose to export scripts and hooks. |
 | [import](../../pipelines/templates/import.yml) | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
+| import | `sharedTemplateVersion` | String | `''` | Shared template version this caller was generated for; a missing or stale value fails the pipeline's first step with a regeneration instruction. |
 | import | `secretVariables` | List of names | `[]` | Secret variables from the development group to expose to build/deployment scripts and hooks. |
 | [deploy stage](../../pipelines/templates/stages/deploy-environment.yml) | `environmentName` | String | Required | Service connection, Azure DevOps environment, and `Environment-<name>` variable group. |
 | deploy stage | `useAlm4DataverseExtension` | Boolean | `true` | Connection-variable task selection. |
+| deploy stage | `sharedTemplateVersion` | String | `''` | Shared template version this caller was generated for; a missing or stale value fails the stage's first step with a regeneration instruction. |
 | deploy stage | `timeoutInMinutes` | Number | `360` | Deployment job timeout in minutes. |
 | deploy stage | `secretVariables` | List of names | `[]` | Secret variables from `Environment-<environmentName>` to expose to the deployment script and hooks. |
+| [apply config](../../pipelines/templates/apply-config.yml) | `organizationUri` | String | `''` | Azure DevOps collection URI; the template derives the organization from it. The static APPLY-CONFIG caller passes `$(System.CollectionUri)`. |
+| apply config | `projectName` | String | `''` | Azure DevOps project name. The static APPLY-CONFIG caller passes `$(System.TeamProject)`. |
+| apply config | `preview` | Boolean | `false` | When `true`, applies the committed configuration and shows the resulting file changes without committing or pushing them. |
 
 Azure Pipelines never passes secret variables to scripts automatically. Each name in
 `secretVariables` is mapped from the attached variable group into the script
@@ -163,7 +198,13 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 | `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. Ignored by GitHub `-ApplyConfig`, which does not sign in to Azure. |
 | `ALM4DataverseRef` | String | Embedded release ref | Choose the shared code ref used during setup. Repository-source scripts resolve the local branch/commit, falling back to `stable`. |
 | `ApplyConfig` | Switch | Off | Select an existing repository and review then regenerate/publish caller files from its committed `alm-config.psd1`; skips settings editors and provider-resource provisioning. Branch, environment, solution, BUILD validation and OIDC changes are made only by editing and committing `alm-config.psd1`. Its external-resource plan is empty. Requires provider, repository, ref, and a non-empty branches map. |
-| `PreviewOnly` | Switch | Off | With `ApplyConfig`, show the setup summary and select individual changed files to preview without publishing or modifying files. The selected file diff is written without paging. Requires `ApplyConfig`. |
+| `PreviewOnly` | Switch | Off | With `ApplyConfig`, show the setup summary and select individual changed files to preview without publishing or modifying files. The selected file diff is written without paging. Requires `ApplyConfig`. Supplying the headless parameters below makes the run unattended; the APPLY-CONFIG caller's preview option uses this. |
+| `Commit` | Switch | Off | With `ApplyConfig`, skip every prompt and commit the regenerated files for all configured branches directly to the default branch. Used by the APPLY-CONFIG caller; it requires the headless parameters below. |
+| `RepositoryFullName` | String | Empty | GitHub only: owner/name of the application repository for unattended `-Commit` and `-PreviewOnly` runs, resolved from the running workflow's repository by the APPLY-CONFIG action. |
+| `AccessToken` | String | Empty | Azure DevOps only: bearer token for unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `System.AccessToken`. |
+| `OrganizationName` | String | Empty | Azure DevOps only: organization used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline derives it from `System.CollectionUri`. |
+| `ProjectName` | String | Empty | Azure DevOps only: project used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `System.TeamProject`. |
+| `RepositoryName` | String | Empty | Azure DevOps only: application repository used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `Build.Repository.Name`. |
 
 `UseDeviceAuthentication` is still accepted so older invocations keep working, but it
 is ignored: setup always uses its normal interactive sign-in. On a machine without a

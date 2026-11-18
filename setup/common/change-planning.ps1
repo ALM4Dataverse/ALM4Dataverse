@@ -301,3 +301,66 @@ function Show-EnvironmentConfigurationTable {
 
     [Spectre.Console.AnsiConsole]::Write($table)
 }
+
+function Get-SetupSingleBranchPublishPlan {
+    <#
+    .SYNOPSIS
+        Collects one publication plan: a target branch plus direct-commit or PR mode.
+    .DESCRIPTION
+        Setup publishes the generated files for every configured branch in a single
+        change on the selected target branch. The default branch is offered first;
+        branch choice and mode each prompt once, so guided setup no longer plans a
+        separate publication per branch. ExistingPlan seeds the mode choice and
+        editable defaults. Cancellation throws; this helper prompts only.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ProviderName,
+        [Parameter(Mandatory)][string]$RepositoryName,
+        [Parameter(Mandatory)][string]$DefaultBranch,
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$BranchStates,
+        [Parameter(Mandatory)][string]$DefaultCommitMessage,
+        [Parameter(Mandatory)][string]$DefaultPullRequestDescription,
+        [Parameter()][AllowNull()][object]$ExistingPlan,
+        [Parameter()][string]$DocRelativePath,
+        [Parameter()][string]$Ref
+    )
+
+    $configuredBranchNames = @($BranchStates | ForEach-Object { [string]$_.BranchName })
+    if (@($configuredBranchNames).Count -eq 0) {
+        throw 'No configured branches are available to publish.'
+    }
+
+    $orderedBranchNames = @([string]$DefaultBranch) + @($configuredBranchNames | Where-Object { $_ -ine $DefaultBranch })
+    $branchMenuItems = @($orderedBranchNames | ForEach-Object {
+        if ($_ -ieq $DefaultBranch) { "Commit to '$_' (default branch)" } else { "Commit to '$_'" }
+    })
+    $branchSelection = Select-FromMenu `
+        -Title "Which branch should receive the $ProviderName changes?" `
+        -Items $branchMenuItems `
+        -PromptGuidanceLines @(
+            'Generated caller files for every configured branch are committed to the selected branch in a single change.',
+            'Use a pull request when the selected branch is protected or review is required.'
+        ) `
+        -PromptGuidanceDocRelativePath $DocRelativePath `
+        -PromptGuidanceRef $Ref
+    if ($null -eq $branchSelection) {
+        throw 'No publication branch selected.'
+    }
+
+    $targetBranch = [string]$orderedBranchNames[$branchSelection]
+    return Get-BranchTargetedRepoChangePublishPlan `
+        -ProviderName $ProviderName `
+        -RepositoryName $RepositoryName `
+        -TargetBranch $targetBranch `
+        -DefaultCommitMessage $DefaultCommitMessage `
+        -DefaultPullRequestTitle $DefaultCommitMessage `
+        -DefaultPullRequestDescription $DefaultPullRequestDescription `
+        -ExistingPlan $ExistingPlan `
+        -GuidanceLines @(
+            "The generated files for every configured branch are published to '$targetBranch' in a single change.",
+            'Direct commit updates the target branch immediately; the pull-request path adds review before the change lands.'
+        ) `
+        -DocRelativePath $DocRelativePath `
+        -Ref $Ref
+}

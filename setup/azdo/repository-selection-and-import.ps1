@@ -240,7 +240,9 @@ function Initialize-AzDoProjectAndRepository {
         [Parameter()][string]$MainRepoWorkingRootForSharedRepository,
         [Parameter()][string]$AccessTokenForSharedRepository,
         [Parameter()][string]$PreferredSharedRepositoryName,
-        [Parameter()][string]$PreferredSharedRepositoryRef
+        [Parameter()][string]$PreferredSharedRepositoryRef,
+        [Parameter()][string]$ProjectName,
+        [Parameter()][string]$RepositoryName
     )
 
     if (
@@ -301,16 +303,28 @@ function Initialize-AzDoProjectAndRepository {
     }
 
     $menuItems = if ($existingResourcesOnly) { $projectNames } else { $projectNames + @('Create a new project') }
-    $index = Select-FromMenu `
-        -Title "Select the target Azure DevOps project" `
-        -Items $menuItems `
-        -PromptGuidanceLines @(
-            'Choose the long-lived project that will host repositories, pipelines, service connections, and approvals.',
-            'Avoid phase-specific project names so the setup can grow with the team.',
-            'Use Create a new project only when no existing project should own this ALM setup.'
-        ) `
-        -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
-        -PromptGuidanceRef $ALM4DataverseRef
+    $index = $null
+    if (-not [string]::IsNullOrWhiteSpace($ProjectName)) {
+        # Headless project selection: the caller supplies the project so the guided
+        # setup menu is skipped.
+        $matchingProjectIndexes = @(0..($projectNames.Count - 1) | Where-Object { $projectNames[$_] -ieq $ProjectName })
+        if ($matchingProjectIndexes.Count -eq 0) {
+            throw "Project '$ProjectName' is not accessible with the authenticated account or does not exist."
+        }
+        $index = $matchingProjectIndexes | Select-Object -First 1
+    }
+    else {
+        $index = Select-FromMenu `
+            -Title "Select the target Azure DevOps project" `
+            -Items $menuItems `
+            -PromptGuidanceLines @(
+                'Choose the long-lived project that will host repositories, pipelines, service connections, and approvals.',
+                'Avoid phase-specific project names so the setup can grow with the team.',
+                'Use Create a new project only when no existing project should own this ALM setup.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+    }
 
     if ($null -eq $index) {
         Write-Host "No project selected." -ForegroundColor Yellow
@@ -383,7 +397,8 @@ function Initialize-AzDoProjectAndRepository {
     $mainRepo = Select-AzDoMainRepository `
         -ProjectName $selectedProject.Name `
         -ExistingOnly:$existingResourcesOnly `
-        -ApplyConfig:$ApplyConfig
+        -ApplyConfig:$ApplyConfig `
+        -RepositoryName $RepositoryName
 
     $script:mainRepoBranch = 'main'
     if ($mainRepo.defaultBranch) {

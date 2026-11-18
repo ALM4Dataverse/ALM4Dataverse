@@ -1021,6 +1021,22 @@ Describe 'Azure DevOps organization selection' {
 
         Should -Invoke Set-VSTeamAccount -Times 0 -Exactly
     }
+
+    It 'connects directly with a supplied organization name for headless setup' {
+        Mock Select-FromMenu { throw 'The organization menu must not run for a supplied organization name.' }
+        Mock Invoke-RestMethod { throw 'The discovery API must not run for a supplied organization name.' }
+        Mock Set-VSTeamAccount {}
+        Set-Variable -Name adoAccessToken -Value ([pscustomobject]@{ Token = 'example-bearer-token' }) -Scope Global
+
+        $organization = Initialize-AzDoOrganization -OrganizationName 'contoso'
+
+        $organization.Name | Should -Be 'contoso'
+        $organization.Uri | Should -Be 'https://dev.azure.com/contoso'
+        Should -Invoke Set-VSTeamAccount -Times 1 -Exactly -ParameterFilter {
+            $Account -eq 'contoso' -and $UseBearerToken -and $Force
+        }
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly
+    }
 }
 
 Describe 'Provider cleanup failure handling' {
@@ -1129,7 +1145,7 @@ Describe 'Generated GitHub workflow files' {
             }
         }
         $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
-        foreach ($name in @('Update-BuildWorkflowInRepoClone', 'Update-DeployWorkflowInRepoClone', 'Get-SecretJsonInputBlock', 'Merge-SecretJsonInput')) {
+        foreach ($name in @('Update-BuildWorkflowInRepoClone', 'Update-DeployWorkflowInRepoClone', 'Update-ExportWorkflowInRepoClone', 'Update-ImportWorkflowInRepoClone', 'Get-SecretJsonInputBlock', 'Get-SecretJsonBlockContent', 'Merge-SecretJsonInput')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -1153,6 +1169,7 @@ Describe 'Generated GitHub workflow files' {
         Assert-GeneratedWorkflowActionlint -Content $content
         $content | Should -Match 'uses: owner/shared/.github/actions/build@stable'
         $content | Should -Match 'alm4dataverse-export-build'
+        $content | Should -Match "shared-template-version: '1'"
         if ($Enabled) {
             $content | Should -Match "name: 'Build''s'"
             $content | Should -Match 'AZURE_CLIENT_SECRET'
@@ -1211,11 +1228,35 @@ Describe 'Generated GitHub workflow files' {
         }
     }
 
-    It 'preserves manual and automatic stage guards in the copied deployment workflow' {
-        $workflow = Get-Content (Join-Path $repoRoot 'copy-to-your-repo/.github/workflows/DEPLOY-main.yml') -Raw | ConvertFrom-Yaml
+    It 'gates manual-gate-tag deployments on the selected target environment' {
+        Update-DeployWorkflowInRepoClone -RepoRoot $workingRoot -Branch main -DeploymentEnvironments @([pscustomobject]@{ ShortName = 'TEST' }, [pscustomobject]@{ ShortName = 'PROD' }) -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable -PromotionMode 'manual-gate-tag'
+        $workflow = Get-Content (Join-Path $workingRoot '.github/workflows/DEPLOY-main.yml') -Raw | ConvertFrom-Yaml
         $condition = [string]$workflow.jobs['deploy-prod']['if']
         $condition | Should -Match '!cancelled\(\)'
-        $condition | Should -Match "needs\['deploy-test'\].result == 'success'"
+        $condition | Should -Match "inputs.target-environment == 'PROD'"
+        $workflow.jobs['deploy-prod'].needs | Should -Be 'deploy-test'
+    }
+
+    It 'regenerates EXPORT and IMPORT with the shared ref and template version' {
+        Update-ExportWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+        Update-ImportWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+
+        $exportContent = Get-Content (Join-Path $workingRoot '.github/workflows/EXPORT.yml') -Raw
+        $importContent = Get-Content (Join-Path $workingRoot '.github/workflows/IMPORT.yml') -Raw
+        $null = ConvertFrom-Yaml -Yaml $exportContent -ErrorAction Stop
+        $null = ConvertFrom-Yaml -Yaml $importContent -ErrorAction Stop
+        Assert-GeneratedWorkflowActionlint -Content $exportContent
+        Assert-GeneratedWorkflowActionlint -Content $importContent
+
+        $exportContent | Should -Match 'uses: owner/shared/.github/actions/export@stable'
+        $exportContent | Should -Match "shared-template-version: '1'"
+        $exportContent | Should -Match 'WORKFLOW_DISPATCH_TOKEN'
+        $importContent | Should -Match 'uses: owner/shared/.github/actions/import@stable'
+        $importContent | Should -Match "shared-template-version: '1'"
+        $importContent | Should -Not -Match 'WORKFLOW_DISPATCH_TOKEN'
+
+        Update-ExportWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
+        Get-Content (Join-Path $workingRoot '.github/workflows/EXPORT.yml') -Raw | Should -Be $exportContent
     }
 
     It 'keeps secret-input merges byte-stable for <Label> generated newlines' -ForEach @(
@@ -1230,6 +1271,105 @@ Describe 'Generated GitHub workflow files' {
         $second = Merge-SecretJsonInput -ExistingContent $first -GeneratedContent $generated
         $second | Should -BeExactly $first
         $first | Should -BeExactly ($lines -join [Environment]::NewLine)
+    }
+
+    It 'carries custom secrets from a single job into every job of the branch-aware BUILD split' {
+        $existing = @'
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        environment:
+            name: Build-main
+        steps:
+            - uses: owner/shared/.github/actions/build@stable
+              with:
+                environment-name: Build-main
+                secrets-json: >-
+                    {
+                        "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }},
+                        "MY_HOOK_SECRET": ${{ toJSON(secrets.MY_HOOK_SECRET) }}
+                    }
+'@
+        $generated = @'
+jobs:
+    build-validation:
+        runs-on: ubuntu-latest
+        environment:
+            name: ${{ fromJSON('{"main":"Build-main"}')[github.ref_name] }}
+        steps:
+            - uses: owner/shared/.github/actions/build@stable
+              with:
+                environment-name: ${{ fromJSON('{"main":"Build-main"}')[github.ref_name] }}
+                secrets-json: >-
+                    {
+                        "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }}
+                    }
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: owner/shared/.github/actions/build@stable
+              with:
+                environment-name: ''
+                secrets-json: >-
+                    {
+                    }
+'@
+        $merged = Merge-SecretJsonInput -ExistingContent $existing -GeneratedContent $generated
+
+        ([regex]::Matches($merged, '"MY_HOOK_SECRET"')).Count | Should -Be 2
+        ([regex]::Matches($merged, '"AZURE_CLIENT_SECRET"')).Count | Should -Be 1
+        # The validation job keeps its regenerated secret and gains the custom one
+        # with a separating comma; the plain job gains only the custom entry.
+        $merged | Should -Match '"AZURE_CLIENT_SECRET": \${{ toJSON\(secrets.AZURE_CLIENT_SECRET\) }},'
+        $merged | Should -Not -Match 'build:\r?\n[\s\S]*?AZURE_CLIENT_SECRET'
+        $merged | Should -Match 'environment-name: ''''\r?\n[\s\S]*?"MY_HOOK_SECRET"'
+
+        $second = Merge-SecretJsonInput -ExistingContent $merged -GeneratedContent $generated
+        $second | Should -BeExactly $merged
+    }
+
+    It 'treats unreadable existing JSON as verbatim content outside the split' {
+        $existing = @'
+jobs:
+    build:
+        with:
+            environment-name: DEV
+            secrets-json: '{"VALUE": "${{ secrets.VALUE }}"}'
+'@
+        $generated = @'
+jobs:
+    build:
+        with:
+            environment-name: DEV
+            secrets-json: >-
+                {
+                    "VALUE": "${{ secrets.VALUE }}"
+                }
+'@
+        $merged = Merge-SecretJsonInput -ExistingContent $existing -GeneratedContent $generated
+        # The flow scalar cannot be read at key level, so the existing single-line
+        # block is carried over verbatim with the generated environment name kept.
+        $merged | Should -Match 'secrets-json: ''\{"VALUE": "\$\{\{ secrets\.VALUE \}\}"\}'''
+        $second = Merge-SecretJsonInput -ExistingContent $merged -GeneratedContent $generated
+        $second | Should -BeExactly $merged
+    }
+
+    It 'reads parseable JSON block keys without evaluating expressions' {
+        $entries = Get-SecretJsonBlockContent -Lines @(
+            '                    {',
+            '                        "AZURE_CLIENT_SECRET": ${{ toJSON(secrets.AZURE_CLIENT_SECRET) }},',
+            '                        "MY_HOOK_SECRET": ${{ toJSON(secrets.MY_HOOK_SECRET) }}',
+            '                    }'
+        )
+        $entries.HasBody | Should -BeTrue
+        $entries.Clean | Should -BeTrue
+        @($entries.Entries | ForEach-Object Key) | Should -Be @('AZURE_CLIENT_SECRET', 'MY_HOOK_SECRET')
+
+        $flowScalar = Get-SecretJsonBlockContent -Lines @('    secrets-json: ''{"A": 1}''')
+        $flowScalar.HasBody | Should -BeFalse
+
+        $singleLine = Get-SecretJsonBlockContent -Lines @('        {"A": 1}')
+        $singleLine.HasBody | Should -BeFalse
     }
 }
 
@@ -1274,7 +1414,6 @@ Describe 'Generated Azure DevOps pipeline files' {
     BeforeEach {
         $workingRoot = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path (Join-Path $workingRoot 'pipelines') -Force | Out-Null
-        Copy-Item (Join-Path $repoRoot 'copy-to-your-repo/pipelines/*.yml') (Join-Path $workingRoot 'pipelines')
     }
 
     It 'writes build settings and replaces deployment stages for extension=<Enabled>' -ForEach @(
@@ -1287,21 +1426,23 @@ Describe 'Generated Azure DevOps pipeline files' {
         Assert-GeneratedAzurePipelineSchema -Path (Join-Path $workingRoot 'pipelines/BUILD.yml')
         $content | Should -Match "buildEnvironmentName: 'Build''s'"
         $content | Should -Match ('useAlm4DataverseExtension: ' + $Enabled.ToString().ToLowerInvariant())
+        $content | Should -Match "sharedTemplateVersion: '1'"
         $environments = @([pscustomobject]@{ ShortName = 'QA' }, [pscustomobject]@{ ShortName = 'PROD' })
-        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeTrue
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeTrue
         $deployContent = Get-Content (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml') -Raw
         $null = ConvertFrom-Yaml -Yaml $deployContent -ErrorAction Stop
         Assert-GeneratedAzurePipelineSchema -Path (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml')
         $deployContent | Should -Match 'environmentName: QA'
         $deployContent | Should -Match 'environmentName: PROD'
+        $deployContent | Should -Match "sharedTemplateVersion: '1'"
         @([regex]::Matches($deployContent, '(?m)^\s+environmentName:')).Count | Should -Be 2
-        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeFalse
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeFalse
     }
 
     It 'preserves per-environment extra deployment parameters when regenerating stages' {
         $deployPath = Join-Path $workingRoot 'pipelines/DEPLOY-main.yml'
         $environments = @([pscustomobject]@{ ShortName = 'QA' }, [pscustomobject]@{ ShortName = 'PROD' })
-        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $environments | Should -BeTrue
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $environments | Should -BeTrue
         $original = (Get-Content -LiteralPath $deployPath -Raw).Replace("`r`n", "`n")
         $prodEntry = "      environmentName: PROD`n      useAlm4DataverseExtension: true`n"
         $original | Should -Match ([regex]::Escape($prodEntry))
@@ -1309,7 +1450,7 @@ Describe 'Generated Azure DevOps pipeline files' {
         Set-Content -LiteralPath $deployPath -Value $customized -NoNewline
 
         $reordered = @([pscustomobject]@{ ShortName = 'UAT' }, [pscustomobject]@{ ShortName = 'PROD' })
-        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $reordered | Should -BeTrue
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $reordered | Should -BeTrue
         $content = Get-Content -LiteralPath $deployPath -Raw
         $parsed = ConvertFrom-Yaml -Yaml $content -ErrorAction Stop
         Assert-GeneratedAzurePipelineSchema -Path $deployPath
@@ -1323,7 +1464,7 @@ Describe 'Generated Azure DevOps pipeline files' {
         @($stages[1].parameters.secretVariables) | Should -Be @('DataverseEnvVar_contoso_APIKey')
         $content | Should -Not -Match 'environmentName: QA'
 
-        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -Environments $reordered | Should -BeFalse
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $reordered | Should -BeFalse
     }
 
     It 'preserves an existing BUILD secretVariables block when rewriting the caller' {
@@ -1352,9 +1493,11 @@ Describe 'Generated Azure DevOps pipeline files' {
         $LASTEXITCODE | Should -Not -Be 0
     }
 
-    It 'fails rather than silently fabricating missing templates' {
-        { Update-AzDoBuildPipelineInWorkingTree -RepoRoot $TestDrive -SharedRepositoryName shared -BuildEnvironmentName '' -UseAlm4DataverseExtension $true } | Should -Throw '*Build pipeline file not found*'
-        { Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch absent -Environments @([pscustomobject]@{ ShortName = 'QA' }) } | Should -Throw '*not found*'
+    It 'creates missing caller files instead of failing' {
+        Update-AzDoBuildPipelineInWorkingTree -RepoRoot $TestDrive -SharedRepositoryName shared -BuildEnvironmentName '' -UseAlm4DataverseExtension $true | Out-Null
+        Test-Path (Join-Path $TestDrive 'pipelines/BUILD.yml') | Should -BeTrue
+        Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch absent -SharedRepositoryName shared -Environments @([pscustomobject]@{ ShortName = 'QA' }) | Should -BeTrue
+        Get-Content (Join-Path $workingRoot 'pipelines/DEPLOY-absent.yml') -Raw | Should -Match 'environmentName: QA'
     }
 }
 

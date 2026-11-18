@@ -29,15 +29,12 @@ function Invoke-GitHubBranchAwareSetup {
         config. Publication and provider configuration are not transactional.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CloneRoot', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested template-fetch callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseGitHubEnvironments', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseRepositoryVariablePrefix', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'EnableEnvironmentApprovals', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RequiredReviewerIds', Justification = 'Captured by the nested review action.')]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'DeploymentPromotionMode', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoFullName', Justification = 'Captured by the nested branch publication and Apply actions.')]
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'PostApplyAction', Justification = 'Invoked by the nested final Apply action.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$CloneRoot,
@@ -61,6 +58,7 @@ function Invoke-GitHubBranchAwareSetup {
         [Parameter()][switch]$ApplyConfig,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$PreviewOnly,
+        [Parameter()][switch]$Commit,
         [Parameter()][bool]$UseRepositoryVariablePrefix = $true,
         [Parameter()][bool]$EnableEnvironmentApprovals = $false,
         [Parameter()][int[]]$RequiredReviewerIds = @(),
@@ -149,6 +147,7 @@ function Invoke-GitHubBranchAwareSetup {
             BuildValidationEnvironmentConfiguration = (Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'ExistingBuildValidationEnvironment')
             UseImmutableWifSubject = $(if ($ApplyConfig) { [bool]$ProviderOptions['GitHubUseImmutableWifSubject'] } else { [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject') })
             UseImmutableWifSubjectChosen = [bool]$ApplyConfig
+            PublishPlan = $null
         }
 
         $branchSetupSteps = @(
@@ -968,44 +967,37 @@ function Invoke-GitHubBranchAwareSetup {
             throw 'The setup change preview action is unavailable.'
         }
         $publicationPlanStep = [pscustomobject]@{
-            Name = 'Choose publication methods'
+            Name = 'Choose publication method'
             HelpDocRelativePath = 'docs/setup/github-setup.md'
             InputSignature = {
                 @($wizardState.BranchStates | ForEach-Object { [string]$_.BranchName }) -join ';'
             }
             Summary = {
-                Get-SetupPublishPlanMenuSummary -BranchStates @($wizardState.BranchStates)
+                Get-SetupSinglePublishPlanSummary -PublishPlan $wizardState.PublishPlan
             }
             Action = {
-                foreach ($branchState in @($wizardState.BranchStates)) {
-                    $branchName = [string]$branchState.BranchName
-                    $defaultCommitMessage = if ($ApplyConfig) {
-                        "Apply alm-config.psd1 settings for branch '$branchName'"
-                    }
-                    else {
-                        "Add ALM4Dataverse GitHub Actions workflows for branch '$branchName'"
-                    }
-                    $defaultPullRequestDescription = if ($ApplyConfig) {
-                        "This pull request regenerates the GitHub workflow files from the committed alm-config.psd1 settings for branch '$branchName'."
-                    }
-                    else {
-                        "This pull request adds or updates the ALM4Dataverse GitHub Actions workflow and repository configuration for branch '$branchName'."
-                    }
-                    $branchState.PublishPlan = Get-BranchTargetedRepoChangePublishPlan `
-                        -ProviderName 'GitHub' `
-                        -RepositoryName $RepoFullName `
-                        -TargetBranch $branchName `
-                        -DefaultCommitMessage $defaultCommitMessage `
-                        -DefaultPullRequestTitle $defaultCommitMessage `
-                        -DefaultPullRequestDescription $defaultPullRequestDescription `
-                        -ExistingPlan $branchState.PublishPlan `
-                        -GuidanceLines @(
-                            "Choose how the generated workflow files for branch '$branchName' should be published.",
-                            'Use a pull request when branch protection or review is required.'
-                        ) `
-                        -DocRelativePath 'docs/setup/github-setup.md' `
-                        -Ref $ALM4DataverseRef
+                $defaultCommitMessage = if ($ApplyConfig) {
+                    'Apply alm-config.psd1 settings for all configured branches'
                 }
+                else {
+                    'Add ALM4Dataverse GitHub Actions workflows for all configured branches'
+                }
+                $defaultPullRequestDescription = if ($ApplyConfig) {
+                    'This pull request regenerates the GitHub workflow files from the committed alm-config.psd1 settings for all configured branches.'
+                }
+                else {
+                    'This pull request adds or updates the ALM4Dataverse GitHub Actions workflows and repository configuration for all configured branches.'
+                }
+                $wizardState.PublishPlan = Get-SetupSingleBranchPublishPlan `
+                    -ProviderName 'GitHub' `
+                    -RepositoryName $RepoFullName `
+                    -DefaultBranch $DefaultBranch `
+                    -BranchStates @($wizardState.BranchStates) `
+                    -DefaultCommitMessage $defaultCommitMessage `
+                    -DefaultPullRequestDescription $defaultPullRequestDescription `
+                    -ExistingPlan $wizardState.PublishPlan `
+                    -DocRelativePath 'docs/setup/github-setup.md' `
+                    -Ref $ALM4DataverseRef
             }
         }
         $setupSteps = @($PrerequisiteSteps) +
@@ -1027,6 +1019,37 @@ function Invoke-GitHubBranchAwareSetup {
             }
         }
 
+        if ($Commit) {
+            if (-not $ApplyConfig) {
+                throw 'Commit requires ApplyConfig.'
+            }
+
+            # Unattended publication: all generated files for every configured branch
+            # are committed directly to the default branch without prompts.
+            $wizardState.PublishPlan = [pscustomobject]@{
+                Mode                   = 'Direct'
+                TargetBranch           = $DefaultBranch
+                BranchName             = $DefaultBranch
+                CommitMessage          = 'Apply alm-config.psd1 settings for all configured branches'
+                PullRequestTitle       = ''
+                PullRequestDescription = ''
+            }
+            $applyResult = Invoke-GitHubBranchAwareSetupApply `
+                -CloneRoot $CloneRoot `
+                -CopyRoot $copyRoot `
+                -DefaultBranch $DefaultBranch `
+                -ExistingSetupState $ExistingSetupState `
+                -SharedWorkflowRepository ([string]$SharedWorkflowRepositoryState.Repository) `
+                -SharedWorkflowReference ([string]$SharedWorkflowRepositoryState.Reference) `
+                -PromotionMode $DeploymentPromotionMode `
+                -WizardState $wizardState `
+                -ProviderOptions $ProviderOptions
+            if ($PostApplyAction) {
+                & $PostApplyAction $applyResult
+            }
+            return $applyResult
+        }
+
         $setupResult = Invoke-SetupWizard `
             -Title 'GitHub Actions ALM4Dataverse setup' `
             -Steps $setupSteps `
@@ -1043,7 +1066,6 @@ function Invoke-GitHubBranchAwareSetup {
                 -ExistingSetupState $ExistingSetupState `
                 -SharedWorkflowRepository ([string]$SharedWorkflowRepositoryState.Repository) `
                 -SharedWorkflowReference ([string]$SharedWorkflowRepositoryState.Reference) `
-                -ALM4DataverseRef $ALM4DataverseRef `
                 -PromotionMode $DeploymentPromotionMode `
                 -WizardState $wizardState `
                 -ProviderOptions $ProviderOptions

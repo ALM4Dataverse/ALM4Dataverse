@@ -70,17 +70,25 @@ release:
 | [Configuration template](../../copy-to-your-repo/alm-config.psd1) | `alm-config.psd1` at the root |
 | [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the root |
 | [Data hook examples](../../copy-to-your-repo/data) | `data/` |
-| [Azure DevOps callers](../../copy-to-your-repo/pipelines) | `pipelines/` |
 
-Do not copy the GitHub workflows unless you also configure GitHub Actions. Pin the shared
-repository `ref` in each caller if you do not want to follow its default branch. Keep
+The caller pipelines are generated, not copied or edited by hand: automated setup writes
+`pipelines/BUILD.yml`, `pipelines/EXPORT.yml`, `pipelines/IMPORT.yml` and
+`pipelines/DEPLOY-<branch>.yml` from `alm-config.psd1` (the static `APPLY-CONFIG.yml`
+caller is the only pipeline copied from the shared scaffold). Set the setup metadata in
+`alm-config.psd1` — `provider = 'azDO'`, the shared repository name in `repository`, its
+branch in `ref`, and the application branches with their environments under `branches` —
+commit it, then create the APPLY-CONFIG pipeline described in
+[pipeline creation](#8-pipeline-creation) and run it to generate and publish the caller
+files; set the pipeline's **preview** parameter to see the generated file diffs in the
+run output without committing them. Alternatively, run `setup-azdo.ps1 -ApplyConfig`
+from the application repository root on a workstation; add `-PreviewOnly` to review the
+generated file diffs without publishing. See
+[setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments)
+and [setup script parameters](../config/pipelines.md#setup-script-parameters).
+
+Do not copy the GitHub workflows unless you also configure GitHub Actions. Keep
 `AGENTS.md` and ask an AI agent to read it before changing components or configuration.
 See [application repository layout](../concepts/application-repository.md).
-
-In the DEPLOY caller, set the `build` pipeline resource's `source` to the BUILD pipeline's
-full name, including its folder. Use the separator shown in the UI: if it displays
-`YourApp\BUILD`, use that exact name. The supplied DEPLOY stages are commented out until
-you configure targets.
 
 ## 4. Service Principal Setup
 
@@ -158,14 +166,21 @@ for each caller in the application repository:
 
 | Pipeline name | YAML path | Trigger |
 | --- | --- | --- |
+| APPLY-CONFIG | `/pipelines/APPLY-CONFIG.yml` | Manual |
 | BUILD | `/pipelines/BUILD.yml` | Branch pushes, or manual |
 | EXPORT | `/pipelines/EXPORT.yml` | Manual, with commit message |
 | IMPORT | `/pipelines/IMPORT.yml` | Manual |
 | DEPLOY-main | `/pipelines/DEPLOY-main.yml` | Matching BUILD completion, or manual |
 
-Save them in an application-specific pipeline folder if you share a project. Ensure the
-DEPLOY resource `source` matches the resulting full BUILD name. Do not run DEPLOY until
-its stages are configured. A BUILD before the first EXPORT may fail because the configured
+Create the APPLY-CONFIG pipeline first, authorize the shared repository resource at its
+first run, and run it: it applies the committed `alm-config.psd1` and commits the
+generated caller files to the default branch. After that, create the BUILD, EXPORT,
+IMPORT and DEPLOY pipelines from the generated files.
+
+Create one DEPLOY pipeline per configured deployment branch. Name the BUILD pipeline
+exactly `BUILD` and avoid pipeline folders, because the generated DEPLOY caller selects
+the BUILD pipeline by that name. Do not run DEPLOY until its branch has deployment
+environments configured. A BUILD before the first EXPORT may fail because the configured
 solution folders do not exist yet.
 
 ## 9. Pipeline Permissions
@@ -210,18 +225,40 @@ List solutions by unique name in dependency order in `alm-config.psd1`:
 Configure [Solution Checker](../config/alm-config.md#solution-check-pac-solution-check),
 additional assets or hooks, and unmanaged deployment only where needed.
 
-In DEPLOY, add one `pipelines/templates/stages/deploy-environment.yml@ALM4Dataverse` stage
-entry per target in promotion order. Each entry supplies `environmentName`, optionally
-`useAlm4DataverseExtension`, and optionally `timeoutInMinutes`. Start from the commented
-example in the caller and keep valid YAML indentation. See the
-[template reference](../config/pipelines.md#azure-devops-templates).
+Branch environments drive the generated pipelines. Configure the `branches` map so each
+branch selects its development environment, ordered deployment environments, and
+optional BUILD validation:
 
-> [!TIP]
-> **Optional: deployment validation.** Set `buildEnvironmentName` in BUILD to a dedicated
-> non-production connection/group. To test an upgrade path, set
-> `branches.<branch>.buildValidation.baselineRelease` to a retained BUILD ID/number or
-> `@<deployment-environment>`. The baseline source is separate from the validation
-> target. See [BUILD validation](../usage/building-releases.md#build-validation).
+```powershell
+@{
+    provider = 'azDO'
+    repository = 'ALM4Dataverse'
+    ref = 'main'
+    branches = @{
+        main = @{
+            developmentEnvironment = 'Dev-main'
+            deploymentEnvironments = @('TEST-main', 'PROD')
+            buildValidation = @{
+                environmentName = 'Build-main'
+                baselineRelease = ''
+            }
+        }
+    }
+}
+```
+
+Setup writes `DEPLOY-<branch>.yml` with one deployment stage per entry in
+`deploymentEnvironments`. Leave `buildValidation.environmentName` empty to pack only.
+Use the exact names configured in [service connections](#5-service-connections) and
+[variable groups](#6-variable-groups). To test an upgrade path, set
+`branches.<branch>.buildValidation.baselineRelease` to a retained BUILD ID/number or
+`@<deployment-environment>`; the baseline source is separate from the validation
+target. See [BUILD validation](../usage/building-releases.md#build-validation).
+
+After changing and committing `alm-config.psd1`, run `setup-azdo.ps1 -ApplyConfig` again
+to regenerate the caller files; they are never edited by hand. See
+[setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments)
+and the [template reference](../config/pipelines.md#azure-devops-templates).
 
 ## Verify The Installation
 

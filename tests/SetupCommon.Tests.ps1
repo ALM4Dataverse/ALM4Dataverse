@@ -1443,28 +1443,23 @@ Describe 'Setup menu branch items' {
         $notRequired | Should -BeNullOrEmpty
     }
 
-    It 'lists selected direct and pull-request publication plans' {
-        $branchStates = @(
-            [pscustomobject]@{
-                BranchName = 'main'
-                PublishPlan = [pscustomobject]@{
-                    Mode = 'Direct'
-                    TargetBranch = 'main'
-                }
-            },
-            [pscustomobject]@{
-                BranchName = 'develop'
-                PublishPlan = [pscustomobject]@{
-                    Mode = 'PullRequest'
-                    BranchName = 'setup/develop'
-                    TargetBranch = 'develop'
-                }
-            }
-        )
+    It 'formats the single direct and pull-request publication plan' {
+        $directPlan = [pscustomobject]@{
+            Mode = 'Direct'
+            TargetBranch = 'main'
+        }
+        Get-SetupSinglePublishPlanSummary -PublishPlan $directPlan |
+            Should -Be 'main: direct commit for all branches'
 
-        Get-SetupPublishPlanMenuSummary -BranchStates $branchStates |
-            Should -Be 'main: direct, develop: PR from setup/develop'
-        Get-SetupPublishPlanMenuSummary -BranchStates @() | Should -Be 'Not configured'
+        $pullRequestPlan = [pscustomobject]@{
+            Mode = 'PullRequest'
+            BranchName = 'setup/main'
+            TargetBranch = 'main'
+        }
+        Get-SetupSinglePublishPlanSummary -PublishPlan $pullRequestPlan |
+            Should -Be 'main: PR from setup/main for all branches'
+
+        Get-SetupSinglePublishPlanSummary -PublishPlan $null | Should -Be 'Not configured'
     }
 
     It 'lists selected solutions and distinguishes empty from unconfigured selections' {

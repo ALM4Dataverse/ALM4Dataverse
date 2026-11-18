@@ -29,6 +29,8 @@
 .PARAMETER PreviewOnly
     With ApplyConfig, display the generated change summary and select individual file
     diffs to view without publishing. Selected diffs are written without paging.
+    Supplying RepositoryFullName makes the run unattended (used by the APPLY-CONFIG
+    caller's preview option).
 .EXAMPLE
     .\setup-github.ps1 -TenantId 'contoso.onmicrosoft.com' -ALM4DataverseRef 'stable'
     Starts interactive setup using the specified tenant and template ref.
@@ -58,7 +60,13 @@ param(
     [switch]$ApplyConfig,
 
     [Parameter()]
-    [switch]$PreviewOnly
+    [switch]$PreviewOnly,
+
+    [Parameter()]
+    [switch]$Commit,
+
+    [Parameter()]
+    [string]$RepositoryFullName
 )
 
 $resolveDevRefAfterGitIsAvailable = $false
@@ -87,6 +95,22 @@ $ProgressPreference = 'SilentlyContinue' # Suppress progress bars
 if ($PreviewOnly -and -not $ApplyConfig) {
     throw 'PreviewOnly requires ApplyConfig.'
 }
+
+if ($Commit -and -not $ApplyConfig) {
+    throw 'Commit requires ApplyConfig.'
+}
+
+if ($Commit -and $PreviewOnly) {
+    throw 'Commit cannot be combined with PreviewOnly.'
+}
+
+if ($Commit -and [string]::IsNullOrWhiteSpace($RepositoryFullName)) {
+    throw 'Commit requires RepositoryFullName so the repository can be resolved without prompts.'
+}
+
+# A supplied repository name makes ApplyConfig run unattended for Commit and
+# PreviewOnly (the apply-config caller uses this); without it, setup stays interactive.
+$headlessMode = ($Commit -or $PreviewOnly) -and $ApplyConfig -and -not [string]::IsNullOrWhiteSpace($RepositoryFullName)
 
 # Dot-sourced helper fragments share this script's state; release preparation embeds
 # the same source so the published installer remains a single file.
@@ -408,11 +432,18 @@ $startupSteps = @(
 )
 
 try {
-    Invoke-SetupWizard `
-        -Title 'GitHub setup prerequisites' `
-        -Steps $startupSteps `
-        -HelpDocRelativePath 'docs/setup/github-setup.md' `
-        -HelpRef $ALM4DataverseRef | Out-Null
+    if ($headlessMode) {
+        $script:githubAuthentication = Initialize-GitHubSetupAuthentication -TenantId $TenantId -ApplyConfig:$ApplyConfig -Headless
+        $script:TenantId = $script:githubAuthentication.TenantId
+        $script:githubRepositoryContext = Initialize-GitHubApplicationRepositoryContext -TenantId $script:TenantId -ApplyConfig:$ApplyConfig -RepoFullName $RepositoryFullName
+    }
+    else {
+        Invoke-SetupWizard `
+            -Title 'GitHub setup prerequisites' `
+            -Steps $startupSteps `
+            -HelpDocRelativePath 'docs/setup/github-setup.md' `
+            -HelpRef $ALM4DataverseRef | Out-Null
+    }
 }
 catch {
     if ($_.Exception.Message -eq 'Setup cancelled before changes were applied.' -or (Test-IsSetupWizardBackException -Exception $_.Exception)) {
@@ -867,6 +898,7 @@ try {
         -ApplyConfig:$ApplyConfig `
         -IsNewRepository:$isNewRepository `
         -PreviewOnly:$PreviewOnly `
+        -Commit:$Commit `
         -UseRepositoryVariablePrefix $useRepositoryVariablePrefix `
         -EnableEnvironmentApprovals $enableEnvironmentApprovals `
         -RequiredReviewerIds $environmentApprovalReviewerIds

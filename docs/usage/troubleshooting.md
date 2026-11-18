@@ -63,8 +63,9 @@ and [IMPORT](importing-changes.md).
 - A later manually selected job must use a status-aware condition such as the supplied `!cancelled()` guard; otherwise skipped dependencies can suppress it.
 - A missing predecessor gate means that build has not completed the required prior target. Do not create a tag to bypass that check.
 
-Check job permissions against the [action contracts](../config/pipelines.md) and compare
-custom callers with the supplied [deployment caller](../../copy-to-your-repo/.github/workflows/DEPLOY-main.yml).
+Check job permissions against the [action contracts](../config/pipelines.md). Regenerate
+stale or customized caller workflows by re-running setup from `alm-config.psd1` instead of
+patching them by hand.
 
 ## Packaging, Hooks, Or Checker Failure
 

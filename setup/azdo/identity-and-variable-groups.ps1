@@ -942,8 +942,27 @@ function Set-AzDoSharedRepositoryState {
 }
 
 function Initialize-AzDoAuthentication {
+    <#
+    .SYNOPSIS
+        Authenticates Azure and returns the Azure DevOps access token.
+    .DESCRIPTION
+        Interactive device-code flow by default. HeadlessAccessToken skips all prompts
+        and adapts a caller-supplied token to the standard result contract.
+    #>
     [CmdletBinding()]
-    param([Parameter()][string]$TenantId)
+    param(
+        [Parameter()][string]$TenantId,
+        [Parameter()][string]$HeadlessAccessToken
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($HeadlessAccessToken)) {
+        $adoAccessToken = [pscustomobject]@{ Token = $HeadlessAccessToken }
+        return [pscustomobject]@{
+            AuthResult  = [pscustomobject]@{ AccessToken = $HeadlessAccessToken; TenantId = $TenantId }
+            AccessToken = $adoAccessToken
+            SecureToken = ConvertTo-SecureString -String $HeadlessAccessToken -AsPlainText -Force
+        }
+    }
 
     Write-Section -Message 'Authenticating'
 

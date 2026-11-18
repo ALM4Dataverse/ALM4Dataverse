@@ -1,0 +1,59 @@
+# Applies committed alm-config.psd1 settings by running the matching shared setup
+# entrypoint and committing the regenerated caller workflows to the default branch.
+# The action and the setup source share one checkout ref, so this caller has no
+# version-dependent content and the APPLY-CONFIG stub never needs regenerating.
+name: Apply Config
+description: Regenerate caller workflows from alm-config.psd1 and commit the changes.
+
+inputs:
+  repository:
+    description: Application repository as owner/name; defaults to the running workflow's repository.
+    required: false
+  github-token:
+    description: Token used to clone and push the application repository.
+    required: true
+  preview:
+    description: When true, shows the changes that would be committed without pushing them.
+    required: false
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    # self is the caller's repository for the job environment; implementation is
+    # taken from this action's own checkout.
+    - name: Checkout application repository
+      uses: actions/checkout@v4
+      with:
+        path: application
+        fetch-depth: 0
+
+    - name: Checkout shared ALM4Dataverse source
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ github.action_repository }}
+        ref: ${{ github.action_ref }}
+        path: shared
+
+    - name: Apply configuration and commit changes
+      shell: pwsh
+      working-directory: ${{ github.workspace }}/shared
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Setup clones a disposable application copy and pushes with plain git, so
+        # authenticate git itself in addition to gh.
+        git config --global user.name 'ALM4Dataverse Setup'
+        git config --global user.email 'setup@alm4dataverse.local'
+        $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
+        git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $basic"
+        # Action inputs cannot use expressions in their defaults, so fall back to
+        # the workflow context here when the caller left the input empty.
+        $repository = if ($env:INPUT_REPOSITORY) { $env:INPUT_REPOSITORY } else { '${{ github.repository }}' }
+        if ($env:INPUT_PREVIEW -eq 'true') {
+            & ./setup-github.ps1 -ApplyConfig -PreviewOnly -RepositoryFullName $repository
+        }
+        else {
+            & ./setup-github.ps1 -ApplyConfig -Commit -RepositoryFullName $repository
+        }

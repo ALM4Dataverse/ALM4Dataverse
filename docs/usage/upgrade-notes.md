@@ -9,6 +9,35 @@ out safely.
 
 ## Setup
 
+### Caller Pipelines And Workflows Are Generated From `alm-config.psd1`
+
+**You'll see:** BUILD, DEPLOY, EXPORT and IMPORT pipelines or workflows stop immediately
+with a shared template version error: the caller file is missing the version the shared
+templates expect, or carries an older one. The error names the setup script and the ref
+the caller points to, and asks you to regenerate the caller. Interactive setup no longer
+offers to create or edit those files by hand.
+
+**Do this:** treat the generated caller files as read-only. Change configuration only in
+`alm-config.psd1`, then regenerate the callers by running
+`setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig` from the application
+repository, or by running the APPLY-CONFIG pipeline or workflow that setup added to the
+repository, which applies the committed `alm-config.psd1` and commits the regenerated
+files. See [GitHub manual setup](../setup/github-manual-setup.md) or
+[Azure DevOps manual setup](../setup/azdo-manual-setup.md).
+
+### Setup Publishes Every Branch In One Change
+
+**You'll see:** guided setup asks once where to publish, instead of once per branch, and
+writes the workflows or pipelines for every configured branch in a single commit or pull
+request. Applying committed configuration with `-ApplyConfig -Commit`, or with the
+APPLY-CONFIG pipeline or workflow, commits directly to the repository's default branch.
+
+**Do this:** when reviewing the publication, check that every configured branch appears
+in the single change. To review the changes before they are committed, run the
+APPLY-CONFIG pipeline or workflow with its preview option enabled (or
+`-ApplyConfig -PreviewOnly` on a workstation); `-ApplyConfig -Commit` always commits
+directly to the repository's default branch.
+
 ### Guided Setup Defers More Writes Until Apply
 
 **You'll see:** shared workflow repository reconciliation, shared repository version

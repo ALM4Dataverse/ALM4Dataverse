@@ -85,6 +85,20 @@
             Reason = 'The existing OAuth API supplies a plaintext access token; conversion adapts it to the downstream SecureString contract, not a hardcoded secret.'
         }
         @{
+            Path = 'setup/azdo/identity-and-variable-groups.ps1'
+            Rule = 'PSAvoidUsingConvertToSecureStringWithPlainText'
+            Function = 'Initialize-AzDoAuthentication'
+            Source = 'ConvertTo-SecureString -String $HeadlessAccessToken -AsPlainText -Force'
+            Reason = 'The headless apply caller supplies a plaintext bearer token at runtime; conversion adapts it to the downstream SecureString contract, not a hardcoded secret.'
+        }
+        @{
+            Path = 'setup/azdo/organization-and-project-setup.ps1'
+            Rule = 'PSAvoidUsingConvertToSecureStringWithPlainText'
+            Function = 'Initialize-AzDoOrganization'
+            Source = 'ConvertTo-SecureString -String $adoAccessToken.Token -AsPlainText -Force'
+            Reason = 'The headless apply caller supplies a plaintext bearer token at runtime; conversion adapts it to the downstream SecureString contract, not a hardcoded secret.'
+        }
+        @{
             Path = 'pipelines/scripts/connect-az.ps1'
             Rule = 'PSAvoidUsingConvertToSecureStringWithPlainText'
             Function = '<script>'

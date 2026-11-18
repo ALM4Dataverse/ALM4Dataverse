@@ -174,21 +174,26 @@ function Get-AzDoSetupArtifactsPreview {
     $previewRoot = New-SetupPreviewRoot -BaseRoot $RepoRoot -RelativePaths $previewRelativePaths
 
     try {
-        foreach ($branchState in $BranchStates) {
-            Invoke-AzDoSetupArtifactGeneration `
-                -RepoRoot $previewRoot `
-                -CopyRoot $CopyRoot `
-                -MainRepo $MainRepo `
-                -SharedRepositoryName $SharedRepositoryName `
-                -SharedRepositoryRef $SharedRepositoryRef `
-                -Branch ([string]$branchState.BranchName) `
-                -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
-                -Solutions $solutions `
-                -DeploymentEnvironments @($branchState.DeploymentEnvironments) `
-                -BuildValidationEnabled ($buildValidationEnvironments.Count -gt 0) `
-                -BuildValidationEnvironments $buildValidationEnvironments `
-                -SetupSettings $settings
-        }
+        $deployWorkflowBranchDefinitions = @($BranchStates | ForEach-Object {
+            [pscustomobject]@{
+                BranchName             = [string]$_.BranchName
+                DeploymentEnvironments = @($_.DeploymentEnvironments)
+            }
+        })
+        Invoke-AzDoSetupArtifactGeneration `
+            -RepoRoot $previewRoot `
+            -CopyRoot $CopyRoot `
+            -MainRepo $MainRepo `
+            -SharedRepositoryName $SharedRepositoryName `
+            -SharedRepositoryRef $SharedRepositoryRef `
+            -Branch ([string](Get-OptionalObjectPropertyValue -InputObject $BranchStates[0] -PropertyName 'BranchName')) `
+            -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
+            -Solutions $solutions `
+            -DeploymentEnvironments @() `
+            -DeployWorkflowBranchDefinitions $deployWorkflowBranchDefinitions `
+            -BuildValidationEnabled ($buildValidationEnvironments.Count -gt 0) `
+            -BuildValidationEnvironments $buildValidationEnvironments `
+            -SetupSettings $settings
 
         $configPath = Join-Path $previewRoot 'alm-config.psd1'
         if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
@@ -247,37 +252,55 @@ function Invoke-AzDoBranchAwareSetupApply {
         -ProviderOptions $ProviderOptions
     $solutions = if ($WizardState.SolutionData) { @($WizardState.SolutionData.Solutions) } else { $null }
     $publishResults = @()
+    $publishPlan = Get-OptionalObjectPropertyValue -InputObject $WizardState -PropertyName 'PublishPlan'
+    if ($null -eq $publishPlan) {
+        throw 'No repository publication plan was recorded. Revisit the publication method step before applying.'
+    }
 
-    foreach ($branchState in $branchStates) {
-        if (-not $branchState.PublishPlan) {
-            throw "No repository publish plan was recorded for branch '$($branchState.BranchName)'. Revisit Configure branches before applying."
+    $targetBranch = [string](Get-OptionalObjectPropertyValue -InputObject $publishPlan -PropertyName 'TargetBranch')
+    if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+        throw 'The repository publication plan has no target branch. Revisit the publication method step before applying.'
+    }
+
+    $deployWorkflowBranchDefinitions = @($branchStates | ForEach-Object {
+        [pscustomobject]@{
+            BranchName             = [string]$_.BranchName
+            DeploymentEnvironments = @($_.DeploymentEnvironments)
+        }
+    })
+
+    $publishResult = Invoke-WithErrorHandling `
+        -OperationName "Publishing repository changes for all branches on '$targetBranch'" `
+        -StatusMessage "Publishing repository changes for all branches on '$targetBranch'..." `
+        -CaptureOutputInPanel `
+        -ScriptBlock {
+            Publish-AzDoBranchSetupChange `
+                -RepoRoot $MainRepoWorkingRoot `
+                -ConfiguredBranch $targetBranch `
+                -PublishPlan $publishPlan `
+                -DefaultBranch $DefaultBranch `
+                -AccessToken $AccessToken `
+                -Repository $MainRepo `
+                -CopyRoot $CopyRoot `
+                -SharedRepositoryName $SharedRepositoryName `
+                -SharedRepositoryRef $SharedRepositoryRef `
+                -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
+                -Solutions $solutions `
+                -DeploymentEnvironments @() `
+                -DeployWorkflowBranchDefinitions $deployWorkflowBranchDefinitions `
+                -BuildValidationEnabled $buildValidationEnabled `
+                -BuildValidationEnvironmentName $buildValidationEnvironmentName `
+                -BuildValidationEnvironments $buildValidationEnvironments `
+                -SetupSettings $setupSettings
         }
 
-        $branchName = [string]$branchState.BranchName
-        $publishResult = Invoke-WithErrorHandling `
-            -OperationName "Publishing repository changes for branch '$branchName'" `
-            -StatusMessage "Publishing repository changes for branch '$branchName'..." `
-            -CaptureOutputInPanel `
-            -ScriptBlock {
-                Publish-AzDoBranchSetupChange `
-                    -RepoRoot $MainRepoWorkingRoot `
-                    -ConfiguredBranch $branchName `
-                    -PublishPlan $branchState.PublishPlan `
-                    -DefaultBranch $DefaultBranch `
-                    -AccessToken $AccessToken `
-                    -Repository $MainRepo `
-                    -CopyRoot $CopyRoot `
-                    -SharedRepositoryName $SharedRepositoryName `
-                    -SharedRepositoryRef $SharedRepositoryRef `
-                    -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
-                    -Solutions $solutions `
-                    -DeploymentEnvironments @($branchState.DeploymentEnvironments) `
-                    -BuildValidationEnabled $buildValidationEnabled `
-                    -BuildValidationEnvironmentName $buildValidationEnvironmentName `
-                    -BuildValidationEnvironments $buildValidationEnvironments `
-                    -SetupSettings $setupSettings
-            }
-        $publishResults += $publishResult
+    $publishResults += [pscustomobject]@{
+        ConfiguredBranch = $targetBranch
+        BranchName       = $publishResult.BranchName
+        TargetBranch     = $publishResult.TargetBranch
+        PullRequestUrl   = $publishResult.PullRequestUrl
+        Mode             = $publishResult.Mode
+        HasChanges       = $publishResult.HasChanges
     }
 
     $enabledBuildBranches = @($branchStates | Where-Object { $_.BuildValidationEnabled -and $_.BuildValidationEnvironmentConfiguration })

@@ -59,25 +59,44 @@ Copy these items from a consistent ALM4Dataverse release into your application r
 | [alm-config.psd1](../../copy-to-your-repo/alm-config.psd1) | Repository root |
 | [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the repository root |
 | [data](../../copy-to-your-repo/data) | `data/` |
-| [GitHub workflows](../../copy-to-your-repo/.github/workflows) | `.github/workflows/` |
 
-Include the hidden `.github` directory. Do not copy the Azure DevOps `pipelines` callers
-unless you also configure that platform. Select a tested action/workflow ref instead of
-unintentionally following the template's `@main` references. Keep `AGENTS.md` and ask an
-AI agent to read it before changing Dataverse components or ALM configuration. See
-[application repository layout](../concepts/application-repository.md).
+The caller workflows are generated, not copied or edited by hand: automated setup writes
+BUILD, EXPORT, IMPORT and DEPLOY-<branch> into `.github/workflows/` from
+`alm-config.psd1` (CLEANUP-RELEASES and the static APPLY-CONFIG caller are the only
+workflows copied from the shared scaffold). Set the setup metadata in `alm-config.psd1` —
+`provider = 'GitHub'`, the shared repository name in `repository`, its ref in `ref`, the
+application branches with their environments under `branches`, and the GitHub options
+such as `GitHubDeploymentPromotionMode` — commit it, and then apply the configuration:
 
-The caller workflows are BUILD, EXPORT, IMPORT, DEPLOY-main and CLEANUP-RELEASES. Configure
-`solutions` using unique names in dependency order, then customize optional assets, hooks,
-checker rules and validation in the [ALM configuration](../config/alm-config.md). Do not
-add plaintext secrets to that file.
+1. Open the repository's **Actions** tab and run the **APPLY-CONFIG** workflow
+   (`workflow_dispatch`). It runs the shared setup source at the ref this workflow
+   references, regenerates every caller workflow for every configured branch, and
+   commits the changes to the default branch. Enable the **preview** input to see the
+   generated file diffs in the run output without committing them. This is the primary
+   route for manual setup.
+2. Alternatively, run `setup-github.ps1 -ApplyConfig` from the application repository
+   root on a workstation. Add `-PreviewOnly` to review the generated file diffs without
+   publishing.
+
+See
+[setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments)
+and [setup script parameters](../config/pipelines.md#setup-script-parameters).
+
+Do not copy the Azure DevOps `pipelines` callers unless you also configure that platform.
+Keep `AGENTS.md` and ask an AI agent to read it before changing Dataverse components or
+ALM configuration. See [application repository layout](../concepts/application-repository.md).
+
+Configure `solutions` using unique names in dependency order, then customize optional
+assets, hooks, checker rules and validation in the
+[ALM configuration](../config/alm-config.md). Do not add plaintext secrets to that file.
 
 ## 3. Configure Credentials
 
 Follow the [environment checklist](github-variables.md) for `Dev-main`, your deployment
-targets, and optional BUILD validation environment. The job's `environment` selects
-GitHub environment settings; `environment-name` tells the action which configuration
-prefix to resolve. Keep them consistent.
+targets, and optional BUILD validation environment. The generated workflow's
+`environment` selects GitHub environment settings; `environment-name` tells the action
+which configuration prefix to resolve. Keep the names in `alm-config.psd1` consistent with
+the checklist names.
 
 Pass `${{ toJSON(vars) }}` as `vars-json`. Explicitly select each secret in `secrets-json`,
 using `toJSON(secrets.NAME)` to escape its value. For prefixed repository secrets, map the
@@ -97,15 +116,14 @@ The complete settings are maintained in one
 
 ## Deployment Configuration
 
-Edit DEPLOY-main to contain one job per target environment. Configure the job environment,
-action `environment-name`, `previous-environment-name`, `promotion-mode` and
-`trigger-branch`. Keep `github-context-json: ${{ toJSON(github) }}` and
-`caller-inputs-json: ${{ toJSON(inputs) }}` unchanged. See the
-[deploy action reference](../config/pipelines.md#deploy).
+Setup generates DEPLOY-<branch> with one job per entry in the branch's
+`deploymentEnvironments`, in promotion order. Select the promotion strategy with
+`GitHubDeploymentPromotionMode` in `alm-config.psd1` before applying: `'environment-approval'`
+or `'manual-gate-tag'`. See the [deploy action reference](../config/pipelines.md#deploy).
 
 ### Environment Approval Mode
 
-The copied caller explicitly uses `environment-approval`. A successful BUILD sends
+Set `GitHubDeploymentPromotionMode = 'environment-approval'`. A successful BUILD sends
 `alm4dataverse-build-deploy-<branch-token>` through `repository_dispatch`; the first stage
 starts, and later stages follow successful predecessors.
 
@@ -126,17 +144,9 @@ private Pro/Team repositories. It does not make private GitHub Free repositories
 supplied jobs still need GitHub environments, which private Free repositories lack. See
 [plan limitations](#github-licence-limitations).
 
-To adapt the supplied caller:
-
-1. Set every stage's `promotion-mode` to `manual-gate-tag`.
-2. Remove the `repository_dispatch` trigger.
-3. Make `target-environment` a required choice containing your target names.
-4. Give each job a manual selection condition. Jobs with `needs` must use a status-aware
-   condition, such as `!cancelled()`, so a skipped earlier job does not suppress the
-   selected stage.
-5. Set each later stage's `previous-environment-name` to its predecessor.
-
-For example, the selection condition on a manual PROD job can be:
+Set `GitHubDeploymentPromotionMode = 'manual-gate-tag'` and re-run setup. The generated
+workflow keeps `target-environment` as a required choice containing your target names and
+gives each job a manual selection condition, such as:
 
 ```yaml
 if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.target-environment == 'PROD' }}
@@ -150,21 +160,20 @@ affect that control, so secure those permissions.
 
 ### Branches And Additional Stages
 
-For another deployment branch, create a matching DEPLOY caller and update its name, branch
-filters, dispatch event, `trigger-branch` and target settings consistently. The dispatch
-token is the lowercase branch name with non-alphanumeric runs replaced by `-`, trimmed at
-the ends: `feature/customer-import` becomes `feature-customer-import`. Avoid
-normalized-name collisions.
+For another deployment branch, add an entry to the `branches` map in `alm-config.psd1` with
+its own `developmentEnvironment` and `deploymentEnvironments`, then re-run setup. Add a UAT
+stage by adding `UAT` to the branch's `deploymentEnvironments` in promotion order; the
+generated jobs chain and update predecessors automatically. Test automatic and targeted
+manual runs. The dispatch token is the lowercase branch name with non-alphanumeric runs
+replaced by `-`, trimmed at the ends: `feature/customer-import` becomes
+`feature-customer-import`. Avoid normalized-name collisions. The
+[action reference](../config/pipelines.md#deploy) defines all supported inputs.
 
 > [!NOTE]
 > Repository-dispatch workflows must exist on the default branch. They use the payload to
 > select the source branch and build, but the workflow's GitHub ref still comes from the
 > default branch. Account for that in environment deployment-branch policies. See
 > [branching strategies](../usage/branching-strategies.md).
-
-To add UAT, add a job, target choice if applicable, credentials and concurrency group;
-chain it with `needs` and update PROD's predecessor. Test automatic and targeted manual
-runs. The [action reference](../config/pipelines.md#deploy) defines all supported inputs.
 
 ## BUILD Validation And Pull Requests
 
@@ -186,7 +195,7 @@ configurations; see
 [setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
 
 Enable Solution Checker separately if required. It checks package quality, not end-user
-behavior. The copied BUILD workflow runs on branch pushes, manual dispatch and export
+behavior. The generated BUILD workflow runs on branch pushes, manual dispatch and export
 dispatch, not `pull_request`. Configure required status checks in repository policies; add
 PR-merge or merge-queue validation separately when required. Do not expose privileged
 credentials to untrusted PR code. See

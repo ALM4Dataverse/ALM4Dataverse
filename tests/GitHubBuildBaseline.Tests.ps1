@@ -188,3 +188,19 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         { Save-BaselineReleaseAsset -ReleaseTag 'first second' -DestinationPath $TestDrive } | Should -Throw '*single non-empty line*'
     }
 }
+Describe 'Shared template version validation for GitHub callers' {
+    BeforeAll {
+        $script:callerVersionValidator = Join-Path $repoRoot '.github/actions/common/validate-caller-version.ps1'
+    }
+
+    It 'accepts the current shared template version' {
+        { & $script:callerVersionValidator -ActualVersion '1' } | Should -Not -Throw
+    }
+
+    It 'rejects missing and stale versions with a regeneration instruction' {
+        { & $script:callerVersionValidator -ActualVersion '' } |
+            Should -Throw '*generated for shared template version*setup-github.ps1 -ApplyConfig*do not edit*'
+        { & $script:callerVersionValidator -ActualVersion '0' } |
+            Should -Throw '*generated for shared template version*setup-github.ps1 -ApplyConfig*do not edit*'
+    }
+}

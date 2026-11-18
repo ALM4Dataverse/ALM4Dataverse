@@ -1033,7 +1033,8 @@ function Initialize-GitHubApplicationRepositoryContext {
     param(
         [Parameter()][string]$TenantId,
         [Parameter()][switch]$ApplyConfig,
-        [Parameter()][switch]$ExistingSetupMode
+        [Parameter()][switch]$ExistingSetupMode,
+        [Parameter()][string]$RepoFullName
     )
 
     Write-Section -Message 'Select GitHub Repository'
@@ -1061,15 +1062,28 @@ function Initialize-GitHubApplicationRepositoryContext {
         $repoMenuActions += @{ Type = 'UseExisting'; Repo = $repo }
     }
 
-    $repoSelection = Select-FromMenu -Title 'Select the repository to set up ALM4Dataverse in' -Items $repoMenuItems -PromptGuidanceLines @(
-        'Choose the application repository that will store your solutions, ALM configuration, and caller workflows.'
-        'You do not need a separate repository for the shared workflow templates unless you maintain a fork.'
-    ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
-    if ($null -eq $repoSelection) {
-        Request-SetupWizardBack
+    $repoSelection = $null
+    if (-not [string]::IsNullOrWhiteSpace($RepoFullName)) {
+        # Headless repository selection: the caller supplies the repository so the
+        # guided setup menu is skipped.
+        $matchingRepos = @($repos | Where-Object { $_.nameWithOwner -ieq $RepoFullName })
+        if ($matchingRepos.Count -eq 0) {
+            throw "Repository '$RepoFullName' is not accessible with the authenticated account or does not exist."
+        }
+        $selectedRepo = $matchingRepos | Select-Object -First 1
+        $repoAction = @{ Type = 'UseExisting'; Repo = $selectedRepo }
     }
+    else {
+        $repoSelection = Select-FromMenu -Title 'Select the repository to set up ALM4Dataverse in' -Items $repoMenuItems -PromptGuidanceLines @(
+            'Choose the application repository that will store your solutions, ALM configuration, and caller workflows.'
+            'You do not need a separate repository for the shared workflow templates unless you maintain a fork.'
+        ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
+        if ($null -eq $repoSelection) {
+            Request-SetupWizardBack
+        }
 
-    $repoAction = $repoMenuActions[$repoSelection]
+        $repoAction = $repoMenuActions[$repoSelection]
+    }
     $isNewRepository = $repoAction.Type -eq 'CreateNew'
     if ($repoAction.Type -eq 'UseExisting') {
         $selectedRepo = $repoAction.Repo

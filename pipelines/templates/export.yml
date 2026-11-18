@@ -7,6 +7,11 @@ parameters:
 - name: useAlm4DataverseExtension
   type: boolean
   default: true
+# Version of the shared templates this caller was generated for. The first step
+# rejects stale caller files and instructs setup regeneration.
+- name: sharedTemplateVersion
+  type: string
+  default: ''
 # Secret names from the caller-attached development variable group to expose
 # to export scripts and hooks under the same name.
 - name: secretVariables
@@ -23,6 +28,11 @@ stages:
         displayName: 'Export'
         timeoutInMinutes: 360  # maximum allowed on Microsoft-hosted agents (free and paid)
         steps:
+        # Reject stale caller files before any checkout or connection work runs.
+        - template: steps/validate-shared-template-version.yml
+          parameters:
+            sharedTemplateVersion: ${{ parameters.sharedTemplateVersion }}
+
         - checkout: self
           persistCredentials: true
           fetchDepth: 1

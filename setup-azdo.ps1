@@ -28,6 +28,8 @@ changes and publish them without running the configuration editors.
 .PARAMETER PreviewOnly
 With ApplyConfig, display the generated change summary and select individual file
 diffs to view without publishing. Selected diffs are written without paging.
+Supplying AccessToken, OrganizationName, ProjectName and RepositoryName makes the
+run unattended (used by the APPLY-CONFIG caller's preview option).
 .EXAMPLE
 .\setup-azdo.ps1 -TenantId contoso.onmicrosoft.com -ALM4DataverseRef stable
 .EXAMPLE
@@ -36,7 +38,6 @@ diffs to view without publishing. Selected diffs are written without paging.
 .\setup-azdo.ps1 -ApplyConfig -PreviewOnly
 #>
 [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseDeviceAuthentication', Justification = 'Legacy installer switch retained for invocation compatibility; current authentication does not consume it.')]
-[Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Captured by the ordered setup authentication prerequisite.')]
 [CmdletBinding()]
 param(
     [Parameter()]
@@ -52,7 +53,22 @@ param(
     [switch]$ApplyConfig,
 
     [Parameter()]
-    [switch]$PreviewOnly
+    [switch]$PreviewOnly,
+
+    [Parameter()]
+    [switch]$Commit,
+
+    [Parameter()]
+    [string]$AccessToken,
+
+    [Parameter()]
+    [string]$OrganizationName,
+
+    [Parameter()]
+    [string]$ProjectName,
+
+    [Parameter()]
+    [string]$RepositoryName
 )
 
 $resolveDevRefAfterGitIsAvailable = $false
@@ -80,6 +96,22 @@ $ProgressPreference = 'SilentlyContinue' # Suppress progress bars
 if ($PreviewOnly -and -not $ApplyConfig) {
     throw 'PreviewOnly requires ApplyConfig.'
 }
+
+if ($Commit -and -not $ApplyConfig) {
+    throw 'Commit requires ApplyConfig.'
+}
+
+if ($Commit -and $PreviewOnly) {
+    throw 'Commit cannot be combined with PreviewOnly.'
+}
+
+if ($Commit -and (@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0) {
+    throw 'Commit requires AccessToken, OrganizationName, ProjectName and RepositoryName so setup can resolve resources without prompts.'
+}
+
+# Fully supplied resource parameters make ApplyConfig run unattended for Commit
+# and PreviewOnly (the apply-config caller uses this); without them, setup stays interactive.
+$headlessMode = ($Commit -or $PreviewOnly) -and $ApplyConfig -and -not (@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0
 
 # Release preparation embeds the ordered helper source into this installer.
 # Version numbers and the ALM4Dataverse ref are injected during release.
@@ -362,11 +394,31 @@ $startupSteps = @(
 )
 
 try {
-    Invoke-SetupWizard `
-        -Title 'Azure DevOps setup prerequisites' `
-        -Steps $startupSteps `
-        -HelpDocRelativePath 'docs/setup/azdo-automated-setup.md' `
-        -HelpRef $ALM4DataverseRef | Out-Null
+    if ($headlessMode) {
+        $authentication = Initialize-AzDoAuthentication -TenantId $TenantId -HeadlessAccessToken $AccessToken
+        $script:adoAuthResult = $authentication.AuthResult
+        $script:adoAccessToken = $authentication.AccessToken
+        $script:secureToken = $authentication.SecureToken
+        $organization = Initialize-AzDoOrganization -OrganizationName $OrganizationName
+        $script:orgName = $organization.Name
+        $script:orgUri = $organization.Uri
+        $script:initialization = Initialize-AzDoProjectAndRepository `
+            -ApplyConfig:$ApplyConfig `
+            -ExistingSetupMode:$existingSetupMode `
+            -SkipSharedRepositoryVersionUpdate `
+            -ProjectName $ProjectName `
+            -RepositoryName $RepositoryName
+        if (-not $script:initialization) {
+            throw 'Azure DevOps project and repository resolution failed in headless mode.'
+        }
+    }
+    else {
+        Invoke-SetupWizard `
+            -Title 'Azure DevOps setup prerequisites' `
+            -Steps $startupSteps `
+            -HelpDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -HelpRef $ALM4DataverseRef | Out-Null
+    }
 }
 catch {
     if ($_.Exception.Message -eq 'Setup cancelled before changes were applied.' -or (Test-IsSetupWizardBackException -Exception $_.Exception)) {
@@ -674,7 +726,8 @@ try {
         -PostApplyAction $postApplyAction `
         -ApplyConfig:$ApplyConfig `
         -IsNewRepository:$isNewRepository `
-        -PreviewOnly:$PreviewOnly
+        -PreviewOnly:$PreviewOnly `
+        -Commit:$Commit
 }
 catch {
     if (

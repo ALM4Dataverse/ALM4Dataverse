@@ -129,11 +129,13 @@ environment and from the environments in `DEPLOY-<branchname>`.
 >
 > Successful validation proves deployment completed, not that end-user behavior is correct.
 
-Automated setup wires the validation environment into BUILD. For manual
-configuration, Azure DevOps uses the `buildEnvironmentName` parameter in
-`pipelines/BUILD.yml`, with a matching Power Platform service connection and
-`Environment-<name>` variable group. GitHub Actions uses the same name for the
-BUILD job's GitHub `environment` and the action's `environment-name` input.
+Automated setup wires the validation environment into BUILD from the branch settings in
+`alm-config.psd1`. For manual
+configuration, set `branches.<branch>.buildValidation.environmentName` in
+`alm-config.psd1` to a matching Power Platform service connection and
+`Environment-<name>` variable group, then run `setup-azdo.ps1 -ApplyConfig`. GitHub
+Actions uses the same name for the BUILD job's GitHub `environment` and the action's
+`environment-name` input.
 The credentials and deployment settings must be available to that job. See
 [Azure DevOps setup](../setup/azdo-manual-setup.md) and
 [GitHub setup](../setup/github-setup.md).

@@ -1,5 +1,6 @@
 @{
     Common = @(
+        'common/shared-template-version.ps1'
         'common/console-runtime-and-rendering.ps1'
         'common/file-change-review.ps1'
         'common/wizard-context-and-flow.ps1'

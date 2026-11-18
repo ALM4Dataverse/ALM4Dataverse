@@ -171,7 +171,8 @@ function Select-AzDoMainRepository {
         [Parameter(Mandatory)][string]$ProjectName,
         [Parameter()][string]$SharedRepositoryName,
         [Parameter()][switch]$ExistingOnly,
-        [Parameter()][switch]$ApplyConfig
+        [Parameter()][switch]$ApplyConfig,
+        [Parameter()][string]$RepositoryName
     )
 
     Write-Section `
@@ -197,14 +198,26 @@ function Select-AzDoMainRepository {
 
     Write-Host "Select the repository where you want to set up pipelines:" -ForegroundColor Green
 
-    $selectedIndex = Select-FromMenu `
-        -Title "Select the main repository" `
-        -Items $menu `
-        -PromptGuidanceLines @(
-            'Choose the primary application repository where your solutions and other assets will be stored.'
-        ) `
-        -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
-        -PromptGuidanceRef $ALM4DataverseRef
+    $selectedIndex = $null
+    if (-not [string]::IsNullOrWhiteSpace($RepositoryName)) {
+        # Headless repository selection: the caller supplies the repository so the
+        # guided setup menu is skipped.
+        $matchingRepoIndexes = @(0..($repoNames.Count - 1) | Where-Object { $repoNames[$_] -ieq $RepositoryName })
+        if ($matchingRepoIndexes.Count -eq 0) {
+            throw "Repository '$RepositoryName' does not exist in project '$ProjectName' or is not selectable."
+        }
+        $selectedIndex = $matchingRepoIndexes | Select-Object -First 1
+    }
+    else {
+        $selectedIndex = Select-FromMenu `
+            -Title "Select the main repository" `
+            -Items $menu `
+            -PromptGuidanceLines @(
+                'Choose the primary application repository where your solutions and other assets will be stored.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+    }
     if ($null -eq $selectedIndex) {
         throw "No main repository selected."
     }
@@ -525,27 +538,23 @@ function Get-AzDoCallerSecretVariableBlock {
 function Sync-CopyToYourRepoIntoGitRepo {
     <#
     .SYNOPSIS
-    Copies the scaffold into a working tree, adapting branch, repository and extension references.
+    Copies the scaffold into a working tree.
     .NOTES
-    Overwrites differing scaffold files but preserves existing alm-config.psd1 for the
-    later merge, existing application-owned files (AGENTS.md and data/), and existing
-    BUILD/DEPLOY-Branch callers, which the BUILD and DEPLOY updaters regenerate
-    afterwards without discarding their custom parameters. EXPORT and IMPORT are
-    refreshed from the scaffold but keep an existing template-level secretVariables
-    block. Every pipeline caller's repository resource is renamed to
-    SharedRepositoryName. DEPLOY-main becomes DEPLOY-Branch; extension false selects the
-    fallback. Obsolete .template companions are removed for existing destinations.
+    Pipeline callers generated from alm-config.psd1 (pipelines/BUILD.yml,
+    DEPLOY-{branch}.yml, EXPORT.yml and IMPORT.yml) are skipped here. The static
+    APPLY-CONFIG.yml caller is copied and its shared repository name and ref are
+    rewritten to the selected values. Overwrites differing scaffold files but
+    preserves existing alm-config.psd1 for the later merge and existing
+    application-owned files (AGENTS.md and data/). Obsolete .template companions are
+    removed for existing destinations.
     Does not commit.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$SourceRoot,
         [Parameter(Mandatory)][string]$TargetRoot,
-        [Parameter(Mandatory)][string]$RepositoryName,
-        [Parameter(Mandatory)][string]$SharedRepositoryName,
-        [Parameter()][string]$SharedRepositoryRef = 'main',
-        [Parameter(Mandatory)][string]$Branch,
-        [Parameter()][bool]$UseAlm4DataverseExtension = $true
+        [Parameter()][string]$SharedRepositoryName,
+        [Parameter()][string]$SharedRepositoryRef = 'main'
     )
 
     if (-not (Test-Path -LiteralPath $SourceRoot)) {
@@ -564,6 +573,10 @@ function Sync-CopyToYourRepoIntoGitRepo {
         $normalizedRelativePath = $relativePath -replace '\\', '/'
         $destPath = Join-Path $TargetRoot $relativePath
 
+        if ($normalizedRelativePath -in @('pipelines/BUILD.yml', 'pipelines/DEPLOY-main.yml', 'pipelines/EXPORT.yml', 'pipelines/IMPORT.yml')) {
+            continue
+        }
+
         if ($normalizedRelativePath -eq 'alm-config.psd1' -and (Test-Path -LiteralPath $destPath)) {
             if (Test-Path -LiteralPath "$destPath.template") {
                 Remove-Item -LiteralPath "$destPath.template" -Force
@@ -578,13 +591,6 @@ function Sync-CopyToYourRepoIntoGitRepo {
             continue
         }
 
-        if ($normalizedRelativePath -eq 'pipelines/DEPLOY-main.yml') {
-            $destPath = Join-Path $TargetRoot "pipelines/DEPLOY-$Branch.yml"
-        }
-        if ($normalizedRelativePath -in @('pipelines/BUILD.yml', 'pipelines/DEPLOY-main.yml') -and (Test-Path -LiteralPath $destPath)) {
-            continue
-        }
-
         $destDir = Split-Path -Parent $destPath
         if (-not (Test-Path -LiteralPath $destDir)) {
             New-Item -ItemType Directory -Path $destDir -Force | Out-Null
@@ -593,65 +599,21 @@ function Sync-CopyToYourRepoIntoGitRepo {
         $sourceFileToUse = $file.FullName
         $isTempFile = $false
 
-        if ($normalizedRelativePath -eq 'pipelines/DEPLOY-main.yml') {
-
+        if ($normalizedRelativePath -eq 'pipelines/APPLY-CONFIG.yml') {
             $content = Get-Content -LiteralPath $file.FullName -Raw
-            $content = $content -replace "source: 'BUILD'", "source: '$RepositoryName\BUILD'"
-            $content = $content -replace "- main", "- $Branch"
-            $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse\s*$', "`${1}$SharedRepositoryName"
-            if (-not $UseAlm4DataverseExtension) {
-                $content = $content -replace '(?m)^(\s*#?\s*useAlm4DataverseExtension:\s*)true\s*$', '${1}false'
+            if (-not [string]::IsNullOrWhiteSpace($SharedRepositoryName)) {
+                $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse\s*$', "`${1}$SharedRepositoryName"
             }
-
-            $tempFile = [System.IO.Path]::GetTempFileName()
-            $content | Set-Content -LiteralPath $tempFile -NoNewline
-            $sourceFileToUse = $tempFile
-            $isTempFile = $true
-        }
-        elseif ($normalizedRelativePath -in @('pipelines/EXPORT.yml', 'pipelines/IMPORT.yml')) {
-            $content = Get-Content -LiteralPath $file.FullName -Raw
-            if (-not $UseAlm4DataverseExtension) {
-                $content = $content -replace '(?m)^(\s*useAlm4DataverseExtension:\s*)true\s*$', '${1}false'
-            }
-            $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse\s*$', "`${1}$SharedRepositoryName"
-            $secretVariableBlock = Get-AzDoCallerSecretVariableBlock -Path $destPath
-            if ($secretVariableBlock) {
-                $content = $content.TrimEnd("`r", "`n") + [Environment]::NewLine + $secretVariableBlock + [Environment]::NewLine
-            }
-
-            $tempFile = [System.IO.Path]::GetTempFileName()
-            $content | Set-Content -LiteralPath $tempFile -NoNewline
-            $sourceFileToUse = $tempFile
-            $isTempFile = $true
-        }
-        elseif ($normalizedRelativePath -eq 'pipelines/BUILD.yml') {
-            $content = Get-Content -LiteralPath $file.FullName -Raw
-            $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse\s*$', "`${1}$SharedRepositoryName"
-
-            $tempFile = [System.IO.Path]::GetTempFileName()
-            $content | Set-Content -LiteralPath $tempFile -NoNewline
-            $sourceFileToUse = $tempFile
-            $isTempFile = $true
-        }
-
-        if ($normalizedRelativePath -in @('pipelines/BUILD.yml', 'pipelines/EXPORT.yml', 'pipelines/IMPORT.yml', 'pipelines/DEPLOY-main.yml')) {
-            $content = [System.IO.File]::ReadAllText($sourceFileToUse)
             $escapedRef = ([string]$SharedRepositoryRef).Replace("'", "''")
-            $updatedContent = [regex]::Replace($content, '(?m)^(?<indent>\s*ref:\s*)[^\r\n]*$', {
+            $content = [regex]::Replace($content, '(?m)^(?<indent>\s*ref:\s*)[^\r\n]*$', {
                 param($match)
                 return $match.Groups['indent'].Value + "'refs/heads/$escapedRef'"
             })
-            if ($updatedContent -cne $content) {
-                if ($isTempFile) {
-                    Set-Content -LiteralPath $sourceFileToUse -Value $updatedContent -NoNewline
-                }
-                else {
-                    $tempFile = [System.IO.Path]::GetTempFileName()
-                    Set-Content -LiteralPath $tempFile -Value $updatedContent -NoNewline
-                    $sourceFileToUse = $tempFile
-                    $isTempFile = $true
-                }
-            }
+
+            $tempFile = [System.IO.Path]::GetTempFileName()
+            $content | Set-Content -LiteralPath $tempFile -NoNewline
+            $sourceFileToUse = $tempFile
+            $isTempFile = $true
         }
 
         try {
