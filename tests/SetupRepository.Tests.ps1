@@ -1683,12 +1683,19 @@ resources:
     It 'copies the static APPLY-CONFIG workflow and rewrites the shared action reference' {
         if ($Provider -ne 'GitHub') { Set-ItResult -Skipped -Because 'GitHub scaffold only'; return }
         New-Item -ItemType Directory -Path (Join-Path $script:scaffoldSource '.github/workflows') -Force | Out-Null
-        Set-Content -LiteralPath (Join-Path $script:scaffoldSource '.github/workflows/APPLY-CONFIG.yml') -Value 'uses: ALM4Dataverse/ALM4Dataverse/.github/actions/apply-config@main'
+        Set-Content -LiteralPath (Join-Path $script:scaffoldSource '.github/workflows/APPLY-CONFIG.yml') -Value @"
+        uses: ALM4Dataverse/ALM4Dataverse/.github/actions/apply-config@main
+        with:
+          shared-repository: ALM4Dataverse/ALM4Dataverse
+          shared-ref: main
+"@
 
         Copy-WorkflowTemplatesToRepo -SourceRoot $script:scaffoldSource -TargetRoot $script:scaffoldTarget -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
 
-        Get-Content -LiteralPath (Join-Path $script:scaffoldTarget '.github/workflows/APPLY-CONFIG.yml') -Raw |
-            Should -Match 'uses: owner/shared/.github/actions/apply-config@stable'
+        $content = Get-Content -LiteralPath (Join-Path $script:scaffoldTarget '.github/workflows/APPLY-CONFIG.yml') -Raw
+        $content | Should -Match 'uses: owner/shared/.github/actions/apply-config@stable'
+        $content | Should -Match 'shared-repository: owner/shared'
+        $content | Should -Match 'shared-ref: stable'
     }
 
     It 'resolves the repository headlessly for the apply-config caller' {

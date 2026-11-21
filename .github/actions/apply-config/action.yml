@@ -16,6 +16,12 @@ inputs:
     description: When true, shows the changes that would be committed without pushing them.
     required: false
     default: 'false'
+  shared-repository:
+    description: Shared ALM4Dataverse repository that contains this action and the setup source.
+    required: true
+  shared-ref:
+    description: Shared ALM4Dataverse ref to check out for the setup source.
+    required: true
 
 runs:
   using: composite
@@ -31,8 +37,8 @@ runs:
     - name: Checkout shared ALM4Dataverse source
       uses: actions/checkout@v4
       with:
-        repository: ${{ github.action_repository }}
-        ref: ${{ github.action_ref }}
+        repository: ${{ inputs.shared-repository }}
+        ref: ${{ inputs.shared-ref }}
         path: shared
 
     - name: Apply configuration and commit changes

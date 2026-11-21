@@ -81,6 +81,19 @@ function Copy-WorkflowTemplatesToRepo {
                     return "$SharedWorkflowRepository/.github/actions/$($m.Groups[1].Value)@$SharedWorkflowRef"
                 }
             )
+            # The apply-config action checks out the shared setup source explicitly.
+            # GitHub does not expose a stable action repository/ref inside a composite
+            # step, so the scaffold carries them as inputs.
+            if ($normalizedRelativePath -eq '.github/workflows/APPLY-CONFIG.yml') {
+                $updatedContent = [regex]::Replace($updatedContent, '(?m)^(?<indent>\s*shared-repository:\s*)[^\r\n]*(?=\r?$)', {
+                    param($match)
+                    return $match.Groups['indent'].Value + $SharedWorkflowRepository
+                })
+                $updatedContent = [regex]::Replace($updatedContent, '(?m)^(?<indent>\s*shared-ref:\s*)[^\r\n]*(?=\r?$)', {
+                    param($match)
+                    return $match.Groups['indent'].Value + $SharedWorkflowRef
+                })
+            }
 
             if ($updatedContent -ne $content) {
                 if ($isTempFile) {
