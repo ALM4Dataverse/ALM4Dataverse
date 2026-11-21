@@ -579,6 +579,7 @@ function Show-SetupChangeReview {
     .DESCRIPTION
         Resource changes describe deferred external mutations and must not contain secrets.
         PreviewOnly uses the same file picker but writes each selected file diff without paging.
+        SkipReview prints only the summaries, for unattended ApplyConfig previews.
         All changed files, including alm-config.psd1, use the same status-labeled choices;
         Done reviewing is a separate action.
         SummaryAction runs synchronously in the caller's scope so it can resolve setup
@@ -590,13 +591,19 @@ function Show-SetupChangeReview {
         [Parameter()][AllowEmptyCollection()][object[]]$ResourceChanges = @(),
         [Parameter()][string]$ResourceChangeNote = 'Resources already provisioned earlier to support setup are excluded.',
         [Parameter(Mandatory)][scriptblock]$SummaryAction,
-        [Parameter()][switch]$PreviewOnly
+        [Parameter()][switch]$PreviewOnly,
+        [Parameter()][switch]$SkipReview
     )
 
     while ($true) {
     & $SummaryAction
     Show-SetupResourceChangeSummary -ResourceChanges $ResourceChanges -Note $ResourceChangeNote
     Show-SetupFileChangeSummary -FileChanges $FileChanges
+    if ($SkipReview) {
+        # Headless previews have no terminal for the interactive diff picker; the
+        # summaries above are the complete unattended output.
+        return
+    }
     $repositoryFileChanges = @($FileChanges | Sort-Object Path -CaseSensitive)
     $reviewMenuItems = [System.Collections.Generic.List[string]]::new()
     foreach ($change in $repositoryFileChanges) {

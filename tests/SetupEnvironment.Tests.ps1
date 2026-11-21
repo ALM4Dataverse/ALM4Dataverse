@@ -309,17 +309,19 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
 
     Context 'Deployment environment editor callbacks' {
         BeforeEach {
-            $script:previousGlobalReadTextWithDefault = Get-Item -Path 'Function:\global:Read-TextWithDefault' -ErrorAction SilentlyContinue
-            $script:previousGlobalWizardBack = Get-Item -Path 'Function:\global:Request-SetupWizardBack' -ErrorAction SilentlyContinue
-            Set-Item -Path 'Function:\global:Read-TextWithDefault' -Value {
-                [CmdletBinding()]
-                param($Prompt, $DefaultValue, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
-                $null = @($Prompt, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
-                if ($DefaultValue) { return $DefaultValue }
-                return 'TEST'
-            }
-            Set-Item -Path 'Function:\global:Request-SetupWizardBack' -Value {
-                throw [System.InvalidOperationException]::new('__ALM4DATAVERSE_WIZARD_BACK__')
+            # The callbacks bind these commands before creating nested closures, so
+            # replace the bound bodies rather than the live functions.
+            Set-Variable -Name SetupCommandBindingOverrides -Scope Global -Value @{
+                'Read-TextWithDefault' = {
+                    [CmdletBinding()]
+                    param($Prompt, $DefaultValue, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                    $null = @($Prompt, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                    if ($DefaultValue) { return $DefaultValue }
+                    return 'TEST'
+                }
+                'Request-SetupWizardBack' = {
+                    throw [System.InvalidOperationException]::new('__ALM4DATAVERSE_WIZARD_BACK__')
+                }
             }
             $script:targetConfiguration = [pscustomobject]@{ ShortName = 'TEST'; FriendlyName = 'Test'; Url = 'https://test.example.com'; Credentials = $script:environmentCredential; ServiceAccountUPN = 'service@example.com' }
             Mock Select-DataverseEnvironment { [pscustomobject]@{ FriendlyName = 'Test'; Endpoints = @{ WebApplication = 'https://test.example.com/' } } }
@@ -384,18 +386,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
         }
 
         AfterEach {
-            if ($null -eq $script:previousGlobalReadTextWithDefault) {
-                Remove-Item -Path 'Function:\global:Read-TextWithDefault' -ErrorAction SilentlyContinue
-            }
-            else {
-                Set-Item -Path 'Function:\global:Read-TextWithDefault' -Value $script:previousGlobalReadTextWithDefault.ScriptBlock
-            }
-            if ($null -eq $script:previousGlobalWizardBack) {
-                Remove-Item -Path 'Function:\global:Request-SetupWizardBack' -ErrorAction SilentlyContinue
-            }
-            else {
-                Set-Item -Path 'Function:\global:Request-SetupWizardBack' -Value $script:previousGlobalWizardBack.ScriptBlock
-            }
+            Remove-Variable -Name SetupCommandBindingOverrides -Scope Global -ErrorAction SilentlyContinue
         }
 
         It 'returns normalized environment configuration with reused credentials and ownership' {

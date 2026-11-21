@@ -1,4 +1,4 @@
-function Read-SecretText {
+﻿function Read-SecretText {
     <#
     .SYNOPSIS
         Reads masked input and returns its plaintext string.
@@ -224,7 +224,8 @@ function Select-FromMenu {
 
         $prompt.PageSize = [Math]::Min([Math]::Max($displayItemCount, 1), $availableMenuRows)
 
-        if ($effectiveItems.Count -gt 8) {
+        $searchEnabled = $effectiveItems.Count -gt 8
+        if ($searchEnabled) {
             $prompt.SearchEnabled = $true
             $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
         }
@@ -234,6 +235,12 @@ function Select-FromMenu {
         $actionDisplayItems = @()
         foreach ($item in $effectiveItems) {
             $displayItem = [string](ConvertTo-SpectreMarkupLiteral -Text $item)
+            if ($searchEnabled) {
+                # Spectre's search highlight rebuilds choice markup without restoring
+                # escaped brackets, turning them into style tags that abort the prompt.
+                # Full-width look-alikes keep literal brackets readable and safe.
+                $displayItem = $displayItem.Replace('[[', '［').Replace(']]', '］')
+            }
             if ($DimItems -contains $item) {
                 $displayItem = "[grey]$displayItem[/]"
             }

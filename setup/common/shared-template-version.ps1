@@ -14,5 +14,5 @@ function Get-AlmSharedTemplateVersion {
     [OutputType([string])]
     param()
 
-    return '1'
+    return '2'
 }

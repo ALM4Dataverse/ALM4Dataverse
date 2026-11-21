@@ -185,9 +185,18 @@ function Invoke-AzDoEnvironmentConfigurationWizard {
         [Parameter()][string]$HelpRef
     )
 
+    # Resolve commands before creating the closures below. A closure created inside
+    # this function cannot resolve sibling setup functions at invocation time when
+    # the function itself was reached through another closure, so bind the bodies
+    # here and invoke those script blocks directly.
+    $selectDataverseEnvironmentCommand = Get-SetupCommandBinding -Name Select-DataverseEnvironment
+    $normalizeEnvironmentUrlCommand = Get-SetupCommandBinding -Name ConvertTo-NormalizedEnvironmentUrl
+    $selectCredentialsCommand = Get-SetupCommandBinding -Name Get-PowerPlatformSCCredential
+    $selectServiceAccountCommand = Get-SetupCommandBinding -Name Get-DataverseServiceAccountUPN
+
     $selectDataverseEnvironment = {
         param($environmentState)
-        $selectedEnvironment = Select-DataverseEnvironment `
+        $selectedEnvironment = & $selectDataverseEnvironmentCommand `
             -Prompt $DataverseEnvironmentPrompt `
             -ExcludeUrl $ExcludedUrl `
             -PreferredUrl $environmentState.Url `
@@ -200,12 +209,12 @@ function Invoke-AzDoEnvironmentConfigurationWizard {
 
         return [pscustomobject]@{
             FriendlyName = [string]$selectedEnvironment.FriendlyName
-            Url = ConvertTo-NormalizedEnvironmentUrl -Url ([string]$selectedEnvironment.Endpoints['WebApplication'])
+            Url = & $normalizeEnvironmentUrlCommand -Url ([string]$selectedEnvironment.Endpoints['WebApplication'])
         }
     }.GetNewClosure()
     $selectCredentials = {
         param($environmentState)
-        Get-PowerPlatformSCCredential `
+        & $selectCredentialsCommand `
             -ExistingCredentials $ExistingCredentials `
             -TenantId $TenantId `
             -ProjectName $ProjectName `
@@ -215,7 +224,7 @@ function Invoke-AzDoEnvironmentConfigurationWizard {
     }.GetNewClosure()
     $selectServiceAccount = {
         param($environmentState)
-        Get-DataverseServiceAccountUPN `
+        & $selectServiceAccountCommand `
             -ExistingServiceAccounts $ExistingServiceAccounts `
             -EnvironmentName $environmentState.ShortName `
             -ExistingValue $environmentState.ServiceAccountUPN
@@ -291,6 +300,10 @@ function Get-DataverseEnvironmentsSelection {
         [Parameter()][string]$InitialEditEnvironmentName
     )
 
+    # Bind commands now: closures created below cannot resolve sibling setup functions at invocation time.
+    $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+    $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+
     $selectedEnvironments = @($InitialEnvironments | Where-Object { $null -ne $_ })
     $credentialsForReuse = @($ExistingCredentials | Where-Object { $null -ne $_ })
     $serviceAccountsForReuse = @($ExistingServiceAccounts)
@@ -351,6 +364,10 @@ function Get-DataverseEnvironmentsSelection {
         -AddEnvironmentScriptBlock {
             param($currentSelections)
 
+            # Inner closures can only capture this callback's locals, so resolve the
+            # commands here instead of relying on the enclosing function's variables.
+            $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+            $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
             $currentCredentials = @($ExistingCredentials)
             $currentCredentials += @($currentSelections | ForEach-Object { $_.Credentials } | Where-Object { $null -ne $_ })
             $currentServiceAccounts = @($ExistingServiceAccounts)
@@ -358,7 +375,7 @@ function Get-DataverseEnvironmentsSelection {
 
             $selectTargetName = {
                 param($environmentState)
-                $shortName = Read-TextWithDefault `
+                $shortName = & $readTextWithDefaultCommand `
                     -Prompt 'Enter a short name for this environment' `
                     -DefaultValue $environmentState.ShortName `
                     -PromptGuidanceLines @(
@@ -369,15 +386,15 @@ function Get-DataverseEnvironmentsSelection {
                     -PromptGuidanceRef $ALM4DataverseRef
                 if ([string]::IsNullOrWhiteSpace($shortName)) {
                     [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 if ($currentSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
                     Write-Host "An environment with Url '$($environmentState.Url)' is already selected." -ForegroundColor Red
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 if ($currentSelections | Where-Object { $_.ShortName -ieq $shortName }) {
                     Write-Host "An environment with short name '$shortName' is already selected (case-insensitive match)." -ForegroundColor Red
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
 
                 return $shortName
@@ -407,6 +424,10 @@ function Get-DataverseEnvironmentsSelection {
         -EditEnvironmentScriptBlock {
             param($currentSelections, $environmentToEdit, $environmentIndex)
 
+            # Inner closures can only capture this callback's locals, so resolve the
+            # commands here instead of relying on the enclosing function's variables.
+            $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+            $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
             $otherSelections = @()
             for ($selectionIndex = 0; $selectionIndex -lt $currentSelections.Count; $selectionIndex++) {
                 if ($selectionIndex -ne $environmentIndex) {
@@ -421,7 +442,7 @@ function Get-DataverseEnvironmentsSelection {
 
             $selectTargetName = {
                 param($environmentState)
-                $shortName = Read-TextWithDefault `
+                $shortName = & $readTextWithDefaultCommand `
                     -Prompt 'Enter a short name for this environment' `
                     -DefaultValue $environmentState.ShortName `
                     -PromptGuidanceLines @(
@@ -432,15 +453,15 @@ function Get-DataverseEnvironmentsSelection {
                     -PromptGuidanceRef $ALM4DataverseRef
                 if ([string]::IsNullOrWhiteSpace($shortName)) {
                     [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 if ($otherSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
                     Write-Host "An environment with Url '$($environmentState.Url)' is already selected." -ForegroundColor Red
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 if ($otherSelections | Where-Object { $_.ShortName -ieq $shortName }) {
                     Write-Host "An environment with short name '$shortName' is already selected (case-insensitive match)." -ForegroundColor Red
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
 
                 return $shortName
@@ -495,7 +516,7 @@ function Get-DataverseEnvironmentsSelection {
             }
             $selectTargetName = {
                 param($environmentState)
-                $shortName = Read-TextWithDefault `
+                $shortName = & $readTextWithDefaultCommand `
                     -Prompt 'Enter a short name for this environment' `
                     -DefaultValue $environmentState.ShortName `
                     -PromptGuidanceLines @(
@@ -506,15 +527,15 @@ function Get-DataverseEnvironmentsSelection {
                     -PromptGuidanceRef $ALM4DataverseRef
                 if ([string]::IsNullOrWhiteSpace($shortName)) {
                     [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 if ($otherSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
                     Write-Host "An environment with Url '$($environmentState.Url)' is already selected." -ForegroundColor Red
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 if ($otherSelections | Where-Object { $_.ShortName -ieq $shortName }) {
                     Write-Host "An environment with short name '$shortName' is already selected (case-insensitive match)." -ForegroundColor Red
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
 
                 return $shortName

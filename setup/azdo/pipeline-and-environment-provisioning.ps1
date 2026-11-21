@@ -266,7 +266,8 @@ function Initialize-AzDoYamlPipelineDefinition {
         [Parameter(Mandatory)][string]$YamlPath,
         [Parameter(Mandatory)][string]$DefinitionBranch,
         [Parameter(Mandatory)][int]$QueueId,
-        [Parameter()][string]$FolderPath = '\'
+        [Parameter()][string]$FolderPath = '\',
+        [Parameter()][string]$LegacyDefinitionName = ''
     )
 
     $YamlPath = $YamlPath.TrimStart('/')
@@ -287,8 +288,25 @@ function Initialize-AzDoYamlPipelineDefinition {
 
     $definitionBranchRef = "refs/heads/$normalizedDefinitionBranch"
 
-    $existing = @(Get-VSTeamBuildDefinition -ProjectName $Project) | Where-Object { $_.name -eq $DefinitionName -and $_.path -eq $FolderPath }
+    $allDefinitions = @(Get-VSTeamBuildDefinition -ProjectName $Project)
+    $existing = @($allDefinitions | Where-Object { $_.name -eq $DefinitionName -and $_.path -eq $FolderPath })
     $def = $existing | Select-Object -First 1
+    if (-not $def -and -not [string]::IsNullOrWhiteSpace($LegacyDefinitionName) -and $LegacyDefinitionName -ne $DefinitionName) {
+        # Adopt a pipeline created before names were qualified with the repository
+        # name, so multi-application projects do not accumulate duplicate BUILD and
+        # EXPORT definitions that make pipeline resource references ambiguous.
+        $def = $allDefinitions |
+            Where-Object {
+                $_.name -eq $LegacyDefinitionName -and
+                $_.path -eq $FolderPath -and
+                $_.repository -and
+                [string]$_.repository.id -eq [string]$Repository.Id
+            } |
+            Select-Object -First 1
+        if ($def) {
+            Write-Host "Renaming pipeline '$LegacyDefinitionName' to '$DefinitionName'..." -ForegroundColor Yellow
+        }
+    }
 
     if (-not $def) {
         Write-Host "Creating pipeline '$DefinitionName' (YAML: $YamlPath)..." -ForegroundColor Yellow
@@ -359,6 +377,7 @@ function Initialize-AzDoYamlPipelineDefinition {
 
     Write-Host "Updating pipeline '$DefinitionName' to point at '$YamlPath'..." -ForegroundColor Yellow
 
+    $def.name = $DefinitionName
     $def.repository.name = $Repository.Name
     $def.repository.id = $Repository.Id
     $def.repository.defaultBranch = $definitionBranchRef
@@ -370,9 +389,35 @@ function Initialize-AzDoYamlPipelineDefinition {
     Write-Host "Updated pipeline '$DefinitionName'."
 }
 
+function Get-AzDoPipelineDefinitionName {
+    <#
+    .SYNOPSIS
+    Returns the repository-qualified pipeline definition name.
+    .DESCRIPTION
+    Several application repositories can share one Azure DevOps project. Pipeline
+    resource triggers resolve a resource by definition name, so BUILD, EXPORT and
+    DEPLOY names must be unique per repository.
+    .OUTPUTS
+    System.String
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][AllowEmptyString()][string]$RepositoryName = '',
+        [Parameter(Mandatory)][string]$PipelineName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RepositoryName)) {
+        return $PipelineName
+    }
+
+    return "$RepositoryName-$PipelineName"
+}
+
 function Initialize-AzDoMainRepositoryPipeline {
-    # Registers filenames as pipeline names; only DEPLOY-<branch>.yml uses its suffix
-    # as the definition branch. Other YAML uses the repository default (or main).
+    # Qualifies filenames with the repository name so pipeline resources stay unique
+    # across applications; only DEPLOY-<branch>.yml uses its suffix as the definition
+    # branch. Other YAML uses the repository default (or main).
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Project,
@@ -399,7 +444,11 @@ function Initialize-AzDoMainRepositoryPipeline {
             $definitionBranchName = [string]$Matches[1]
         }
 
-        Initialize-AzDoYamlPipelineDefinition  -Project $Project -Repository $Repository -DefinitionName $name -YamlPath $yaml -DefinitionBranch $definitionBranchName -QueueId $queueId -FolderPath $FolderPath
+        # Qualify pipeline names with the repository because a project can host
+        # several application repositories; duplicate BUILD names make the DEPLOY
+        # pipeline resource reference ambiguous and stop completion triggers firing.
+        $definitionName = Get-AzDoPipelineDefinitionName -RepositoryName $Repository.Name -PipelineName $name
+        Initialize-AzDoYamlPipelineDefinition -Project $Project -Repository $Repository -DefinitionName $definitionName -LegacyDefinitionName $name -YamlPath $yaml -DefinitionBranch $definitionBranchName -QueueId $queueId -FolderPath $FolderPath
     }
 }
 

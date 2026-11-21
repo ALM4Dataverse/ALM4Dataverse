@@ -898,6 +898,7 @@ try {
         -ApplyConfig:$ApplyConfig `
         -IsNewRepository:$isNewRepository `
         -PreviewOnly:$PreviewOnly `
+        -SkipChangeReview:$headlessMode `
         -Commit:$Commit `
         -UseRepositoryVariablePrefix $useRepositoryVariablePrefix `
         -EnableEnvironmentApprovals $enableEnvironmentApprovals `

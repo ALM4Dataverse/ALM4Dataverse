@@ -12,8 +12,8 @@ steps:
 - pwsh: |
     $ErrorActionPreference = 'Stop'
     $actualVersion = $env:ALM_SHARED_TEMPLATE_VERSION
-    if ($actualVersion -ne '1') {
-      throw "This pipeline was generated for shared template version '$actualVersion', but the ALM4Dataverse templates it references require version '1'. Re-run setup from the shared repository ref this pipeline references (guided setup or setup-azdo.ps1 -ApplyConfig) to regenerate this file; do not edit it by hand."
+    if ($actualVersion -ne '2') {
+      throw "This pipeline was generated for shared template version '$actualVersion', but the ALM4Dataverse templates it references require version '2'. Re-run setup from the shared repository ref this pipeline references (guided setup or setup-azdo.ps1 -ApplyConfig) to regenerate this file; do not edit it by hand."
     }
   displayName: 'Validate ALM4Dataverse shared template version'
   env:

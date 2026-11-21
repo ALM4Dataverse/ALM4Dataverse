@@ -31,13 +31,14 @@ function Invoke-AzDoBranchAwareSetup {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectedProject', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'OrganizationName', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Captured by the nested wizard actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SkipChangeReview', Justification = 'Captured by the nested change-review action.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$MainRepoWorkingRoot,
         [Parameter(Mandatory)][object]$MainRepo,
         [Parameter(Mandatory)][object]$SelectedProject,
         [Parameter(Mandatory)][string]$OrganizationName,
-        [Parameter(Mandatory)][string]$TenantId,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$TenantId,
         [Parameter(Mandatory)][string]$DefaultBranch,
         [Parameter(Mandatory)][string]$AccessToken,
         [Parameter(Mandatory)][string]$CopyRoot,
@@ -52,9 +53,15 @@ function Invoke-AzDoBranchAwareSetup {
         [Parameter()][switch]$ApplyConfig,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$PreviewOnly,
+        [Parameter()][switch]$SkipChangeReview,
         [Parameter()][switch]$Commit,
         [Parameter()][System.Collections.IDictionary]$SharedRepositoryState
     )
+
+    # Bind commands now: closures created below cannot resolve sibling setup functions at invocation time.
+    $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+    $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+    $selectBuildValidationBaselineEnvironmentCommand = Get-SetupCommandBinding -Name Select-BuildValidationBaselineEnvironment
 
     if ($null -eq $SharedRepositoryState) {
         $SharedRepositoryState = [ordered]@{
@@ -73,6 +80,7 @@ function Invoke-AzDoBranchAwareSetup {
             -ProjectName $SelectedProject.Name `
             -DefaultBranch $DefaultBranch `
             -TenantId $TenantId `
+            -RepositoryId ([string](Get-OptionalObjectPropertyValue -InputObject $MainRepo -PropertyName 'Id')) `
             -SkipProviderState:$ApplyConfig
     }
 
@@ -256,6 +264,10 @@ function Invoke-AzDoBranchAwareSetup {
                     -EditBuildValidationScriptBlock {
                         param($allMappings, $mappingToEdit, $environmentNameToEdit)
 
+                        $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+                        $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+                        $selectBuildValidationBaselineEnvironmentCommand = Get-SetupCommandBinding -Name Select-BuildValidationBaselineEnvironment
+
                         $branchName = [string]$mappingToEdit.BranchName
                         Write-Section -Message "BUILD validation for branch '$branchName'"
                         $buildValidationGuidanceLines = @(
@@ -299,7 +311,7 @@ function Invoke-AzDoBranchAwareSetup {
 
                         $selectTargetName = {
                             param($environmentState)
-                            $environmentName = Read-TextWithDefault `
+                            $environmentName = & $readTextWithDefaultCommand `
                                 -Prompt "Enter the Azure DevOps service connection name for BUILD validation on branch '$branchName'" `
                                 -DefaultValue $environmentState.ShortName `
                                 -PromptGuidanceLines @(
@@ -310,7 +322,7 @@ function Invoke-AzDoBranchAwareSetup {
                                 -PromptGuidanceRef $ALM4DataverseRef
                             if ([string]::IsNullOrWhiteSpace($environmentName)) {
                                 [Spectre.Console.AnsiConsole]::MarkupLine('[red]A service connection name is required for BUILD validation.[/]')
-                                Request-SetupWizardBack
+                                & $requestSetupWizardBackCommand
                             }
                             return $environmentName.Trim()
                         }.GetNewClosure()
@@ -325,7 +337,7 @@ function Invoke-AzDoBranchAwareSetup {
                             if ([bool]$environmentState.BaselineConfigured) {
                                 $baselineParameters['CurrentBaselineRelease'] = [string]$environmentState.BaselineRelease
                             }
-                            Select-BuildValidationBaselineEnvironment @baselineParameters
+                            & $selectBuildValidationBaselineEnvironmentCommand @baselineParameters
                         }.GetNewClosure()
                         $buildValidationConfiguration = Invoke-WithErrorHandling -OperationName "Configuring BUILD validation for branch '$branchName'" -ScriptBlock {
                             Invoke-AzDoEnvironmentConfigurationWizard `
@@ -536,7 +548,8 @@ function Invoke-AzDoBranchAwareSetup {
                     -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
                     -BranchStates @($wizardState.BranchStates) `
                     -ProviderOptions $ProviderOptions `
-                    -SolutionData $wizardState.SolutionData
+                    -SolutionData $wizardState.SolutionData `
+                    -ApplyConfig:$ApplyConfig
 
                 $resourceChanges = @()
                 $resourceChangeNote = if ($ApplyConfig) {
@@ -624,7 +637,8 @@ function Invoke-AzDoBranchAwareSetup {
                     -ResourceChanges $resourceChanges `
                     -ResourceChangeNote $resourceChangeNote `
                     -SummaryAction $summaryAction `
-                    -PreviewOnly:$PreviewOnly
+                    -PreviewOnly:$PreviewOnly `
+                    -SkipReview:$SkipChangeReview
             }
         }
     )
@@ -710,7 +724,8 @@ function Invoke-AzDoBranchAwareSetup {
             -SharedRepositoryRef ([string]$SharedRepositoryState.Ref) `
             -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
             -WizardState $wizardState `
-            -ProviderOptions $ProviderOptions
+            -ProviderOptions $ProviderOptions `
+            -ApplyConfig:$ApplyConfig
         if ($PostApplyAction) {
             & $PostApplyAction $applyResult
         }
@@ -736,7 +751,8 @@ function Invoke-AzDoBranchAwareSetup {
             -SharedRepositoryRef ([string]$SharedRepositoryState.Ref) `
             -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
             -WizardState $wizardState `
-            -ProviderOptions $ProviderOptions
+            -ProviderOptions $ProviderOptions `
+            -ApplyConfig:$ApplyConfig
         if ($PostApplyAction) {
             & $PostApplyAction $applyResult
         }

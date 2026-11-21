@@ -1152,10 +1152,10 @@ Describe 'Setup wizard navigation menu' {
         Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {}
 
         $script:wizardMenuItems.Count | Should -Be 2
-        $script:wizardMenuItems[0][0] | Should -Be '[ ] Configure repository settings - Not configured'
+        $script:wizardMenuItems[0][0] | Should -Be '• Configure repository settings - Not configured'
         $script:wizardMenuItems[1][0] | Should -Be 'Apply changes - Ready'
         $script:wizardMenuItems[1][1] | Should -Be 'Exit without applying changes'
-        $script:wizardMenuItems[1][2] | Should -Be '[✓] Configure repository settings - main (PROD)'
+        $script:wizardMenuItems[1][2] | Should -Be '✓ Configure repository settings - main (PROD)'
     }
 
     It 'guides a new environment through sequential detail steps and keeps secrets out of summaries' {
@@ -1186,11 +1186,11 @@ Describe 'Setup wizard navigation menu' {
         $result.Credentials | Should -Be $credential
         $result.ServiceAccountUPN | Should -Be 'service@example.com'
         $result.BaselineRelease | Should -Be '@PROD'
-        $script:wizardMenuItems[0] | Should -Contain '[ ] Target name - Not configured'
-        $script:wizardMenuItems[1] | Should -Contain '[✓] Dataverse environment - Test (https://test.example.com)'
-        $script:wizardMenuItems[1] | Should -Contain '[ ] Credentials - Not configured'
-        $script:wizardDimMenuItems[0] | Should -Contain '[ ] Target name - Not configured'
-        $script:wizardDimMenuItems[1] | Should -Contain '[ ] Credentials - Not configured'
+        $script:wizardMenuItems[0] | Should -Contain '• Target name - Not configured'
+        $script:wizardMenuItems[1] | Should -Contain '✓ Dataverse environment - Test (https://test.example.com)'
+        $script:wizardMenuItems[1] | Should -Contain '• Credentials - Not configured'
+        $script:wizardDimMenuItems[0] | Should -Contain '• Target name - Not configured'
+        $script:wizardDimMenuItems[1] | Should -Contain '• Credentials - Not configured'
         (($script:wizardMenuItems | ForEach-Object { $_ -join ' ' }) -join "`n") |
             Should -Not -Match '\(locked'
         (($script:wizardMenuItems | ForEach-Object { $_ -join ' ' }) -join "`n") |
@@ -1222,8 +1222,8 @@ Describe 'Setup wizard navigation menu' {
             -SelectServiceAccountAction { $configuration.ServiceAccountUPN }
 
         $result | Should -BeNullOrEmpty
-        $script:wizardMenuItems[0] | Should -Contain '[✓] Target name - Dev-main (generated from branch)'
-        $script:wizardDimMenuItems[0] | Should -Contain '[✓] Target name - Dev-main (generated from branch)'
+        $script:wizardMenuItems[0] | Should -Contain '✓ Target name - Dev-main (generated from branch)'
+        $script:wizardDimMenuItems[0] | Should -Contain '✓ Target name - Dev-main (generated from branch)'
     }
 
     It 'clears credentials and service-account ownership when the Dataverse environment changes' {
@@ -1297,13 +1297,13 @@ Describe 'Setup wizard navigation menu' {
 
         $result | Should -Be applied
         $script:wizardMenuItems[0] | Should -Be @(
-            '[ ] Configure branches, dev and deployment envs'
+            '• Configure branches, dev and deployment envs'
             '  main'
             '    DEV: Dev-main (main)'
             'Apply changes (finish all setup steps first) - Not ready'
             'Exit without applying changes'
         )
-        $script:wizardMenuItems[1][2] | Should -Be '[✓] Configure branches, dev and deployment envs'
+        $script:wizardMenuItems[1][2] | Should -Be '✓ Configure branches, dev and deployment envs'
         $script:selectedMenuTargets.Count | Should -Be 1
         $script:selectedMenuTargets[0].Kind | Should -Be DevEnvironment
         $script:selectedMenuTargets[0].BranchName | Should -Be main
@@ -1334,9 +1334,9 @@ Describe 'Setup wizard navigation menu' {
         Invoke-SetupWizard -Title 'Setup' -Steps $steps -ApplyAction {}
 
         $script:wizardMenuItems.Count | Should -Be 2
-        $script:wizardMenuItems[0][0] | Should -Be '[ ] Select shared repository - Unavailable: Configured repository ''old-templates'' was not found.'
+        $script:wizardMenuItems[0][0] | Should -Be '• Select shared repository - Unavailable: Configured repository ''old-templates'' was not found.'
         $script:wizardMenuItems[1][1] | Should -Be 'Exit without applying changes'
-        $script:wizardMenuItems[1][2] | Should -Be '[✓] Select shared repository - shared-templates (main)'
+        $script:wizardMenuItems[1][2] | Should -Be '✓ Select shared repository - shared-templates (main)'
     }
 
     It 'keeps incomplete steps in supplied order and puts Apply first only when ready' {
@@ -1356,12 +1356,12 @@ Describe 'Setup wizard navigation menu' {
 
         $result | Should -Be applied
         $script:wizardMenuItems.Count | Should -Be 3
-        $script:wizardMenuItems[0][0] | Should -Be '[ ] First - Not configured'
-        $script:wizardMenuItems[0][1] | Should -Be '[ ] Second - Not configured'
+        $script:wizardMenuItems[0][0] | Should -Be '• First - Not configured'
+        $script:wizardMenuItems[0][1] | Should -Be '• Second - Not configured'
         $script:wizardMenuItems[0][2] | Should -Be 'Apply changes (finish all setup steps first) - Not ready'
         $script:wizardMenuItems[0][3] | Should -Be 'Exit without applying changes'
-        $script:wizardMenuItems[1][0] | Should -Be '[✓] First - Complete'
-        $script:wizardMenuItems[1][1] | Should -Be '[ ] Second - Not configured'
+        $script:wizardMenuItems[1][0] | Should -Be '✓ First - Complete'
+        $script:wizardMenuItems[1][1] | Should -Be '• Second - Not configured'
         $script:wizardMenuItems[1][2] | Should -Be 'Apply changes (finish all setup steps first) - Not ready'
         $script:wizardMenuItems[1][3] | Should -Be 'Exit without applying changes'
         $script:wizardMenuItems[2][0] | Should -Be 'Apply changes - Ready'
@@ -1392,6 +1392,41 @@ Describe 'Setup wizard navigation menu' {
         $script:stepCalls.First | Should -Be 1
         $script:stepCalls.Second | Should -Be 1
         $script:stepCalls.Apply | Should -Be 1
+    }
+
+    It 'advances sequential progress past an auto-completed locked step' {
+        foreach ($selection in @(0, 2, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:stepCalls = @{ First = 0; Locked = 0; Second = 0; Apply = 0 }
+        $steps = @(
+            [pscustomobject]@{ Name = 'First'; Action = { $script:stepCalls.First++ }; IsComplete = $false }
+            [pscustomobject]@{ Name = 'Locked'; Action = { $script:stepCalls.Locked++ }; IsComplete = $true; IsLocked = $true }
+            [pscustomobject]@{ Name = 'Second'; Action = { $script:stepCalls.Second++ }; IsComplete = $false }
+        )
+
+        Invoke-SetupWizard -Title 'Setup' -Steps $steps -RequireSequentialSteps -ApplyAction {
+            $script:stepCalls.Apply++
+        }
+
+        $script:wizardDimMenuItems[0] | Should -Contain '• Second - Not configured'
+        $script:wizardPromptGuidanceLines[1] |
+            Should -Not -Contain 'Complete the earlier setup steps before moving forward.'
+        $script:stepCalls.First | Should -Be 1
+        $script:stepCalls.Second | Should -Be 1
+        $script:stepCalls.Apply | Should -Be 1
+    }
+
+    It 'prints headless preview summaries without opening the interactive review' {
+        $script:previewSummaryCalls = 0
+        $script:reviewedFileChanges = $null
+        Mock Show-SetupFileChangeSummary { $script:reviewedFileChanges = @($FileChanges) }
+
+        Show-SetupChangeReview -FileChanges @([pscustomobject]@{ Path = 'alm-config.psd1'; Status = 'Modified' }) -SummaryAction { $script:previewSummaryCalls++ } -PreviewOnly -SkipReview
+
+        $script:previewSummaryCalls | Should -Be 1
+        $script:reviewedFileChanges.Path | Should -Be 'alm-config.psd1'
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
     }
 
     It 'keeps Preview optional and unavailable until required setup steps are complete' {
@@ -2096,6 +2131,23 @@ Describe 'Shared setup prompt and rendering contracts' {
         }
         Select-FromMenu -Title Test -Items @('One', 'Two') | Should -Be 0
         $script:laterStepPromptChoices | Should -Be @('One', 'Two')
+    }
+
+    It 'avoids escaped brackets in searchable menu choices that Spectre would reparse as markup' {
+        $items = @(1..9 | ForEach-Object { "Item $_" }) + @('[Bracketed] item')
+        $script:searchablePromptChoices = @()
+        $script:searchablePromptEnabled = $false
+        Mock Show-SetupPromptWithInterruptHandling {
+            $script:searchablePromptEnabled = [bool]$Prompt.SearchEnabled
+            $script:searchablePromptChoices = @($Prompt.Choices)
+            return $script:searchablePromptChoices[-1]
+        }
+
+        Select-FromMenu -Title Test -Items $items | Should -Be 9
+
+        $script:searchablePromptEnabled | Should -BeTrue
+        $script:searchablePromptChoices[-1] | Should -Be '［Bracketed］ item'
+        @($script:searchablePromptChoices | Where-Object { $_.Contains('[[') -or $_.Contains(']]') }).Count | Should -Be 0
     }
 
     It 'routes Escape from menus and every prompt type to the setup menu' {
@@ -2904,4 +2956,66 @@ Describe 'Development ALM4Dataverse reference resolution' {
 AfterAll {
     $env:DISPLAY = $script:originalDisplay
     $env:WAYLAND_DISPLAY = $script:originalWaylandDisplay
+}
+
+Describe 'Setup entrypoint call signatures' {
+    It 'passes only parameters that the shared setup functions declare' {
+        $commonParameters = @(
+            'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction',
+            'ErrorVariable', 'WarningVariable', 'InformationVariable', 'OutVariable',
+            'OutBuffer', 'PipelineVariable', 'ProgressAction'
+        )
+        $functionParameters = @{}
+        Get-ChildItem -Path (Join-Path $repoRoot 'setup') -Recurse -Filter '*.ps1' | ForEach-Object {
+            $tokens = $null
+            $parseErrors = $null
+            $fileAst = [System.Management.Automation.Language.Parser]::ParseFile($_.FullName, [ref]$tokens, [ref]$parseErrors)
+            $fileAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
+                ForEach-Object {
+                    $parameters = if ($_.Body.ParamBlock) { @($_.Body.ParamBlock.Parameters) } else { @() }
+                    $declaredNames = @($parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+                    $acceptsRemaining = @($parameters | Where-Object {
+                            $_.Attributes | Where-Object { $_ -is [System.Management.Automation.Language.AttributeAst] } |
+                                Where-Object { $_.NamedArguments | Where-Object { $_.ArgumentName -eq 'ValueFromRemainingArguments' } }
+                        }).Count -gt 0
+                    $functionParameters[$_.Name] = @{ Names = $declaredNames; AcceptsRemaining = $acceptsRemaining }
+                }
+        }
+
+        $violations = @()
+        foreach ($entrypointName in @('setup-azdo.ps1', 'setup-github.ps1')) {
+            $tokens = $null
+            $parseErrors = $null
+            $entrypointAst = [System.Management.Automation.Language.Parser]::ParseFile(
+                (Join-Path $repoRoot $entrypointName), [ref]$tokens, [ref]$parseErrors)
+            $entrypointAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
+                ForEach-Object {
+                    $commandName = $_.GetCommandName()
+                    if (-not $commandName -or -not $functionParameters.ContainsKey($commandName)) {
+                        return
+                    }
+
+                    $definition = $functionParameters[$commandName]
+                    if ($definition.AcceptsRemaining) {
+                        return
+                    }
+
+                    foreach ($element in $_.CommandElements) {
+                        if ($element -isnot [System.Management.Automation.Language.CommandParameterAst]) {
+                            continue
+                        }
+                        $parameterName = $element.ParameterName
+                        if ($parameterName -in $commonParameters) {
+                            continue
+                        }
+                        # PowerShell binds unambiguous parameter prefixes.
+                        if (@($definition.Names | Where-Object { $_ -like "$parameterName*" }).Count -eq 0) {
+                            $violations += ('{0}:{1} {2} -{3}' -f $entrypointName, $_.Extent.StartLineNumber, $commandName, $parameterName)
+                        }
+                    }
+                }
+        }
+
+        $violations | Should -BeNullOrEmpty
+    }
 }

@@ -9,6 +9,47 @@ out safely.
 
 ## Setup
 
+### Azure DevOps Pipeline Names Include The Repository Name
+
+**You'll see:** the pipelines setup creates are named `<repository>-BUILD`,
+`<repository>-EXPORT`, `<repository>-IMPORT` and `<repository>-DEPLOY-<branch>`. Existing
+pipelines named `BUILD`, `EXPORT`, `IMPORT` or `DEPLOY-<branch>` are renamed in place when
+their repository matches, and generated DEPLOY callers reference the qualified BUILD name.
+Without the qualified names, two application repositories in one project both named
+`BUILD` make the DEPLOY pipeline resource ambiguous and BUILD completion no longer starts
+DEPLOY.
+
+**Do this:** run the interactive setup script once for the application repository so it
+renames the existing pipelines and rewrites the DEPLOY caller's BUILD reference. Running
+`-ApplyConfig` alone keeps the current BUILD reference, because that mode does not change
+pipeline definitions. Check that the existing pipelines were renamed instead of
+duplicated. If you created pipelines manually, rename them to include the repository
+name.
+
+### GitHub BUILD Workflow Requires Regeneration
+
+**You'll see:** BUILD fails before any job runs with a template error such as
+`The following format string references more arguments than were supplied:
+{0}-{1}-{2}-{3}` when BUILD validation is disabled, which is the default. The generated
+run name had four placeholders but only three values.
+
+**Do this:** regenerate `.github/workflows/BUILD.yml` by running
+`setup-github.ps1 -ApplyConfig -Commit` from the application repository, or by running the
+APPLY-CONFIG workflow. The corrected generator supplies the fourth value.
+
+### GitHub DEPLOY Selects The Requested BUILD's Source Branch
+
+**You'll see:** a DEPLOY workflow dispatched with a numeric `build-run-name`, or a BUILD
+started through `repository_dispatch` from EXPORT, fails with
+`Selected BUILD branch 'main' does not match deployment branch 'develop'` even though the
+selected BUILD built `develop`. The shared resolver read Release lists as one nested
+array, so it missed the branch in the Release metadata and fell back to the run's
+`head_branch` (`main` for dispatch runs).
+
+**Do this:** update the application's shared workflow source to a ref that contains the
+resolver fix, or re-run setup to update the shared workflow repository. No configuration
+change is required.
+
 ### Caller Pipelines And Workflows Are Generated From `alm-config.psd1`
 
 **You'll see:** BUILD, DEPLOY, EXPORT and IMPORT pipelines or workflows stop immediately

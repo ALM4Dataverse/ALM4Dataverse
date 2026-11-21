@@ -1169,7 +1169,11 @@ Describe 'Generated GitHub workflow files' {
         Assert-GeneratedWorkflowActionlint -Content $content
         $content | Should -Match 'uses: owner/shared/.github/actions/build@stable'
         $content | Should -Match 'alm4dataverse-export-build'
-        $content | Should -Match "shared-template-version: '1'"
+        $content | Should -Match "shared-template-version: '2'"
+        # The run name has four placeholders; the fourth argument keeps GitHub's
+        # format() from rejecting the workflow before any job starts.
+        $buildNameLine = @($content -split "`n" | Where-Object { $_ -match '^\s+build-name:' }) | Select-Object -First 1
+        $buildNameLine | Should -Match 'github\.run_number'
         if ($Enabled) {
             $content | Should -Match "name: 'Build''s'"
             $content | Should -Match 'AZURE_CLIENT_SECRET'
@@ -1249,10 +1253,10 @@ Describe 'Generated GitHub workflow files' {
         Assert-GeneratedWorkflowActionlint -Content $importContent
 
         $exportContent | Should -Match 'uses: owner/shared/.github/actions/export@stable'
-        $exportContent | Should -Match "shared-template-version: '1'"
+        $exportContent | Should -Match "shared-template-version: '2'"
         $exportContent | Should -Match 'WORKFLOW_DISPATCH_TOKEN'
         $importContent | Should -Match 'uses: owner/shared/.github/actions/import@stable'
-        $importContent | Should -Match "shared-template-version: '1'"
+        $importContent | Should -Match "shared-template-version: '2'"
         $importContent | Should -Not -Match 'WORKFLOW_DISPATCH_TOKEN'
 
         Update-ExportWorkflowInRepoClone -RepoRoot $workingRoot -SharedWorkflowRepository owner/shared -SharedWorkflowRef stable
@@ -1426,7 +1430,7 @@ Describe 'Generated Azure DevOps pipeline files' {
         Assert-GeneratedAzurePipelineSchema -Path (Join-Path $workingRoot 'pipelines/BUILD.yml')
         $content | Should -Match "buildEnvironmentName: 'Build''s'"
         $content | Should -Match ('useAlm4DataverseExtension: ' + $Enabled.ToString().ToLowerInvariant())
-        $content | Should -Match "sharedTemplateVersion: '1'"
+        $content | Should -Match "sharedTemplateVersion: '2'"
         $environments = @([pscustomobject]@{ ShortName = 'QA' }, [pscustomobject]@{ ShortName = 'PROD' })
         Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeTrue
         $deployContent = Get-Content (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml') -Raw
@@ -1434,7 +1438,7 @@ Describe 'Generated Azure DevOps pipeline files' {
         Assert-GeneratedAzurePipelineSchema -Path (Join-Path $workingRoot 'pipelines/DEPLOY-main.yml')
         $deployContent | Should -Match 'environmentName: QA'
         $deployContent | Should -Match 'environmentName: PROD'
-        $deployContent | Should -Match "sharedTemplateVersion: '1'"
+        $deployContent | Should -Match "sharedTemplateVersion: '2'"
         @([regex]::Matches($deployContent, '(?m)^\s+environmentName:')).Count | Should -Be 2
         Update-DeployPipelineInWorkingTree -RepoRoot $workingRoot -Branch main -SharedRepositoryName shared -Environments $environments -UseAlm4DataverseExtension $Enabled | Should -BeFalse
     }
@@ -1808,7 +1812,7 @@ Describe 'Azure DevOps pipeline and endpoint reconciliation' {
         Mock Get-AzDoDefaultAgentQueueId { 1 }
         Mock Initialize-AzDoYamlPipelineDefinition {}
         Initialize-AzDoMainRepositoryPipeline -Project project -Repository ([pscustomobject]@{ Id = 'repo-id'; Name = 'repo'; defaultBranch = 'refs/heads/main' }) -YamlFiles @('pipelines/BUILD.yml', 'pipelines/DEPLOY-release.yml')
-        Should -Invoke Initialize-AzDoYamlPipelineDefinition -Times 1 -Exactly -ParameterFilter { $DefinitionName -eq 'BUILD' -and $DefinitionBranch -eq 'main' }
-        Should -Invoke Initialize-AzDoYamlPipelineDefinition -Times 1 -Exactly -ParameterFilter { $DefinitionName -eq 'DEPLOY-release' -and $DefinitionBranch -eq 'release' }
+        Should -Invoke Initialize-AzDoYamlPipelineDefinition -Times 1 -Exactly -ParameterFilter { $DefinitionName -eq 'repo-BUILD' -and $LegacyDefinitionName -eq 'BUILD' -and $DefinitionBranch -eq 'main' }
+        Should -Invoke Initialize-AzDoYamlPipelineDefinition -Times 1 -Exactly -ParameterFilter { $DefinitionName -eq 'repo-DEPLOY-release' -and $LegacyDefinitionName -eq 'DEPLOY-release' -and $DefinitionBranch -eq 'release' }
     }
 }

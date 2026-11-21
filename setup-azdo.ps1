@@ -105,13 +105,14 @@ if ($Commit -and $PreviewOnly) {
     throw 'Commit cannot be combined with PreviewOnly.'
 }
 
-if ($Commit -and (@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0) {
+$missingResourceParameters = @(@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) })
+if ($Commit -and $missingResourceParameters.Count -gt 0) {
     throw 'Commit requires AccessToken, OrganizationName, ProjectName and RepositoryName so setup can resolve resources without prompts.'
 }
 
 # Fully supplied resource parameters make ApplyConfig run unattended for Commit
 # and PreviewOnly (the apply-config caller uses this); without them, setup stays interactive.
-$headlessMode = ($Commit -or $PreviewOnly) -and $ApplyConfig -and -not (@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) }).Count -gt 0
+$headlessMode = ($Commit -or $PreviewOnly) -and $ApplyConfig -and $missingResourceParameters.Count -eq 0
 
 # Release preparation embeds the ordered helper source into this installer.
 # Version numbers and the ALM4Dataverse ref are injected during release.
@@ -397,6 +398,11 @@ try {
     if ($headlessMode) {
         $authentication = Initialize-AzDoAuthentication -TenantId $TenantId -HeadlessAccessToken $AccessToken
         $script:adoAuthResult = $authentication.AuthResult
+        if ([string]::IsNullOrWhiteSpace([string]$script:adoAuthResult.TenantId)) {
+            # Apply-config pipelines pass an access token but no tenant parameter;
+            # the token's tenant claim keeps downstream setup calls bindable.
+            $script:adoAuthResult.TenantId = Get-AzDoAccessTokenTenantId -AccessToken $AccessToken
+        }
         $script:adoAccessToken = $authentication.AccessToken
         $script:secureToken = $authentication.SecureToken
         $organization = Initialize-AzDoOrganization -OrganizationName $OrganizationName
@@ -606,11 +612,8 @@ try {
             Sync-CopyToYourRepoIntoGitRepo `
                 -SourceRoot $copyRoot `
                 -TargetRoot $mainRepoWorkingRoot `
-                -RepositoryName $mainRepo.Name `
                 -SharedRepositoryName $sharedRepoName `
-                -SharedRepositoryRef $sharedRepositoryRef `
-                -Branch $script:mainRepoBranch `
-                -UseAlm4DataverseExtension $script:useAlm4DataverseExtension
+                -SharedRepositoryRef $sharedRepositoryRef
         }
         finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -727,6 +730,7 @@ try {
         -ApplyConfig:$ApplyConfig `
         -IsNewRepository:$isNewRepository `
         -PreviewOnly:$PreviewOnly `
+        -SkipChangeReview:$headlessMode `
         -Commit:$Commit
 }
 catch {

@@ -642,25 +642,21 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
             $edited = & $EditEnvironmentScriptBlock @($added, $script:target) $added 0
             return @($edited)
         }
-        $previousGlobalReadTextWithDefault = Get-Item -Path 'Function:\global:Read-TextWithDefault' -ErrorAction SilentlyContinue
-        Set-Item -Path 'Function:\global:Read-TextWithDefault' -Value {
-            [CmdletBinding()]
-            param($Prompt, $DefaultValue, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
-            $null = @($Prompt, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
-            if ($DefaultValue) { return $DefaultValue }
-            return 'UAT'
+        Set-Variable -Name SetupCommandBindingOverrides -Scope Global -Value @{
+            'Read-TextWithDefault' = {
+                [CmdletBinding()]
+                param($Prompt, $DefaultValue, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                $null = @($Prompt, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                if ($DefaultValue) { return $DefaultValue }
+                return 'UAT'
+            }
         }
 
         try {
             $result = & $Wizard @script:wizardParameters
         }
         finally {
-            if ($previousGlobalReadTextWithDefault) {
-                Set-Item -Path 'Function:\global:Read-TextWithDefault' -Value $previousGlobalReadTextWithDefault.ScriptBlock
-            }
-            else {
-                Remove-Item -Path 'Function:\global:Read-TextWithDefault' -ErrorAction SilentlyContinue
-            }
+            Remove-Variable -Name SetupCommandBindingOverrides -Scope Global -ErrorAction SilentlyContinue
         }
 
         $result.BranchStates[0].DeploymentEnvironments.Count | Should -Be 1

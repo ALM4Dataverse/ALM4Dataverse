@@ -156,7 +156,8 @@ function Get-AzDoSetupArtifactsPreview {
         [Parameter(Mandatory)][bool]$UseAlm4DataverseExtension,
         [Parameter(Mandatory)][array]$BranchStates,
         [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{},
-        [Parameter()][AllowNull()][object]$SolutionData
+        [Parameter()][AllowNull()][object]$SolutionData,
+        [Parameter()][switch]$ApplyConfig
     )
 
     $settings = Get-AlmSetupConfiguration `
@@ -193,7 +194,8 @@ function Get-AzDoSetupArtifactsPreview {
             -DeployWorkflowBranchDefinitions $deployWorkflowBranchDefinitions `
             -BuildValidationEnabled ($buildValidationEnvironments.Count -gt 0) `
             -BuildValidationEnvironments $buildValidationEnvironments `
-            -SetupSettings $settings
+            -SetupSettings $settings `
+            -PreserveDeployBuildPipelineSource:$ApplyConfig
 
         $configPath = Join-Path $previewRoot 'alm-config.psd1'
         if (-not (Test-Path -LiteralPath $configPath -PathType Leaf)) {
@@ -221,6 +223,7 @@ function Invoke-AzDoBranchAwareSetupApply {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Captured by the nested branch publication script block.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'CopyRoot', Justification = 'Captured by the nested branch publication script block.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseAlm4DataverseExtension', Justification = 'Captured by the nested branch publication script block.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ApplyConfig', Justification = 'Captured by the nested apply script block.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$MainRepoWorkingRoot,
@@ -232,7 +235,8 @@ function Invoke-AzDoBranchAwareSetupApply {
         [Parameter(Mandatory)][string]$SharedRepositoryRef,
         [Parameter(Mandatory)][bool]$UseAlm4DataverseExtension,
         [Parameter(Mandatory)][object]$WizardState,
-        [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{}
+        [Parameter()][System.Collections.IDictionary]$ProviderOptions = @{},
+        [Parameter()][switch]$ApplyConfig
     )
 
     $branchStates = @($WizardState.BranchStates)
@@ -291,7 +295,8 @@ function Invoke-AzDoBranchAwareSetupApply {
                 -BuildValidationEnabled $buildValidationEnabled `
                 -BuildValidationEnvironmentName $buildValidationEnvironmentName `
                 -BuildValidationEnvironments $buildValidationEnvironments `
-                -SetupSettings $setupSettings
+                -SetupSettings $setupSettings `
+                -PreserveDeployBuildPipelineSource:$ApplyConfig
         }
 
     $publishResults += [pscustomobject]@{
@@ -397,7 +402,7 @@ function Get-AzDoSetupResourceChange {
             $environmentTargets.Add([pscustomobject]@{
                     Role                     = 'DEV'
                     EnvironmentConfiguration = $branchState.DevEnvironmentConfiguration
-                    PipelineName             = 'EXPORT'
+                    PipelineName             = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName 'EXPORT'
                     IsDevelopmentEnvironment = $true
                     IsBuildValidationEnvironment = $false
                     RequireDeploymentApproval = $false
@@ -408,7 +413,7 @@ function Get-AzDoSetupResourceChange {
             $environmentTargets.Add([pscustomobject]@{
                     Role                     = 'BUILD validation'
                     EnvironmentConfiguration = $branchState.BuildValidationEnvironmentConfiguration
-                    PipelineName             = 'BUILD'
+                    PipelineName             = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName 'BUILD'
                     IsDevelopmentEnvironment = $false
                     IsBuildValidationEnvironment = $true
                     RequireDeploymentApproval = $false
@@ -419,7 +424,7 @@ function Get-AzDoSetupResourceChange {
             $environmentTargets.Add([pscustomobject]@{
                     Role                     = 'Deployment'
                     EnvironmentConfiguration = $environment
-                    PipelineName             = "DEPLOY-$($branchState.BranchName)"
+                    PipelineName             = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName "DEPLOY-$($branchState.BranchName)"
                     IsDevelopmentEnvironment = $false
                     IsBuildValidationEnvironment = $false
                     RequireDeploymentApproval = $true
@@ -583,7 +588,10 @@ function Invoke-AzDoSetupPostApply {
             $pipelineFolder = "\$($MainRepo.Name)"
 
             foreach ($name in $pipelineNames) {
-                $pipeline = $allPipelines | Where-Object { $_.name -eq $name -and $_.path -eq $pipelineFolder } | Select-Object -First 1
+                # Pipeline definitions are repository-qualified; authorize the same
+                # names that Initialize-AzDoMainRepositoryPipeline created.
+                $definitionName = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName $name
+                $pipeline = $allPipelines | Where-Object { $_.name -eq $definitionName -and $_.path -eq $pipelineFolder } | Select-Object -First 1
                 if ($pipeline) {
                     $mainRepoResourceId = "$($SelectedProject.Id).$($MainRepo.Id)"
                     Initialize-AzDoPipelinePermission -Organization $OrganizationName -Project $SelectedProject.Name -ResourceType 'repository' -ResourceId $mainRepoResourceId -PipelineId $pipeline.id
@@ -596,11 +604,13 @@ function Invoke-AzDoSetupPostApply {
 
     $pipelineFolder = "\$($MainRepo.Name)"
     $allPipelines = Get-VSTeamBuildDefinition -ProjectName $SelectedProject.Name
-    $buildPipeline = $allPipelines | Where-Object { $_.name -eq 'BUILD' -and $_.path -eq $pipelineFolder } | Select-Object -First 1
-    $exportPipeline = $allPipelines | Where-Object { $_.name -eq 'EXPORT' -and $_.path -eq $pipelineFolder } | Select-Object -First 1
+    $buildPipelineName = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName 'BUILD'
+    $exportPipelineName = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName 'EXPORT'
+    $buildPipeline = $allPipelines | Where-Object { $_.name -eq $buildPipelineName -and $_.path -eq $pipelineFolder } | Select-Object -First 1
+    $exportPipeline = $allPipelines | Where-Object { $_.name -eq $exportPipelineName -and $_.path -eq $pipelineFolder } | Select-Object -First 1
     $deployPipelinesByBranch = @{}
     foreach ($branchState in $branchStates) {
-        $deployPipelineName = "DEPLOY-$($branchState.BranchName)"
+        $deployPipelineName = Get-AzDoPipelineDefinitionName -RepositoryName $MainRepo.Name -PipelineName "DEPLOY-$($branchState.BranchName)"
         $deployPipeline = $allPipelines | Where-Object { $_.name -eq $deployPipelineName -and $_.path -eq $pipelineFolder } | Select-Object -First 1
         if ($deployPipeline) {
             $deployPipelinesByBranch[$branchState.BranchName] = $deployPipeline

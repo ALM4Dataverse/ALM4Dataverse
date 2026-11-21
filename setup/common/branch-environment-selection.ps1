@@ -591,6 +591,9 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         [Parameter()][string]$HelpRef
     )
 
+    # Bind commands now: closures created below cannot resolve sibling setup functions at invocation time.
+    $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+
     $normalizeEnvironmentUrlScriptBlock = (Get-Command ConvertTo-NormalizedEnvironmentUrl -CommandType Function -ErrorAction Stop).ScriptBlock
     $credentialSummaryScriptBlock = (Get-Command Get-CredentialSummaryText -CommandType Function -ErrorAction Stop).ScriptBlock
     $targetName = [string](Get-OptionalObjectPropertyValue -InputObject $InitialConfiguration -PropertyName 'ShortName')
@@ -624,12 +627,12 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         Action = {
             $selectedEnvironment = & $SelectDataverseEnvironmentAction $environmentState
             if ($null -eq $selectedEnvironment) {
-                Request-SetupWizardBack
+                & $requestSetupWizardBackCommand
             }
 
             $selectedUrl = [string](& $normalizeEnvironmentUrlScriptBlock -Url ([string]$selectedEnvironment.Url))
             if ([string]::IsNullOrWhiteSpace($selectedUrl)) {
-                Request-SetupWizardBack
+                & $requestSetupWizardBackCommand
             }
 
             if ($selectedUrl -ine $environmentState.Url) {
@@ -659,13 +662,13 @@ function Invoke-SetupEnvironmentConfigurationWizard {
                 {
                 $selectedTargetName = [string](& $SelectTargetNameAction $environmentState)
                 if ([string]::IsNullOrWhiteSpace($selectedTargetName)) {
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 $environmentState.ShortName = $selectedTargetName.Trim()
                 }.GetNewClosure()
             }
             else {
-                { Request-SetupWizardBack }.GetNewClosure()
+                { & $requestSetupWizardBackCommand }.GetNewClosure()
             }
         }
         $steps.Add($targetNameStep)
@@ -687,7 +690,7 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         Action = {
             $selectedCredentials = & $SelectCredentialsAction $environmentState
             if ($null -eq $selectedCredentials) {
-                Request-SetupWizardBack
+                & $requestSetupWizardBackCommand
             }
             $environmentState.Credentials = $selectedCredentials
         }.GetNewClosure()
@@ -704,7 +707,7 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         Action = {
             $selectedServiceAccount = [string](& $SelectServiceAccountAction $environmentState)
             if ([string]::IsNullOrWhiteSpace($selectedServiceAccount)) {
-                Request-SetupWizardBack
+                & $requestSetupWizardBackCommand
             }
             $environmentState.ServiceAccountUPN = $selectedServiceAccount.Trim()
         }.GetNewClosure()
@@ -726,7 +729,7 @@ function Invoke-SetupEnvironmentConfigurationWizard {
             Action = {
                 $selectedBaseline = & $SelectBaselineAction $environmentState
                 if ($null -eq $selectedBaseline) {
-                    Request-SetupWizardBack
+                    & $requestSetupWizardBackCommand
                 }
                 $environmentState.BaselineRelease = [string]$selectedBaseline
                 $environmentState.BaselineConfigured = $true

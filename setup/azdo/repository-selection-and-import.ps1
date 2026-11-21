@@ -400,6 +400,12 @@ function Initialize-AzDoProjectAndRepository {
         -ApplyConfig:$ApplyConfig `
         -RepositoryName $RepositoryName
 
+    # An empty existing repository follows the new-repository flow: scaffold callers
+    # and choose the shared repository now instead of expecting alm-config.psd1.
+    if (-not $ApplyConfig -and [bool](Get-OptionalObjectPropertyValue -InputObject $mainRepo -PropertyName 'IsNewRepository')) {
+        $DeferSharedRepositorySelection = $false
+    }
+
     $script:mainRepoBranch = 'main'
     if ($mainRepo.defaultBranch) {
         $script:mainRepoBranch = ConvertFrom-GitRefToBranchName -Ref $mainRepo.defaultBranch

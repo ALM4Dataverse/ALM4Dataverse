@@ -188,7 +188,7 @@ With `useAlm4DataverseExtension: false`, the Microsoft Power Platform Build Tool
 
 EXPORT and IMPORT resolve their development service connection from `Dev-$(Build.SourceBranchName)`. Azure DevOps's `Build.SourceBranchName` is the final branch path component: `feature/customer-import` resolves to `Dev-customer-import`, unlike GitHub's full branch name. Avoid branch-leaf collisions or customize the naming logic consistently.
 
-DEPLOY expects a pipeline resource alias `build`, whose source names the application's BUILD pipeline, including its folder if applicable. The deployment job downloads that resource's `artifacts` and runs its packaged scripts. It updates the annotated `deployed/<environmentName>` tag after success. Grant repository tag creation and force-update permissions only to the trusted build identity and required scope.
+DEPLOY expects a pipeline resource alias `build`, whose source names the application's repository-qualified BUILD pipeline, for example `app-BUILD`. Setup qualifies BUILD, EXPORT, IMPORT and DEPLOY names with the application repository name so several repositories can share one project without ambiguous pipeline resources. The deployment job downloads that resource's `artifacts` and runs its packaged scripts. It updates the annotated `deployed/<environmentName>` tag after success. Grant repository tag creation and force-update permissions only to the trusted build identity and required scope.
 
 ## Setup Script Parameters
 

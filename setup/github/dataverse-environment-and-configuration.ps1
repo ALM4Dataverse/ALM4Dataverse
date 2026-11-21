@@ -583,9 +583,18 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
         [Parameter()][string]$HelpRef
     )
 
+    # Resolve commands before creating the closures below. A closure created inside
+    # this function cannot resolve sibling setup functions at invocation time when
+    # the function itself was reached through another closure, so bind the bodies
+    # here and invoke those script blocks directly.
+    $selectDataverseEnvironmentCommand = Get-SetupCommandBinding -Name Select-DataverseEnvironment
+    $normalizeEnvironmentUrlCommand = Get-SetupCommandBinding -Name ConvertTo-NormalizedEnvironmentUrl
+    $selectCredentialsCommand = Get-SetupCommandBinding -Name Get-GitHubCredentialsForEnvironment
+    $selectServiceAccountCommand = Get-SetupCommandBinding -Name Get-DataverseServiceAccountUPN
+
     $selectDataverseEnvironment = {
         param($environmentState)
-        $selectedEnvironment = Select-DataverseEnvironment `
+        $selectedEnvironment = & $selectDataverseEnvironmentCommand `
             -Prompt $DataverseEnvironmentPrompt `
             -ExcludeUrl $ExcludedUrl `
             -PreferredUrl $environmentState.Url `
@@ -599,12 +608,12 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
 
         return [pscustomobject]@{
             FriendlyName = [string]$selectedEnvironment.FriendlyName
-            Url = ConvertTo-NormalizedEnvironmentUrl -Url ([string]$selectedEnvironment.Endpoints['WebApplication'])
+            Url = & $normalizeEnvironmentUrlCommand -Url ([string]$selectedEnvironment.Endpoints['WebApplication'])
         }
     }.GetNewClosure()
     $selectCredentials = {
         param($environmentState)
-        Get-GitHubCredentialsForEnvironment `
+        & $selectCredentialsCommand `
             -ExistingCredentials $ExistingCredentials `
             -TenantId $TenantId `
             -RepoName $RepoName `
@@ -613,7 +622,7 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
     }.GetNewClosure()
     $selectServiceAccount = {
         param($environmentState)
-        Get-DataverseServiceAccountUPN `
+        & $selectServiceAccountCommand `
             -ExistingServiceAccounts $ExistingServiceAccounts `
             -EnvironmentName $environmentState.ShortName `
             -ExistingValue $environmentState.ServiceAccountUPN

@@ -194,7 +194,9 @@ Describe 'Shared template version validation for GitHub callers' {
     }
 
     It 'accepts the current shared template version' {
-        { & $script:callerVersionValidator -ActualVersion '1' } | Should -Not -Throw
+        $versionSource = Get-Content -LiteralPath (Join-Path $repoRoot 'setup/common/shared-template-version.ps1') -Raw
+        $currentVersion = [regex]::Match($versionSource, "return '([^']+)'").Groups[1].Value
+        { & $script:callerVersionValidator -ActualVersion $currentVersion } | Should -Not -Throw
     }
 
     It 'rejects missing and stale versions with a regeneration instruction' {

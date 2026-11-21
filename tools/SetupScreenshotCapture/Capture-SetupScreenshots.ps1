@@ -2053,27 +2053,67 @@ function Open-CaptureTerminalWindow {
 }
 
 function Connect-CaptureTerminal {
-    [CmdletBinding()]
+    <#
+    .SYNOPSIS
+        Starts a PTY-backed terminal for a screenshot scene or a live command.
+    .DESCRIPTION
+        The Scene set runs the generated setup harness with the capture environment
+        allowlist used for reproducible screenshots. The Command set runs any
+        executable with an optional full environment so live verification can use
+        the caller's identity, module paths and service tokens. Columns and rows
+        default to the screenshot layout; the Command set can override them.
+    .PARAMETER AdditionalEnvironment
+        Command set only. Entries override the capture environment allowlist; the
+        caller is responsible for not exposing secrets in recorded output.
+    #>
+    [CmdletBinding(DefaultParameterSetName = 'Scene')]
     param(
         [Parameter(Mandatory)][object]$Terminal,
-        [Parameter(Mandatory)][pscustomobject]$Scene,
+        [Parameter(Mandatory, ParameterSetName = 'Scene')][pscustomobject]$Scene,
+        [Parameter(Mandatory, ParameterSetName = 'Command')][string]$Command,
+        [Parameter(ParameterSetName = 'Command')][string[]]$Arguments = @(),
+        [Parameter(ParameterSetName = 'Command')][string]$WorkingDirectory,
+        [Parameter(ParameterSetName = 'Command')][System.Collections.IDictionary]$Environment,
         [Parameter(Mandatory)][string]$RepositoryRoot,
-        [Parameter()][string]$ConPtyLibraryPath
+        [Parameter()][string]$ConPtyLibraryPath,
+        [Parameter()][int]$Columns = 0,
+        [Parameter()][int]$Rows = 0
     )
 
     $ptyOptionsType = Get-CaptureType -TypeName 'Terminal.Pty.PtyOptions'
     $ptyOptions = [System.Activator]::CreateInstance($ptyOptionsType)
-    $ptyOptions.Command = Get-CapturePowerShellExecutable
-    $arguments = [System.Collections.Generic.List[string]]::new()
-    [void]$arguments.Add('-NoLogo')
-    [void]$arguments.Add('-NoProfile')
-    [void]$arguments.Add('-Command')
-    [void]$arguments.Add((Get-CaptureHarness -RepositoryRoot $RepositoryRoot -Provider $Scene.Provider -SceneName $Scene.Name))
-    $ptyOptions.Arguments = $arguments
-    $ptyOptions.WorkingDirectory = $RepositoryRoot
-    $ptyOptions.Environment = Get-CaptureTerminalEnvironment
-    $ptyOptions.Columns = $script:CaptureTerminalColumns
-    $ptyOptions.Rows = $Scene.Rows
+
+    if ($PSCmdlet.ParameterSetName -eq 'Scene') {
+        $ptyOptions.Command = Get-CapturePowerShellExecutable
+        # A local name is required: $Arguments is a typed [string[]] parameter, so a
+        # case-variant assignment would coerce the list to a fixed-size array.
+        $sceneArguments = [System.Collections.Generic.List[string]]::new()
+        [void]$sceneArguments.Add('-NoLogo')
+        [void]$sceneArguments.Add('-NoProfile')
+        [void]$sceneArguments.Add('-Command')
+        [void]$sceneArguments.Add((Get-CaptureHarness -RepositoryRoot $RepositoryRoot -Provider $Scene.Provider -SceneName $Scene.Name))
+        $ptyOptions.Arguments = $sceneArguments
+        $ptyOptions.WorkingDirectory = $RepositoryRoot
+        $ptyOptions.Environment = Get-CaptureTerminalEnvironment
+        $ptyOptions.Columns = $script:CaptureTerminalColumns
+        $ptyOptions.Rows = $Scene.Rows
+    }
+    else {
+        $ptyOptions.Command = $Command
+        $ptyOptions.Arguments = [string[]]$Arguments
+        $ptyOptions.WorkingDirectory = if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { $RepositoryRoot } else { $WorkingDirectory }
+
+        $terminalEnvironment = Get-CaptureTerminalEnvironment
+        if ($null -ne $Environment) {
+            foreach ($name in $Environment.Keys) {
+                $terminalEnvironment[[string]$name] = [string]$Environment[$name]
+            }
+        }
+        $ptyOptions.Environment = $terminalEnvironment
+        $ptyOptions.Columns = if ($Columns -gt 0) { $Columns } else { $script:CaptureTerminalColumns }
+        $ptyOptions.Rows = if ($Rows -gt 0) { $Rows } else { 40 }
+    }
+
     if (-not [string]::IsNullOrWhiteSpace($ConPtyLibraryPath)) {
         $ptyOptions.ConPtyLibraryPath = $ConPtyLibraryPath
     }

@@ -332,6 +332,42 @@ function Get-SetupWizardStepInputSignature {
     return [string]$signature
 }
 
+function Get-SetupCommandBinding {
+    <#
+    .SYNOPSIS
+        Resolves a setup command for use inside a closure.
+    .DESCRIPTION
+        A closure created with GetNewClosure can only resolve commands from its
+        captured session state, so callers bind the command before creating the
+        closure and invoke the returned CommandInfo. A global function wins when
+        one exists, which keeps test doubles that replace Function:\global: names
+        effective; otherwise the normal script-scope function is returned.
+    .PARAMETER Name
+        Command name defined by the setup sources.
+    .OUTPUTS
+        System.Management.Automation.CommandInfo
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Management.Automation.CommandInfo])]
+    param(
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    # $global:SetupCommandBindingOverrides lets a host that exercises the callbacks
+    # supply deterministic command bodies when its own scope cannot shadow them.
+    $bindingOverrides = Get-Variable -Name 'SetupCommandBindingOverrides' -Scope Global -ErrorAction SilentlyContinue
+    if ($null -ne $bindingOverrides -and $bindingOverrides.Value.ContainsKey($Name)) {
+        return $bindingOverrides.Value[$Name]
+    }
+
+    $globalCommand = Get-Item -Path "Function:\global:$Name" -ErrorAction SilentlyContinue
+    if ($null -ne $globalCommand) {
+        return $globalCommand
+    }
+
+    return Get-Command -Name $Name -CommandType Function -ErrorAction Stop
+}
+
 function Invoke-SetupWizard {
     <#
     .SYNOPSIS
@@ -470,7 +506,9 @@ function Invoke-SetupWizard {
                 $dimMenuItems = @()
                 $hasSubItems = $false
                 for ($stepIndex = 0; $stepIndex -lt $Steps.Count; $stepIndex++) {
-                    $completionLabel = if ($completedSteps[$stepIndex]) { '[✓]' } else { '[ ]' }
+                    # Spectre's menu search re-parses escaped brackets when it highlights
+                    # a match, so the status marker must not look like markup.
+                    $completionLabel = if ($completedSteps[$stepIndex]) { '✓' } else { '•' }
                     $stepProperties = @($Steps[$stepIndex].PSObject.Properties.Name)
                     $subItems = @()
                     if ($stepProperties -contains 'SubItems') {
@@ -812,9 +850,6 @@ function Invoke-SetupWizard {
 
                 $completedSteps[$selectedStepIndex] = $true
                 $completedStepSignatures[$selectedStepIndex] = Get-SetupWizardStepInputSignature -Step $Steps[$selectedStepIndex]
-                if ($selectedStepIndex -gt $furthestStepIndex) {
-                    $furthestStepIndex = $selectedStepIndex
-                }
                 for ($laterStepIndex = $selectedStepIndex + 1; $laterStepIndex -lt $Steps.Count; $laterStepIndex++) {
                     if ($lockedSteps[$laterStepIndex]) {
                         continue
@@ -833,6 +868,13 @@ function Invoke-SetupWizard {
 
                     $completedSteps[$laterStepIndex] = $false
                     $completedStepSignatures[$laterStepIndex] = $null
+                }
+
+                # Auto-completed and locked steps count toward sequential progress even
+                # when the user never selects them, so the next editable step stays reachable.
+                $furthestStepIndex = -1
+                while (($furthestStepIndex + 1) -lt $Steps.Count -and $completedSteps[$furthestStepIndex + 1]) {
+                    $furthestStepIndex++
                 }
             }
         }

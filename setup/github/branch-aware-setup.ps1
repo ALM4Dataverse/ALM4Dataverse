@@ -35,6 +35,7 @@ function Invoke-GitHubBranchAwareSetup {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'EnableEnvironmentApprovals', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RequiredReviewerIds', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoFullName', Justification = 'Captured by the nested branch publication and Apply actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SkipChangeReview', Justification = 'Captured by the nested change-review action.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$CloneRoot,
@@ -58,12 +59,18 @@ function Invoke-GitHubBranchAwareSetup {
         [Parameter()][switch]$ApplyConfig,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$PreviewOnly,
+        [Parameter()][switch]$SkipChangeReview,
         [Parameter()][switch]$Commit,
         [Parameter()][bool]$UseRepositoryVariablePrefix = $true,
         [Parameter()][bool]$EnableEnvironmentApprovals = $false,
         [Parameter()][int[]]$RequiredReviewerIds = @(),
         [Parameter()][System.Collections.IDictionary]$SharedWorkflowRepositoryState
     )
+
+    # Bind commands now: closures created below cannot resolve sibling setup functions at invocation time.
+    $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+    $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+    $selectBuildValidationBaselineEnvironmentCommand = Get-SetupCommandBinding -Name Select-BuildValidationBaselineEnvironment
 
     if ($null -eq $SharedWorkflowRepositoryState) {
         if (
@@ -281,6 +288,9 @@ function Invoke-GitHubBranchAwareSetup {
                                     -AddEnvironmentScriptBlock {
                                         param($currentSelections)
 
+                                        $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+                                        $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+
                                         $currentCredentials = @($cachedCredentials)
                                         $currentCredentials += @($currentSelections | ForEach-Object { $_.Credentials } | Where-Object { $null -ne $_ })
                                         $currentServiceAccounts = @($cachedServiceAccounts)
@@ -289,9 +299,9 @@ function Invoke-GitHubBranchAwareSetup {
                                             param($environmentState)
                                             if ($currentSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
                                                 Write-Host 'An environment with that URL is already selected for this branch.' -ForegroundColor Red
-                                                Request-SetupWizardBack
+                                                & $requestSetupWizardBackCommand
                                             }
-                                            $shortName = Read-TextWithDefault `
+                                            $shortName = & $readTextWithDefaultCommand `
                                                 -Prompt 'Enter a short name for this environment' `
                                                 -DefaultValue $environmentState.ShortName `
                                                 -PromptGuidanceLines @(
@@ -302,11 +312,11 @@ function Invoke-GitHubBranchAwareSetup {
                                                 -PromptGuidanceRef $ALM4DataverseRef
                                             if ([string]::IsNullOrWhiteSpace($shortName)) {
                                                 [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
-                                                Request-SetupWizardBack
+                                                & $requestSetupWizardBackCommand
                                             }
                                             if ($currentSelections | Where-Object { $_.ShortName -ieq $shortName }) {
                                                 Write-Host 'An environment with that short name is already selected for this branch.' -ForegroundColor Red
-                                                Request-SetupWizardBack
+                                                & $requestSetupWizardBackCommand
                                             }
                                             return $shortName.Trim()
                                         }.GetNewClosure()
@@ -342,6 +352,9 @@ function Invoke-GitHubBranchAwareSetup {
                                     -EditEnvironmentScriptBlock {
                                         param($currentSelections, $environmentToEdit, $environmentIndex)
 
+                                        $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+                                        $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+
                                         $otherSelections = @()
                                         for ($selectionIndex = 0; $selectionIndex -lt $currentSelections.Count; $selectionIndex++) {
                                             if ($selectionIndex -ne $environmentIndex) {
@@ -357,9 +370,9 @@ function Invoke-GitHubBranchAwareSetup {
                                             param($environmentState)
                                             if ($otherSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
                                                 Write-Host 'An environment with that URL is already selected for this branch.' -ForegroundColor Red
-                                                Request-SetupWizardBack
+                                                & $requestSetupWizardBackCommand
                                             }
-                                            $shortName = Read-TextWithDefault `
+                                            $shortName = & $readTextWithDefaultCommand `
                                                 -Prompt 'Enter a short name for this environment' `
                                                 -DefaultValue $environmentState.ShortName `
                                                 -PromptGuidanceLines @(
@@ -370,11 +383,11 @@ function Invoke-GitHubBranchAwareSetup {
                                                 -PromptGuidanceRef $ALM4DataverseRef
                                             if ([string]::IsNullOrWhiteSpace($shortName)) {
                                                 [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
-                                                Request-SetupWizardBack
+                                                & $requestSetupWizardBackCommand
                                             }
                                             if ($otherSelections | Where-Object { $_.ShortName -ieq $shortName }) {
                                                 Write-Host 'An environment with that short name is already selected for this branch.' -ForegroundColor Red
-                                                Request-SetupWizardBack
+                                                & $requestSetupWizardBackCommand
                                             }
                                             return $shortName.Trim()
                                         }.GetNewClosure()
@@ -410,6 +423,10 @@ function Invoke-GitHubBranchAwareSetup {
                             } `
                             -EditBuildValidationScriptBlock {
                                 param($allMappings, $mappingToEdit, $environmentNameToEdit)
+
+                                $readTextWithDefaultCommand = Get-SetupCommandBinding -Name Read-TextWithDefault
+                                $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+                                $selectBuildValidationBaselineEnvironmentCommand = Get-SetupCommandBinding -Name Select-BuildValidationBaselineEnvironment
 
                                 $branchName = [string]$mappingToEdit.BranchName
                                 Write-Section -Message "BUILD validation for branch '$branchName'"
@@ -461,7 +478,7 @@ function Invoke-GitHubBranchAwareSetup {
 
                                 $selectTargetName = {
                                     param($environmentState)
-                                    $environmentName = Read-TextWithDefault `
+                                    $environmentName = & $readTextWithDefaultCommand `
                                         -Prompt "Enter the GitHub environment name for BUILD validation on branch '$branchName'" `
                                         -DefaultValue $environmentState.ShortName `
                                         -PromptGuidanceLines @(
@@ -472,7 +489,7 @@ function Invoke-GitHubBranchAwareSetup {
                                         -PromptGuidanceRef $ALM4DataverseRef
                                     if ([string]::IsNullOrWhiteSpace($environmentName)) {
                                         [Spectre.Console.AnsiConsole]::MarkupLine('[red]A GitHub environment name is required for BUILD validation.[/]')
-                                        Request-SetupWizardBack
+                                        & $requestSetupWizardBackCommand
                                     }
                                     return $environmentName.Trim()
                                 }.GetNewClosure()
@@ -487,7 +504,7 @@ function Invoke-GitHubBranchAwareSetup {
                                     if ([bool]$environmentState.BaselineConfigured) {
                                         $baselineParameters['CurrentBaselineRelease'] = [string]$environmentState.BaselineRelease
                                     }
-                                    Select-BuildValidationBaselineEnvironment @baselineParameters
+                                    & $selectBuildValidationBaselineEnvironmentCommand @baselineParameters
                                 }.GetNewClosure()
                                 $buildValidationConfiguration = Invoke-GitHubEnvironmentConfigurationWizard `
                                     -Title "Configure BUILD validation for branch '$branchName'" `
@@ -691,7 +708,7 @@ function Invoke-GitHubBranchAwareSetup {
                         }) -join '; '
                         Write-Host "Complete these GitHub deployment environment settings before applying changes: $incompleteEnvironmentSummary. Select each listed environment under 'Configure branches, dev and deployment envs'." -ForegroundColor Yellow
                         # Return to the navigation menu without completing this step; each environment remains directly selectable.
-                        Request-SetupWizardBack
+                        & $requestSetupWizardBackCommand
                     }
                 }
             },
@@ -958,7 +975,8 @@ function Invoke-GitHubBranchAwareSetup {
                         -ResourceChanges $resourceChanges `
                         -ResourceChangeNote $resourceChangeNote `
                         -SummaryAction $summaryAction `
-                        -PreviewOnly:$PreviewOnly
+                        -PreviewOnly:$PreviewOnly `
+                        -SkipReview:$SkipChangeReview
                 }
             }
         )

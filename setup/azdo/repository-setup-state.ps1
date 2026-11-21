@@ -793,13 +793,21 @@ function Get-AzDoRegisteredDeployPipelineBranch {
     [CmdletBinding()]
     [OutputType([string], [object[]])]
     param(
-        [Parameter(Mandatory)][string]$ProjectName
+        [Parameter(Mandatory)][string]$ProjectName,
+        [Parameter()][string]$RepositoryId = ''
     )
 
     $branches = @()
     $definitions = @(Get-VSTeamBuildDefinition -ProjectName $ProjectName)
+    if (-not [string]::IsNullOrWhiteSpace($RepositoryId)) {
+        # The project can host several application repositories. Legacy state for
+        # this repository must not be inferred from another repository's pipelines.
+        $definitions = @($definitions | Where-Object {
+                $_.repository -and [string]$_.repository.id -eq $RepositoryId
+            })
+    }
     foreach ($definition in @($definitions)) {
-        if ($definition.name -match '^DEPLOY-(.+)$') {
+        if ($definition.name -match 'DEPLOY-(.+)$') {
             $branchName = [string]$Matches[1]
             if (-not [string]::IsNullOrWhiteSpace($branchName) -and $branches -notcontains $branchName) {
                 $branches += $branchName
@@ -826,12 +834,13 @@ function Get-AzDoLegacyConfigurationConversion {
         [Parameter(Mandatory)][string]$ProjectName,
         [Parameter(Mandatory)][string]$DefaultBranch,
         [Parameter()][string]$TenantId,
+        [Parameter()][string]$RepositoryId = '',
         [Parameter()][string]$LegacyBaselineRelease = ''
     )
 
     try {
         $deployMappings = @(Get-AzDoDeployPipelineBranchMappingsFromRepoClone -RepoRoot $RepoRoot)
-        $registeredBranches = @(Get-AzDoRegisteredDeployPipelineBranch -ProjectName $ProjectName)
+        $registeredBranches = @(Get-AzDoRegisteredDeployPipelineBranch -ProjectName $ProjectName -RepositoryId $RepositoryId)
         $defaultBuildContent = Get-GitRepoFileContentFromRemoteBranch -RepoRoot $RepoRoot -Branch $DefaultBranch -RelativePath 'pipelines/BUILD.yml'
         $defaultBuildEnvironmentName = Get-AzDoBuildEnvironmentNameFromPipelineContent -PipelineContent $defaultBuildContent
 
@@ -899,6 +908,7 @@ function Get-AzDoRepositoryExistingSetupState {
         [Parameter(Mandatory)][string]$ProjectName,
         [Parameter(Mandatory)][string]$DefaultBranch,
         [Parameter()][string]$TenantId,
+        [Parameter()][string]$RepositoryId = '',
         [Parameter()][switch]$SkipProviderState
     )
 
@@ -913,7 +923,7 @@ function Get-AzDoRepositoryExistingSetupState {
     $needsLegacyConversion = -not $SkipProviderState -and (-not $existingConfiguration.Contains('branches') -or ($existingConfiguration.branches -is [System.Collections.IDictionary] -and $existingConfiguration.branches.Count -eq 0))
     if ($needsLegacyConversion) {
         $legacyBaselineRelease = [string](Get-OptionalObjectPropertyValue -InputObject (Get-OptionalObjectPropertyValue -InputObject $existingConfiguration -PropertyName 'buildValidation') -PropertyName 'baselineRelease')
-        $legacyConfigurationConversion = Get-AzDoLegacyConfigurationConversion -RepoRoot $RepoRoot -ProjectName $ProjectName -DefaultBranch $DefaultBranch -TenantId $TenantId -LegacyBaselineRelease $legacyBaselineRelease
+        $legacyConfigurationConversion = Get-AzDoLegacyConfigurationConversion -RepoRoot $RepoRoot -ProjectName $ProjectName -DefaultBranch $DefaultBranch -TenantId $TenantId -RepositoryId $RepositoryId -LegacyBaselineRelease $legacyBaselineRelease
         if ($legacyConfigurationConversion.Status -eq 'Converted') {
             $existingConfiguration['branches'] = $legacyConfigurationConversion.Branches
         }

@@ -34,7 +34,7 @@ function Invoke-GitHubApi {
 
     $uri = "https://api.github.com/repos/$($env:GITHUB_REPOSITORY)/$RelativePath"
     try {
-        return Invoke-RestMethod -Uri $uri -Headers (Get-GitHubApiHeader)
+        $response = Invoke-RestMethod -Uri $uri -Headers (Get-GitHubApiHeader)
     }
     catch {
         $statusCode = $null
@@ -46,6 +46,14 @@ function Invoke-GitHubApi {
         }
         throw
     }
+
+    # Invoke-RestMethod returns a JSON array as one object. Enumerate it so callers
+    # that wrap the result with @() receive releases/runs instead of a nested array.
+    if ($response -is [System.Array]) {
+        foreach ($item in $response) { Write-Output $item }
+        return
+    }
+    return $response
 }
 
 function Resolve-BuildRunDisplayName {

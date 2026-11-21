@@ -16,6 +16,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if ($ActualVersion -ne '1') {
-    throw "This workflow was generated for shared template version '$ActualVersion', but the ALM4Dataverse actions it references require version '1'. Re-run setup from the shared repository ref this workflow references (guided setup or setup-github.ps1 -ApplyConfig) to regenerate this file; do not edit it by hand."
+if ($ActualVersion -ne '2') {
+    throw "This workflow was generated for shared template version '$ActualVersion', but the ALM4Dataverse actions it references require version '2'. Re-run setup from the shared repository ref this workflow references (guided setup or setup-github.ps1 -ApplyConfig) to regenerate this file; do not edit it by hand."
 }

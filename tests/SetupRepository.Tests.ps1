@@ -415,6 +415,29 @@ Describe 'Azure DevOps repository selection and working trees' {
             Should -Throw '*ApplyConfig requires an existing application repository*'
     }
 
+    It 'treats an existing repository with no commits as new' {
+        Mock Get-VSTeamGitRepository {
+            [pscustomobject]@{ Id = 'empty-id'; Name = 'empty'; remoteUrl = 'https://example.invalid/empty'; defaultBranch = ''; size = 0 }
+        }
+        $script:repoMenuIndex = 0
+
+        $result = Select-AzDoMainRepository -ProjectName project -ExistingOnly
+
+        $result.Id | Should -Be empty-id
+        $result.IsNewRepository | Should -BeTrue
+    }
+
+    It 'treats a populated existing repository as existing' {
+        Mock Get-VSTeamGitRepository {
+            [pscustomobject]@{ Id = 'existing-id'; Name = 'existing'; remoteUrl = 'https://example.invalid/existing'; defaultBranch = 'refs/heads/main'; size = 42 }
+        }
+        $script:repoMenuIndex = 0
+
+        $result = Select-AzDoMainRepository -ProjectName project -ExistingOnly
+
+        $result.IsNewRepository | Should -BeFalse
+    }
+
     It 'prepares existing, fallback and empty working branches' -ForEach @(
         @{ HasCommits = $true; Fallback = $false }
         @{ HasCommits = $true; Fallback = $true }
@@ -1235,6 +1258,28 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains 'commit' -and $args -contains '-m' -and $args -contains 'Setup' }
         }
 
+        It 'seeds the default branch when a new repository is published to another branch' -Skip:($Provider -ne 'Azure DevOps') {
+            $script:publishTargetExists = $false
+            $script:publishDefaultExists = $false
+            $script:publishHeadExists = $false
+            $result = & $script:publicationHelper @script:publicationParameters
+            $result.HasChanges | Should -BeTrue
+            Should -Invoke git -Times 1 -Exactly -ParameterFilter {
+                $args -contains 'push' -and $args -contains 'HEAD:refs/heads/main'
+            }
+        }
+
+        It 'keeps an existing default branch untouched' -Skip:($Provider -ne 'Azure DevOps') {
+            $script:publishTargetExists = $false
+            $script:publishDefaultExists = $true
+            $script:publishHeadExists = $true
+            $result = & $script:publicationHelper @script:publicationParameters
+            $result.HasChanges | Should -BeTrue
+            Should -Invoke git -Times 0 -Exactly -ParameterFilter {
+                $args -contains 'push' -and $args -contains 'HEAD:refs/heads/main'
+            }
+        }
+
         It 'ensures an unchanged branch exists without committing or opening a PR' {
             $script:publishHasChanges = $false
             $result = & $script:publicationHelper @script:publicationParameters
@@ -1348,6 +1393,16 @@ Describe 'Repository configuration and synchronization in <Provider>' -ForEach @
     AfterEach {
         if ($script:discoveryExitCode) { $global:LASTEXITCODE = $script:discoveryExitCode.Value }
         else { Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue }
+    }
+
+    It 'ignores deploy definitions that belong to another repository' -Skip:($Provider -ne 'Azure DevOps') {
+        Mock Get-VSTeamBuildDefinition {
+            [pscustomobject]@{ name = 'DEPLOY-other'; process = $null; repository = [pscustomobject]@{ id = 'other-id' } }
+            [pscustomobject]@{ name = 'DEPLOY-release'; process = $null; repository = [pscustomobject]@{ id = 'repo-id' } }
+        }
+
+        Get-AzDoRegisteredDeployPipelineBranch -ProjectName project -RepositoryId repo-id |
+            Should -Be @('release')
     }
 
     It 'uses branch settings only from alm-config.psd1' {
@@ -1597,7 +1652,7 @@ stages:
 
         $content = Get-Content -LiteralPath (Join-Path $script:scaffoldTarget 'pipelines/EXPORT.yml') -Raw
         $content | Should -Match '(?m)^\s+name: shared\s*$'
-        $content | Should -Match "sharedTemplateVersion: '1'"
+        $content | Should -Match "sharedTemplateVersion: '2'"
         $content | Should -Match '(?m)^    secretVariables:\r?\n    - DataverseEnvVar_contoso_APIKey\r?\n      # nested comment\r?\n    - DataverseEnvVar_contoso_Other\s*$'
     }
 
@@ -1661,5 +1716,90 @@ resources:
         $context.RepoFullName | Should -Be 'owner/app'
         $context.DefaultBranch | Should -Be 'main'
         Should -Invoke Select-FromMenu -Times 0 -Exactly
+    }
+}
+Describe 'Azure DevOps deploy pipeline resource names' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
+        foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+            Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    It 'qualifies pipeline names with the repository only when a name is available' {
+        Get-AzDoPipelineDefinitionName -RepositoryName 'app' -PipelineName 'BUILD' | Should -Be 'app-BUILD'
+        Get-AzDoPipelineDefinitionName -RepositoryName '' -PipelineName 'DEPLOY-main' | Should -Be 'DEPLOY-main'
+    }
+
+    It 'creates DEPLOY callers that reference the repository-qualified BUILD pipeline' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $root 'pipelines') -Force | Out-Null
+
+        $null = Update-DeployPipelineInWorkingTree `
+            -Environments @([pscustomobject]@{ ShortName = 'TEST' }) `
+            -RepoRoot $root `
+            -Branch develop `
+            -SharedRepositoryName shared `
+            -BuildPipelineName 'app-BUILD'
+
+        $content = Get-Content -LiteralPath (Join-Path $root 'pipelines/DEPLOY-develop.yml') -Raw
+        $content | Should -Match "(?m)^\s+source: 'app-BUILD'$"
+        $content | Should -Not -Match "source: 'BUILD'"
+    }
+
+    It 'preserves the existing BUILD resource reference when ApplyConfig regenerates callers' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $root 'pipelines') -Force | Out-Null
+        $existing = @"
+resources:
+  pipelines:
+    - pipeline: build
+      source: 'BUILD'
+      trigger:
+        branches:
+          include:
+          - develop
+"@
+        [System.IO.File]::WriteAllText((Join-Path $root 'pipelines/DEPLOY-develop.yml'), $existing)
+
+        $null = Update-DeployPipelineInWorkingTree `
+            -Environments @([pscustomobject]@{ ShortName = 'TEST' }) `
+            -RepoRoot $root `
+            -Branch develop `
+            -SharedRepositoryName shared `
+            -BuildPipelineName 'app-BUILD' `
+            -PreserveBuildPipelineSource
+
+        $content = Get-Content -LiteralPath (Join-Path $root 'pipelines/DEPLOY-develop.yml') -Raw
+        $content | Should -Match "source: 'BUILD'"
+        $content | Should -Not -Match "source: 'app-BUILD'"
+    }
+
+    It 'rewrites an existing DEPLOY caller to the repository-qualified BUILD pipeline' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $root 'pipelines') -Force | Out-Null
+        $existing = @"
+resources:
+  pipelines:
+    - pipeline: build
+      source: 'BUILD'
+      trigger:
+        branches:
+          include:
+          - develop
+"@
+        [System.IO.File]::WriteAllText((Join-Path $root 'pipelines/DEPLOY-develop.yml'), $existing)
+
+        $null = Update-DeployPipelineInWorkingTree `
+            -Environments @([pscustomobject]@{ ShortName = 'TEST' }) `
+            -RepoRoot $root `
+            -Branch develop `
+            -SharedRepositoryName shared `
+            -BuildPipelineName 'app-BUILD'
+
+        $content = Get-Content -LiteralPath (Join-Path $root 'pipelines/DEPLOY-develop.yml') -Raw
+        $content | Should -Match "source: 'app-BUILD'"
+        $content | Should -Not -Match "source: 'BUILD'"
+        $content | Should -Match 'environmentName: TEST'
     }
 }

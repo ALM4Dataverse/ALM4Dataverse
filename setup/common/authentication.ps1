@@ -695,3 +695,43 @@ function Resolve-EntraIdApplicationByAppId {
         return $null
     }
 }
+
+function Get-AzDoAccessTokenTenantId {
+    <#
+    .SYNOPSIS
+        Reads the tenant ID claim from a JWT access token.
+    .DESCRIPTION
+        Headless apply-config runs supply an Azure DevOps access token but no tenant
+        parameter. Azure DevOps issues JWT tokens that carry the tenant in the 'tid'
+        claim, so recover it without another interactive sign-in. Returns an empty
+        string for opaque tokens or malformed payloads.
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][AllowEmptyString()][string]$AccessToken = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($AccessToken)) { return '' }
+    $segments = $AccessToken.Split('.')
+    if ($segments.Count -lt 2) { return '' }
+
+    $payload = $segments[1].Replace('-', '+').Replace('_', '/')
+    switch ($payload.Length % 4) {
+        2 { $payload += '==' }
+        3 { $payload += '=' }
+    }
+
+    try {
+        $json = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($payload))
+        $claims = $json | ConvertFrom-Json
+        if ($claims.PSObject.Properties['tid']) { return [string]$claims.tid }
+    }
+    catch {
+        return ''
+    }
+
+    return ''
+}

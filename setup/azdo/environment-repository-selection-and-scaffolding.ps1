@@ -194,7 +194,10 @@ function Select-AzDoMainRepository {
         }
         throw 'Existing-repository setup requires an existing application repository.'
     }
-    $menu = if ($ExistingOnly) { @($repoNames) } else { @('Create a new repository') + @($repoNames) }
+    $menu = @($repoNames)
+    if (-not $ExistingOnly) {
+        $menu = @('Create a new repository') + $menu
+    }
 
     Write-Host "Select the repository where you want to set up pipelines:" -ForegroundColor Green
 
@@ -246,7 +249,15 @@ function Select-AzDoMainRepository {
         throw "Failed to resolve selected repository '$selectedName'."
     }
 
-    $selected | Add-Member -NotePropertyName IsNewRepository -NotePropertyValue $false -Force
+    # An existing repository with no commits behaves like a new repository: setup
+    # must scaffold callers and prompt for the branching strategy instead of
+    # trusting legacy pipeline definitions, which may belong to another repository.
+    $repositorySize = Get-OptionalObjectPropertyValue -InputObject $selected -PropertyName 'size'
+    $repositoryIsEmpty = (
+        [string]::IsNullOrWhiteSpace([string]$selected.defaultBranch) -or
+        ($null -ne $repositorySize -and [long]$repositorySize -eq 0)
+    )
+    $selected | Add-Member -NotePropertyName IsNewRepository -NotePropertyValue $repositoryIsEmpty -Force
     Write-Host "Selected main repository: $($selected.Name)"
     return $selected
 }

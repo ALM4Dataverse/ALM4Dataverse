@@ -169,19 +169,23 @@ for each caller in the application repository:
 | Pipeline name | YAML path | Trigger |
 | --- | --- | --- |
 | APPLY-CONFIG | `/pipelines/APPLY-CONFIG.yml` | Manual |
-| BUILD | `/pipelines/BUILD.yml` | Branch pushes, or manual |
-| EXPORT | `/pipelines/EXPORT.yml` | Manual, with commit message |
-| IMPORT | `/pipelines/IMPORT.yml` | Manual |
-| DEPLOY-main | `/pipelines/DEPLOY-main.yml` | Matching BUILD completion, or manual |
+| `<repository>-BUILD` | `/pipelines/BUILD.yml` | Branch pushes, or manual |
+| `<repository>-EXPORT` | `/pipelines/EXPORT.yml` | Manual, with commit message |
+| `<repository>-IMPORT` | `/pipelines/IMPORT.yml` | Manual |
+| `<repository>-DEPLOY-main` | `/pipelines/DEPLOY-main.yml` | Matching BUILD completion, or manual |
+
+`<repository>` is the application repository name.
 
 Create the APPLY-CONFIG pipeline first, authorize the shared repository resource at its
 first run, and run it: it applies the committed `alm-config.psd1` and commits the
 generated caller files to the default branch. After that, create the BUILD, EXPORT,
 IMPORT and DEPLOY pipelines from the generated files.
 
-Create one DEPLOY pipeline per configured deployment branch. Name the BUILD pipeline
-exactly `BUILD` and avoid pipeline folders, because the generated DEPLOY caller selects
-the BUILD pipeline by that name. Do not run DEPLOY until its branch has deployment
+Create one DEPLOY pipeline per configured deployment branch. Qualify every pipeline name
+with the application repository name, as shown, because pipeline completion triggers
+resolve the BUILD resource by name. Two application repositories in one project with
+pipelines both named `BUILD` make the DEPLOY resource reference ambiguous and deployment
+triggers stop firing. Do not run DEPLOY until its branch has deployment
 environments configured. A BUILD before the first EXPORT may fail because the configured
 solution folders do not exist yet.
 

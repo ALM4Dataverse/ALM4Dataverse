@@ -24,7 +24,9 @@ function Update-DeployPipelineInWorkingTree {
         [Parameter(Mandatory)][string]$Branch,
         [Parameter(Mandatory)][string]$SharedRepositoryName,
         [Parameter()][string]$SharedRepositoryRef = 'main',
-        [Parameter()][bool]$UseAlm4DataverseExtension = $true
+        [Parameter()][bool]$UseAlm4DataverseExtension = $true,
+        [Parameter()][string]$BuildPipelineName = 'BUILD',
+        [Parameter()][switch]$PreserveBuildPipelineSource
     )
 
     if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Update Azure DevOps DEPLOY pipeline')) { return $false }
@@ -44,6 +46,7 @@ function Update-DeployPipelineInWorkingTree {
     }
 
     $escapedSharedRepositoryRef = ([string]$SharedRepositoryRef).Replace("'", "''")
+    $escapedBuildPipelineName = ([string]$BuildPipelineName).Replace("'", "''")
     $templateVersion = Get-AlmSharedTemplateVersion
     if (-not (Test-Path -LiteralPath $deployYamlPath)) {
         $deployDirectory = Split-Path -Parent $deployYamlPath
@@ -61,7 +64,7 @@ trigger: none # Triggered by build completion or manually
 resources:
   pipelines:
     - pipeline: build
-      source: 'BUILD'
+      source: '$escapedBuildPipelineName'
       trigger:
         branches:
           include:
@@ -83,6 +86,17 @@ stages:
     }
 
     $originalContent = Get-Content -LiteralPath $deployYamlPath -Raw
+    # Pipeline resource triggers resolve BUILD by name. Rewrite the reference so a
+    # regenerated caller adopts the repository-qualified pipeline name. ApplyConfig
+    # preserves it because that mode never renames pipeline definitions.
+    if (-not $PreserveBuildPipelineSource) {
+        $sourcePattern = '(?m)^(\s*source:\s*)([''"]?)[^''"\r\n]+\2(\s*)$'
+        $updatedContent = [regex]::Replace($originalContent, $sourcePattern, { param($match) $match.Groups[1].Value + "'" + $escapedBuildPipelineName + "'" + $match.Groups[3].Value })
+        if ($updatedContent -cne $originalContent) {
+            Set-Content -LiteralPath $deployYamlPath -Value $updatedContent -NoNewline
+        }
+    }
+
     $contentLines = Get-Content -LiteralPath $deployYamlPath
     $cleanedContent = @()
     $preservedParameterLines = @{}
@@ -298,7 +312,8 @@ function Invoke-AzDoSetupArtifactGeneration {
         [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = '',
         [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter()][System.Collections.IDictionary]$BuildValidationEnvironments = @{},
-        [Parameter()][System.Collections.IDictionary]$SetupSettings
+        [Parameter()][System.Collections.IDictionary]$SetupSettings,
+        [Parameter()][switch]$PreserveDeployBuildPipelineSource
     )
 
     Sync-CopyToYourRepoIntoGitRepo `
@@ -348,7 +363,9 @@ function Invoke-AzDoSetupArtifactGeneration {
             -Branch ([string]$deployDefinition.BranchName) `
             -SharedRepositoryName $SharedRepositoryName `
             -SharedRepositoryRef $SharedRepositoryRef `
-            -UseAlm4DataverseExtension $UseAlm4DataverseExtension | Out-Null
+            -UseAlm4DataverseExtension $UseAlm4DataverseExtension `
+            -BuildPipelineName $(if ($PreserveDeployBuildPipelineSource) { 'BUILD' } else { Get-AzDoPipelineDefinitionName -RepositoryName ([string](Get-OptionalObjectPropertyValue -InputObject $MainRepo -PropertyName 'Name')) -PipelineName 'BUILD' }) `
+            -PreserveBuildPipelineSource:$PreserveDeployBuildPipelineSource | Out-Null
     }
 }
 
@@ -362,7 +379,10 @@ function Publish-AzDoBranchSetupChange {
     wins, then default-branch history, then an orphan/available HEAD path.
     PR mode first creates a missing target branch (with an empty commit if needed)
     so Azure DevOps has a target. Null Solutions preserves that branch's list.
-    Returns the publication result; failures do not roll back prior remote pushes.
+    Direct commits to a non-default branch also seed a missing default branch with
+    the same commit so its generated pipeline callers exist before definitions are
+    created. Returns the publication result; failures do not roll back prior remote
+    pushes.
     #>
     [CmdletBinding()]
     param(
@@ -383,7 +403,8 @@ function Publish-AzDoBranchSetupChange {
         [Parameter()][AllowEmptyString()][string]$BuildValidationEnvironmentName = '',
         [Parameter()][AllowEmptyString()][string]$BuildValidationBaselineRelease = '',
         [Parameter()][System.Collections.IDictionary]$BuildValidationEnvironments = @{},
-        [Parameter()][System.Collections.IDictionary]$SetupSettings
+        [Parameter()][System.Collections.IDictionary]$SetupSettings,
+        [Parameter()][switch]$PreserveDeployBuildPipelineSource
     )
 
     Push-Location $RepoRoot
@@ -491,9 +512,28 @@ function Publish-AzDoBranchSetupChange {
             -BuildValidationEnvironmentName $BuildValidationEnvironmentName `
             -BuildValidationBaselineRelease $BuildValidationBaselineRelease `
             -BuildValidationEnvironments $BuildValidationEnvironments `
-            -SetupSettings $SetupSettings
+            -SetupSettings $SetupSettings `
+            -PreserveDeployBuildPipelineSource:$PreserveDeployBuildPipelineSource
 
-        return Publish-AzDoRepoChange -RepoRoot $RepoRoot -PublishPlan $PublishPlan -AccessToken $AccessToken -Repository $Repository
+        $publishResult = Publish-AzDoRepoChange -RepoRoot $RepoRoot -PublishPlan $PublishPlan -AccessToken $AccessToken -Repository $Repository
+
+        # A newly created repository has no default branch until something is pushed.
+        # Seed it with this first direct-commit publication so main's generated
+        # callers exist before setup creates pipeline definitions for that branch;
+        # otherwise Azure DevOps cannot register their pipeline completion triggers.
+        if (
+            $PublishPlan.Mode -ne 'PullRequest' -and
+            $ConfiguredBranch -ine $DefaultBranch -and
+            -not $defaultBranchExistsOnOrigin
+        ) {
+            Write-Host "Initializing default branch '$DefaultBranch' from the published commit..." -ForegroundColor Yellow
+            & git -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push origin "HEAD:refs/heads/$DefaultBranch" 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Failed to initialize default branch '$DefaultBranch' from the published commit."
+            }
+        }
+
+        return $publishResult
     }
     finally {
         $ErrorActionPreference = $previousErrorActionPreference

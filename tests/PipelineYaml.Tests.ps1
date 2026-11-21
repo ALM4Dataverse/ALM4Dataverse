@@ -42,6 +42,19 @@ Describe 'Workflow and pipeline YAML validation' {
             Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
     }
 
+    It 'configures a committer identity before creating the annotated environment tag' {
+        $deploymentTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/stages/deploy-environment.yml') -Raw
+
+        $deploymentTemplate | Should -Match '\$env:BUILD_REQUESTEDFOR'
+        $deploymentTemplate | Should -Match '\$env:BUILD_REQUESTEDFOREMAIL'
+        $deploymentTemplate.IndexOf('git config user.name') |
+            Should -BeGreaterThan -1
+        $deploymentTemplate.IndexOf('git config user.email') |
+            Should -BeGreaterThan $deploymentTemplate.IndexOf('git config user.name')
+        $deploymentTemplate.IndexOf('git config user.email') |
+            Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
+    }
+
     It 'keeps the branch validation map authoritative over the fallback variable group' {
         $buildTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/build.yml') -Raw
 

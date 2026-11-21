@@ -212,6 +212,19 @@ stages:
                     }
 
                     Write-Host "Updating environment pointer tag '$environmentTag' to BUILD run $buildRunId ($targetCommit)"
+                    # Annotated tags need a committer identity. Deployment runs can be
+                    # started by a pipeline resource trigger, where the requested-for
+                    # identity may be empty, so fall back to a stable automation identity.
+                    $tagIdentityName = if ([string]::IsNullOrWhiteSpace($env:BUILD_REQUESTEDFOR)) { 'ALM4Dataverse' } else { $env:BUILD_REQUESTEDFOR }
+                    $tagIdentityEmail = if ([string]::IsNullOrWhiteSpace($env:BUILD_REQUESTEDFOREMAIL)) { 'alm4dataverse@users.noreply.github.com' } else { $env:BUILD_REQUESTEDFOREMAIL }
+                    git config user.name "$tagIdentityName"
+                    if ($LASTEXITCODE -ne 0) {
+                      throw "Failed to configure the git committer name '$tagIdentityName'"
+                    }
+                    git config user.email "$tagIdentityEmail"
+                    if ($LASTEXITCODE -ne 0) {
+                      throw "Failed to configure the git committer email '$tagIdentityEmail'"
+                    }
                     $pointerMessage = @(
                       'ALM4Dataverse environment deployment pointer'
                       "Build: $rawBuildRunName"
