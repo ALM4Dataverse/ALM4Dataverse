@@ -45,6 +45,7 @@ function Update-DeployPipelineInWorkingTree {
         return $false
     }
 
+    $escapedSharedRepositoryName = ([string]$SharedRepositoryName).Replace("'", "''")
     $escapedSharedRepositoryRef = ([string]$SharedRepositoryRef).Replace("'", "''")
     $escapedBuildPipelineName = ([string]$BuildPipelineName).Replace("'", "''")
     $templateVersion = Get-AlmSharedTemplateVersion
@@ -86,6 +87,21 @@ stages:
     }
 
     $originalContent = Get-Content -LiteralPath $deployYamlPath -Raw
+    # An existing caller can predate a shared repository rename or ref change.
+    # Rewrite its ALM4Dataverse resource block so ApplyConfig updates the source
+    # along with BUILD, EXPORT and IMPORT callers.
+    $sharedRepositoryPattern = '(?m)^(?<prefix>[ \t]*- repository:[ \t]*ALM4Dataverse[ \t]*\r?\n[ \t]*type:[ \t]*git[ \t]*\r?\n[ \t]*name:[ \t]*)[^\r\n]+(?<middle>\r?\n[ \t]*ref:[ \t]*)[^\r\n]+(?<suffix>[ \t]*)(?=\r?$)'
+    $updatedContent = [regex]::Replace($originalContent, $sharedRepositoryPattern, {
+        param($match)
+        $match.Groups['prefix'].Value + $escapedSharedRepositoryName +
+            $match.Groups['middle'].Value + "'refs/heads/$escapedSharedRepositoryRef'" +
+            $match.Groups['suffix'].Value
+    })
+    if ($updatedContent -cne $originalContent) {
+        Set-Content -LiteralPath $deployYamlPath -Value $updatedContent -NoNewline
+        $originalContent = $updatedContent
+    }
+
     # Pipeline resource triggers resolve BUILD by name. Rewrite the reference so a
     # regenerated caller adopts the repository-qualified pipeline name. ApplyConfig
     # preserves it because that mode never renames pipeline definitions.

@@ -1775,6 +1775,37 @@ resources:
         $content | Should -Not -Match "source: 'app-BUILD'"
     }
 
+    It 'updates the shared repository name and ref in an existing DEPLOY caller' {
+        $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $root 'pipelines') -Force | Out-Null
+        $existing = @"
+resources:
+  pipelines:
+    - pipeline: build
+      source: 'BUILD'
+  repositories:
+    - repository: ALM4Dataverse
+      type: git
+      name: old-shared
+      ref: 'refs/heads/main'
+"@
+        [System.IO.File]::WriteAllText((Join-Path $root 'pipelines/DEPLOY-develop.yml'), $existing)
+
+        $null = Update-DeployPipelineInWorkingTree `
+            -Environments @([pscustomobject]@{ ShortName = 'TEST' }) `
+            -RepoRoot $root `
+            -Branch develop `
+            -SharedRepositoryName 'new-shared' `
+            -SharedRepositoryRef 'release' `
+            -BuildPipelineName 'app-BUILD' `
+            -PreserveBuildPipelineSource
+
+        $content = Get-Content -LiteralPath (Join-Path $root 'pipelines/DEPLOY-develop.yml') -Raw
+        $content | Should -Match "name: new-shared"
+        $content | Should -Match "ref: 'refs/heads/release'"
+        $content | Should -Match "source: 'BUILD'"
+    }
+
     It 'rewrites an existing DEPLOY caller to the repository-qualified BUILD pipeline' {
         $root = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path (Join-Path $root 'pipelines') -Force | Out-Null
