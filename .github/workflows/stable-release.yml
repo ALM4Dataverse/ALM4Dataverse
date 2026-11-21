@@ -35,10 +35,12 @@ jobs:
           # Generate setup scripts and launchers pinned to this release tag.
           pwsh -File prepare-release.ps1 -TagName "$TAG_NAME" -OutputDir release -UpstreamRepo "$UPSTREAM_REPO"
           
-          echo "SETUP_AZDO_FILE=release/setup-azdo.ps1" >> "$GITHUB_OUTPUT"
-          echo "SETUP_GITHUB_FILE=release/setup-github.ps1" >> "$GITHUB_OUTPUT"
-          echo "SETUP_AZDO_WSB_FILE=release/setup-azdo.wsb" >> "$GITHUB_OUTPUT"
-          echo "SETUP_GITHUB_WSB_FILE=release/setup-github.wsb" >> "$GITHUB_OUTPUT"
+          {
+            echo "SETUP_AZDO_FILE=release/setup-azdo.ps1"
+            echo "SETUP_GITHUB_FILE=release/setup-github.ps1"
+            echo "SETUP_AZDO_WSB_FILE=release/setup-azdo.wsb"
+            echo "SETUP_GITHUB_WSB_FILE=release/setup-github.wsb"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Update stable tag
         # Unlike immutable version tags, stable is an intentionally moving pointer.

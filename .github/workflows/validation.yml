@@ -69,13 +69,12 @@ jobs:
       - name: Validate Azure Pipelines against Microsoft schema
         if: runner.os == 'Linux'
         run: |
-          # DEPLOY-main.yml is an intentionally empty scaffold; setup-generated deployments are validated in Pester.
+          # Caller pipelines are generated from alm-config.psd1 and validated in Pester.
+          # The static APPLY-CONFIG scaffold remains in copy-to-your-repo.
           node scripts/validate-azure-pipelines.js \
             --schema "$RUNNER_TEMP/azure-pipelines-schema.json" \
             pipelines \
-            copy-to-your-repo/pipelines/BUILD.yml \
-            copy-to-your-repo/pipelines/EXPORT.yml \
-            copy-to-your-repo/pipelines/IMPORT.yml
+            copy-to-your-repo/pipelines/APPLY-CONFIG.yml
       - name: Install validation tools
         shell: pwsh
         run: |
