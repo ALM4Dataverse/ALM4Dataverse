@@ -218,7 +218,9 @@ function Invoke-ProcessSetupScript {
     $content = $content.Replace($ProviderLibraryPlaceholder, $ProviderLibraryContent)
 
     try {
-        Set-Content -Path $OutputFile -Value $content -NoNewline
+        # Windows PowerShell 5.1 reads a UTF-8 file without a BOM as ANSI and then
+        # fails to parse the Unicode banner and status markers in the installer.
+        [System.IO.File]::WriteAllText($OutputFile, $content, [System.Text.UTF8Encoding]::new($true))
     }
     catch {
         Write-Host "ERROR: Could not write $OutputFile`: $($_.Exception.Message)" -ForegroundColor Red

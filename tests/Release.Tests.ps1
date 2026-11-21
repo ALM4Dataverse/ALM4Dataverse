@@ -10,6 +10,8 @@ Describe 'Release packaging' {
         foreach ($name in @('setup-azdo.ps1', 'setup-github.ps1')) {
             $generatedPath = Join-Path $releaseDirectory $name
             $content = Get-Content -LiteralPath $generatedPath -Raw
+            $bytes = [System.IO.File]::ReadAllBytes($generatedPath)
+            @($bytes[0], $bytes[1], $bytes[2]) | Should -Be @(0xEF, 0xBB, 0xBF)
             $content | Should -Not -Match '__ALM4DATAVERSE_REF__|__ALM4DATAVERSE_VERSION__|__RNWOOD_DATAVERSE_VERSION__|__UPSTREAM_REPO__|__SETUP_COMMON_LIB__|__SETUP_AZDO_BOOTSTRAP_LIB__|__SETUP_AZDO_LIB__|__SETUP_GITHUB_BOOTSTRAP_LIB__|__SETUP_GITHUB_LIB__'
             $content | Should -Match '\$script:ALM4DataverseVersion = ''v0\.0\.0-test'''
             $tokens = $null
