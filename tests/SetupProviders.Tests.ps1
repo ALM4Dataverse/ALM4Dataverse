@@ -866,6 +866,30 @@ Describe 'GitHub setup authentication and application repository context' {
         Should -Invoke Select-FromMenu -Times 1 -Exactly
     }
 
+    It 'continues headless apply-config when a token cannot read the user profile' {
+        Mock gh {
+            if ($args[0] -eq 'auth' -and $args[1] -eq 'status') {
+                $global:LASTEXITCODE = 0
+                return
+            }
+            if ($args[0] -eq 'api' -and $args[-1] -eq '.login') {
+                $global:LASTEXITCODE = 1
+                return 'Resource not accessible by integration'
+            }
+            if ($args[0] -eq 'api' -and $args[-1] -eq '.id') {
+                $global:LASTEXITCODE = 1
+                return 'Resource not accessible by integration'
+            }
+
+            throw 'Unexpected GitHub CLI command.'
+        }
+
+        $result = Initialize-GitHubSetupAuthentication -ApplyConfig -Headless
+
+        $result.GitHubUser | Should -BeNullOrEmpty
+        $result.GitHubUserId | Should -BeNullOrEmpty
+    }
+
     It 'opens browser authentication when the GitHub CLI has no existing login' {
         $script:authenticationGhCalls = @()
         Mock gh {

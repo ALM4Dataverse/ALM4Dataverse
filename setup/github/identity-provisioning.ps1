@@ -540,9 +540,16 @@ function Initialize-GitHubSetupAuthentication {
         }
     }
 
-    $script:ghUser = (& gh api user --jq '.login' 2>&1)
+    $script:ghUser = (& gh api user --jq '.login' 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {
-        throw 'Failed to determine GitHub username.'
+        if (-not $ApplyConfig) {
+            throw 'Failed to determine GitHub username.'
+        }
+        # An installation token supplied through GH_TOKEN can read and write the
+        # repository but cannot call /user. ApplyConfig does not need the profile;
+        # provider resources that use a reviewer id are skipped in this mode.
+        $script:ghUser = ''
+        Write-Host 'The GitHub token cannot read the user profile; continuing with repository permissions only.' -ForegroundColor DarkGray
     }
 
     $script:ghUserId = $null
@@ -551,9 +558,11 @@ function Initialize-GitHubSetupAuthentication {
         $script:ghUserId = [int]$ghUserIdRaw
     }
 
-    Write-Host "Logged in as: $script:ghUser" -ForegroundColor Green
-    if ($script:ghUserId) {
-        Write-Host "GitHub user id: $script:ghUserId" -ForegroundColor DarkGray
+    if (-not [string]::IsNullOrWhiteSpace($script:ghUser)) {
+        Write-Host "Logged in as: $script:ghUser" -ForegroundColor Green
+        if ($script:ghUserId) {
+            Write-Host "GitHub user id: $script:ghUserId" -ForegroundColor DarkGray
+        }
     }
 
     $script:azureAuthResult = $null
