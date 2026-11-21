@@ -55,6 +55,14 @@ Describe 'Workflow and pipeline YAML validation' {
             Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
     }
 
+    It 'runs the Azure DevOps apply-config setup from the shared checkout path' {
+        $applyConfigTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/apply-config.yml') -Raw
+        # checkout with path: alm places the repository under Agent.BuildDirectory,
+        # not under the source repository's Build.SourcesDirectory.
+        $applyConfigTemplate | Should -Match '\$\(Agent\.BuildDirectory\)/alm/setup-azdo\.ps1'
+        $applyConfigTemplate | Should -Not -Match 'Build\.SourcesDirectory\)/alm'
+    }
+
     It 'keeps the branch validation map authoritative over the fallback variable group' {
         $buildTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/build.yml') -Raw
 

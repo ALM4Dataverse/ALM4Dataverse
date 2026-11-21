@@ -30,7 +30,7 @@ steps:
     git config --global user.name 'ALM4Dataverse Setup'
     git config --global user.email 'setup@alm4dataverse.local'
     if ('${{ parameters.preview }}' -eq 'True') {
-      & "$(Build.SourcesDirectory)/alm/setup-azdo.ps1" `
+      & "$(Agent.BuildDirectory)/alm/setup-azdo.ps1" `
         -ApplyConfig -PreviewOnly `
         -AccessToken $env:ALM_ACCESS_TOKEN `
         -OrganizationName $organizationName `
@@ -38,7 +38,7 @@ steps:
         -RepositoryName '$(Build.Repository.Name)'
     }
     else {
-      & "$(Build.SourcesDirectory)/alm/setup-azdo.ps1" `
+      & "$(Agent.BuildDirectory)/alm/setup-azdo.ps1" `
         -ApplyConfig -Commit `
         -AccessToken $env:ALM_ACCESS_TOKEN `
         -OrganizationName $organizationName `
