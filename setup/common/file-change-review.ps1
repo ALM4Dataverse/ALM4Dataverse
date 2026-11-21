@@ -176,19 +176,23 @@ function Get-SetupSideBySideDiffRow {
     $afterMiddleCount = $afterLines.Count - $prefixCount - $suffixCount
     $matrixCellCount = ([long]$beforeMiddleCount + 1) * ([long]$afterMiddleCount + 1)
     if ($matrixCellCount -le 4000000) {
-        $lengths = [int[,]]::new($beforeMiddleCount + 1, $afterMiddleCount + 1)
+        # Store the matrix in one flat array: Windows PowerShell 5.1 cannot parse a
+        # comma index such as $lengths[$row, $column], and the release installer is
+        # syntax-checked with that parser even though setup itself requires 7.2+.
+        $afterWidth = $afterMiddleCount + 1
+        $lengths = [int[]]::new(($beforeMiddleCount + 1) * $afterWidth)
         for ($beforeIndex = $beforeMiddleCount - 1; $beforeIndex -ge 0; $beforeIndex--) {
             for ($afterIndex = $afterMiddleCount - 1; $afterIndex -ge 0; $afterIndex--) {
+                $cellIndex = $beforeIndex * $afterWidth + $afterIndex
+                $downIndex = ($beforeIndex + 1) * $afterWidth + $afterIndex
+                $rightIndex = $cellIndex + 1
                 $beforeLine = $beforeLines[$prefixCount + $beforeIndex]
                 $afterLine = $afterLines[$prefixCount + $afterIndex]
                 if ([string]::Equals($beforeLine, $afterLine, [StringComparison]::Ordinal)) {
-                    $lengths[$beforeIndex, $afterIndex] = $lengths[($beforeIndex + 1), ($afterIndex + 1)] + 1
+                    $lengths[$cellIndex] = $lengths[$downIndex + 1] + 1
                 }
                 else {
-                    $lengths[$beforeIndex, $afterIndex] = [Math]::Max(
-                        $lengths[($beforeIndex + 1), $afterIndex],
-                        $lengths[$beforeIndex, ($afterIndex + 1)]
-                    )
+                    $lengths[$cellIndex] = [Math]::Max($lengths[$downIndex], $lengths[$rightIndex])
                 }
             }
         }
@@ -218,7 +222,8 @@ function Get-SetupSideBySideDiffRow {
                 $afterIndex -lt $afterMiddleCount -and
                 (
                     $beforeIndex -ge $beforeMiddleCount -or
-                    $lengths[$beforeIndex, ($afterIndex + 1)] -ge $lengths[($beforeIndex + 1), $afterIndex]
+                    $lengths[$beforeIndex * $afterWidth + $afterIndex + 1] -ge
+                    $lengths[($beforeIndex + 1) * $afterWidth + $afterIndex]
                 )
             ) {
                 $operations.Add([pscustomobject]@{
