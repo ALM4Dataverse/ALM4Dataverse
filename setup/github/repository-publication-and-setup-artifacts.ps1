@@ -1,3 +1,32 @@
+function Assert-GitHubPushSucceeded {
+    <#
+    .SYNOPSIS
+        Throws a diagnosable error for a failed git push.
+    .DESCRIPTION
+        Call this only when git push reported a nonzero exit code: it always throws.
+        The message includes the captured CLI output, and explains the workflow-file
+        restriction separately because the built-in Actions token can never create or
+        update workflow files on the default branch.
+    .PARAMETER Output
+        Merged stdout/stderr lines captured from the git push call.
+    .PARAMETER Target
+        Branch or ref that was pushed, used in the error message.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][object[]]$Output,
+        [Parameter(Mandatory)][string]$Target
+    )
+
+    $details = @($Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if (($details -join [Environment]::NewLine) -match 'without .?workflows.? permission') {
+        throw "Git push of '$Target' was rejected because GitHub does not let the Actions workflow token create or update workflow files. Store a token with the Workflows permission as the ALM4DATAVERSE_APPLY_TOKEN repository secret and pass it to the apply-config action with github-token: `${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}."
+    }
+
+    $detailText = if ($details.Count -gt 0) { " $($details -join ' ')" } else { '' }
+    throw "Git push of '$Target' failed.$detailText"
+}
+
 function Publish-GitHubRepoChange {
     <#
     .SYNOPSIS
@@ -28,8 +57,12 @@ function Publish-GitHubRepoChange {
 
         if (-not $hasChanges) {
             Write-Host "No content changes detected, but ensuring branch '$($PublishPlan.BranchName)' exists on origin..." -ForegroundColor Yellow
-            & git push -u origin $PublishPlan.BranchName 2>&1
-            if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+            $pushOutput = @(& git push -u origin $PublishPlan.BranchName 2>&1)
+            $pushExitCode = $LASTEXITCODE
+            $pushOutput | Out-Host
+            if ($pushExitCode -ne 0) {
+                Assert-GitHubPushSucceeded -Output $pushOutput -Target $PublishPlan.BranchName
+            }
 
             Write-Host 'No changes to commit; repository already contains the required files.' -ForegroundColor Green
             return [pscustomobject]@{
@@ -47,8 +80,12 @@ function Publish-GitHubRepoChange {
         if ($LASTEXITCODE -ne 0) { throw 'Git commit failed.' }
 
         Write-Host "Pushing to origin/$($PublishPlan.BranchName)..." -ForegroundColor Yellow
-        & git push -u origin $PublishPlan.BranchName 2>&1
-        if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+        $pushOutput = @(& git push -u origin $PublishPlan.BranchName 2>&1)
+        $pushExitCode = $LASTEXITCODE
+        $pushOutput | Out-Host
+        if ($pushExitCode -ne 0) {
+            Assert-GitHubPushSucceeded -Output $pushOutput -Target $PublishPlan.BranchName
+        }
 
         $pullRequestUrl = $null
         if ($PublishPlan.Mode -eq 'PullRequest') {
@@ -275,9 +312,11 @@ function Publish-GitHubBranchSetupChange {
                 }
             }
 
-            & git push -u origin $ConfiguredBranch 2>&1 | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                throw "Failed to push target branch '$ConfiguredBranch' to origin."
+            $pushOutput = @(& git push -u origin $ConfiguredBranch 2>&1)
+            $pushExitCode = $LASTEXITCODE
+            $pushOutput | Out-Host
+            if ($pushExitCode -ne 0) {
+                Assert-GitHubPushSucceeded -Output $pushOutput -Target $ConfiguredBranch
             }
 
             $targetBranchExistsOnOrigin = $true

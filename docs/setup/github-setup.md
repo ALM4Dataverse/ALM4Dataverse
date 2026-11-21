@@ -239,6 +239,14 @@ diffs without publishing:
 See
 [setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
 
+> [!IMPORTANT]
+> GitHub does not let the built-in Actions token create or update files under
+> `.github/workflows/`, so the APPLY-CONFIG **workflow** needs a token with the
+> Workflows permission. Store it as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret;
+> the copied caller workflow passes it to the action. Preview runs work without it.
+> Running `-ApplyConfig -Commit` locally uses your own sign-in instead. See
+> [apply configuration token](../config/github-secrets.md#apply-configuration-token).
+
 ## Manual Setup
 
 To create the repository settings, environments and credentials yourself, use

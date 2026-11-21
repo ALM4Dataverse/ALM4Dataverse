@@ -77,6 +77,33 @@ store one as an environment secret named `WORKFLOW_DISPATCH_TOKEN` (or legacy al
 
 This token is separate from the Dataverse/Azure credentials shown below.
 
+## Apply configuration token
+
+The `APPLY-CONFIG` workflow regenerates the caller workflows and commits them to the
+default branch. GitHub never lets the built-in Actions token create or update files under
+`.github/workflows/`, so that commit needs a token with the Workflows permission:
+
+1. Create a classic personal access token with the `workflow` and `repo` scopes, or a
+   fine-grained token for the repository with **Contents: read and write** and
+   **Workflows: read and write**.
+2. Store it as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret (Settings > Secrets and
+   variables > Actions).
+3. Pass it to the action as `github-token` from `.github/workflows/APPLY-CONFIG.yml`.
+   The scaffold workflow setup copies uses:
+
+   ```yaml
+           with:
+             github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
+   ```
+
+Without the secret the built-in token is used and a run that has changes to commit fails
+with `refusing to allow a GitHub App to create or update workflow ... without
+`workflows` permission`. Preview runs work with the built-in token because they do not
+push. Running `setup-github.ps1 -ApplyConfig -Commit` on a workstation uses the signed-in
+user's own credentials instead of this secret.
+
+This token is separate from the Dataverse/Azure credentials shown below.
+
 ## Release and cleanup permissions
 
 The supplied BUILD and EXPORT callers declare `contents: write`, `actions: write`,

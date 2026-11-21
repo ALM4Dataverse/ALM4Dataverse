@@ -79,6 +79,30 @@ APPLY-CONFIG pipeline or workflow with its preview option enabled (or
 `-ApplyConfig -PreviewOnly` on a workstation); `-ApplyConfig -Commit` always commits
 directly to the repository's default branch.
 
+### GitHub APPLY-CONFIG Needs A Token That Can Write Workflows
+
+**You'll see:** the GitHub **APPLY-CONFIG** workflow fails while pushing with
+`refusing to allow a GitHub App to create or update workflow ... without `workflows`
+permission`. GitHub never lets the built-in Actions token create or update workflow files
+on the default branch, and the workflow's only job is to commit regenerated workflows.
+
+**Do this:** create a token that has the Workflows permission (a classic personal access
+token with the `workflow` scope, or a fine-grained token with **Workflows: read and
+write** and **Contents: read and write** for the repository), store it as the
+`ALM4DATAVERSE_APPLY_TOKEN` repository secret, and pass it to the action from
+`.github/workflows/APPLY-CONFIG.yml`:
+
+```yaml
+        with:
+          github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
+```
+
+Setup writes this line for new and regenerated APPLY-CONFIG callers; an existing caller
+keeps its own line until it is regenerated. Rerun the workflow after storing the secret.
+Keep using the built-in token for builds and deployments. Preview-only runs work with the
+built-in token because they do not push. See
+[apply configuration token](../config/github-secrets.md#apply-configuration-token).
+
 ### Guided Setup Defers More Writes Until Apply
 
 **You'll see:** shared workflow repository reconciliation, shared repository version

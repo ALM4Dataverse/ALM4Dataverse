@@ -74,8 +74,11 @@ such as `GitHubDeploymentPromotionMode` — commit it, and then apply the config
    (`workflow_dispatch`). It runs the shared setup source at the ref this workflow
    references, regenerates every caller workflow for every configured branch, and
    commits the changes to the default branch. Enable the **preview** input to see the
-   generated file diffs in the run output without committing them. This is how manual
-   setup generates the caller workflows.
+   generated file diffs in the run output without committing them. GitHub blocks the
+   built-in Actions token from committing workflow files, so store a token with the
+   Workflows permission as the `ALM4DATAVERSE_APPLY_TOKEN` secret; the caller workflow
+   passes it to the action. This is how manual setup generates the caller workflows.
+   See [apply configuration token](../config/github-secrets.md#apply-configuration-token).
 2. Alternatively, run `setup-github.ps1 -ApplyConfig` from the application repository
    root on a workstation. Add `-PreviewOnly` to review the generated file diffs without
    publishing.

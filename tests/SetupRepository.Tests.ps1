@@ -1911,3 +1911,28 @@ Describe 'GitHub repository OIDC metadata access' {
         $identity.UseImmutableSubject | Should -BeTrue
     }
 }
+
+Describe 'GitHub push failure diagnostics' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
+        foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+            Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    It 'explains the workflow permission restriction with the secret to add' {
+        $output = @(
+            'To https://github.com/owner/repo.git'
+            ' ! [remote rejected] main -> main (refusing to allow a GitHub App to create or update workflow `.github/workflows/BUILD.yml` without `workflows` permission)'
+            'error: failed to push some refs to https://github.com/owner/repo.git'
+        )
+
+        { Assert-GitHubPushSucceeded -Target main -Output $output } |
+            Should -Throw '*ALM4DATAVERSE_APPLY_TOKEN*'
+    }
+
+    It 'includes the captured output for other push failures' {
+        { Assert-GitHubPushSucceeded -Target main -Output @('remote: Repository not found.', 'fatal: repository not found') } |
+            Should -Throw '*Repository not found*'
+    }
+}
