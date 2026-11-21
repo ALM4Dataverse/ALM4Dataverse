@@ -1700,7 +1700,8 @@ resources:
 
     It 'resolves the repository headlessly for the apply-config caller' {
         if ($Provider -ne 'GitHub') { Set-ItResult -Skipped -Because 'GitHub helper only'; return }
-        Mock Get-GitHubRepoList { @([pscustomobject]@{ owner = @{ login = 'owner' }; name = 'app'; nameWithOwner = 'owner/app'; defaultBranchRef = @{ name = 'main' } }) }
+        Mock Get-GitHubRepoList { throw 'A supplied repository must not list /user/repos.' }
+        Mock Get-GitHubRepo { [pscustomobject]@{ owner = @{ login = 'owner' }; name = 'app'; nameWithOwner = 'owner/app'; defaultBranchRef = @{ name = 'main' } } }
         Mock Select-FromMenu { throw 'The repository menu must not run for a supplied repository name.' }
         Mock Invoke-WithSpectreStatus { & $ScriptBlock }
         Mock Invoke-WithErrorHandling { & $ScriptBlock }
@@ -1723,6 +1724,7 @@ resources:
         $context.RepoFullName | Should -Be 'owner/app'
         $context.DefaultBranch | Should -Be 'main'
         Should -Invoke Select-FromMenu -Times 0 -Exactly
+        Should -Invoke Get-GitHubRepoList -Times 0 -Exactly
     }
 }
 Describe 'Azure DevOps deploy pipeline resource names' {

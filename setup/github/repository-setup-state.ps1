@@ -1039,9 +1039,22 @@ function Initialize-GitHubApplicationRepositoryContext {
 
     Write-Section -Message 'Select GitHub Repository'
 
-    $repos = @(Invoke-WithSpectreStatus -Status 'Fetching repositories you have write access to...' -ScriptBlock {
-        Get-GitHubRepoList
-    })
+    if (-not [string]::IsNullOrWhiteSpace($RepoFullName)) {
+        # A headless caller supplies the repository. Fetch it directly so an
+        # installation token, which cannot list /user/repos, still works.
+        $repoParts = $RepoFullName.Split('/', 2)
+        if ($repoParts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($repoParts[0]) -or [string]::IsNullOrWhiteSpace($repoParts[1])) {
+            throw "Repository '$RepoFullName' must use the owner/name format."
+        }
+        $repos = @(Invoke-WithSpectreStatus -Status "Loading GitHub repository '$RepoFullName'..." -ScriptBlock {
+            Get-GitHubRepo -Owner $repoParts[0] -Repo $repoParts[1]
+        })
+    }
+    else {
+        $repos = @(Invoke-WithSpectreStatus -Status 'Fetching repositories you have write access to...' -ScriptBlock {
+            Get-GitHubRepoList
+        })
+    }
     $repos = @($repos | Sort-Object -Property nameWithOwner)
     $repoMenuItems = @()
     $repoMenuActions = @()
