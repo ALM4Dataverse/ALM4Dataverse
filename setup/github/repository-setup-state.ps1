@@ -1126,7 +1126,7 @@ function Initialize-GitHubApplicationRepositoryContext {
     $repoOwnerId = [long]$repoIdentity.OwnerId
     $repoId = [long]$repoIdentity.RepositoryId
     $useImmutableWifSubject = [bool]$repoIdentity.UseImmutableSubject
-    if (-not $repoIdentity.OidcSettingsAvailable) {
+    if (-not [bool](Get-OptionalObjectPropertyValue -InputObject $repoIdentity -PropertyName 'OidcSettingsAvailable')) {
         # ApplyConfig usually runs from a workflow whose token has no repository admin
         # rights, so report the gap instead of failing or changing the setting.
         Write-Host 'The current token cannot read the repository OIDC subject setting; applying configuration will not change it.' -ForegroundColor Yellow

@@ -43,6 +43,8 @@ callers, so the static `APPLY-CONFIG` caller workflow never needs regeneration. 
 | `github-token` | Yes | None | Token used to clone and push the application repository. The caller passes `${{ github.token }}` with `contents: write`. |
 | `repository` | No | `${{ github.repository }}` | Application repository as `owner/name`. |
 | `preview` | No | `false` | When `true`, applies the committed configuration and shows the resulting file changes without committing or pushing them. |
+| `shared-repository` | Yes | None | Shared ALM4Dataverse repository that contains the action and the setup source; generated callers pass the repository recorded in `alm-config.psd1`. |
+| `shared-ref` | Yes | None | Shared ALM4Dataverse ref checked out for the setup source; generated callers pass the ref recorded in `alm-config.psd1`. |
 
 ### Build
 

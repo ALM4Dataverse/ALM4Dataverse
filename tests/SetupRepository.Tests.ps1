@@ -1854,7 +1854,6 @@ Describe 'GitHub repository OIDC metadata access' {
 
     It 'returns null when a forbidden endpoint is tolerated' {
         Mock gh {
-            param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
             $global:LASTEXITCODE = 1
             Write-Error 'gh: Resource not accessible by integration (HTTP 403)'
         }
@@ -1864,7 +1863,6 @@ Describe 'GitHub repository OIDC metadata access' {
 
     It 'throws for a forbidden endpoint when the caller does not tolerate it' {
         Mock gh {
-            param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
             $global:LASTEXITCODE = 1
             Write-Error 'gh: Resource not accessible by integration (HTTP 403)'
         }
