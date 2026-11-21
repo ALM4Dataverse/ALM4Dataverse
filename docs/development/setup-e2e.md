@@ -119,6 +119,22 @@ a short `Sleep` after a selection that replaces a screen with a different instan
 the same title. Otherwise a stale frame can satisfy the wait and the next action runs
 against the wrong prompt.
 
+## GitHub notes
+
+- The generated **APPLY-CONFIG** workflow commits workflow files, and GitHub never lets
+  the built-in Actions token create or update workflow files on the default branch. Store
+  a token with the Workflows permission (`workflow` scope for a classic personal access
+  token, or **Workflows: read and write** for a fine-grained token) as the
+  `ALM4DATAVERSE_APPLY_TOKEN` repository secret before validating a commit run. Preview
+  runs do not need it. See
+  [apply configuration token](../config/github-secrets.md#apply-configuration-token).
+- A workflow dispatch needs the workflow file on the default branch. Push the scaffold
+  file, then dispatch it by its exact file name, or the API answers `404 workflow not
+  found on the default branch`.
+- Disposable repositories used for validation should be private. Private repositories on
+  the free plan have no branch protection or rulesets, so a direct apply commit is
+  accepted once the token has the workflow permission.
+
 ## Azure DevOps notes
 
 - Environments created for deployment stages carry approval checks. The harness controls
