@@ -104,7 +104,17 @@ jobs:
             $tokens = $null
             $parseErrors = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$parseErrors)
-            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+            if ($parseErrors.Count -gt 0) {
+              $lines = Get-Content -LiteralPath $file.FullName
+              foreach ($parseError in $parseErrors) {
+                $lineNumber = $parseError.Extent.StartLineNumber
+                Write-Host ("{0}:{1}: {2}" -f $file.Name, $lineNumber, $parseError.Message)
+                if ($lineNumber -ge 1 -and $lineNumber -le $lines.Count) {
+                  Write-Host $lines[$lineNumber - 1]
+                }
+              }
+              throw "Generated installer $($file.Name) has $($parseErrors.Count) syntax errors under Windows PowerShell 5.1."
+            }
           }
       - name: Publish test and coverage results
         if: always()
