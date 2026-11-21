@@ -193,7 +193,9 @@ function Invoke-WithErrorHandling {
     .DESCRIPTION
         Returns operation output or null when skipped. Retry invokes the operation
         again without rollback, so partial side effects must be handled by callers.
-        Back/cancellation exceptions bypass the error menu. Abort or a cancelled
+        Back/cancellation exceptions bypass the error menu, and an unattended
+        headless run rethrows instead of offering a menu it cannot show.
+        Abort or a cancelled
         menu throws a setup-aborted error. When a .NET callback wraps a PowerShell
         failure, the innermost error and its source location are shown when available.
     .PARAMETER StatusMessage
@@ -223,6 +225,13 @@ function Invoke-WithErrorHandling {
             }
 
             if (Test-IsUserInterruptException -Exception $_.Exception) {
+                throw
+            }
+
+            $headlessMode = Get-Variable -Name 'headlessMode' -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+            if ($headlessMode) {
+                # An unattended run cannot answer the retry menu, so surface the
+                # original error instead of failing later while drawing the prompt.
                 throw
             }
 

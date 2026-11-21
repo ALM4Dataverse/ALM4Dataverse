@@ -2271,6 +2271,19 @@ Describe 'Shared setup prompt and rendering contracts' {
         $state.Attempts | Should -Be 2
     }
 
+    It 'rethrows without prompting when the run is headless' {
+        $script:headlessMode = $true
+        Mock Select-FromMenu { throw 'A headless run must not show the retry menu.' }
+        try {
+            { Invoke-WithErrorHandling -OperationName Test -ScriptBlock { throw 'Unattended failure' } } |
+                Should -Throw '*Unattended failure*'
+            Should -Invoke Select-FromMenu -Times 0 -Exactly
+        }
+        finally {
+            Remove-Variable -Name headlessMode -Scope Script -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'summarizes pending configuration, authentication mix and distinct service accounts' -ForEach @(
         @{ AuthTypes = @('WIF', 'Secret'); ExpectedMix = 'Mixed' }
         @{ AuthTypes = @('WIF'); ExpectedMix = 'WIF' }
