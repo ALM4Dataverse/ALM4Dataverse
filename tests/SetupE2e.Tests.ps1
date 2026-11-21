@@ -562,6 +562,7 @@ Describe 'Setup E2E interactive control' {
     It 'passes the live process environment to the terminal' {
         $environment = Get-SetupE2eTerminalEnvironment
         $environment['TERM'] | Should -Be 'xterm-256color'
-        $environment.ContainsKey('PATH') | Should -BeTrue
+        # Windows exposes the process path as 'Path', not 'PATH'.
+        @($environment.Keys | Where-Object { $_ -ieq 'PATH' }).Count | Should -Be 1
     }
 }

@@ -1743,7 +1743,7 @@ Describe 'Azure DevOps deploy pipeline resource names' {
             -BuildPipelineName 'app-BUILD'
 
         $content = Get-Content -LiteralPath (Join-Path $root 'pipelines/DEPLOY-develop.yml') -Raw
-        $content | Should -Match "(?m)^\s+source: 'app-BUILD'$"
+        $content | Should -Match "(?m)^\s+source: 'app-BUILD'\r?$"
         $content | Should -Not -Match "source: 'BUILD'"
     }
 

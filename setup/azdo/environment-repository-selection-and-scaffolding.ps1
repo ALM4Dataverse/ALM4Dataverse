@@ -613,10 +613,10 @@ function Sync-CopyToYourRepoIntoGitRepo {
         if ($normalizedRelativePath -eq 'pipelines/APPLY-CONFIG.yml') {
             $content = Get-Content -LiteralPath $file.FullName -Raw
             if (-not [string]::IsNullOrWhiteSpace($SharedRepositoryName)) {
-                $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse\s*$', "`${1}$SharedRepositoryName"
+                $content = $content -replace '(?m)^(\s*name:\s*)ALM4Dataverse(?=\r?$)', "`${1}$SharedRepositoryName"
             }
             $escapedRef = ([string]$SharedRepositoryRef).Replace("'", "''")
-            $content = [regex]::Replace($content, '(?m)^(?<indent>\s*ref:\s*)[^\r\n]*$', {
+            $content = [regex]::Replace($content, '(?m)^(?<indent>\s*ref:\s*)[^\r\n]*(?=\r?$)', {
                 param($match)
                 return $match.Groups['indent'].Value + "'refs/heads/$escapedRef'"
             })

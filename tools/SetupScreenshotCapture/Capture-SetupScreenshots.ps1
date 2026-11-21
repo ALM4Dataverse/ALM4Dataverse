@@ -2525,7 +2525,8 @@ function Invoke-CaptureWalkthrough {
 
         $outputPath = Join-Path $RepositoryRoot $script:CaptureWalkthroughRelativePath
         Move-Item -LiteralPath $temporaryGifPath -Destination $outputPath -Force
-        Write-Output "Captured $([System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath))."
+        $relativeOutputPath = [System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath).Replace('\', '/')
+        Write-Output "Captured $relativeOutputPath."
     }
     finally {
         if (Test-Path -LiteralPath $temporaryDirectory -PathType Container) {
@@ -2709,7 +2710,8 @@ function Invoke-CaptureScreenshotSet {
             -OutputPath $outputPath `
             -FontFamilyName $fontFamilyName `
             -ConPtyLibraryPath $runtime.ConPtyLibraryPath
-        Write-Output "Captured $([System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath))."
+        $relativeOutputPath = [System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath).Replace('\', '/')
+        Write-Output "Captured $relativeOutputPath."
     }
 
     if (-not [string]::IsNullOrWhiteSpace($FfmpegExecutable)) {
