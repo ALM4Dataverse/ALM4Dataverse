@@ -91,7 +91,10 @@ function Invoke-WithSpectreStatus {
         starts it is never retried automatically in this mode; a post-completion
         display failure returns the stored result instead of repeating the operation.
     .DESCRIPTION
-        Back/cancellation exceptions propagate. Without capture, other spinner or
+        Back/cancellation exceptions propagate. With capture, a callback failure first
+        displays the output captured before the failure and then rethrows, so
+        unattended runs still show what the failed operation wrote. Without capture,
+        other spinner or
         callback failures fall back to running ScriptBlock with null, which can
         repeat side effects; callers needing at-most-once execution should not rely
         on the uncaptured fallback as a transaction boundary.
@@ -177,6 +180,12 @@ function Invoke-WithSpectreStatus {
         if ($CaptureOutputInPanel -and ($statusExecutionState.Started -or $statusExecutionState.Completed)) {
             if ($statusExecutionState.Completed) {
                 return $statusExecutionState.Result
+            }
+
+            # The operation failed after producing output. Show what it captured so the
+            # failure can be diagnosed, then rethrow for the caller's error handling.
+            if ($capturedLines.Count -gt 0) {
+                Show-SetupActivityOutputPanel -Heading $Status -Lines $capturedLines
             }
 
             throw
