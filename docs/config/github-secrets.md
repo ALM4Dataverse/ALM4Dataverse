@@ -152,6 +152,10 @@ existing repositories retain the legacy format unless immutable subjects are ena
 For an existing legacy repository, setup offers to enable immutable subjects when WIF
 is selected. Review the [GitHub changelog](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories)
 first because other repository consumers that trust legacy subjects may need updates.
+The repository OIDC setting requires repository admin permission, so the
+`APPLY-CONFIG` workflow cannot change it: it keeps the existing setting and assumes it
+matches `GitHubUseImmutableWifSubject` in `alm-config.psd1`. Run setup interactively to
+change the setting.
 
 > [!NOTE]
 > **Advanced: custom job subjects.** An environment-based subject requires a job that

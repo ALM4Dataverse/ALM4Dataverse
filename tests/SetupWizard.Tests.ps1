@@ -495,6 +495,37 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         Should -Invoke Set-GitHubEnvironmentConfiguration -Times 2 -Exactly
     }
 
+    It 'leaves the GitHub OIDC setting untouched when the token cannot read it' -Skip:($Provider -ne 'GitHub') {
+        Mock Set-GitHubRepositoryImmutableSubject { throw 'An admin-only setting must not be written with a limited token.' }
+        Mock Set-GitHubEnvironmentConfiguration {}
+        $setupResult = [pscustomobject]@{
+            BranchStates = @([pscustomobject]@{
+                BranchName = 'main'
+                DevEnvironmentConfiguration = $script:dev
+                DeploymentEnvironments = @($script:target)
+                BuildValidationEnabled = $false
+                BuildValidationEnvironmentConfiguration = $null
+            })
+            UseImmutableWifSubject = $true
+        }
+
+        Invoke-GitHubSetupPostApply `
+            -SetupResult $setupResult `
+            -RepoIdentity ([pscustomobject]@{ UseImmutableSubject = $null; OidcSettingsAvailable = $false }) `
+            -TenantId 'example.com' `
+            -RepoOwner owner `
+            -RepoName repo `
+            -RepoFullName owner/repo `
+            -RepoOwnerId 1 `
+            -RepoId 2 `
+            -UseGitHubEnvironments $true `
+            -UseRepositoryVariablePrefix $true `
+            -EnableEnvironmentApprovals $false
+
+        Should -Invoke Set-GitHubRepositoryImmutableSubject -Times 0 -Exactly
+        Should -Invoke Set-GitHubEnvironmentConfiguration -Times 2 -Exactly
+    }
+
     It 'registers Azure DevOps resources in the retryable Apply callback' -Skip:($Provider -ne 'Azure DevOps') {
         Mock Initialize-AzDoBuildServiceRepositoryPermission {}
         Mock Initialize-AzDoMainRepositoryPipeline {}
@@ -945,6 +976,16 @@ Describe 'Provider setup artifact preview scopes' {
         $repositoryVariableChanges.Resource | Should -Contain 'GitHub environment secret'
         (($environmentChanges + $repositoryVariableChanges | ConvertTo-Json -Depth 5 -Compress) -join '') |
             Should -Not -Match 'github-preview-secret'
+
+        $unknownOidcChanges = @(Get-GitHubSetupResourceChange `
+                -BranchStates $branchStates `
+                -RepoIdentity ([pscustomobject]@{ UseImmutableSubject = $null; OidcSettingsAvailable = $false }) `
+                -RepoFullName owner/repo `
+                -UseImmutableWifSubject $true `
+                -UseGitHubEnvironments $false `
+                -UseRepositoryVariablePrefix $true `
+                -EnableEnvironmentApprovals $false)
+        ($unknownOidcChanges | Where-Object { $_.Resource -eq 'GitHub repository OIDC setting' }).Action | Should -Be 'Leave'
     }
 
     It 'plans Azure DevOps pipelines, permissions, service connections, checks, and Dataverse roles' {

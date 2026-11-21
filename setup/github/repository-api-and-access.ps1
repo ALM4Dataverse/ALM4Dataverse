@@ -5,7 +5,8 @@ function Invoke-GhApi {
     .DESCRIPTION
         Sends a truthy Body as JSON on stdin. Returns parsed JSON, raw CLI output when
         parsing fails, or null for an empty response. Nonzero CLI exits throw unless
-        AllowNotFound matches 404/Not Found in the captured error text.
+        AllowNotFound matches 404/Not Found or AllowForbidden matches 403 in the
+        captured error text.
         Temporarily permits native stderr so the exit code can be handled explicitly.
     #>
     [CmdletBinding()]
@@ -13,7 +14,8 @@ function Invoke-GhApi {
         [Parameter(Mandatory)][string]$Endpoint,
         [Parameter()][string]$Method = 'GET',
         [Parameter()][object]$Body,
-        [Parameter()][switch]$AllowNotFound
+        [Parameter()][switch]$AllowNotFound,
+        [Parameter()][switch]$AllowForbidden
     )
 
     $ghArgs = @('api', '--method', $Method, $Endpoint)
@@ -41,6 +43,11 @@ function Invoke-GhApi {
     if ($ghExitCode -ne 0) {
         $errText = @($result | ForEach-Object { [string]$_ }) -join "`n"
         if ($AllowNotFound -and ($errText -match '404' -or $errText -match 'Not Found')) {
+            return $null
+        }
+        # Workflow installation tokens cannot read endpoints that require repository
+        # admin, so best-effort callers can treat that as "not available" instead.
+        if ($AllowForbidden -and ($errText -match '403' -or $errText -match 'not accessible by integration')) {
             return $null
         }
         throw "gh api call failed (exit code $ghExitCode): $errText"

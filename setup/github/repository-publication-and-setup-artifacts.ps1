@@ -625,13 +625,21 @@ function Get-GitHubSetupResourceChange {
                 }
             })
     }
-    $currentImmutableSubject = [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject')
-    if ($UseImmutableWifSubject -and -not $currentImmutableSubject) {
+    $currentImmutableSubject = Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject'
+    if ($UseImmutableWifSubject -and $null -ne $currentImmutableSubject -and -not [bool]$currentImmutableSubject) {
         $changes.Add([pscustomobject]@{
                 Action   = 'Enable'
                 Resource = 'GitHub repository OIDC setting'
                 Target   = $RepoFullName
                 Details  = 'Enable immutable subject claims while preserving the existing claim-selection mode.'
+            })
+    }
+    elseif ($UseImmutableWifSubject -and $null -eq $currentImmutableSubject) {
+        $changes.Add([pscustomobject]@{
+                Action   = 'Leave'
+                Resource = 'GitHub repository OIDC setting'
+                Target   = $RepoFullName
+                Details  = 'The current token cannot read this admin-only setting, so it stays unchanged and is assumed to match alm-config.psd1.'
             })
     }
 
@@ -811,7 +819,10 @@ function Invoke-GitHubSetupPostApply {
 
     $branchStates = @($SetupResult.BranchStates)
     $useImmutableWifSubject = [bool]$SetupResult.UseImmutableWifSubject
-    if ($useImmutableWifSubject -and -not [bool](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject')) {
+    $currentImmutableSubject = Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject'
+    # A null value means the token could not read the admin-only setting, so it must
+    # be left alone rather than treated as disabled.
+    if ($useImmutableWifSubject -and $null -ne $currentImmutableSubject -and -not [bool]$currentImmutableSubject) {
         $updatedOidcCustomization = Invoke-WithErrorHandling `
             -OperationName "Enabling immutable GitHub OIDC subjects for '$RepoFullName'" `
             -StatusMessage "Enabling immutable GitHub OIDC subjects for '$RepoFullName'..." `

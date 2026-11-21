@@ -1843,3 +1843,73 @@ resources:
         $content | Should -Match 'environmentName: TEST'
     }
 }
+
+Describe 'GitHub repository OIDC metadata access' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
+        foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+            Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+    }
+
+    It 'returns null when a forbidden endpoint is tolerated' {
+        Mock gh {
+            param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+            $global:LASTEXITCODE = 1
+            Write-Error 'gh: Resource not accessible by integration (HTTP 403)'
+        }
+
+        Invoke-GhApi -Endpoint 'repos/owner/repo/actions/oidc/customization/sub' -AllowForbidden | Should -BeNullOrEmpty
+    }
+
+    It 'throws for a forbidden endpoint when the caller does not tolerate it' {
+        Mock gh {
+            param([Parameter(ValueFromRemainingArguments)][string[]]$Arguments)
+            $global:LASTEXITCODE = 1
+            Write-Error 'gh: Resource not accessible by integration (HTTP 403)'
+        }
+
+        { Invoke-GhApi -Endpoint 'repos/owner/repo/actions/oidc/customization/sub' } | Should -Throw '*403*'
+    }
+
+    It 'reports the OIDC subject setting as unknown when it cannot be read' {
+        Mock Invoke-GhApi {
+            if ($Endpoint -eq 'repos/owner/repo') {
+                [pscustomobject]@{ id = 2; owner = [pscustomobject]@{ id = 1 } }
+            }
+        }
+
+        $identity = Get-GitHubRepositoryIdentity -Owner owner -Repo repo -AllowUnavailableOidcSettings
+
+        $identity.OidcSettingsAvailable | Should -BeFalse
+        $identity.UseImmutableSubject | Should -BeNullOrEmpty
+        $identity.OwnerId | Should -Be 1
+        $identity.RepositoryId | Should -Be 2
+    }
+
+    It 'fails when the OIDC subject setting is required but unreadable' {
+        Mock Invoke-GhApi {
+            if ($Endpoint -eq 'repos/owner/repo') {
+                [pscustomobject]@{ id = 2; owner = [pscustomobject]@{ id = 1 } }
+            }
+        }
+
+        { Get-GitHubRepositoryIdentity -Owner owner -Repo repo } | Should -Throw '*admin permission*'
+    }
+
+    It 'reports the OIDC subject setting when it can be read' {
+        Mock Invoke-GhApi {
+            if ($Endpoint -eq 'repos/owner/repo') {
+                [pscustomobject]@{ id = 2; owner = [pscustomobject]@{ id = 1 } }
+            }
+            else {
+                [pscustomobject]@{ use_default = $true; use_immutable_subject = $true }
+            }
+        }
+
+        $identity = Get-GitHubRepositoryIdentity -Owner owner -Repo repo -AllowUnavailableOidcSettings
+
+        $identity.OidcSettingsAvailable | Should -BeTrue
+        $identity.UseImmutableSubject | Should -BeTrue
+    }
+}

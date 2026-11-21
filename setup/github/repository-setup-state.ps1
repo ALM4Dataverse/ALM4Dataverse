@@ -119,12 +119,17 @@ function Get-GitHubRepositoryIdentity {
     .DESCRIPTION
         Requires numeric owner/repository IDs and an explicit use_immutable_subject
         setting; missing metadata throws rather than guessing an Entra trust subject.
-        Returns IDs as Int64 plus the original OidcCustomization for later updates.
+        AllowUnavailableOidcSettings reports that setting as null instead of throwing
+        when the token cannot read it, which is how workflow installation tokens
+        behave; callers must then leave the repository setting unchanged.
+        Returns IDs as Int64, OidcSettingsAvailable, and the original OidcCustomization
+        for later updates.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Owner,
-        [Parameter(Mandatory)][string]$Repo
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter()][switch]$AllowUnavailableOidcSettings
     )
 
     $repository = Invoke-GhApi -Endpoint "repos/$Owner/$Repo"
@@ -147,17 +152,19 @@ function Get-GitHubRepositoryIdentity {
 
     # Existing repositories remain on the legacy subject format unless they opt in.
     # Read GitHub's effective repository setting instead of inferring the format from age.
-    $oidcCustomization = Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/oidc/customization/sub" -AllowNotFound
+    $oidcCustomization = Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/oidc/customization/sub" -AllowNotFound -AllowForbidden
     $oidcCustomizationPropertyNames = if ($oidcCustomization) { @($oidcCustomization.PSObject.Properties.Name) } else { @() }
-    if (-not $oidcCustomization -or $oidcCustomizationPropertyNames -notcontains 'use_immutable_subject') {
-        throw "GitHub did not report the OIDC subject format for repository '$Owner/$Repo'."
+    $oidcSettingsAvailable = [bool]($oidcCustomization -and $oidcCustomizationPropertyNames -contains 'use_immutable_subject')
+    if (-not $oidcSettingsAvailable -and -not $AllowUnavailableOidcSettings) {
+        throw "GitHub did not report the OIDC subject format for repository '$Owner/$Repo'. Sign in with an account that has admin permission on the repository."
     }
 
     return [pscustomobject]@{
-        OwnerId             = [long]$ownerId
-        RepositoryId        = [long]$repositoryId
-        UseImmutableSubject = [bool]$oidcCustomization.use_immutable_subject
-        OidcCustomization   = $oidcCustomization
+        OwnerId               = [long]$ownerId
+        RepositoryId          = [long]$repositoryId
+        UseImmutableSubject   = $(if ($oidcSettingsAvailable) { [bool]$oidcCustomization.use_immutable_subject } else { $null })
+        OidcSettingsAvailable = $oidcSettingsAvailable
+        OidcCustomization     = $oidcCustomization
     }
 }
 
@@ -1114,12 +1121,20 @@ function Initialize-GitHubApplicationRepositoryContext {
     Write-Host "Selected: $repoFullName" -ForegroundColor Cyan
 
     $repoIdentity = Invoke-WithSpectreStatus -Status "Loading GitHub owner and repository IDs for '$repoFullName'..." -ScriptBlock {
-        Get-GitHubRepositoryIdentity -Owner $repoOwner -Repo $repoName
+        Get-GitHubRepositoryIdentity -Owner $repoOwner -Repo $repoName -AllowUnavailableOidcSettings:$ApplyConfig
     }
     $repoOwnerId = [long]$repoIdentity.OwnerId
     $repoId = [long]$repoIdentity.RepositoryId
     $useImmutableWifSubject = [bool]$repoIdentity.UseImmutableSubject
-    $wifSubjectFormat = if ($useImmutableWifSubject) { 'immutable owner/repository ID' } else { 'legacy owner/repository name' }
+    if (-not $repoIdentity.OidcSettingsAvailable) {
+        # ApplyConfig usually runs from a workflow whose token has no repository admin
+        # rights, so report the gap instead of failing or changing the setting.
+        Write-Host 'The current token cannot read the repository OIDC subject setting; applying configuration will not change it.' -ForegroundColor Yellow
+        $wifSubjectFormat = 'unknown'
+    }
+    else {
+        $wifSubjectFormat = if ($useImmutableWifSubject) { 'immutable owner/repository ID' } else { 'legacy owner/repository name' }
+    }
     Write-Host "GitHub OIDC identity: owner ID $repoOwnerId, repository ID $repoId ($wifSubjectFormat subject format)" -ForegroundColor DarkGray
 
     $defaultBranch = 'main'
