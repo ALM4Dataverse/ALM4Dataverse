@@ -6,7 +6,7 @@ Start with the platform your organization already uses and licenses. Both run th
 core ALM4Dataverse scripts, but their pricing and deployment controls differ:
 
 - **Azure DevOps** is usually the simpler low-cost choice for private repositories that need deployment approvals. A small team can start free, but **every job must finish within 60 minutes** on its free hosted tier.
-- **GitHub** fits teams already using GitHub and public/open-source projects. For private organization repositories, budget for Team or Enterprise Cloud, depending on the approval controls you need. ALM4Dataverse's GitHub support is still **PREVIEW**.
+- **GitHub** fits teams already using GitHub and public/open-source projects. For private organization repositories, budget for Team or Enterprise Cloud, depending on the approval controls you need.
 
 > [!NOTE]
 > **Pricing checked: 12 October 2026.** Figures below are advertised USD prices for
@@ -89,7 +89,7 @@ option does **not** include private deployment required-reviewer approvals.
 > Enterprise Cloud. Pro supports private environments for personal repositories, with
 > the same approval limitation. ALM4Dataverse's manual gate tags record promotion order;
 > they do not provide independent approval. Prefixed credentials do not remove the
-> supplied jobs' environment requirement. See the [GitHub plan limitations](setup/github-setup.md#github-licence-limitations).
+> supplied jobs' environment requirement. See the [GitHub plan limitations](setup/github-manual-setup.md#github-licence-limitations).
 
 Official sources: [Azure DevOps pricing](https://azure.microsoft.com/en-us/pricing/details/devops/azure-devops-services/),
 [Azure hosted-job rules](https://learn.microsoft.com/en-us/azure/devops/pipelines/licensing/concurrent-jobs?view=azure-devops),

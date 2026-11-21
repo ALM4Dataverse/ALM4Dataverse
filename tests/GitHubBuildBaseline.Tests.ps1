@@ -9,11 +9,12 @@ BeforeAll {
 
 Describe 'GitHub baseline package selection and deployment order' {
     BeforeEach {
-        $script:savedBaselineEnvironment = @{ RUNNER_TEMP = $env:RUNNER_TEMP; GITHUB_TOKEN = $env:GITHUB_TOKEN; GITHUB_REPOSITORY = $env:GITHUB_REPOSITORY; GH_TOKEN = $env:GH_TOKEN }
+        $script:savedBaselineEnvironment = @{ RUNNER_TEMP = $env:RUNNER_TEMP; GITHUB_TOKEN = $env:GITHUB_TOKEN; GITHUB_REPOSITORY = $env:GITHUB_REPOSITORY; GH_TOKEN = $env:GH_TOKEN; BUILD_BRANCH = $env:BUILD_BRANCH }
         $script:savedBaselineExitCode = $global:LASTEXITCODE
         $env:RUNNER_TEMP = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         $env:GITHUB_TOKEN = 'fake-test-token'
         $env:GITHUB_REPOSITORY = 'example/repository'
+        $env:BUILD_BRANCH = 'main'
         $script:candidatePath = Join-Path $env:RUNNER_TEMP 'candidate'
         $baselineSource = Join-Path $env:RUNNER_TEMP 'baseline-source'
         # Both packages expose a recording-only deploy entry point, so archive extraction and
@@ -56,13 +57,25 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
     }
 
     It 'deploys a downloaded baseline before the candidate and removes temporary packages' {
-        & $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST
+        & $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST -BranchName main
         $order = @(Get-Content (Join-Path $env:RUNNER_TEMP 'deploy-order.log'))
         $order.Count | Should -Be 2
         $order[0] | Should -Match 'alm4dataverse-baseline-'
         $order[1] | Should -Be $script:candidatePath
         @(Get-ChildItem $env:RUNNER_TEMP -Directory -Filter 'alm4dataverse-*').Count | Should -Be 0
         Should -Invoke gh -Times 1 -Exactly
+    }
+
+    It 'uses the selected branch baseline instead of the legacy global baseline' {
+        Set-Content -LiteralPath (Join-Path $script:candidatePath 'alm-config.psd1') `
+            -Value "@{ buildValidation = @{ baselineRelease = 'release-1' }; branches = @{ main = @{ buildValidation = @{ baselineRelease = '' } } } }"
+
+        & $script:githubBaselineScript -ArtifactsPath $script:candidatePath -EnvironmentName TEST -BranchName main
+
+        $order = @(Get-Content (Join-Path $env:RUNNER_TEMP 'deploy-order.log'))
+        $order.Count | Should -Be 1
+        $order[0] | Should -Be $script:candidatePath
+        Should -Invoke gh -Times 0 -Exactly
     }
 
     It 'supports numeric, annotated pointer, and legacy pointer selectors' -ForEach @(
@@ -173,5 +186,23 @@ Add-Content -LiteralPath (Join-Path $env:RUNNER_TEMP 'deploy-order.log') -Value 
         Compress-Archive -LiteralPath $invalidFile -DestinationPath $invalidArchive
         { Expand-BaselineArchive -ArchivePath $invalidArchive -DestinationPath (Join-Path $env:RUNNER_TEMP 'extracted') } | Should -Throw '*does not contain*deploy.ps1*'
         { Save-BaselineReleaseAsset -ReleaseTag 'first second' -DestinationPath $TestDrive } | Should -Throw '*single non-empty line*'
+    }
+}
+Describe 'Shared template version validation for GitHub callers' {
+    BeforeAll {
+        $script:callerVersionValidator = Join-Path $repoRoot '.github/actions/common/validate-caller-version.ps1'
+    }
+
+    It 'accepts the current shared template version' {
+        $versionSource = Get-Content -LiteralPath (Join-Path $repoRoot 'setup/common/shared-template-version.ps1') -Raw
+        $currentVersion = [regex]::Match($versionSource, "return '([^']+)'").Groups[1].Value
+        { & $script:callerVersionValidator -ActualVersion $currentVersion } | Should -Not -Throw
+    }
+
+    It 'rejects missing and stale versions with a regeneration instruction' {
+        { & $script:callerVersionValidator -ActualVersion '' } |
+            Should -Throw '*generated for shared template version*setup-github.ps1 -ApplyConfig*do not edit*'
+        { & $script:callerVersionValidator -ActualVersion '0' } |
+            Should -Throw '*generated for shared template version*setup-github.ps1 -ApplyConfig*do not edit*'
     }
 }

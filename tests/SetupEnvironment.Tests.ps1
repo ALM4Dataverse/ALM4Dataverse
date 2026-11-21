@@ -1,6 +1,7 @@
 BeforeAll {
     $repoRoot = Split-Path $PSScriptRoot -Parent
-    . (Join-Path $repoRoot 'setup-common.ps1')
+    . (Join-Path $repoRoot 'setup/setup-common.ps1')
+    . (Join-Path $repoRoot 'tests/helpers/SetupTestHelpers.ps1')
     function Get-VSTeamServiceEndpoint {
         [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ProjectName', Justification = 'Mock command signature; Pester inspects this argument.')]
         [CmdletBinding()]
@@ -49,9 +50,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
     @{ Provider = 'Azure DevOps'; Source = 'setup-azdo.ps1'; CredentialHelper = 'Get-PowerPlatformSCCredential'; ApplyHelper = 'Set-AzDoEnvironmentConfiguration' }
 ) {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $Source), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint $Source
         # Load provider function bodies without executing installer bootstrap/authentication.
         foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
             Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
@@ -102,14 +101,10 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
         $script:credentialParameters.ExistingCredential = $script:environmentCredential
         $result = & $CredentialHelper @script:credentialParameters
         $script:environmentCredential.ClientSecret | Should -BeNullOrEmpty
-        if ($Rotate) {
-            $result.ClientSecret | Should -Be 'fake-rotated-secret'
-            Should -Invoke New-EntraIdApplicationSecret -Times 1 -Exactly -ParameterFilter { $ApplicationObjectId -eq 'object-id' }
-        }
-        else {
-            $result.ClientSecret | Should -BeNullOrEmpty
-            Should -Invoke New-EntraIdApplicationSecret -Times 0 -Exactly
-        }
+        $result.ClientSecret | Should -BeNullOrEmpty
+        $result.RotateSecret | Should -Be ([bool]$Rotate)
+        # Rotation is deferred until Apply, so selection must not write a secret.
+        Should -Invoke New-EntraIdApplicationSecret -Times 0 -Exactly
     }
 
     It 'creates the explicitly selected new application authentication mode' -ForEach @(
@@ -314,17 +309,84 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
 
     Context 'Deployment environment editor callbacks' {
         BeforeEach {
+            # The callbacks bind these commands before creating nested closures, so
+            # replace the bound bodies rather than the live functions.
+            Set-Variable -Name SetupCommandBindingOverrides -Scope Global -Value @{
+                'Read-TextWithDefault' = {
+                    [CmdletBinding()]
+                    param($Prompt, $DefaultValue, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                    $null = @($Prompt, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                    if ($DefaultValue) { return $DefaultValue }
+                    return 'TEST'
+                }
+                'Request-SetupWizardBack' = {
+                    throw [System.InvalidOperationException]::new('__ALM4DATAVERSE_WIZARD_BACK__')
+                }
+            }
             $script:targetConfiguration = [pscustomobject]@{ ShortName = 'TEST'; FriendlyName = 'Test'; Url = 'https://test.example.com'; Credentials = $script:environmentCredential; ServiceAccountUPN = 'service@example.com' }
             Mock Select-DataverseEnvironment { [pscustomobject]@{ FriendlyName = 'Test'; Endpoints = @{ WebApplication = 'https://test.example.com/' } } }
             Mock Get-DataverseServiceAccountUPN { 'service@example.com' }
             Mock Invoke-WithSpectreStatus { & $ScriptBlock }
             Mock Start-Sleep {}
-            Mock Read-TextWithDefault { 'TEST' }
+            Mock Read-TextWithDefault { if ($DefaultValue) { $DefaultValue } else { 'TEST' } }
             if ($Provider -eq 'Azure DevOps') {
-                Mock Get-AzDoEnvironmentConfiguration { $script:targetConfiguration }
                 Mock Get-ExistingEnvironmentsFromWorkingTree { @('TEST', 'PROD') }
                 Mock Get-AzDoExistingEnvironmentState { $script:targetConfiguration }
+                Mock Invoke-SetupEnvironmentConfigurationWizard {
+                    $shortName = [string]$InitialTargetName
+                    $url = 'https://test.example.com'
+                    $friendlyName = 'Test'
+                    if ($InitialConfiguration) {
+                        if (-not [string]::IsNullOrWhiteSpace($InitialConfiguration.ShortName)) {
+                            $shortName = [string]$InitialConfiguration.ShortName
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($InitialConfiguration.Url)) {
+                            $url = [string]$InitialConfiguration.Url
+                        }
+                        elseif ($shortName -ieq 'PROD') {
+                            $url = 'https://prod.example.com'
+                            $friendlyName = 'Production'
+                        }
+                        if (-not [string]::IsNullOrWhiteSpace($InitialConfiguration.FriendlyName)) {
+                            $friendlyName = [string]$InitialConfiguration.FriendlyName
+                        }
+                    }
+
+                    $environmentState = [pscustomobject]@{ ShortName = $shortName; Url = $url }
+                    if ($SelectTargetNameAction) {
+                        try {
+                            $selectedName = [string](& $SelectTargetNameAction $environmentState)
+                            if (-not [string]::IsNullOrWhiteSpace($selectedName)) {
+                                $shortName = $selectedName
+                            }
+                        }
+                        catch {
+                            if (Test-IsSetupWizardBackException -Exception $_.Exception) {
+                                return $null
+                            }
+                            throw
+                        }
+                    }
+
+                    $baselineRelease = [string]$InitialBaselineRelease
+                    if ($SelectBaselineAction) {
+                        $baselineRelease = [string](& $SelectBaselineAction ([pscustomobject]@{ ShortName = $shortName; Url = $url }))
+                    }
+                    return [pscustomobject]@{
+                        ShortName = $shortName
+                        FriendlyName = $friendlyName
+                        Url = $url
+                        Credentials = $script:environmentCredential
+                        ServiceAccountUPN = 'service@example.com'
+                        BaselineRelease = $baselineRelease
+                        BaselineConfigured = $null -ne $SelectBaselineAction
+                    }
+                }
             }
+        }
+
+        AfterEach {
+            Remove-Variable -Name SetupCommandBindingOverrides -Scope Global -ErrorAction SilentlyContinue
         }
 
         It 'returns normalized environment configuration with reused credentials and ownership' {
@@ -345,7 +407,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
                 $result = @(Get-DataverseEnvironmentsSelection -ProjectName project -TenantId example.com)
                 $result.Count | Should -Be 1
                 $result[0].ShortName | Should -Be TEST
-                Should -Invoke Get-AzDoEnvironmentConfiguration -Times 2 -Exactly
+                Should -Invoke Invoke-SetupEnvironmentConfigurationWizard -Times 2 -Exactly
             }
         }
 
@@ -359,7 +421,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
                 @()
             }
             @(Get-DataverseEnvironmentsSelection -ProjectName project).Count | Should -Be 0
-            Should -Invoke Get-AzDoEnvironmentConfiguration -Times 0 -Exactly
+            Should -Invoke Invoke-SetupEnvironmentConfigurationWizard -Times 4 -Exactly
         }
 
         It 'prepopulates existing stages and completes missing configuration' -Skip:($Provider -eq 'GitHub') {
@@ -369,8 +431,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
             $result.Count | Should -Be 2
             $result[0].Credentials | Should -Be $script:environmentCredential
             $result[0].Url | Should -Be 'https://test.example.com'
-            Should -Invoke Get-AzDoEnvironmentConfiguration -Times 2 -Exactly
-            Should -Invoke Select-DataverseEnvironment -Times 2 -Exactly
+            Should -Invoke Invoke-SetupEnvironmentConfigurationWizard -Times 2 -Exactly
         }
     }
 }
@@ -380,9 +441,7 @@ Describe 'Identity and environment discovery in <Provider>' -ForEach @(
     @{ Provider = 'Azure DevOps'; Source = 'setup-azdo.ps1' }
 ) {
     BeforeAll {
-        $tokens = $null
-        $parseErrors = $null
-        $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repoRoot $Source), [ref]$tokens, [ref]$parseErrors)
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint $Source
         foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
             Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
         }

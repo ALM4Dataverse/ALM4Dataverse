@@ -1,294 +1,276 @@
-# GitHub Actions Setup Guide
+# GitHub Automated Setup
 
-GitHub Actions support is **PREVIEW**. This guide covers automated and manual setup.
-For Azure DevOps, use the [Azure DevOps setup guide](azdo-automated-setup.md).
+Automated setup is the recommended GitHub Actions route (PREVIEW): one guided script that
+creates or selects the application repository, configures GitHub environments, variables,
+secrets and OIDC settings, and generates the caller workflows from `alm-config.psd1`. It
+does not create Dataverse environments. Both routes generate the caller workflows
+automatically from `alm-config.psd1`; the difference is who creates everything else.
 
-The application repository contains unpacked solutions, its ALM configuration, data/hooks,
-and small caller workflows. Shared composite actions run the build/export/import/deploy
-steps; a separate reusable workflow handles Release cleanup. You do not need a second
-GitHub repository unless you want to maintain a fork of the shared implementation.
+For Azure DevOps, use the [Azure DevOps automated setup guide](azdo-automated-setup.md).
+To create the GitHub and Dataverse resources yourself, use
+[manual setup](github-manual-setup.md). For the shortest path to a first deployment, start
+with the [GitHub quickstart](../getting-started/quickstart-github.md).
 
-## Prerequisites
+## Before You Start
 
-- A GitHub repository with Actions enabled and permission to configure its workflows, variables, secrets, and environments.
-- Access to development and deployment Dataverse environments and permission to create/manage application users.
-- An Entra app registration for each target, or permission to create one and configure its authentication.
-- An existing user account for process ownership, with the necessary licensing, roles, and connection access.
-- A GitHub plan supporting the environment features you intend to use; see [licence limitations](#github-licence-limitations).
-- For automated setup: Windows PowerShell 5.1 or PowerShell 7 on Windows, Git, and network access to GitHub and the required Microsoft/package services. Setup downloads a temporary GitHub CLI when `gh` is missing.
+- **A GitHub repository** with Actions enabled and permission to configure its workflows,
+  variables, secrets and environments. Use a public repository, or a private one on a plan
+  with environments; see
+  [plan limitations](github-manual-setup.md#github-licence-limitations).
+- **Development and deployment Dataverse environments**, with permission to create and
+  manage application users.
+- **An Entra app registration for each target**, or permission to create one and configure
+  its authentication.
+- **An existing licensed user** in each environment to own and activate flows and other
+  processes.
+- **For automated setup:** Windows PowerShell 5.1 or PowerShell 7 on Windows, Git, and
+  network access to GitHub and the required Microsoft services. Setup downloads a
+  temporary GitHub CLI when `gh` is missing.
+
+> [!NOTE]
+> **Optional Dev Container.** The repository includes a
+> [Dev Container](../../.devcontainer/devcontainer.json) with PowerShell 7, Git and
+> GitHub CLI. It is not a security boundary; setup still acts with the permissions of the
+> authenticated accounts. Use least-privilege identities. The container has no browser,
+> so sign-in shows a device code to enter at the printed URL in a browser on your machine.
 
 > [!CAUTION]
 > Use separate application identities for production and non-production. The application
 > user authenticates automation; the service-account user owns and activates processes.
 > They are not interchangeable. The standard setup assigns the application user the
-> Dataverse System Administrator role. Restrict access to CI credentials and treat
-> workflow and hook changes as privileged code changes.
+> Dataverse System Administrator role. Treat workflow and hook changes as privileged code
+> changes.
 
 ## Automated Setup
 
-Download the released script, review it, then run it from PowerShell:
+Download the released script, review it, then run it:
 
 ```powershell
 Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1' -OutFile './setup-github.ps1'
-```
-
-After reviewing the downloaded file:
-
-```powershell
 .\setup-github.ps1
 ```
 
-The existing one-line bootstrap remains available for users who have already reviewed
-and trust the release:
+If you have already reviewed and trust the release, you can run the one-line bootstrap
+instead:
 
 ```powershell
 iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1 | iex
 ```
 
-Setup signs in, selects or creates the application repository, selects solutions in
-dependency order, and configures development and deployment environments. It prompts
-for application identities/authentication and process-owner accounts, generates caller
-workflows, and offers shared BUILD deployment validation with an optional baseline source.
-Existing repository choices include repositories owned by your account, available through
-an organization, or shared with you as a collaborator. An existing repository can be
-empty; setup creates its initial branch and commit when publishing the generated files.
-When creating a shared workflow repository, setup prompts for an owner and defaults to
-the owner of the selected application repository.
+To select a tenant or a specific shared-code ref, see
+[setup parameters](../config/pipelines.md#setup-script-parameters).
+
+> [!NOTE]
+> Released setup scripts embed their helpers. A raw script downloaded from the source
+> repository is not equivalent and needs its adjacent files.
+
+### Guided Setup
+
+Setup asks a few questions, then opens a menu. New repositories unlock steps in order; an
+existing repository starts from the settings in `alm-config.psd1` and lets you open any
+step. After each step you return to the menu. **Preview changes** is optional, and
+**Apply changes** stays unavailable until every required step is complete.
+
+![Guided setup menu for a new GitHub repository](./screenshots/github-menu-new-repository.png)
+
+![Guided setup menu for an existing GitHub repository with saved branch mappings](./screenshots/github-menu-existing-repository.png)
+
+![Guided setup menu when the configured shared workflow repository is inaccessible](./screenshots/github-menu-unavailable-shared-repository.png)
+
+#### 1. New or existing repository
+
+Choose **Set up a new application repository** to create the repository and its first
+branch, or **Configure an existing repository** to use one that already exists. An
+existing repository can be empty; setup creates its initial branch and commit when it
+publishes files. The choice appears before authentication.
+
+![New or existing repository choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
+
+#### 2. Sign in and select the application repository
+
+Setup signs in to GitHub and Azure, then asks for the application repository. Existing
+repository choices include repositories you own, repositories in your organizations, and
+repositories shared with you as a collaborator.
+
+![GitHub authentication choices](./screenshots/github-authentication.png)
+
+![Selecting the GitHub application repository](./screenshots/github-application-repository.png)
+
+#### 3. Select the shared workflow repository
+
+The shared workflow repository contains the composite actions and reusable workflows.
+Select an existing fork or private repository, or create one; creating it asks for
+confirmation because it is created before preview. When creating, setup asks for the owner
+and defaults to the owner of the application repository.
+
+The separate **Check and update shared workflow repository version** step compares the
+selected repository with the ALM4Dataverse ref you are running. If it needs a fast-forward
+or reconciliation, setup records the update and performs it only when you choose
+**Apply changes**.
+
+![Selecting or creating the shared workflow repository](./screenshots/github-shared-workflow-repository.png)
+
+#### 4. Configure branches and environments
+
+**Configure branches, dev and deployment envs** defines each branch, its DEV environment,
+its deployment targets and its BUILD validation. Select the row to start.
+
+1. **Choose a branch strategy.** For a new repository, choose `main only` or
+   `main + develop`. Existing repositories start from the mappings in `alm-config.psd1`
+   and skip this prompt. This creates branch mappings, not branch protection. See
+   [branching strategies](../usage/branching-strategies.md).
+
+   ![Branch strategy menu from GitHub setup](./screenshots/branch-strategy.png)
+
+2. **Add or edit branch mappings.** Choose **Add a branch mapping** or **Edit a branch
+   mapping**. Branch names must be unique.
+
+   ![Prompt for a new branch name](./screenshots/branch-name.png)
+
+3. **Configure the DEV environment.** Choose whether the branch has a DEV environment. For
+   a new GitHub branch the confirmation defaults to No. If you choose Yes, select the
+   Dataverse environment; setup names it `Dev-<branch>`. Only branches with a DEV
+   environment can be a solution source.
+
+   ![GitHub DEV environment confirmation](./screenshots/github-dev-confirmation.png)
+
+   ![GitHub DEV environment selection](./screenshots/github-dev-environment-selection.png)
+
+4. **Choose credentials and the process owner.** The environment detail menu asks for the
+   Dataverse environment, its credential and the service account. Setup can create an App
+   Registration, reuse an existing one, or let you enter existing details. A new
+   registration asks whether to use workload identity federation or a client secret. If
+   you choose a client secret, store it as a GitHub secret; never put it in
+   `alm-config.psd1` or source control. Rotating an existing secret is deferred until you
+   choose **Apply changes**.
+
+   ![GitHub credential choices](./screenshots/github-credentials.png)
+
+   ![GitHub authentication type choices](./screenshots/github-authentication-type.png)
+
+   ![GitHub service-account choices](./screenshots/github-service-account.png)
+
+   The service account is the licensed user that owns processes, not the application
+   identity. Setup checks the format of a manually entered UPN but does not verify its
+   licensing or roles.
+
+5. **Add deployment targets.** Choose **Add an environment**, then complete the Dataverse
+   environment, short name (`TEST`, `UAT`, `PROD`), credentials and service account. Add
+   targets in promotion order; the list order becomes the deployment stage order. A
+   branch can have no deployment targets.
+
+   ![Per-environment detail menu with completed prerequisites and the service-account step ready to configure](./screenshots/environment-detail-menu.png)
+
+   ![GitHub deployment environment selection](./screenshots/github-deployment-environment-selection.png)
+
+   ![Prompt for a deployment environment short name](./screenshots/deployment-short-name.png)
+
+   ![GitHub deployment environment plan](./screenshots/deployment-environment-plan.png)
+
+6. **Enable BUILD validation (optional).** Choose a non-production Dataverse environment
+   to receive each build, then its GitHub environment name, credentials, service account
+   and optional baseline. Leave it off for now if you are still setting up; you can enable
+   it later. See
+   [BUILD validation](github-manual-setup.md#build-validation-and-pull-requests).
+
+   ![GitHub BUILD validation environment selection for a branch](./screenshots/github-build-validation.png)
+
+7. **Review the branch map.** Check the table, then choose **Done**. Reopen a branch to
+   change its DEV environment, deployment targets or BUILD validation.
+
+   ![GitHub branch-to-environment mapping table](./screenshots/branch-mapping.png)
+
+#### 5. Configure solutions
+
+Choose a branch with a DEV environment as the discovery source, then select and order the
+solutions. The summary shows them in dependency order. See
+[solutions configuration](../config/alm-config.md#solutions).
+
+![Selecting and ordering managed solutions](./screenshots/solutions-configuration.png)
+
+#### 6. Configure GitHub OIDC identity
+
+When a selected credential uses workload identity federation and immutable subjects are
+not already enabled, setup asks whether to enable them for the repository. The setting is
+changed during Apply. Review other applications that trust the repository before changing
+this repository-wide setting.
+
+![GitHub OIDC immutable-subject confirmation](./screenshots/github-oidc-identity.png)
+
+#### 7. Preview and apply
+
+**Preview changes** shows the generated files, the `alm-config.psd1` diff and the external
+operations that Apply will perform: repository OIDC settings, environment variables,
+secrets and approvals, federated credentials, application users and process owners. It
+leaves the repository and the target environments unchanged. Operations already completed
+during setup are marked **Already applied**.
+
+![GitHub setup change summary and review menu](./screenshots/github-setup-change-review.png)
+
+![Scrollable colored side-by-side setup diff](./screenshots/setup-change-side-by-side-diff.png)
+
+When the menu shows **Apply changes** as ready, select it to publish the files and apply
+the listed settings. You do not have to preview first. If Apply fails, setup keeps your
+selections so you can correct the problem and retry. Operations that already succeeded are
+not rolled back.
+
+![Guided setup menu with Apply changes ready](./screenshots/github-apply-changes.png)
+
+### Apply A Committed Config
+
+If `alm-config.psd1` is reviewed and committed on the default branch, regenerate the
+workflows without the settings editors:
+
+```powershell
+.\setup-github.ps1 -ApplyConfig
+```
+
+This mode selects an existing repository and reads the provider, repository, ref, provider
+options and branch mappings from the committed config. It does not create repositories,
+configure GitHub environments, secrets, OIDC subjects or approvals, or offer the branch,
+environment, solution, BUILD validation and OIDC editors. To change those settings, edit
+and commit `alm-config.psd1`, then run the command again. Add `-PreviewOnly` to inspect the
+diffs without publishing:
+
+```powershell
+.\setup-github.ps1 -ApplyConfig -PreviewOnly
+```
+
+See
+[setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
 
 > [!IMPORTANT]
-> Verify plan compatibility and the generated protection rules. Setup selects
-> `environment-approval` when it detects support, or repository variables (optionally
-> environment-prefixed) plus
-> `manual-gate-tag` otherwise. The fallback still stores client secrets in the matching
-> GitHub environment; it does not make private GitHub Free repositories a fully supported
-> out-of-the-box configuration.
-
-Re-running setup can update generated files. Existing `secrets-json` mappings, including
-separate deployment-stage mappings, `AGENTS.md` and files under `data/` are preserved.
-Review the resulting diff and stored settings; other local workflow customizations can be
-overwritten (see [re-running setup](../usage/updating.md#re-run-setup-carefully)).
-GitHub cannot reveal existing secret values for automatic relocation.
-
-To select a tenant (`TenantId`) or shared code ref (`ALM4DataverseRef`), see
-[setup parameters](../config/pipelines.md#setup-script-parameters). Released scripts
-embed their helpers; raw repository scripts need the adjacent files in this repository.
+> GitHub does not let the built-in Actions token create or update files under
+> `.github/workflows/`, so the APPLY-CONFIG **workflow** needs a token with the
+> Workflows permission. Store it as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret;
+> the copied caller workflow passes it to the action. Preview runs work without it.
+> Running `-ApplyConfig -Commit` locally uses your own sign-in instead. See
+> [apply configuration token](../config/github-secrets.md#apply-configuration-token).
 
 ## Manual Setup
 
-### 1. Prepare Application Identities
+To create the repository settings, environments and credentials yourself, use
+[manual setup](github-manual-setup.md).
 
-For each target, register an app in Entra ID and record its application/client ID and
-tenant ID. In the Power Platform admin center, select the Dataverse environment, add
-an **Application user** for that app, and assign the required role.
+## After Setup
 
-Choose authentication:
-
-- **WIF/OIDC:** add a federated credential with issuer `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`, and the exact job subject. No client secret is needed.
-- **Client secret:** create a secret and retain its value in GitHub Secrets, not source control. Track its expiry and rotation process.
-
-The [credential reference](../config/github-secrets.md#entra-id-federated-credential-setup)
-shows both legacy and immutable subject formats. For environment-based jobs, create a
-credential for each relevant GitHub environment, including BUILD validation when enabled.
-
-> [!NOTE]
-> **Advanced: immutable OIDC subjects.** Setup can offer to enable these on existing
-> repositories. Review other applications trusting the old subjects before changing
-> this repository-wide setting.
-
-Official guidance: [app registrations](https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app),
-[Dataverse application users](https://learn.microsoft.com/en-us/power-platform/admin/manage-application-users),
-and [GitHub OIDC with Azure](https://docs.github.com/en/actions/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-azure).
-
-### 2. Copy The Application Files
-
-Copy the following from a consistent ALM4Dataverse release into your application repository:
-
-| Source | Destination |
-| --- | --- |
-| [alm-config.psd1](../../copy-to-your-repo/alm-config.psd1) | Repository root |
-| [AI-agent context](../../copy-to-your-repo/AGENTS.md) | `AGENTS.md` at the repository root |
-| [data](../../copy-to-your-repo/data) | `data/` |
-| [GitHub workflows](../../copy-to-your-repo/.github/workflows) | `.github/workflows/` |
-
-Include the hidden `.github` directory. Do not copy the Azure DevOps `pipelines` callers
-unless you also intend to configure that platform. Select a tested action/workflow ref
-instead of unintentionally following the template's `@main` references.
-
-Automated setup syncs the same `AGENTS.md` scaffold. Keep it in the application repository
-and ask an AI agent to read it before changing Dataverse components or ALM configuration.
-
-The caller workflows are BUILD, EXPORT, IMPORT, DEPLOY-main, and CLEANUP-RELEASES.
-Configure `solutions` using unique names in dependency order, then customize optional
-assets, hooks, checker rules, and validation in the [ALM configuration](../config/alm-config.md).
-Do not add plaintext secrets to that file.
-
-### 3. Configure Credentials
-
-Follow the [environment checklist](github-variables.md) for `Dev-main`, your deployment
-targets, and optional BUILD validation environment. The job's `environment` selects
-GitHub environment settings; `environment-name` tells the action which configuration
-prefix to resolve. Keep them consistent.
-
-Pass `${{ toJSON(vars) }}` as `vars-json`. Explicitly select each secret in `secrets-json`,
-using `toJSON(secrets.NAME)` to escape its value. For prefixed repository secrets, map the
-stored prefixed name to the runtime unprefixed name in each stage. Do not duplicate a
-setting in multiple forms and rely on ambiguous precedence.
-
-## Credential Configuration
-
-The complete settings are maintained in one [credential reference](../config/github-secrets.md):
-
-| Requirement | Reference |
-| --- | --- |
-| Environment values with WIF | [WIF settings and subjects](../config/github-secrets.md#approach-1-workload-identity-federation-oidc) |
-| Environment values with a client secret | [Client-secret settings](../config/github-secrets.md#approach-2-github-environments-with-client-secret) |
-| Repository values | [Repository variables and secrets](../config/github-secrets.md#approach-3-repository-variables-and-secrets) |
-| Connection references and Dataverse variables | [Per-solution settings](../config/github-secrets.md#per-solution-connection-references) |
-| Custom secrets and process-owner keys | [Explicit mapping](../config/github-secrets.md#per-solution-environment-variable-values) |
-
-## Deployment Configuration
-
-Edit DEPLOY-main to contain one job per target environment. Configure the job environment,
-action `environment-name`, `previous-environment-name`, `promotion-mode`, and
-`trigger-branch`. Keep `github-context-json: ${{ toJSON(github) }}` and
-`caller-inputs-json: ${{ toJSON(inputs) }}` unchanged.
-
-### Environment Approval Mode
-
-The copied caller explicitly uses `environment-approval`. A successful BUILD sends
-`alm4dataverse-build-deploy-<branch-token>` through `repository_dispatch`; the first
-stage starts, and later stages follow successful predecessors.
-
-> [!IMPORTANT]
-> Configure actual GitHub environment required reviewers where supported. Without
-> protection rules, `environment-approval` can deploy through every stage automatically.
-
-For a manual run, leave `target-environment` empty to start at the first stage, or set
-it to a named stage. The `build-run-name` selector can be an exact Release tag, BUILD
-name, or numeric BUILD run ID; blank means the latest successful BUILD from the selected
-branch. For promotion, use an explicit identity so a newer build is not selected by accident.
-
-### Manual Gate-Tag Promotion
-
-`manual-gate-tag` is the alternative when required reviewers are unavailable, such as
-private Pro/Team repositories. It does not make private GitHub Free repositories work:
-the supplied jobs still need GitHub environments, which private Free repositories
-lack. See [plan limitations](#github-licence-limitations).
-
-To adapt the supplied caller:
-
-1. Set every stage's `promotion-mode` to `manual-gate-tag`.
-2. Remove the `repository_dispatch` trigger.
-3. Make `target-environment` a required choice containing your target names.
-4. Give each job a manual selection condition. Jobs with `needs` must use a status-aware condition, such as `!cancelled()`, so a skipped earlier job does not suppress the selected stage.
-5. Set each later stage's `previous-environment-name` to its predecessor.
-
-For example, the selection condition on a manual PROD job can be:
-
-```yaml
-if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.target-environment == 'PROD' }}
-```
-
-Run DEPLOY manually for the first target, inspect the result, then run it again for the
-next target with the **same build identity**. Later stages require a success tag for
-that build in the previous environment. These tags enforce recorded order, not a separate
-person's approval. Anyone able to modify trusted workflows, credentials, or gate tags
-can affect that control, so secure those permissions.
-
-### Branches And Additional Stages
-
-For another deployment branch, create a matching DEPLOY caller and update its name,
-branch filters, dispatch event, `trigger-branch`, and target settings consistently.
-The dispatch token is the lowercase branch name with non-alphanumeric runs replaced
-by `-`, trimmed at the ends: `feature/customer-import` becomes `feature-customer-import`.
-Avoid normalized-name collisions.
-
-> [!NOTE]
-> **Advanced: dispatch branch context.** Repository-dispatch workflows must exist on the
-> repository's **default branch**. They use the payload to select the source branch/build,
-> but the workflow's GitHub ref still comes from the default branch. Account for that in
-> environment deployment-branch policies. See [branching strategies](../usage/branching-strategies.md).
-
-To add UAT, add a job, target choice if applicable, credentials, and concurrency group;
-chain it with `needs` and update PROD's predecessor. Test automatic and targeted manual
-runs. The [action reference](../config/pipelines.md#deploy) defines all supported inputs.
-
-## BUILD Validation And Pull Requests
-
-For deployment validation, uncomment the BUILD job's environment block, set its name,
-and set the action's `environment-name` to that same value. Provide the target's URL,
-credentials, process-owner UPN, connections, and Dataverse values.
-
-The automated setup prompt defaults BUILD validation to No unless it detects an existing
-BUILD environment association or active `solutionCheck.enabled = $true` configuration
-on the default branch.
-
-> [!CAUTION]
-> Use a dedicated non-production Dataverse environment for BUILD validation. It is
-> updated in place, not reset, and builds from multiple branches can share it.
-> Configure appropriate serialization to prevent conflicting deployments.
-
-Optionally set `buildValidation.baselineRelease` to a retained build or `@<deployment-environment>`.
-That source environment is separate from the validation target.
-
-Enable Solution Checker separately if required. It checks package quality, not end-user
-behavior. The copied BUILD workflow runs on branch pushes, manual dispatch, and export
-dispatch, not `pull_request`. Configure required status checks in repository policies;
-add PR-merge/merge-queue validation separately when required. Do not expose privileged
-credentials to untrusted PR code. See [building releases](../usage/building-releases.md).
-
-## Workflow Job Timeouts
-
-Caller jobs run on `ubuntu-latest` and request `timeout-minutes: 360` at job level.
-Do not pass a timeout as a composite-action input. DEPLOY's example concurrency groups
-use `cancel-in-progress: true`; EXPORT/IMPORT use a shared development-environment group
-with cancellation disabled. Review the consequences of cancellation for server-side imports.
-See [timeouts](../config/alm-config.md#import-timeout).
-
-## GitHub Licence Limitations
-
-| Capability | Public repositories on Free/Pro/Team | Private Free | Private Pro/Team |
-| --- | --- | --- | --- |
-| GitHub Actions | Available, subject to policy/limits | Available, subject to limits | Available, subject to limits |
-| Environments and environment secrets/variables | Available | Not available | Available |
-| Required reviewers and wait timers | Available | Not available | Not available |
-| Environment deployment branch/tag restrictions | Available | Not available | Available |
-
-For private-repository required reviewers, check the applicable GitHub Enterprise offering.
-These are platform capabilities, not features ALM4Dataverse can enable on an unsupported
-plan. Prefixed repository credentials and manual gate tags are not equivalent to protected
-environment secrets and independent approval.
-
-Consult [environment availability](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments),
-[protection rules](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments),
-and [current Actions limits](https://docs.github.com/en/actions/reference/limits).
-The supplied Linux jobs should not be budgeted using Windows-runner multipliers.
-
-## Grant Permissions For Workflow Operations
-
-Keep the caller's explicit job-level permissions, described in the
-[permissions reference](../config/pipelines.md#caller-settings-and-permissions), and
-verify organization/repository policy permits them. EXPORT needs to push source changes;
-BUILD publishes tags and Releases; DEPLOY writes success/pointer tags; cleanup deletes
-managed Releases. Branch and tag rules must permit these intended operations.
-
-> [!NOTE]
-> **Advanced: custom dispatch tokens.** EXPORT normally uses `GITHUB_TOKEN` to dispatch
-> BUILD after committing. Its default mapping also accepts an optional
-> `WORKFLOW_DISPATCH_TOKEN` or legacy `GH_WORKFLOW_TOKEN` secret when policy requires one.
-> Dataverse credentials do not grant GitHub repository access. Do not grant broad default
-> token access when explicit job permissions suffice.
-
-## First Run
-
-1. Commit the configured callers and configuration to the default branch.
+1. Review the generated files, then commit them or merge the pull requests setup created.
 2. Run EXPORT from the intended development branch with a meaningful commit message.
 3. Review the exported `solutions/<unique-name>` files and any data changes.
-4. Check the resulting BUILD and its Release. A build before the first export may fail because solution source is not present yet.
-5. Deploy that exact build to the first non-production target and verify process activation and application behavior.
+4. Check the resulting BUILD and its Release. A build before the first export may fail
+   because solution source is not present yet.
+5. Deploy that exact build to the first non-production target and verify process activation
+   and application behavior.
 6. Promote the same build through the remaining configured targets.
 
-Use IMPORT to seed or synchronize a development environment from source, not to promote
-a release. Keep CLEANUP-RELEASES on the default branch and review its retention policy.
-Continue with [exporting](../usage/exporting-changes.md), [building](../usage/building-releases.md),
-[deploying](../usage/deploying.md), or [importing](../usage/importing-changes.md).
+Continue with [exporting](../usage/exporting-changes.md),
+[building](../usage/building-releases.md), [deploying](../usage/deploying.md), or
+[importing](../usage/importing-changes.md).
+
+## Re-Running Setup
+
+Re-running setup can update generated files. Existing `secrets-json` mappings, `AGENTS.md`
+and files under `data/` are preserved. Review the resulting diff; other workflow
+customizations can be overwritten. See
+[re-running setup](../usage/updating.md#re-run-setup-carefully). GitHub cannot reveal
+existing secret values, so map relocated secrets explicitly.

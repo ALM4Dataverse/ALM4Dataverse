@@ -115,7 +115,7 @@ solutions using the configured deployment and upgrade behavior and runs
 configured deployment hooks. A failure to import, upgrade, or complete a hook
 fails the BUILD run.
 
-Automated setup can configure one shared validation environment for generated
+Setup can configure one shared validation environment for generated
 BUILD pipelines/workflows, so builds from different branches deploy to that
 same environment. It is separate from each branch's `Dev-<branchname>`
 environment and from the environments in `DEPLOY-<branchname>`.
@@ -129,11 +129,13 @@ environment and from the environments in `DEPLOY-<branchname>`.
 >
 > Successful validation proves deployment completed, not that end-user behavior is correct.
 
-Automated setup wires the validation environment into BUILD. For manual
-configuration, Azure DevOps uses the `buildEnvironmentName` parameter in
-`pipelines/BUILD.yml`, with a matching Power Platform service connection and
-`Environment-<name>` variable group. GitHub Actions uses the same name for the
-BUILD job's GitHub `environment` and the action's `environment-name` input.
+Setup wires the validation environment into BUILD from the branch settings in
+`alm-config.psd1`. For manual
+configuration, set `branches.<branch>.buildValidation.environmentName` in
+`alm-config.psd1` to a matching Power Platform service connection and
+`Environment-<name>` variable group, then run `setup-azdo.ps1 -ApplyConfig`. GitHub
+Actions uses the same name for the BUILD job's GitHub `environment` and the action's
+`environment-name` input.
 The credentials and deployment settings must be available to that job. See
 [Azure DevOps setup](../setup/azdo-manual-setup.md) and
 [GitHub setup](../setup/github-setup.md).
@@ -149,7 +151,11 @@ deployment pointer yet, BUILD warns and validates only the candidate. Other
 baseline resolution, download, or deployment failures fail BUILD before the
 candidate is deployed.
 
-Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
+Configure `branches.<branch>.buildValidation.baselineRelease` in `alm-config.psd1`
+for each branch that BUILD validates. A branch-level value takes precedence over the
+legacy top-level `buildValidation.baselineRelease`, which applies only to branches
+without that key. Setup copies the legacy value into branch settings when it converts
+a repository that predates the `branches` map:
 
 - Leave it empty to deploy only the current candidate.
 - Use `@<environment-name>` to resolve the most recently successfully
@@ -159,7 +165,7 @@ Configure `buildValidation.baselineRelease` in `alm-config.psd1`:
   its Release and downloads the durable `artifacts.zip` asset, not the
   expiring Actions artifact.
 
-Automated setup asks for a baseline source deployment environment separately
+Setup asks for a baseline source deployment environment separately
 from the Dataverse validation target. It also offers a no-baseline choice.
 On initial use, the selected source may not yet have a successful deployment;
 the first BUILD then warns and deploys only the candidate. After a successful

@@ -2,14 +2,17 @@
 .SYNOPSIS
     Resolves an Azure DevOps validation baseline to BuildValidationBaselineBuildId.
 .DESCRIPTION
-    Reads buildValidation.baselineRelease directly from ConfigPath: a numeric run
-    ID, exact build number or @environment pointer. Requires REST access to the
-    specified collection/project/BUILD definition and Git origin access for pointers.
-    Emits an Azure task variable, not a pipeline result object. Blank selectors and
-    absent remote pointers clear the variable for candidate-only validation; lookup
-    failures, invalid selectors and unsuccessful/wrong-definition builds throw.
+    Reads the selected branch's buildValidation.baselineRelease from ConfigPath,
+    falling back to the legacy global selector: a numeric run ID, exact build number
+    or @environment pointer. Requires REST access to the specified collection/project/
+    BUILD definition and Git origin access for pointers. Emits an Azure task variable,
+    not a pipeline result object. Blank selectors and absent remote pointers clear the
+    variable for candidate-only validation; lookup failures, invalid selectors and
+    unsuccessful/wrong-definition builds throw.
 .PARAMETER SourceDirectory
     Git working tree used to fetch deployment pointer tags (local tags may be replaced).
+.PARAMETER BranchName
+    Source branch whose BUILD validation baseline should be resolved.
 .PARAMETER AccessToken
     Bearer token for Azure DevOps REST requests; never written to diagnostics here.
 .EXAMPLE
@@ -26,10 +29,12 @@ param(
     [Parameter(Mandatory)][string]$CollectionUri,
     [Parameter(Mandatory)][string]$Project,
     [Parameter(Mandatory)][string]$DefinitionId,
-    [Parameter(Mandatory)][string]$AccessToken
+    [Parameter(Mandatory)][string]$AccessToken,
+    [Parameter()][AllowEmptyString()][string]$BranchName = ''
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'common.ps1')
 
 function Get-AzureBuild {
     # Uses the enclosing script's project/token; REST failures propagate unchanged.
@@ -136,10 +141,12 @@ if (-not (Test-Path -LiteralPath $ConfigPath)) {
 }
 
 $config = Import-PowerShellDataFile -LiteralPath $ConfigPath
-$selector = ''
-if ($config.Contains('buildValidation') -and $config.buildValidation -and $config.buildValidation.Contains('baselineRelease')) {
-    $selector = ([string]$config.buildValidation.baselineRelease).Trim()
+$effectiveBranchName = $BranchName
+if ([string]::IsNullOrWhiteSpace($effectiveBranchName)) {
+    $effectiveBranchName = [string]$env:BUILD_BRANCH
 }
+$buildValidationConfiguration = Get-AlmBuildValidationConfiguration -Config $config -BranchName $effectiveBranchName
+$selector = [string]$buildValidationConfiguration.BaselineRelease
 
 if ([string]::IsNullOrWhiteSpace($selector)) {
     Write-Host 'No BUILD validation baseline is configured.'

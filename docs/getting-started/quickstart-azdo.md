@@ -7,26 +7,23 @@ For GitHub Actions, use the [GitHub quickstart](quickstart-github.md).
 Expect about an hour, most of it answering setup prompts and waiting for the first
 EXPORT, BUILD and DEPLOY.
 
-## Before You Start
+## Choose A Setup Route
 
-Check that you have all of these. Setup stops when it needs something you don't have.
+Both routes end the same way: the caller pipelines in `pipelines/` are generated
+automatically from `alm-config.psd1` — you never edit them by hand. The difference is who
+creates everything else.
 
-- [ ] A Windows computer with Windows PowerShell 5.1 or PowerShell 7 and a browser.
-      Setup downloads Git and its PowerShell modules itself.
-- [ ] An Azure DevOps organization that can run pipelines on Microsoft-hosted agents.
-      New organizations must request or buy that capacity first; see
-      [organization requirements](../setup/azdo-organisation-requirements.md).
-- [ ] An Azure DevOps project where you are a Project Administrator, or Project
-      Collection Administrator rights so setup can create one.
-- [ ] A **development** Dataverse environment containing your unmanaged solutions, and at
-      least one **test** Dataverse environment to deploy to, all in the same Entra ID
-      tenant as your Azure DevOps organization and your own account.
-- [ ] The **unique names** of the solutions to manage, in dependency order (a solution
-      comes after every solution it depends on).
-- [ ] An existing, licensed **user account** in each environment to own and activate flows
-      and other processes (the "process owner").
-- [ ] Permission to create Entra ID app registrations and Dataverse application users, or
-      an administrator who can do it with you.
+| | Automated setup | Manual setup |
+| --- | --- | --- |
+| Who does the work | One guided script, run in PowerShell on your computer with internet access | You create the project, repositories, connections, groups, environments and approvals yourself, step by step |
+| `alm-config.psd1` | Setup writes it from your answers | You write and commit it yourself |
+| Caller pipelines | Generated from `alm-config.psd1` by setup at the end | Generated from `alm-config.psd1` by the APPLY-CONFIG pipeline (or `-ApplyConfig` locally) |
+| Choose when | Recommended: every Windows computer can run it | Running PowerShell locally is restricted, or you want to create each resource yourself |
+
+The automated route is the default. Its prerequisites and guided steps are in
+[Azure DevOps automated setup](../setup/azdo-automated-setup.md); the manual route's
+prerequisites and steps are in
+[Azure DevOps manual setup](../setup/azdo-manual-setup.md).
 
 New to the vocabulary? The [glossary](../concepts/glossary.md) explains the terms used
 below.
@@ -41,24 +38,13 @@ Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/lates
 .\setup-azdo.ps1
 ```
 
-When setup asks, choose:
-
-| Prompt | Recommended answer |
-| --- | --- |
-| ALM4Dataverse extension | Use it. It allows workload identity federation, which needs no secret. |
-| Project | Your project, or create one with a long-lived name. |
-| Repository | Create a new repository for this application, or select its existing one. |
-| Development environment | Your development Dataverse environment. |
-| Solutions | Your solutions, in dependency order. |
-| Deployment environments | Your test environment first. Add production later, once the first deployment works. |
-| Application identity | Let setup create one per environment, using **workload identity federation**. |
-| Process owner | The user account from the checklist. |
-| BUILD validation | Skip it for now. You can enable it later; see [BUILD validation](../usage/building-releases.md#build-validation). |
-
-Setup also imports the shared `ALM4Dataverse` repository into your project, creates the
-BUILD, EXPORT, IMPORT and DEPLOY-main pipelines, and creates a variable group and service
-connection for each environment. At the end it lists what it changed. If it opened pull
-requests, review and complete them before continuing.
+Follow the [guided setup steps](../setup/azdo-automated-setup.md#guided-setup). For a
+first deployment, use the ALM4Dataverse extension (workload identity federation needs
+it), choose your solutions in dependency order, your test environment first, and skip
+BUILD validation; you can enable it later (see
+[BUILD validation](../usage/building-releases.md#build-validation)). At the end, setup
+lists what it changed. If it opened pull requests, review and complete them before
+continuing.
 
 ## 2. Export Your Solutions
 

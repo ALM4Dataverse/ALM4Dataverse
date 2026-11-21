@@ -1,151 +1,268 @@
 # Azure DevOps Automated Setup
 
-> [!TIP]
-> Need to configure resources individually? Follow the [manual setup guide](azdo-manual-setup.md).
-
-Setup provisions ALM resources interactively: repositories, caller pipelines, service
-connections, variable groups, and target configuration. It does not create your Dataverse
-environments or replace a backup/recovery plan. Run it with a setup identity authorized
-to make these changes; pipeline execution later uses the configured application identities.
-
-## Limitations
-
-- The account you use for setup must be in the same Entra ID tenant as:
-
-  - the Dataverse environments for development and deployment
-  - the Azure DevOps organisation.
-
-- The process works for the standard `Azure Cloud` (`Commercial`) cloud and not `GCC` etc.
-
-- Generated pipelines use Microsoft-hosted `windows-2022` agents. Self-hosted pools require manual template customization and validation; they are not a setup-script option.
-
-- Entra ID Applications:
-  - if created automatically, will have name in format `<project name> - <env name> deployment` (but you can safely rename them if you wish after creation).
-  - you will be prompted to choose between two authentication types:
-    - **Service Principal with Secret (traditional)**: Uses a client secret that expires and needs periodic renewal
-    - **Workload Identity Federation (recommended)**: Uses OpenID Connect federation with no secrets to manage
-
-## Pre-requisites
-
-Before you start, you need:
-
-- Windows PowerShell 5.1 or PowerShell 7 on Windows, or PowerShell 7 on Linux with Git installed and available on `PATH`. All platforms need network access to the required Microsoft services, GitHub, and package feeds.
-- Existing Dataverse environments, the solutions to manage, and suitable process-owner user accounts.
-- Permission to create/configure Entra apps, Dataverse application users, and the relevant Azure DevOps resources, or administrators available to complete those steps.
-
-Windows setup downloads temporary portable Git; Linux setup uses system Git from `PATH`.
-Setup also downloads its required PowerShell modules. Keep interactive authentication in
-the console/browser; do not put passwords or tokens into source files or command history.
-
-### 1) An Azure DevOps organisation
-
-You will need an Azure DevOps organisation with pipeline capabilities enabled. See [Azure DevOps Organisation Requirements](azdo-organisation-requirements.md) for details on:
-
-- Creating a new organisation if you don't have one
-- Configuring pipeline capabilities (free or paid options)
-  
-### 2) An Azure DevOps project or permissions to create one
-
-You will need to be 'Project Collection Administrator' if you want the automated process to create a new project for you. Otherwise, you will need a project with 'Project Administrator' role assigned to you.
-  
-[How to create a new project](https://learn.microsoft.com/en-us/azure/devops/organizations/projects/create-project?view=azure-devops&tabs=browser#create-a-project)
+Automated setup is the recommended route: a guided interactive script that creates or
+selects the application repository, imports the shared `ALM4Dataverse` repository,
+creates the caller pipelines, and configures service connections, variable groups,
+environments and approvals. It does not create Dataverse environments or replace your
+backup and recovery plan. Both routes generate the caller pipelines automatically from
+`alm-config.psd1`; the difference is who creates everything else.
 
 > [!TIP]
-> Choose a long-lived project name. Avoid phase names such as "CRM System Phase 1".
+> Prefer to create each resource yourself? Use [manual setup](azdo-manual-setup.md). For
+> the shortest path to a first deployment, start with the
+> [Azure DevOps quickstart](../getting-started/quickstart-azdo.md).
 
-[How to assign the project administrator role for an existing project](https://learn.microsoft.com/en-us/azure/devops/user-guide/project-admin-tutorial?toc=%2Fazure%2Fdevops%2Forganizations%2Ftoc.json&view=azure-devops#add-members-to-the-project-administrators-group)
+## Before You Start
 
-### 3) Entra ID Applications for each environment
+You need:
 
-> [!TIP]
-> Use a separate application for each environment (or at least one for non-production and one for production) to keep proper separation between environments.
-> There is no cost to these applications, so there is no significant overhead in doing this.
+- **An Azure DevOps organization** that can run pipelines on Microsoft-hosted agents, and
+  a project where you are a Project Administrator, or Project Collection Administrator
+  rights so setup can create one. See
+  [organization requirements](azdo-organisation-requirements.md).
+- **A development Dataverse environment** with the unmanaged solutions you want to
+  manage, plus at least one environment to deploy to. All must be in the same Entra ID
+  tenant as your setup account and the organization.
+- **The unique names of your solutions**, in dependency order.
+- **An existing licensed user** in each environment to own and activate flows and other
+  processes (the process owner).
+- **Permission to create Entra app registrations and Dataverse application users**, or an
+  administrator who can complete those steps with you.
+- **Windows PowerShell 5.1 or PowerShell 7** on Windows, or PowerShell 7 on Linux with
+  Git on `PATH`. Setup downloads its PowerShell modules and, on Windows, temporary Git.
 
-## Running Setup
+> [!NOTE]
+> **Optional Dev Container.** The repository includes a
+> [Dev Container](../../.devcontainer/devcontainer.json) with PowerShell 7, Git and
+> GitHub CLI. It is not a security boundary; setup still acts with the permissions of the
+> authenticated accounts. Use least-privilege identities. The container has no browser,
+> so sign-in shows a device code to enter at the printed URL in a browser on your machine.
 
-Download and review the released script before executing it:
+## Run Setup
+
+Download the released script, review it, then run it:
 
 ```powershell
 Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1' -OutFile './setup-azdo.ps1'
+.\setup-azdo.ps1
 ```
 
-After review, run `.\setup-azdo.ps1`. To select a tenant or shared code ref, use the
+If you have already reviewed and trust the release, you can run the one-line bootstrap
+instead:
+
+```powershell
+iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1 | iex
+```
+
+To select a tenant or a specific shared-code ref, see
 [setup parameters](../config/pipelines.md#setup-script-parameters).
 
 > [!NOTE]
-> **Advanced: running source scripts.** Released setup scripts embed their helpers and
-> pinned dependencies. A single raw script downloaded from the source repository is not
-> equivalent; it needs the adjacent shared files.
+> Released setup scripts embed their helpers. A raw script downloaded from the source
+> repository is not equivalent and needs its adjacent files.
 
-The one-line bootstrap is also available after you have reviewed and trust the release:
+## Guided Setup
 
-1) Open Windows PowerShell or PowerShell 7. On Linux, start a `pwsh` terminal.
+Setup asks a few questions, then opens a menu. New repositories unlock steps in order; an
+existing repository starts from the settings in `alm-config.psd1` and lets you open any
+step. After each step you return to the menu. **Preview changes** is optional, and
+**Apply changes** stays unavailable until every required step is complete. Press F1 for
+the current step's help page; Esc returns to the previous prompt or menu.
 
-2) Paste this in and press Enter.
+![Guided setup menu for a new Azure DevOps repository](./screenshots/azdo-menu-new-repository.png)
 
-   ```powershell
-   iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1 | iex
-   ```
+![Guided setup menu for an existing Azure DevOps repository with saved branch mappings](./screenshots/azdo-menu-existing-repository.png)
 
-   Use the download-and-review approach above before trusting this bootstrap.
+![Guided setup menu when the configured Azure DevOps shared repository is unavailable](./screenshots/azdo-menu-unavailable-shared-repository.png)
 
-3) Follow the on-screen instructions.
+### 1. New or existing repository
 
-## What Setup Does
+Choose **Set up a new application repository** to create the repository and its first
+branch, or **Configure an existing repository** to use one that already exists. The
+choice appears before authentication.
 
-1) Prompts you to authenticate. The account you select will be used when connecting to AzDO and Dataverse environments during setup.
-2) Ensures the required Power Platform AzDO Extension is installed in the target AzDO organisation.
-   If you have the required level of access, it will be enabled automatically.
-   Pipeline execution still uses the pinned `pacCliVersion` installed by `installdependencies.ps1` (the templates keep PPBT `AddToolsToPath` disabled).
-3) Prompts you whether to use the ALM4Dataverse extension task for connection-variable resolution.
-   - If enabled, setup can use either client secret or workload identity federation authentication.
-   - If disabled, setup configures pipelines to use the Power Platform Build Tools **Set Connection Variables** task with service-principal secret auth.
-4) Prompts you to select an existing AzDO project, or create a new one.
-   If you select the option to create a new one, you will be prompted for the name and process template.
-5) Imports or updates the shared `ALM4Dataverse` repo.
-6) Prompts you to select the Git repo in the AzDO project or create a new one and creates the required pipelines files and registrations.
-7) Prompts you to select a Dataverse environment to be used as the main development environment and creates the required variable groups and service connections.
-8) Prompts you to select the solutions to be managed in dependency order and edits the `alm-config.psd1` file
-9) Prompts you to select Dataverse environments to be used as the deployment targets (your test and production environments) and creates the required variable groups and service connections.
-10) For both the dev environment and all deployment environments, prompts you to select the Entra ID application (service principal) you want to use, with an option to create one automatically.
-11) For each selected service principal, prompts you to choose the authentication type:
-     - **Service Principal with Secret**: Traditional approach using client secrets
-     - **Workload Identity Federation**: Modern approach using federated credentials (no secrets required)
-     - When ALM4Dataverse extension mode is disabled, only **Service Principal with Secret** is available.
-12) For both the dev environment and all deployment environments, prompts you to select the Service Account (user account) you want to use. This must be pre-existing as no option to create one is provided.
-13) Offers shared BUILD validation, configures its URL/authentication/service account, and lets you choose a separate deployment environment as the baseline source or choose no baseline. It defaults to No unless the default branch already has an active BUILD environment association or `solutionCheck.enabled = $true` configuration.
+![New or existing repository choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
 
-> [!NOTE]
-> **Advanced: BUILD validation.** Generated pipelines deploy an available baseline first,
-> then the candidate, and run configured PAC Solution Checker rules. If the baseline source
-> has no successful deployment pointer yet, BUILD warns and validates only the candidate.
-> A successful DEPLOY creates the pointer for subsequent builds.
->
-> Setup creates no deployment approvers team or approval check for the BUILD variable group.
-> Deployment target groups retain their approval checks, and existing checks are left unchanged.
-> All branches share the validation target, so choose a non-production environment that is
-> safe to update repeatedly. See [Building Releases](../usage/building-releases.md).
+### 2. Sign in and select resources
+
+Setup signs in to Azure DevOps and Azure, then asks for the organization, project and
+application repository. You can reuse an existing Azure login. Creating a project or
+repository happens immediately.
+
+![Azure DevOps authentication choices](./screenshots/azdo-authentication.png)
+
+![Azure DevOps project selection](./screenshots/azdo-project-selection.png)
+
+![Azure DevOps application repository selection](./screenshots/azdo-main-repository-selection.png)
+
+After you select the repository, setup checks for Power Platform Build Tools and asks
+whether to use the ALM4Dataverse extension. Keep it enabled unless you must use Microsoft
+tooling only; workload identity federation requires it. See
+[service connections](../config/azdo-environment-service-connection.md).
+
+![Azure DevOps extension confirmation with Workload Identity Federation guidance](./screenshots/azdo-extension-mode.png)
+
+### 3. Select the shared repository
+
+The shared `ALM4Dataverse` repository holds the templates your pipelines use. Select an
+existing repository in the project or create one; creating it asks for confirmation
+because the repository is created before preview. Then run **Check and update shared
+repository version** to seed a new repository or compare an existing one with the
+ALM4Dataverse ref you are running. That step can rewrite shared history, so setup asks
+for confirmation before changing it.
+
+![Azure DevOps shared repository selection and creation confirmation](./screenshots/azdo-shared-repository-selection.png)
+
+![Confirmation before checking and updating the shared repository version](./screenshots/azdo-shared-repository-version.png)
+
+### 4. Configure branches and environments
+
+**Configure branches, dev and deployment envs** defines each branch, its DEV environment,
+its deployment targets and its BUILD validation. Select the row to start.
+
+1. **Choose a branch strategy.** For a new repository, choose `main only` or
+   `main + develop`. Existing repositories start from the mappings in `alm-config.psd1`
+   and skip this prompt. This creates branch mappings, not branch policies. See
+   [branching strategies](../usage/branching-strategies.md).
+
+   ![Branch strategy menu from Azure DevOps setup](./screenshots/branch-strategy.png)
+
+2. **Add or edit branch mappings.** Choose **Add a branch mapping** or **Edit a branch
+   mapping**. Branch names must be unique.
+
+   ![Prompt for a new branch name](./screenshots/branch-name.png)
+
+3. **Configure the DEV environment.** Choose whether the branch has a DEV environment. If
+   you choose Yes, select the Dataverse environment; setup names it `Dev-<branch>`. Only
+   branches with a DEV environment can be a solution source.
+
+   ![Azure DevOps DEV environment confirmation](./screenshots/azdo-dev-confirmation.png)
+
+   ![Azure DevOps DEV environment selection](./screenshots/azdo-dev-environment-selection.png)
+
+4. **Choose credentials and the process owner.** The environment detail menu asks for the
+   Dataverse environment, its credential and the service account. Setup can create an
+   Entra app and service connection, reuse existing ones, or let you enter connection
+   details. Prefer **Workload Identity Federation**; it needs no client secret. The
+   service account is the licensed user that owns processes, not the application
+   identity. Setup checks the format of a manually entered UPN but does not verify its
+   licensing or roles. Rotating an existing client secret is deferred until you choose
+   **Apply changes**.
+
+   ![Azure DevOps credential choices](./screenshots/azdo-credentials.png)
+
+   ![Azure DevOps authentication type choices](./screenshots/azdo-authentication-type.png)
+
+   ![Azure DevOps service-account choices](./screenshots/azdo-service-account.png)
+
+5. **Add deployment targets.** Choose **Add an environment**, then complete the Dataverse
+   environment, short name (`TEST`, `UAT`, `PROD`), credentials and service account. Add
+   targets in promotion order; the list order becomes the deployment stage order. A
+   branch can have no deployment targets.
+
+   ![Per-environment detail menu with completed prerequisites and the service-account step ready to configure](./screenshots/environment-detail-menu.png)
+
+   ![Azure DevOps deployment environment selection](./screenshots/azdo-deployment-environment-selection.png)
+
+   ![Prompt for an Azure DevOps deployment environment short name](./screenshots/azdo-deployment-short-name.png)
+
+   ![Azure DevOps deployment environment plan](./screenshots/azdo-deployment-environment-plan.png)
+
+6. **Enable BUILD validation (optional).** Choose a non-production Dataverse environment
+   to receive each build, then its connection, credentials, service account and optional
+   baseline. Leave it off for now if you are still setting up; you can enable it later.
+   See [BUILD validation](../usage/building-releases.md#build-validation).
+
+   ![Azure DevOps BUILD validation environment selection for a branch](./screenshots/azdo-build-validation.png)
+
+7. **Review the branch map.** Check the table, then choose **Done**. Reopen a branch to
+   change its DEV environment, deployment targets or BUILD validation.
+
+   ![Azure DevOps branch-to-environment mapping table](./screenshots/branch-mapping.png)
+
+### 5. Configure solutions
+
+Choose a branch with a DEV environment as the discovery source, then select and order the
+solutions. The summary shows them in dependency order. See
+[solutions configuration](../config/alm-config.md#solutions).
+
+![Selecting and ordering managed solutions](./screenshots/solutions-configuration.png)
+
+### 6. Preview and apply
+
+**Preview changes** shows the generated files, the `alm-config.psd1` diff and the
+external operations that Apply will perform: pipelines and permissions, service
+connections and federated credentials, variable groups and checks, environments,
+application users and process owners. It leaves the repository and the target
+environments unchanged. Operations already completed during setup are marked
+**Already applied**.
+
+![Azure DevOps setup change summary and review menu](./screenshots/azdo-setup-change-review.png)
+
+![Scrollable colored side-by-side setup diff](./screenshots/setup-change-side-by-side-diff.png)
+
+When the menu shows **Apply changes** as ready, select it to publish the files and apply
+the listed operations. You do not have to preview first.
+
+![Guided setup menu with Apply changes ready](./screenshots/azdo-apply-changes.png)
+
+If Apply fails, setup keeps your selections so you can correct the problem and retry.
+Operations that already succeeded are not rolled back.
+
+## Apply A Committed Config
+
+If `alm-config.psd1` is reviewed and committed on the default branch, regenerate the
+pipeline files without the settings editors:
+
+```powershell
+.\setup-azdo.ps1 -ApplyConfig
+```
+
+This mode selects existing resources and reads the shared repository, ref, provider
+options and branch mappings from the committed config. It does not create repositories,
+install extensions, provision Azure DevOps resources, or offer the branch, environment,
+solution, BUILD validation and OIDC editors. To change those settings, edit and commit
+`alm-config.psd1`, then run the command again. Add `-PreviewOnly` to inspect the diffs
+without publishing:
+
+```powershell
+.\setup-azdo.ps1 -ApplyConfig -PreviewOnly
+```
+
+See
+[setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
 
 ## After Setup
 
-1. Review generated caller files, solution order, environment URLs, authentication type, and the selected shared-code ref.
-2. Complete target settings that automation cannot infer: connection IDs, Dataverse values, custom secrets, and hook configuration. See [variable groups](../config/azdo-environment-variable-group.md).
-3. Check pipeline resource permissions, approver membership, and locks. Confirm the process-owner UPN identifies the intended enabled Dataverse user.
-4. Run [EXPORT](../usage/exporting-changes.md) to establish solution source, then verify [BUILD](../usage/building-releases.md).
-5. Deploy that exact build to a non-production target and test the application before promoting it further.
-6. Configure branch/PR build policies separately if required; setup does not enforce your review process.
+1. Review the generated files, then commit them or merge the pull requests setup created.
+2. Add target values that setup cannot infer: connection references, environment-variable
+   values and custom secrets. See
+   [variable groups](../config/azdo-environment-variable-group.md).
+3. Add the right people to each `<environment> deployment approvers` team; setup creates
+   the teams with only you in them.
+4. Run [EXPORT](../usage/exporting-changes.md), check
+   [BUILD](../usage/building-releases.md), then deploy that build to a non-production
+   target.
+5. Configure branch policies or PR build validation separately; setup does not create
+   them.
 
-## Reconfigure An Existing Installation
+## Re-Running Setup
 
-Re-run setup to select existing resources and review its proposed updates.
-[Re-running setup](../usage/updating.md#re-run-setup-carefully) lists which files and
-settings it keeps and which it replaces.
+Re-run setup to add environments or branches. Setup keeps some files and settings and
+replaces others; see
+[re-running setup](../usage/updating.md#re-run-setup-carefully).
 
 > [!CAUTION]
-> Review custom callers and approval checks in the resulting changes.
-> Do not run two setups concurrently against the same repository. If setup fails partway,
-> inspect resources already created before retrying; changes are not automatically rolled back.
+> Do not run two setups against the same repository at once. If setup fails partway,
+> inspect resources already created before retrying; changes are not automatically rolled
+> back.
 
-Keep shared repository updates and application caller changes consistent. An older
-release artifact retains its packaged deployment scripts even after shared code is
-updated. See [pipeline parameters](../config/pipelines.md) for manual customization.
+## Limitations
+
+- The setup account, the Azure DevOps organization and all Dataverse environments must be
+  in the same Entra ID tenant.
+- Only the commercial `Azure Cloud` is supported; sovereign clouds are not.
+- Generated pipelines use Microsoft-hosted `windows-2022` agents. Self-hosted agents
+  require manual template changes.
+- Entra apps created by setup are named `<project> - <environment> deployment`; you can
+  rename them later.

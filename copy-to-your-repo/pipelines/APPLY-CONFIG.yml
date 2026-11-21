@@ -1,0 +1,41 @@
+# Static caller: automated setup copies this file verbatim (rewriting only the
+# shared repository name and ref) and never needs to regenerate it, because the
+# shared apply-config template and setup source always come from the same
+# checkout ref. Run this pipeline manually after committing alm-config.psd1
+# changes; it regenerates every caller pipeline and commits the changes to the
+# default branch, or set preview to inspect the changes without committing.
+trigger: none # Run manually when configuration changes should be applied
+
+parameters:
+- name: preview
+  displayName: Preview changes without committing
+  type: boolean
+  default: false
+
+resources:
+  repositories:
+    - repository: ALM4Dataverse
+      type: git
+      name: ALM4Dataverse
+      ref: 'refs/heads/main'
+
+pool:
+  vmImage: windows-2022
+
+steps:
+- checkout: self
+  persistCredentials: true
+  fetchDepth: 1
+  displayName: 'Checkout Source Repository'
+  path: self
+
+- checkout: ALM4Dataverse
+  fetchDepth: 1
+  displayName: 'Checkout ALM Templates Repository'
+  path: alm
+
+- template: pipelines/templates/apply-config.yml@ALM4Dataverse
+  parameters:
+    organizationUri: '$(System.CollectionUri)'
+    projectName: '$(System.TeamProject)'
+    preview: ${{ parameters.preview }}

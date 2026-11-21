@@ -7,7 +7,6 @@ BeforeAll {
         '.github/actions'
         'copy-to-your-repo/.github/workflows'
         'pipelines'
-        'copy-to-your-repo/pipelines'
     )
     $script:yamlFiles = @(
         foreach ($root in $yamlRoots) {
@@ -41,6 +40,49 @@ Describe 'Workflow and pipeline YAML validation' {
         $deploymentTemplate | Should -Match '\$targetCommit -ine \[string\]\$metadata\.sourceCommit'
         $deploymentTemplate.IndexOf('$targetCommit -ine [string]$metadata.sourceCommit') |
             Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
+    }
+
+    It 'configures a committer identity before creating the annotated environment tag' {
+        $deploymentTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/stages/deploy-environment.yml') -Raw
+
+        $deploymentTemplate | Should -Match '\$env:BUILD_REQUESTEDFOR'
+        $deploymentTemplate | Should -Match '\$env:BUILD_REQUESTEDFOREMAIL'
+        $deploymentTemplate.IndexOf('git config user.name') |
+            Should -BeGreaterThan -1
+        $deploymentTemplate.IndexOf('git config user.email') |
+            Should -BeGreaterThan $deploymentTemplate.IndexOf('git config user.name')
+        $deploymentTemplate.IndexOf('git config user.email') |
+            Should -BeLessThan $deploymentTemplate.IndexOf('git tag -f -a "$environmentTag"')
+    }
+
+    It 'runs the Azure DevOps apply-config setup from the shared checkout path' {
+        $applyConfigTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/apply-config.yml') -Raw
+        # checkout with path: alm places the repository under Agent.BuildDirectory,
+        # not under the source repository's Build.SourcesDirectory.
+        $applyConfigTemplate | Should -Match '\$\(Agent\.BuildDirectory\)/alm/setup-azdo\.ps1'
+        $applyConfigTemplate | Should -Not -Match 'Build\.SourcesDirectory\)/alm'
+    }
+
+    It 'keeps the branch validation map authoritative over the fallback variable group' {
+        $buildTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/build.yml') -Raw
+
+        # The template must never hand an object map to the length() expression
+        # function; the documented contract accepts strings and arrays only.
+        $buildTemplate | Should -Not -Match 'length\(parameters\.buildValidationEnvironments\)'
+
+        # The fallback variable and group exist only under the empty-map guard, so a
+        # matching branch entry cannot duplicate them; the branch group comes later
+        # and is the only group an entry can emit.
+        $emptyMapGuard = $buildTemplate.IndexOf("eq(convertToJson(parameters.buildValidationEnvironments), '{}')")
+        $emptyMapGuard | Should -BeGreaterThan -1
+        $fallbackVariable = $buildTemplate.IndexOf('value: ${{ parameters.buildEnvironmentName }}')
+        $fallbackGroup = $buildTemplate.IndexOf("group: 'Environment-`${{ parameters.buildEnvironmentName }}'")
+        $branchGroup = $buildTemplate.IndexOf("group: 'Environment-`${{ branch.value }}'")
+        $emptyMapGuard | Should -BeLessThan $fallbackVariable
+        $fallbackVariable | Should -BeLessThan $fallbackGroup
+        $fallbackGroup | Should -BeLessThan $branchGroup
+        ([regex]::Matches($buildTemplate, 'group: ''Environment-\$\{\{ parameters\.buildEnvironmentName \}\}''')).Count |
+            Should -Be 1
     }
 
     It 'signs in to Az PowerShell from the selected Azure DevOps service connection before DEPLOY' {
@@ -87,5 +129,39 @@ Describe 'Workflow and pipeline YAML validation' {
         $mappings = [regex]::Matches($text, '\$\{\{ each secretVariable in parameters\.secretVariables \}\}:\s+\$\{\{ secretVariable \}\}: \$\(\$\{\{ secretVariable \}\}\)')
         $mappings.Count | Should -Be $ConnectedSteps
         [regex]::Matches($text, 'connect\.ps1').Count | Should -Be $ConnectedSteps
+    }
+    It 'keeps the setup, Azure DevOps and GitHub shared template version literals in sync' {
+        $versionSourcePath = Join-Path $repoRoot 'setup/common/shared-template-version.ps1'
+        $tokens = $null
+        $parseErrors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($versionSourcePath, [ref]$tokens, [ref]$parseErrors)
+        @($parseErrors).Count | Should -Be 0
+        $definition = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-AlmSharedTemplateVersion' }, $true)
+        $null -ne $definition | Should -BeTrue
+        Set-Item -Path 'Function:Get-AlmSharedTemplateVersion' -Value $definition.Body.GetScriptBlock()
+        $setupVersion = Get-AlmSharedTemplateVersion
+
+        $azdoGuard = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/steps/validate-shared-template-version.yml') -Raw
+        $azdoVersion = [regex]::Match($azdoGuard, '-ne ''(?<version>[^'']+)''').Groups['version'].Value
+        $githubGuard = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/common/validate-caller-version.ps1') -Raw
+        $githubVersion = [regex]::Match($githubGuard, '-ne ''(?<version>[^'']+)''').Groups['version'].Value
+
+        $azdoVersion | Should -Be $setupVersion
+        $githubVersion | Should -Be $setupVersion
+    }
+
+    It 'guards every shared template and action entry point against stale caller versions' {
+        foreach ($templateName in @('build.yml', 'export.yml', 'import.yml', 'stages/deploy-environment.yml')) {
+            $templatePath = Join-Path $repoRoot "pipelines/templates/$templateName"
+            $template = Get-Content -LiteralPath $templatePath -Raw
+            $template | Should -Match ([regex]::Escape('validate-shared-template-version.yml'))
+            $template | Should -Match 'sharedTemplateVersion'
+        }
+        foreach ($actionName in @('build', 'export', 'import', 'deploy')) {
+            $actionPath = Join-Path $repoRoot ".github/actions/$actionName/action.yml"
+            $action = Get-Content -LiteralPath $actionPath -Raw
+            $action | Should -Match 'shared-template-version'
+            $action | Should -Match ([regex]::Escape('validate-caller-version.ps1'))
+        }
     }
 }

@@ -1,0 +1,20 @@
+# Caller pipelines must pass the shared template version their generator embedded;
+# this guard stops stale caller files with a regeneration instruction before any
+# other step runs. Bump the expected literal together with
+# setup/common/shared-template-version.ps1 and
+# .github/actions/common/validate-caller-version.ps1.
+parameters:
+- name: sharedTemplateVersion
+  type: string
+  default: ''
+
+steps:
+- pwsh: |
+    $ErrorActionPreference = 'Stop'
+    $actualVersion = $env:ALM_SHARED_TEMPLATE_VERSION
+    if ($actualVersion -ne '2') {
+      throw "This pipeline was generated for shared template version '$actualVersion', but the ALM4Dataverse templates it references require version '2'. Re-run setup from the shared repository ref this pipeline references (guided setup or setup-azdo.ps1 -ApplyConfig) to regenerate this file; do not edit it by hand."
+    }
+  displayName: 'Validate ALM4Dataverse shared template version'
+  env:
+    ALM_SHARED_TEMPLATE_VERSION: ${{ parameters.sharedTemplateVersion }}

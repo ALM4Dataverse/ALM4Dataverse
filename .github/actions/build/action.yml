@@ -4,6 +4,10 @@ name: Build
 description: Build, validate, optionally deploy a baseline and candidate to the validation environment, publish, and tag Dataverse solution artifacts.
 
 inputs:
+  shared-template-version:
+    description: Shared template version the caller workflow was generated for; a missing or stale value stops the workflow with a regeneration instruction.
+    required: false
+    default: ''
   build-name:
     description: Exact build name used for the run and source tag.
     required: true
@@ -50,6 +54,15 @@ outputs:
 runs:
   using: composite
   steps:
+    # Caller files must carry the version their generator embedded; stale callers
+    # stop here with a regeneration instruction before any other work runs.
+    - name: Validate shared template version
+      shell: pwsh
+      env:
+        ALM_SHARED_TEMPLATE_VERSION: ${{ inputs.shared-template-version }}
+      run: |
+        & "${{ github.action_path }}/../common/validate-caller-version.ps1" -ActualVersion $env:ALM_SHARED_TEMPLATE_VERSION
+
     # Build the explicitly selected source, not necessarily the caller workflow SHA.
     # Action implementation paths remain github.action_path rather than self/alm.
     - name: Checkout source code
@@ -196,7 +209,8 @@ runs:
           $artifactsPath = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
           & "${{ github.action_path }}/../common/deploy-build-validation.ps1" `
             -ArtifactsPath $artifactsPath `
-            -EnvironmentName $env:BUILD_ENVIRONMENT_NAME
+            -EnvironmentName $env:BUILD_ENVIRONMENT_NAME `
+            -BranchName $env:BUILD_BRANCH
           Write-Host '##[endgroup]'
         }
 

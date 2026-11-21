@@ -69,13 +69,12 @@ jobs:
       - name: Validate Azure Pipelines against Microsoft schema
         if: runner.os == 'Linux'
         run: |
-          # DEPLOY-main.yml is an intentionally empty scaffold; setup-generated deployments are validated in Pester.
+          # Caller pipelines are generated from alm-config.psd1 and validated in Pester.
+          # The static APPLY-CONFIG scaffold remains in copy-to-your-repo.
           node scripts/validate-azure-pipelines.js \
             --schema "$RUNNER_TEMP/azure-pipelines-schema.json" \
             pipelines \
-            copy-to-your-repo/pipelines/BUILD.yml \
-            copy-to-your-repo/pipelines/EXPORT.yml \
-            copy-to-your-repo/pipelines/IMPORT.yml
+            copy-to-your-repo/pipelines/APPLY-CONFIG.yml
       - name: Install validation tools
         shell: pwsh
         run: |
@@ -105,7 +104,17 @@ jobs:
             $tokens = $null
             $parseErrors = $null
             $null = [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$tokens, [ref]$parseErrors)
-            if ($parseErrors.Count -gt 0) { throw ($parseErrors | Out-String) }
+            if ($parseErrors.Count -gt 0) {
+              $lines = Get-Content -LiteralPath $file.FullName
+              foreach ($parseError in $parseErrors) {
+                $lineNumber = $parseError.Extent.StartLineNumber
+                Write-Host ("{0}:{1}: {2}" -f $file.Name, $lineNumber, $parseError.Message)
+                if ($lineNumber -ge 1 -and $lineNumber -le $lines.Count) {
+                  Write-Host $lines[$lineNumber - 1]
+                }
+              }
+              throw "Generated installer $($file.Name) has $($parseErrors.Count) syntax errors under Windows PowerShell 5.1."
+            }
           }
       - name: Publish test and coverage results
         if: always()

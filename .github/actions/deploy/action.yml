@@ -5,6 +5,10 @@ name: Deploy
 description: Resolve a BUILD run, download its artifacts, deploy them, and publish deployment gate tags.
 
 inputs:
+  shared-template-version:
+    description: Shared template version the caller workflow was generated for; a missing or stale value stops the workflow with a regeneration instruction.
+    required: false
+    default: ''
   environment-name:
     description: Target Dataverse and GitHub environment name.
     required: true
@@ -40,6 +44,15 @@ inputs:
 runs:
   using: composite
   steps:
+    # Caller files must carry the version their generator embedded; stale callers
+    # stop here with a regeneration instruction before any other work runs.
+    - name: Validate shared template version
+      shell: pwsh
+      env:
+        ALM_SHARED_TEMPLATE_VERSION: ${{ inputs.shared-template-version }}
+      run: |
+        & "${{ github.action_path }}/../common/validate-caller-version.ps1" -ActualVersion $env:ALM_SHARED_TEMPLATE_VERSION
+
     # Resolve/validate branch, BUILD identity and promotion mode before credentials
     # or artifact execution. A retained Release may outlive its Actions run.
     - name: Resolve deployment execution context

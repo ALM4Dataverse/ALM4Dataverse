@@ -35,11 +35,12 @@ authentication or grant approval capabilities.
 > stores client secrets there. Use a supported plan, or explicitly adapt jobs, secret
 > storage, and OIDC subjects together for an environment-free workflow.
 
-See [GitHub Setup Guide](../setup/github-setup.md) for detailed configuration steps.
+See the [manual setup guide](../setup/github-manual-setup.md) for detailed configuration
+steps.
 
 ---
 
-## Automated setup behavior (`setup-github.ps1`)
+## Setup behavior (`setup-github.ps1`)
 
 `setup-github.ps1` automatically detects whether the selected repository supports
 GitHub environment approvals and configures credentials accordingly:
@@ -57,9 +58,11 @@ GitHub environment approvals and configures credentials accordingly:
   - Detects existing unprefixed repository credentials and keeps them unprefixed when setup is rerun
   - Generates deploy stages with `promotion-mode: manual-gate-tag` and manual dispatch from stage 1 onward
 
-You can still change either mode manually after setup by editing your workflow YAML
-and credential locations. Confirm that the resulting environments and protection rules
-really exist and are supported by your plan before treating a target as protected.
+You can still change either mode after setup by setting
+`GitHubDeploymentPromotionMode` in `alm-config.psd1`, committing it, and re-running setup;
+the caller workflows are generated from the configuration, not edited by hand. Confirm
+that the resulting environments and protection rules really exist and are supported by
+your plan before treating a target as protected.
 
 ---
 
@@ -71,6 +74,33 @@ event via the GitHub CLI/API after it pushes an export commit.
 By default, this uses `GITHUB_TOKEN`. If your repository requires a separate token,
 store one as an environment secret named `WORKFLOW_DISPATCH_TOKEN` (or legacy alias
 `GH_WORKFLOW_TOKEN`) and add it to the Export workflow's `secrets-json` JSON object.
+
+This token is separate from the Dataverse/Azure credentials shown below.
+
+## Apply configuration token
+
+The `APPLY-CONFIG` workflow regenerates the caller workflows and commits them to the
+default branch. GitHub never lets the built-in Actions token create or update files under
+`.github/workflows/`, so that commit needs a token with the Workflows permission:
+
+1. Create a classic personal access token with the `workflow` and `repo` scopes, or a
+   fine-grained token for the repository with **Contents: read and write** and
+   **Workflows: read and write**.
+2. Store it as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret (Settings > Secrets and
+   variables > Actions).
+3. Pass it to the action as `github-token` from `.github/workflows/APPLY-CONFIG.yml`.
+   The scaffold workflow setup copies uses:
+
+   ```yaml
+           with:
+             github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
+   ```
+
+Without the secret the built-in token is used and a run that has changes to commit fails
+with `refusing to allow a GitHub App to create or update workflow ... without
+`workflows` permission`. Preview runs work with the built-in token because they do not
+push. Running `setup-github.ps1 -ApplyConfig -Commit` on a workstation uses the signed-in
+user's own credentials instead of this secret.
 
 This token is separate from the Dataverse/Azure credentials shown below.
 
@@ -143,12 +173,16 @@ to the corresponding App Registration:
 
 The numeric IDs are the GitHub `repository_owner_id` and `repository_id` values.
 They are included when the repository uses GitHub's immutable subject claims. The
-automated setup script reads the repository setting and configures the matching subject;
+setup script reads the repository setting and configures the matching subject;
 existing repositories retain the legacy format unless immutable subjects are enabled.
 
 For an existing legacy repository, setup offers to enable immutable subjects when WIF
 is selected. Review the [GitHub changelog](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories)
 first because other repository consumers that trust legacy subjects may need updates.
+The repository OIDC setting requires repository admin permission, so the
+`APPLY-CONFIG` workflow cannot change it: it keeps the existing setting and assumes it
+matches `GitHubUseImmutableWifSubject` in `alm-config.psd1`. Run setup interactively to
+change the setting.
 
 > [!NOTE]
 > **Advanced: custom job subjects.** An environment-based subject requires a job that

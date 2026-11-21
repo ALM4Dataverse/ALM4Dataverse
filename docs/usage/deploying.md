@@ -61,8 +61,8 @@ promotions. Use an explicit identity when promoting or redeploying.
 
 Approval mode does not itself create an approval rule. Without configured protection,
 stages run automatically. Gate-tag mode records prior success; it does not require an
-independent reviewer. Configure [GitHub deployment modes](../setup/github-setup.md#deployment-configuration)
-and [platform plan restrictions](../setup/github-setup.md#github-licence-limitations) deliberately.
+independent reviewer. Configure [GitHub deployment modes](../setup/github-manual-setup.md#deployment-configuration)
+and [platform plan restrictions](../setup/github-manual-setup.md#github-licence-limitations) deliberately.
 
 > [!IMPORTANT]
 > **Configure deployment targets.**
@@ -74,7 +74,7 @@ and [platform plan restrictions](../setup/github-setup.md#github-licence-limitat
 > - **Exclusive lock** — ensures only one deployment at a time can touch the environment.
 > - **Approval** — requires approvers to sign off before deployment starts.
 >
-> **GitHub Actions**: Each target requires [variables and secrets](../setup/github-variables.md). Secrets must be listed explicitly in each stage's `secrets-json` input. Required-reviewer availability depends on plan and visibility; private Pro/Team repositories do not have this rule. See [manual gate-tag promotion](../setup/github-setup.md#manual-gate-tag-promotion) for the manual alternative.
+> **GitHub Actions**: Each target requires [variables and secrets](../setup/github-variables.md). Secrets must be listed explicitly in each stage's `secrets-json` input. Required-reviewer availability depends on plan and visibility; private Pro/Team repositories do not have this rule. See [manual gate-tag promotion](../setup/github-manual-setup.md#manual-gate-tag-promotion) for the manual alternative.
 
 ## Monitor A Deployment
 

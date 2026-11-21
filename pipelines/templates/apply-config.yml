@@ -1,0 +1,51 @@
+# Runs the shared setup entrypoint in apply-config mode from the ALM4Dataverse
+# repository resource, so the caller and the setup implementation always come from
+# the same shared ref and no version guard is required.
+parameters:
+- name: organizationUri
+  type: string
+  default: ''
+- name: projectName
+  type: string
+  default: ''
+- name: preview
+  type: boolean
+  default: false
+
+steps:
+- pwsh: |
+    $ErrorActionPreference = 'Stop'
+    $organizationUri = [uri]$env:ALM_ORGANIZATION_URI
+    # dev.azure.com collections use the first path segment as the organization
+    # name; legacy visualstudio.com collections use the host prefix.
+    $organizationName = @($organizationUri.AbsolutePath -split '/') | Where-Object { $_ } | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($organizationName) -and $organizationUri.Host -match '^([^.]+)\.visualstudio\.com$') {
+      $organizationName = $Matches[1]
+    }
+    if ([string]::IsNullOrWhiteSpace($organizationName)) {
+      throw 'The Azure DevOps organization could not be derived from the collection URI.'
+    }
+    # Setup clones a disposable application copy and pushes with the supplied
+    # token, so the commit identity must be configured before it runs.
+    git config --global user.name 'ALM4Dataverse Setup'
+    git config --global user.email 'setup@alm4dataverse.local'
+    if ('${{ parameters.preview }}' -eq 'True') {
+      & "$(Agent.BuildDirectory)/alm/setup-azdo.ps1" `
+        -ApplyConfig -PreviewOnly `
+        -AccessToken $env:ALM_ACCESS_TOKEN `
+        -OrganizationName $organizationName `
+        -ProjectName '${{ parameters.projectName }}' `
+        -RepositoryName '$(Build.Repository.Name)'
+    }
+    else {
+      & "$(Agent.BuildDirectory)/alm/setup-azdo.ps1" `
+        -ApplyConfig -Commit `
+        -AccessToken $env:ALM_ACCESS_TOKEN `
+        -OrganizationName $organizationName `
+        -ProjectName '${{ parameters.projectName }}' `
+        -RepositoryName '$(Build.Repository.Name)'
+    }
+  displayName: 'Apply alm-config.psd1 and commit changes'
+  env:
+    ALM_ORGANIZATION_URI: ${{ parameters.organizationUri }}
+    ALM_ACCESS_TOKEN: $(System.AccessToken)

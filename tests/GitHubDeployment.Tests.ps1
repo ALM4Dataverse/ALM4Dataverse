@@ -377,6 +377,20 @@ Describe 'GitHub deployment selection and gates' {
         { Find-LatestSuccessfulBuildRunForBranch -BranchName main } | Should -Throw '*No successful BUILD workflow runs*'
     }
 
+    It 'enumerates JSON list responses from the GitHub API' {
+        . $script:deploymentResolver
+        Mock Invoke-RestMethod {
+            ,@(
+                [pscustomobject]@{ tag_name = 'one' }
+                [pscustomobject]@{ tag_name = 'two' }
+            )
+        }
+
+        $items = @(Invoke-GitHubApi -RelativePath 'releases?per_page=100&page=1')
+        $items.Count | Should -Be 2
+        $items[0].tag_name | Should -Be 'one'
+    }
+
     It 'rejects incomplete metadata and ambiguous releases and ignores unrelated branches' {
         . $script:deploymentResolver
         { Get-ReleaseInformation -Release @{ body = ''; tag_name = 'invalid' } } | Should -Throw '*complete ALM build metadata*'

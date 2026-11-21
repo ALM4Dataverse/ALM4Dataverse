@@ -3,7 +3,7 @@
 ![ALM4Dataverse](logo.png)
 
 Source-controlled application lifecycle management for Microsoft Dataverse, using
-**Azure DevOps** or **GitHub Actions (PREVIEW)**. Export maker changes, build a numbered
+**Azure DevOps** or **GitHub Actions**. Export maker changes, build a numbered
 deployment package, and promote that same package through your environments.
 
 This repository contains the shared PowerShell automation, pipeline and action
@@ -41,6 +41,8 @@ deployment using automated setup.
 - [Quickstart: GitHub Actions](docs/getting-started/quickstart-github.md)
 - [Quickstart: Azure DevOps](docs/getting-started/quickstart-azdo.md)
 
+![Interactive walkthrough of ALM4Dataverse automated setup with character-by-character typing: sign-in, project and repository selection, branch environments, authentication, preview, apply, and GitHub support](docs/setup/screenshots/setup-walkthrough.gif)
+
 Not sure which platform? Read
 [Should I use Azure DevOps or GitHub?](docs/faqs.md#should-i-use-azure-devops-or-github)
 
@@ -64,7 +66,7 @@ Not sure which platform? Read
 
 | Platform | Guides |
 | --- | --- |
-| GitHub Actions | [Quickstart](docs/getting-started/quickstart-github.md), [full setup](docs/setup/github-setup.md), [environment checklist](docs/setup/github-variables.md) |
+| GitHub Actions | [Quickstart](docs/getting-started/quickstart-github.md), [automated setup](docs/setup/github-setup.md), [manual setup](docs/setup/github-manual-setup.md), [environment checklist](docs/setup/github-variables.md) |
 | Azure DevOps | [Quickstart](docs/getting-started/quickstart-azdo.md), [requirements](docs/setup/azdo-organisation-requirements.md), [automated setup](docs/setup/azdo-automated-setup.md), [manual setup](docs/setup/azdo-manual-setup.md) |
 
 ### Use It Day To Day

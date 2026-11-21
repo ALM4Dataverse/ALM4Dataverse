@@ -313,6 +313,79 @@ function Get-AlmConfig {
     return $config
 }
 
+function Get-AlmBuildValidationConfiguration {
+    <#
+    .SYNOPSIS
+        Resolves BUILD validation settings for one source branch.
+    .DESCRIPTION
+        Branch settings override the legacy global baseline selector. A missing
+        branch setting inherits that selector; an explicitly empty selector clears it.
+        Validation is enabled only when the selected branch has an environment name.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Config,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$BranchName
+    )
+
+    $baselineRelease = ''
+    if ($Config.Contains('buildValidation') -and $Config.buildValidation) {
+        if ($Config.buildValidation -isnot [System.Collections.IDictionary]) {
+            throw 'The buildValidation setting must be a hashtable.'
+        }
+        if ($Config.buildValidation.Contains('baselineRelease')) {
+            $baselineRelease = [string]$Config.buildValidation.baselineRelease
+        }
+    }
+
+    $branchNameToMatch = $BranchName.Trim()
+    if ($branchNameToMatch -match '^refs/heads/(?<name>.+)$') {
+        $branchNameToMatch = $Matches.name
+    }
+
+    $environmentName = ''
+    if (-not [string]::IsNullOrWhiteSpace($branchNameToMatch) -and $Config.Contains('branches') -and $null -ne $Config.branches) {
+        if ($Config.branches -isnot [System.Collections.IDictionary]) {
+            throw 'The branches setting must be a hashtable keyed by branch name.'
+        }
+
+        $configuredBranchName = $null
+        foreach ($candidateBranchName in $Config.branches.Keys) {
+            if ([string]$candidateBranchName -ieq $branchNameToMatch) {
+                $configuredBranchName = [string]$candidateBranchName
+                break
+            }
+        }
+
+        if ($configuredBranchName) {
+            $branchConfiguration = $Config.branches[$configuredBranchName]
+            if ($branchConfiguration -isnot [System.Collections.IDictionary]) {
+                throw "Configuration for branch '$branchNameToMatch' must be a hashtable."
+            }
+
+            if ($branchConfiguration.Contains('buildValidation') -and $null -ne $branchConfiguration.buildValidation) {
+                $branchBuildValidation = $branchConfiguration.buildValidation
+                if ($branchBuildValidation -isnot [System.Collections.IDictionary]) {
+                    throw "BUILD validation configuration for branch '$branchNameToMatch' must be a hashtable."
+                }
+                if ($branchBuildValidation.Contains('environmentName')) {
+                    $environmentName = [string]$branchBuildValidation.environmentName
+                }
+                if ($branchBuildValidation.Contains('baselineRelease')) {
+                    $baselineRelease = [string]$branchBuildValidation.baselineRelease
+                }
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Enabled = -not [string]::IsNullOrWhiteSpace($environmentName)
+        EnvironmentName = $environmentName.Trim()
+        BaselineRelease = $baselineRelease.Trim()
+    }
+}
+
 function Resolve-ConfiguredSettingMap {
     <#
     .SYNOPSIS

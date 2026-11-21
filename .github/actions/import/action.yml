@@ -4,6 +4,10 @@ name: Import
 description: Build the current source and import unmanaged solutions into Dataverse.
 
 inputs:
+  shared-template-version:
+    description: Shared template version the caller workflow was generated for; a missing or stale value stops the workflow with a regeneration instruction.
+    required: false
+    default: ''
   environment-name:
     description: GitHub environment used for credentials and prefixed values.
     required: false
@@ -22,6 +26,15 @@ inputs:
 runs:
   using: composite
   steps:
+    # Caller files must carry the version their generator embedded; stale callers
+    # stop here with a regeneration instruction before any other work runs.
+    - name: Validate shared template version
+      shell: pwsh
+      env:
+        ALM_SHARED_TEMPLATE_VERSION: ${{ inputs.shared-template-version }}
+      run: |
+        & "${{ github.action_path }}/../common/validate-caller-version.ps1" -ActualVersion $env:ALM_SHARED_TEMPLATE_VERSION
+
     # self is the source/configuration tree; implementation is taken from this action.
     - name: Checkout source code
       uses: actions/checkout@v4

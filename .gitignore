@@ -360,3 +360,9 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Dev Container Git common-directory link
+.devcontainer/git-common
+
+# Setup E2E recordings and the local configuration with real identifiers
+tools/SetupE2e/config.local.psd1

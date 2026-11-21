@@ -70,6 +70,25 @@ Tests use temporary repositories and mocked Dataverse/package operations.
 They do not provision resources, contact Dataverse, or push Git changes.
 Release packaging tests generate and parse both standalone setup installers.
 
+## Setup Screenshot Capture
+
+The full capture regenerates the setup PNGs and the interactive walkthrough GIF
+embedded in the [README](../../README.md). It requires PowerShell 7.6 on .NET 10 or
+newer, NuGet access on first use, the platform font listed in the
+[repository instructions](../../AGENTS.md), and ffmpeg with drawtext and
+fontconfig support. The Dev Container installs ffmpeg and Noto Sans Mono.
+The GIF holds setup checkpoints for six seconds, types characters one at a time,
+and uses a semi-transparent caption footer below a raised green divider.
+
+Run the full capture from the repository root:
+
+```powershell
+pwsh -NoLogo -NoProfile -File ./tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1
+```
+
+Use `-Scene <name>` to capture one PNG without creating the GIF, or
+`-SkipAnimation` to regenerate the complete PNG set without ffmpeg.
+
 ## Test Organisation
 
 Suites live under `tests/`, grouped by the behaviour they own:
@@ -115,7 +134,7 @@ A focused Pester run verifies behaviour; it does not replace the full validation
 command or its per-file coverage gate.
 
 Run setup suites in a fresh PowerShell process to report command coverage for all
-three setup scripts:
+setup source modules:
 
 ```powershell
 pwsh -NoProfile -File ./tests/helpers/Invoke-SetupTests.ps1
@@ -123,9 +142,14 @@ pwsh -NoProfile -File ./tests/helpers/Invoke-SetupTests.ps1 -TestPath tests/Setu
 ```
 
 The setup runner uses the pinned Pester version, fails on test failures, and prints
-per-file coverage and the largest uncovered functions. A single-suite percentage
+per-module coverage and the largest uncovered functions. A single-suite percentage
 reports only that suite's coverage. Use the full validation command for analyzer
 checks, saved artifacts and enforcement of the 65% changed-file gate.
+
+Setup sources are feature-sliced under [setup/common](../../setup/common),
+[setup/azdo](../../setup/azdo), and [setup/github](../../setup/github). The
+[source manifest](../../setup/setup-sources.psd1) defines development and release
+load order; preserve it when adding or moving source fragments.
 
 ### Setup Mutation Guards
 
@@ -147,15 +171,19 @@ or discarding an otherwise successful result.
 
 > [!WARNING]
 > The legacy `-UseDeviceAuthentication` installer switch remains accepted for
-> compatibility but does not select device-code authentication. Setup continues
-> to use its existing authentication flow.
+> compatibility but does not select the sign-in flow. Setup signs in with a browser
+> when the host can open one and shows a device code when it cannot, such as in a
+> Dev Container, SSH session or CI.
 
 ## Coverage Gate
 
-Each added, modified, copied, or renamed `.ps1` or `.psm1` source file must have
-at least **65% command coverage across the entire file**, not just changed lines.
-The check compares the unrounded percentage; a repository-wide average cannot
-compensate for an under-covered file.
+Each added, modified, copied, or renamed `.ps1` or `.psm1` helper source file must
+have at least **65% command coverage across the entire file**, not just changed
+lines. The check compares the unrounded percentage; a repository-wide average
+cannot compensate for an under-covered file. The root `setup-azdo.ps1` and
+`setup-github.ps1` entrypoints are excluded from command coverage because they
+coordinate interactive startup; they still receive syntax and analyzer checks,
+and release tests verify the generated standalone installers.
 
 Files under `tests/`, `*.Tests.ps1`, and `*.Tests.psm1` are excluded from source
 coverage. Deleted files are not checked. Data, manifest, configuration, and XML
@@ -180,9 +208,11 @@ excluding under-covered source files or reducing the threshold.
 
 ### Setup Coverage Limits
 
-All three setup scripts meet the same 65% whole-file command coverage threshold as
-other executable source files. Startup commands remain part of the denominator;
-there are no setup exemptions or reduced thresholds.
+Every helper source file under `setup/` is subject to the same 65% whole-file
+command coverage threshold as other executable source files. The two root setup
+entrypoints are orchestration scripts and are exempt from command coverage;
+syntax and analyzer checks still apply, and release tests validate both generated
+standalone installers.
 
 Setup tests cover prompt and rendering contracts, configuration editing, wizard
 steps, branch/environment mapping, identity reuse and creation, service-account
