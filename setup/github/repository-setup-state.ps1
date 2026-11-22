@@ -320,6 +320,52 @@ function Initialize-GitHubSharedWorkflowAccessPolicy {
     Write-Host "Actions access policy set to '$accessLevel' on '$Owner/$Repo'." -ForegroundColor Green
 }
 
+function Initialize-GitHubPullRequestCreationPolicy {
+    <#
+    .SYNOPSIS
+        Enables "Allow GitHub Actions to create and approve pull requests" on a repository.
+    .DESCRIPTION
+        Apply-config publishes through a pull request opened with the run's GITHUB_TOKEN,
+        which GitHub rejects unless this repository setting is on. The current default
+        workflow permissions are kept; only can_approve_pull_request_reviews changes.
+        Changing repository Actions settings needs admin rights, so a 403 warns and
+        returns instead of failing setup. Other API failures propagate.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo
+    )
+
+    $currentPolicy = Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/permissions/workflow" -AllowForbidden
+    if (-not $currentPolicy) {
+        Write-Warning "Could not read the workflow permissions of '$Owner/$Repo' (the token may lack admin rights). Enable 'Allow GitHub Actions to create and approve pull requests' in the repository's Actions settings so apply-config can open pull requests."
+        return
+    }
+    if ($currentPolicy.can_approve_pull_request_reviews) {
+        Write-Host "GitHub Actions can already create pull requests in '$Owner/$Repo'." -ForegroundColor DarkGray
+        return
+    }
+
+    Write-Host "Allowing GitHub Actions to create and approve pull requests in '$Owner/$Repo'..." -ForegroundColor Yellow
+    try {
+        # A 204 response has no body, so success and "forbidden" are told apart by the
+        # error text rather than by a null result.
+        Invoke-GhApi -Endpoint "repos/$Owner/$Repo/actions/permissions/workflow" -Method 'PUT' -Body @{
+            default_workflow_permissions     = $currentPolicy.default_workflow_permissions
+            can_approve_pull_request_reviews = $true
+        } | Out-Null
+    }
+    catch {
+        if ($_.Exception.Message -notmatch '403') {
+            throw
+        }
+        Write-Warning "Could not change the workflow permissions of '$Owner/$Repo' (the token may lack admin rights). Enable 'Allow GitHub Actions to create and approve pull requests' in the repository's Actions settings so apply-config can open pull requests."
+        return
+    }
+    Write-Host "GitHub Actions can now create pull requests in '$Owner/$Repo'." -ForegroundColor Green
+}
+
 function Get-GitHubActionsVariableValue {
     <#
     .SYNOPSIS

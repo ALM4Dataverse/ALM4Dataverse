@@ -273,12 +273,26 @@ function Publish-AzDoRepoChange {
         $pullRequestUrl = $null
         if ($PublishPlan.Mode -eq 'PullRequest') {
             Write-Host "Creating pull request into '$($PublishPlan.TargetBranch)'..." -ForegroundColor Yellow
-            $pullRequest = New-AzDoPullRequest `
-                -RepositoryId $Repository.Id `
-                -SourceBranch $PublishPlan.BranchName `
-                -TargetBranch $PublishPlan.TargetBranch `
-                -Title $PublishPlan.PullRequestTitle `
-                -Description $PublishPlan.PullRequestDescription
+            try {
+                $pullRequest = New-AzDoPullRequest `
+                    -RepositoryId $Repository.Id `
+                    -SourceBranch $PublishPlan.BranchName `
+                    -TargetBranch $PublishPlan.TargetBranch `
+                    -Title $PublishPlan.PullRequestTitle `
+                    -Description $PublishPlan.PullRequestDescription
+            }
+            catch {
+                # Pipelines set APPLY_CONFIG_ARTIFACT_DIR. Keep the pushed branch as the
+                # source of truth and hand the changed files to the user as an artifact.
+                $pullRequestError = $_.Exception.Message
+                if ([string]::IsNullOrWhiteSpace($env:APPLY_CONFIG_ARTIFACT_DIR)) {
+                    throw
+                }
+
+                $committedPaths = @(& git diff-tree --root --no-commit-id --name-only -r --diff-filter=d HEAD)
+                $artifactDirectory = Copy-ApplyConfigArtifactFile -RepoRoot $RepoRoot -RelativePaths $committedPaths
+                throw "Pull request creation failed: $pullRequestError The changes were pushed to '$($PublishPlan.BranchName)'. Open a pull request from that branch into '$($PublishPlan.TargetBranch)', or apply the changed files from the 'apply-config-files' artifact ($artifactDirectory) and commit them."
+            }
 
             if ($pullRequest -and $pullRequest._links -and $pullRequest._links.web -and $pullRequest._links.web.href) {
                 $pullRequestUrl = $pullRequest._links.web.href

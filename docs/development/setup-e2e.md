@@ -121,13 +121,12 @@ against the wrong prompt.
 
 ## GitHub notes
 
-- The generated **APPLY-CONFIG** workflow commits workflow files, which the built-in Actions
-  token cannot do. Without a token with the Workflows permission (`workflow` scope for a
-  classic personal access token, or **Workflows: read and write** for a fine-grained token)
-  stored as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret, a commit run that changes
-  workflow files fails and uploads them as the `apply-config-workflows` artifact. Preview runs
-  and runs with no changes do not need the secret. See
-  [apply configuration token](../config/github-secrets.md#apply-configuration-token).
+- The generated **APPLY-CONFIG** workflow opens a pull request with the built-in Actions
+  token. It puts workflow files in `replace-github-workflows/`, because that token cannot
+  change `.github/workflows`, and uploads the `apply-config-files` artifact only when the
+  pull request cannot be created. The repository must allow Actions to create pull
+  requests; guided setup enables this. Preview runs and runs with no changes open no
+  pull request. See [apply configuration](../config/github-secrets.md#apply-configuration).
 - A workflow dispatch needs the workflow file on the default branch. Push the scaffold
   file, then dispatch it by its exact file name, or the API answers `404 workflow not
   found on the default branch`.

@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   apply:
@@ -28,11 +29,10 @@ jobs:
       - name: Apply configuration and commit changes
         uses: ALM4Dataverse/ALM4Dataverse/.github/actions/apply-config@main
         with:
-          # Optional. The built-in token cannot push workflow files, so when the
-          # regenerated callers change the run fails and uploads those files as the
-          # apply-config-workflows artifact. A token with the Workflows permission stored
-          # as the ALM4DATAVERSE_APPLY_TOKEN secret lets the run commit them directly.
-          github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
+          # Optional. The built-in token opens a pull request with the regenerated
+          # callers. GitHub blocks that token from changing .github/workflows, so those
+          # files are placed in replace-github-workflows/ in the pull request.
+          github-token: ${{ github.token }}
           preview: ${{ inputs.preview }}
           shared-repository: ALM4Dataverse/ALM4Dataverse
           shared-ref: main

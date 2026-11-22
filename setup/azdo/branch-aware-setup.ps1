@@ -704,15 +704,16 @@ function Invoke-AzDoBranchAwareSetup {
             throw 'Commit requires ApplyConfig.'
         }
 
-        # Unattended publication: all generated files for every configured branch
-        # are committed directly to the default branch without prompts.
+        # Unattended publication opens a pull request from a timestamped branch. If the
+        # pull request cannot be created, the apply-config run artifact carries the files.
+        $applyConfigTitle = 'Apply alm-config.psd1 settings for all configured branches'
         $wizardState.PublishPlan = [pscustomobject]@{
-            Mode                   = 'Direct'
+            Mode                   = 'PullRequest'
             TargetBranch           = $DefaultBranch
-            BranchName             = $DefaultBranch
-            CommitMessage          = 'Apply alm-config.psd1 settings for all configured branches'
-            PullRequestTitle       = ''
-            PullRequestDescription = ''
+            BranchName             = Get-DefaultSetupBranchName -BaseBranch $DefaultBranch -Context 'apply-config'
+            CommitMessage          = $applyConfigTitle
+            PullRequestTitle       = $applyConfigTitle
+            PullRequestDescription = 'This pull request regenerates the Azure DevOps pipelines and configuration from the committed alm-config.psd1 settings for all configured branches.'
         }
         $applyResult = Invoke-AzDoBranchAwareSetupApply `
             -MainRepoWorkingRoot $MainRepoWorkingRoot `

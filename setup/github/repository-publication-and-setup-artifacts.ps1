@@ -17,44 +17,91 @@ function Test-GitHubWorkflowPermissionRejection {
     return (($details -join [Environment]::NewLine) -match 'without .?workflows?.? (permission|scope)')
 }
 
-function Save-GitHubUnpushedWorkflow {
+function Get-GitHubWorkflowChangeSet {
     <#
     .SYNOPSIS
-        Copies generated workflow files that could not be pushed into a run artifact folder.
+        Lists workflow paths changed by commits after BaseSha, including deletions.
     .DESCRIPTION
-        Acts only when APPLY_CONFIG_WORKFLOW_DIR is set, which the apply-config action sets
-        and uploads as a run artifact. Copies each workflow file that HEAD adds or changes
-        relative to origin/BranchName, keeping its .github/workflows/ path. Returns the
-        folder, or $null when the rejection is not a workflow restriction or no folder is
-        configured. Deleted workflows are not copied. Call from inside the clone.
-    .PARAMETER Output
-        Merged stdout/stderr lines captured from the git push call.
-    .PARAMETER BranchName
-        Branch that was pushed; the changes are compared with its remote-tracking ref.
+        Call from inside the clone. Throws when git cannot compare the commits.
+    .PARAMETER BaseSha
+        Commit the publication branch was created from. Empty when the branch had no commits,
+        so every workflow file in HEAD counts as changed.
     #>
     [CmdletBinding()]
+    [OutputType([string[]])]
     param(
-        [Parameter()][object[]]$Output,
-        [Parameter(Mandatory)][string]$BranchName
+        [Parameter()][AllowEmptyString()][string]$BaseSha
     )
 
-    $workflowDirectory = $env:APPLY_CONFIG_WORKFLOW_DIR
-    if ([string]::IsNullOrWhiteSpace($workflowDirectory) -or -not (Test-GitHubWorkflowPermissionRejection -Output $Output)) {
-        return $null
+    $diffBase = $BaseSha
+    if ([string]::IsNullOrWhiteSpace($diffBase)) {
+        $diffBase = (& git hash-object -t tree /dev/null 2>&1 | Out-String).Trim()
     }
 
-    $changedWorkflows = @(& git diff --name-only --diff-filter=AM "origin/$BranchName" HEAD -- .github/workflows 2>&1)
+    $workflowPaths = @(& git diff --name-only $diffBase HEAD -- .github/workflows 2>&1)
     if ($LASTEXITCODE -ne 0) {
-        throw "Failed to list the generated workflow files for '$BranchName'."
+        throw 'Failed to list the generated workflow files.'
     }
 
-    foreach ($workflowPath in $changedWorkflows) {
-        $destination = Join-Path $workflowDirectory $workflowPath
-        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
-        Copy-Item -LiteralPath $workflowPath -Destination $destination -Force
-    }
+    return [string[]]$workflowPaths
+}
 
-    return $workflowDirectory
+function Move-GitHubWorkflowChangeToReplacementFolder {
+    <#
+    .SYNOPSIS
+        Moves the generated workflow folder out of the publication commit into replace-github-workflows/.
+    .DESCRIPTION
+        GITHUB_TOKEN cannot push .github/workflows changes. This copies the complete current
+        .github/workflows folder to replace-github-workflows/, so applying the change is a
+        single folder swap, then recommits the publication without touching .github/workflows.
+        Returns the repository-relative paths of the copied files. Call from inside the clone.
+    .PARAMETER RepoRoot
+        Repository root containing the generated .github/workflows folder.
+    .PARAMETER BaseSha
+        Commit the publication branch was created from. Empty when the branch had no commits;
+        the commit is then removed by deleting the branch ref.
+    .PARAMETER CommitMessage
+        Message for the replacement commit.
+    #>
+    [CmdletBinding()]
+    [OutputType([string[]])]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter()][AllowEmptyString()][string]$BaseSha,
+        [Parameter(Mandatory)][string]$CommitMessage
+    )
+
+    $replacementFolder = 'replace-github-workflows'
+    $replacementPath = Join-Path $RepoRoot $replacementFolder
+    if (Test-Path -LiteralPath $replacementPath) {
+        Remove-Item -LiteralPath $replacementPath -Recurse -Force
+    }
+    New-Item -ItemType Directory -Path $replacementPath | Out-Null
+
+    $workflowFiles = @(Get-ChildItem -LiteralPath (Join-Path $RepoRoot '.github/workflows') -File -ErrorAction SilentlyContinue)
+    foreach ($workflowFile in $workflowFiles) {
+        Copy-Item -LiteralPath $workflowFile.FullName -Destination $replacementPath
+    }
+    $relativePaths = @($workflowFiles | ForEach-Object { "$replacementFolder/$($_.Name)" })
+
+    if ([string]::IsNullOrWhiteSpace($BaseSha)) {
+        & git update-ref -d HEAD
+    }
+    else {
+        & git reset --soft $BaseSha
+    }
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to reset the publication commit.' }
+
+    & git reset --quiet -- .github/workflows
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to unstage the workflow files.' }
+
+    & git add -A -- $replacementFolder
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to stage the replacement workflow folder.' }
+
+    & git commit -m $CommitMessage | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'Git commit failed.' }
+
+    return [string[]]$relativePaths
 }
 
 function Assert-GitHubPushSucceeded {
@@ -63,31 +110,21 @@ function Assert-GitHubPushSucceeded {
         Throws a diagnosable error for a failed git push.
     .DESCRIPTION
         Call this only when git push reported a nonzero exit code: it always throws.
-        The message includes the captured CLI output. Workflow-file rejections get
-        specific guidance: with a WorkflowFilesPath the generated workflow files were
-        copied there; without one the push credentials need the workflow permission.
+        The message includes the captured CLI output. Workflow-file rejections name the
+        credential permission that is missing.
     .PARAMETER Output
         Merged stdout/stderr lines captured from the git push call.
     .PARAMETER Target
         Branch or ref that was pushed, used in the error message.
-    .PARAMETER WorkflowFilesPath
-        Folder holding the workflow files that could not be pushed, when they were copied.
     #>
     [CmdletBinding()]
     param(
         [Parameter()][object[]]$Output,
-        [Parameter(Mandatory)][string]$Target,
-        [Parameter()][string]$WorkflowFilesPath
+        [Parameter(Mandatory)][string]$Target
     )
 
     if (Test-GitHubWorkflowPermissionRejection -Output $Output) {
-        $guidance = if ($WorkflowFilesPath) {
-            "The generated workflow files were not pushed. Copies are in '$WorkflowFilesPath' and uploaded as this run's artifact. Copy them into .github/workflows and commit, or run setup-github.ps1 -ApplyConfig -Commit from a workstation."
-        }
-        else {
-            "Make sure the push credentials have the workflow permission. For GitHub CLI sign-in, run 'gh auth refresh -s workflow'."
-        }
-        throw "Git push of '$Target' was rejected because GitHub does not allow these credentials to create or update workflow files. $guidance"
+        throw "Git push of '$Target' was rejected because GitHub does not allow these credentials to create or update workflow files. Make sure the push credentials have the workflow permission. For GitHub CLI sign-in, run 'gh auth refresh -s workflow'."
     }
 
     $details = @($Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
@@ -142,47 +179,84 @@ function Publish-GitHubRepoChange {
             }
         }
 
+        # An unborn branch has no HEAD yet; an empty base tells the workflow helpers to treat HEAD as the first commit.
+        $baseSha = (& git rev-parse --verify --quiet HEAD 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0) { $baseSha = '' }
+
         & git config user.name 'ALM4Dataverse Setup'
         & git config user.email 'setup@alm4dataverse.local'
         & git commit -m $PublishPlan.CommitMessage 2>&1
         if ($LASTEXITCODE -ne 0) { throw 'Git commit failed.' }
+
+        # Workflow files cannot be pushed with the default token, so a pull request carries them in replace-github-workflows/.
+        $movedWorkflowFiles = @()
+        if ($PublishPlan.Mode -eq 'PullRequest') {
+            $workflowChanges = @(Get-GitHubWorkflowChangeSet -BaseSha $baseSha)
+            if ($workflowChanges.Count -gt 0) {
+                $movedWorkflowFiles = @(Move-GitHubWorkflowChangeToReplacementFolder -RepoRoot $RepoRoot -BaseSha $baseSha -CommitMessage $PublishPlan.CommitMessage)
+            }
+        }
 
         Write-Host "Pushing to origin/$($PublishPlan.BranchName)..." -ForegroundColor Yellow
         $pushOutput = @(& git push -u origin $PublishPlan.BranchName 2>&1)
         $pushExitCode = $LASTEXITCODE
         $pushOutput | Out-Host
         if ($pushExitCode -ne 0) {
-            $workflowFilesPath = Save-GitHubUnpushedWorkflow -Output $pushOutput -BranchName $PublishPlan.BranchName
-            Assert-GitHubPushSucceeded -Output $pushOutput -Target $PublishPlan.BranchName -WorkflowFilesPath $workflowFilesPath
+            Assert-GitHubPushSucceeded -Output $pushOutput -Target $PublishPlan.BranchName
+        }
+
+        $pullRequestDescription = $PublishPlan.PullRequestDescription
+        if ($movedWorkflowFiles.Count -gt 0) {
+            $replacementSection = (@(
+                    '## Replace workflow files'
+                    ''
+                    'GitHub does not allow the default token to change files under `.github/workflows`, so the generated workflows are in `replace-github-workflows/` in this pull request. To apply them, delete `.github/workflows`, rename `replace-github-workflows` to `.github/workflows`, and commit. Until this is done, the build fails.'
+                ) -join [Environment]::NewLine)
+            $pullRequestDescription = @($PublishPlan.PullRequestDescription, $replacementSection) -join ([Environment]::NewLine * 2)
         }
 
         $pullRequestUrl = $null
         if ($PublishPlan.Mode -eq 'PullRequest') {
-            $existingPrOutput = (& gh pr list --head $PublishPlan.BranchName --base $PublishPlan.TargetBranch --state open --json number,url 2>&1 | Out-String).Trim()
-            if ($LASTEXITCODE -ne 0) {
-                throw 'Failed to query existing pull requests.'
-            }
-
-            $existingPullRequests = @()
-            if (-not [string]::IsNullOrWhiteSpace($existingPrOutput)) {
-                $existingPullRequests = @($existingPrOutput | ConvertFrom-Json)
-            }
-
-            $existingPullRequest = $existingPullRequests | Select-Object -First 1
-            if ($existingPullRequest) {
-                Write-Host "Updating existing pull request #$($existingPullRequest.number)..." -ForegroundColor Yellow
-                & gh pr edit $existingPullRequest.number --title $PublishPlan.PullRequestTitle --body $PublishPlan.PullRequestDescription 2>&1
+            try {
+                $existingPrOutput = (& gh pr list --head $PublishPlan.BranchName --base $PublishPlan.TargetBranch --state open --json number,url 2>&1 | Out-String).Trim()
                 if ($LASTEXITCODE -ne 0) {
-                    throw 'Failed to update the pull request.'
+                    throw 'Failed to query existing pull requests.'
                 }
-                $pullRequestUrl = $existingPullRequest.url
+
+                $existingPullRequests = @()
+                if (-not [string]::IsNullOrWhiteSpace($existingPrOutput)) {
+                    $existingPullRequests = @($existingPrOutput | ConvertFrom-Json)
+                }
+
+                $existingPullRequest = $existingPullRequests | Select-Object -First 1
+                if ($existingPullRequest) {
+                    Write-Host "Updating existing pull request #$($existingPullRequest.number)..." -ForegroundColor Yellow
+                    & gh pr edit $existingPullRequest.number --title $PublishPlan.PullRequestTitle --body $pullRequestDescription 2>&1
+                    if ($LASTEXITCODE -ne 0) {
+                        throw 'Failed to update the pull request.'
+                    }
+                    $pullRequestUrl = $existingPullRequest.url
+                }
+                else {
+                    Write-Host "Creating pull request into '$($PublishPlan.TargetBranch)'..." -ForegroundColor Yellow
+                    $pullRequestUrl = (& gh pr create --title $PublishPlan.PullRequestTitle --body $pullRequestDescription --base $PublishPlan.TargetBranch --head $PublishPlan.BranchName 2>&1 | Out-String).Trim()
+                    if ($LASTEXITCODE -ne 0) {
+                        throw 'Failed to create the pull request.'
+                    }
+                }
             }
-            else {
-                Write-Host "Creating pull request into '$($PublishPlan.TargetBranch)'..." -ForegroundColor Yellow
-                $pullRequestUrl = (& gh pr create --title $PublishPlan.PullRequestTitle --body $PublishPlan.PullRequestDescription --base $PublishPlan.TargetBranch --head $PublishPlan.BranchName 2>&1 | Out-String).Trim()
-                if ($LASTEXITCODE -ne 0) {
-                    throw 'Failed to create the pull request.'
+            catch {
+                $pullRequestError = $_.Exception.Message
+                # Fallback: the replacement workflow files go to the artifact so they can still be applied by hand.
+                $artifactPath = $null
+                if ($movedWorkflowFiles.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($env:APPLY_CONFIG_ARTIFACT_DIR)) {
+                    $artifactPath = Copy-ApplyConfigArtifactFile -RepoRoot $RepoRoot -RelativePaths $movedWorkflowFiles
                 }
+                if (-not $artifactPath) {
+                    throw
+                }
+
+                throw "Branch '$($PublishPlan.BranchName)' was pushed, but the pull request could not be created: $pullRequestError Open a pull request for that branch manually. The workflow files are in replace-github-workflows/ on that branch and in the apply-config-files run artifact; to apply them, replace .github/workflows with that folder and commit."
             }
         }
 

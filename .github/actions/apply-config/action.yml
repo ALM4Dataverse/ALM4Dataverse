@@ -1,5 +1,5 @@
 # Applies committed alm-config.psd1 settings by running the matching shared setup
-# entrypoint and committing the regenerated caller workflows to the default branch.
+# entrypoint and opening a pull request with the regenerated caller workflows.
 # The action and the setup source share one checkout ref, so this caller has no
 # version-dependent content and the APPLY-CONFIG stub never needs regenerating.
 name: Apply Config
@@ -10,7 +10,7 @@ inputs:
     description: Application repository as owner/name; defaults to the running workflow's repository.
     required: false
   github-token:
-    description: Token used to clone and push the application repository. Optional; when omitted the run's GITHUB_TOKEN is used. GitHub blocks that token from pushing workflow files, so those files are uploaded as the apply-config-workflows artifact instead.
+    description: Token used to clone and push the application repository and open the pull request. Optional; when omitted the run's GITHUB_TOKEN is used. GitHub blocks that token from changing .github/workflows, so those files are placed in replace-github-workflows/ in the pull request. They are uploaded as the apply-config-files artifact only if the pull request cannot be created.
     required: false
   preview:
     description: When true, shows the changes that would be committed without pushing them.
@@ -51,7 +51,7 @@ runs:
         # falls back to the running workflow's repository.
         APPLY_CONFIG_REPOSITORY: ${{ inputs.repository || github.repository }}
         APPLY_CONFIG_PREVIEW: ${{ inputs.preview }}
-        APPLY_CONFIG_WORKFLOW_DIR: ${{ runner.temp }}/apply-config-workflows
+        APPLY_CONFIG_ARTIFACT_DIR: ${{ runner.temp }}/apply-config-files
       run: |
         $ErrorActionPreference = 'Stop'
         # Setup clones a disposable application copy and pushes with plain git, so
@@ -67,13 +67,14 @@ runs:
             & ./setup-github.ps1 -ApplyConfig -Commit -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
         }
 
-    # Runs even when the apply step fails, so rejected workflow-file changes stay downloadable.
+    # Runs even when the apply step fails. The folder exists only when the pull request
+    # could not be created, so the workflow files that were not applied stay downloadable.
     - name: Upload generated workflow files
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: apply-config-workflows
-        path: ${{ runner.temp }}/apply-config-workflows
+        name: apply-config-files
+        path: ${{ runner.temp }}/apply-config-files
         # Keeps the .github/ folder, which upload-artifact skips by default.
         include-hidden-files: true
         if-no-files-found: ignore

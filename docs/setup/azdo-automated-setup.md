@@ -232,6 +232,14 @@ without publishing:
 See
 [setup metadata and branch environments](../config/alm-config.md#setup-metadata-and-branch-environments).
 
+Applying publishes through a pull request. The pipeline pushes an `apply-config` branch and
+opens a pull request into the default branch as the project's Build Service identity. Guided
+setup grants that identity Contribute, Create branch and Contribute to pull requests on the
+application repository. `-ApplyConfig` does not change permissions, so a project set up
+before this change needs one guided setup run (`setup-azdo.ps1` without `-ApplyConfig`). If
+the pull request cannot be created, the pipeline fails after pushing the branch and publishes
+the generated files as the `apply-config-files` pipeline artifact.
+
 ## After Setup
 
 1. Review the generated files, then commit them or merge the pull requests setup created.

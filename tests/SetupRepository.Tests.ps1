@@ -1190,8 +1190,8 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             $script:publishPlan = [pscustomobject]@{ Mode = 'Direct'; BranchName = 'release'; TargetBranch = 'release'; CommitMessage = 'Setup'; PullRequestTitle = 'Setup'; PullRequestDescription = 'Configure automation' }
             Mock git {
                 $global:LASTEXITCODE = 0
-                # Git diff uses 1 for changes, unlike the failure codes simulated below.
-                if ($args -contains 'diff' -and $script:publishHasChanges) { $global:LASTEXITCODE = 1 }
+                # `git diff --cached --quiet` uses 1 for changes, unlike the failure codes simulated below.
+                if ($args -contains 'diff' -and $args -contains '--cached' -and $script:publishHasChanges) { $global:LASTEXITCODE = 1 }
                 if ($args -contains 'ls-remote') {
                     $exists = if ($args[-1] -eq 'release') { $script:publishTargetExists } else { $script:publishDefaultExists }
                     if (-not $exists) { $global:LASTEXITCODE = 2 }
@@ -1727,6 +1727,71 @@ resources:
         Should -Invoke Get-GitHubRepoList -Times 0 -Exactly
     }
 }
+Describe 'Azure DevOps pull request fallback' {
+    BeforeAll {
+        $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
+        foreach ($definition in $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+            Set-Item -Path "Function:$($definition.Name)" -Value $definition.Body.GetScriptBlock()
+        }
+        # Real git runs against a local bare origin so the push and commit behaviour is exercised.
+        $script:realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+    }
+
+    BeforeEach {
+        Mock git { & $script:realGit @args }
+        $env:APPLY_CONFIG_ARTIFACT_DIR = $null
+        $script:origin = Join-Path $TestDrive ('origin-' + [guid]::NewGuid().ToString('N'))
+        $script:clone = Join-Path $TestDrive ('clone-' + [guid]::NewGuid().ToString('N'))
+        & $script:realGit init -q --bare $script:origin
+        New-Item -ItemType Directory -Path $script:clone | Out-Null
+        Push-Location $script:clone
+        try {
+            & $script:realGit init -q -b main
+            & $script:realGit config user.name 'Test'
+            & $script:realGit config user.email 'test@example.invalid'
+            Set-Content -LiteralPath 'README.md' -Value 'base'
+            & $script:realGit add -A
+            & $script:realGit commit -q -m 'base'
+            & $script:realGit remote add origin $script:origin
+            & $script:realGit push -q origin main
+            & $script:realGit checkout -q -b apply-config
+            Set-Content -LiteralPath 'settings.json' -Value '{}'
+        }
+        finally {
+            Pop-Location
+        }
+        $script:publishPlan = [pscustomobject]@{
+            Mode                   = 'PullRequest'
+            BranchName             = 'apply-config'
+            TargetBranch           = 'main'
+            CommitMessage          = 'Apply settings'
+            PullRequestTitle       = 'Apply settings'
+            PullRequestDescription = 'Regenerate'
+        }
+    }
+    AfterEach {
+        $env:APPLY_CONFIG_ARTIFACT_DIR = $null
+    }
+
+    It 'pushes the branch and copies the committed files to the artifact folder when the pull request fails' {
+        $env:APPLY_CONFIG_ARTIFACT_DIR = Join-Path $TestDrive 'apply-config-files'
+        Mock New-AzDoPullRequest { throw 'TF401027: not authorized' }
+
+        { Publish-AzDoRepoChange -RepoRoot $script:clone -PublishPlan $script:publishPlan -AccessToken 'token' -Repository ([pscustomobject]@{ Id = 'repo-id' }) } |
+            Should -Throw '*Pull request creation failed*TF401027*apply-config-files*'
+
+        Get-Content -LiteralPath (Join-Path $env:APPLY_CONFIG_ARTIFACT_DIR 'settings.json') | Should -Be '{}'
+        & $script:realGit --git-dir $script:origin rev-parse --verify --quiet refs/heads/apply-config | Should -Not -BeNullOrEmpty
+    }
+
+    It 'rethrows the pull request error when no artifact folder is configured' {
+        Mock New-AzDoPullRequest { throw 'TF401027: not authorized' }
+
+        { Publish-AzDoRepoChange -RepoRoot $script:clone -PublishPlan $script:publishPlan -AccessToken 'token' -Repository ([pscustomobject]@{ Id = 'repo-id' }) } |
+            Should -Throw 'TF401027: not authorized'
+    }
+}
+
 Describe 'Azure DevOps deploy pipeline resource names' {
     BeforeAll {
         $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-azdo.ps1'
@@ -1920,18 +1985,7 @@ Describe 'GitHub push failure diagnostics' {
         }
     }
 
-    It 'explains the workflow permission restriction and where the workflow files are' {
-        $output = @(
-            'To https://github.com/owner/repo.git'
-            ' ! [remote rejected] main -> main (refusing to allow a GitHub App to create or update workflow `.github/workflows/BUILD.yml` without `workflows` permission)'
-            'error: failed to push some refs to https://github.com/owner/repo.git'
-        )
-
-        { Assert-GitHubPushSucceeded -Target main -Output $output -WorkflowFilesPath 'workflow-files' } |
-            Should -Throw "*Copies are in 'workflow-files'*"
-    }
-
-    It 'asks for the workflow scope on the push credentials when no workflow files were copied' {
+    It 'asks for the workflow scope on the push credentials when a push is rejected for workflow files' {
         $output = @(' ! [remote rejected] main -> main (refusing to allow an OAuth App to create or update workflow `.github/workflows/BUILD.yml` without `workflow` scope)')
 
         { Assert-GitHubPushSucceeded -Target main -Output $output } |
@@ -1943,53 +1997,90 @@ Describe 'GitHub push failure diagnostics' {
             Should -Throw '*Repository not found*'
     }
 
-    Context 'copying unpushed workflow files' {
+    Context 'moving the generated workflows into replace-github-workflows' {
+        BeforeAll {
+            # Real git runs against a throwaway repository because the reset sequence depends on
+            # git's index semantics; the file-level git mock would hide that behaviour.
+            $script:realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+        }
         BeforeEach {
-            $script:workflowRejection = @(' ! [remote rejected] main -> main (refusing to allow a GitHub App to create or update workflow `.github/workflows/BUILD.yml` without `workflows` permission)')
-            $script:workflowDirectory = Join-Path $TestDrive 'apply-config-workflows'
-            Remove-Item -LiteralPath $script:workflowDirectory -Recurse -Force -ErrorAction SilentlyContinue
-            $script:clone = Join-Path $TestDrive 'clone'
-            New-Item -ItemType Directory -Path (Join-Path $script:clone '.github/workflows') -Force | Out-Null
-            Set-Content -LiteralPath (Join-Path $script:clone '.github/workflows/BUILD.yml') -Value 'name: BUILD'
-            $env:APPLY_CONFIG_WORKFLOW_DIR = $script:workflowDirectory
-            # Stands in for `git diff --name-only` against origin/main.
-            Mock git {
-                $global:LASTEXITCODE = 0
-                $script:diffArgs = @($args)
-                @('.github/workflows/BUILD.yml')
-            }
-        }
-        AfterEach {
-            $env:APPLY_CONFIG_WORKFLOW_DIR = $null
-        }
+            Mock git { & $script:realGit @args }
 
-        It 'copies changed workflow files into the artifact folder keeping their .github/workflows path' {
+            $script:clone = Join-Path $TestDrive 'clone'
+            Remove-Item -LiteralPath $script:clone -Recurse -Force -ErrorAction SilentlyContinue
+            New-Item -ItemType Directory -Path $script:clone | Out-Null
             Push-Location $script:clone
             try {
-                $result = Save-GitHubUnpushedWorkflow -Output $script:workflowRejection -BranchName main
+                & $script:realGit init -q -b main
+                & $script:realGit config user.name 'Test'
+                & $script:realGit config user.email 'test@example.invalid'
+                Set-Content -LiteralPath 'README.md' -Value 'base'
+                & $script:realGit add -A
+                & $script:realGit commit -q -m 'base'
+                $script:baseSha = (& $script:realGit rev-parse HEAD).Trim()
+
+                New-Item -ItemType Directory -Path '.github/workflows' -Force | Out-Null
+                Set-Content -LiteralPath '.github/workflows/BUILD.yml' -Value 'name: BUILD'
+                Set-Content -LiteralPath 'settings.json' -Value '{}'
+                & $script:realGit add -A
+                & $script:realGit commit -q -m 'publish'
             }
             finally {
                 Pop-Location
             }
-
-            $result | Should -Be $script:workflowDirectory
-            Get-Content -LiteralPath (Join-Path $script:workflowDirectory '.github/workflows/BUILD.yml') | Should -Be 'name: BUILD'
-            $script:diffArgs | Should -Contain 'origin/main'
         }
 
-        It 'does not copy anything for other push failures' {
-            $result = Save-GitHubUnpushedWorkflow -Output @('remote: Repository not found.') -BranchName main
+        It 'recommits the other changes and puts the complete workflow folder in replace-github-workflows' {
+            Push-Location $script:clone
+            try {
+                $moved = Move-GitHubWorkflowChangeToReplacementFolder -RepoRoot $script:clone -BaseSha $script:baseSha -CommitMessage 'Apply settings'
 
-            $result | Should -BeNullOrEmpty
-            Test-Path $script:workflowDirectory | Should -BeFalse
+                $moved -join ',' | Should -Be 'replace-github-workflows/BUILD.yml'
+                (& $script:realGit show --name-only --format= HEAD | Out-String).Split([Environment]::NewLine, [StringSplitOptions]::RemoveEmptyEntries) |
+                    Sort-Object | Should -Be @('replace-github-workflows/BUILD.yml', 'settings.json')
+                (& $script:realGit log -1 --format=%s) | Should -Be 'Apply settings'
+                & $script:realGit ls-files -- .github/workflows | Should -BeNullOrEmpty
+                Get-Content -LiteralPath 'replace-github-workflows/BUILD.yml' | Should -Be 'name: BUILD'
+            }
+            finally {
+                Pop-Location
+            }
         }
 
-        It 'does not copy anything when no artifact folder is configured' {
-            $env:APPLY_CONFIG_WORKFLOW_DIR = $null
+        It 'removes stale files from an earlier replacement folder' {
+            Push-Location $script:clone
+            try {
+                New-Item -ItemType Directory -Path 'replace-github-workflows' -Force | Out-Null
+                Set-Content -LiteralPath 'replace-github-workflows/REMOVED.yml' -Value 'old'
+                & $script:realGit add -A
+                & $script:realGit commit -q --amend --no-edit
 
-            $result = Save-GitHubUnpushedWorkflow -Output $script:workflowRejection -BranchName main
+                $null = Move-GitHubWorkflowChangeToReplacementFolder -RepoRoot $script:clone -BaseSha $script:baseSha -CommitMessage 'Apply settings'
 
-            $result | Should -BeNullOrEmpty
+                @(& $script:realGit ls-tree -r --name-only HEAD -- replace-github-workflows) | Should -Be 'replace-github-workflows/BUILD.yml'
+            }
+            finally {
+                Pop-Location
+            }
+        }
+
+        It 'treats a branch with no earlier commits as the first commit' {
+            Push-Location $script:clone
+            try {
+                # Recreate the publication as a root commit, as a fresh repository would have it.
+                & $script:realGit update-ref -d HEAD
+                & $script:realGit commit -q -m 'publish'
+
+                $moved = Move-GitHubWorkflowChangeToReplacementFolder -RepoRoot $script:clone -BaseSha '' -CommitMessage 'Apply settings'
+
+                $moved -join ',' | Should -Be 'replace-github-workflows/BUILD.yml'
+                @(& $script:realGit show --name-only --format= HEAD) | Should -Contain 'settings.json'
+                @(& $script:realGit show --name-only --format= HEAD) | Should -Contain 'replace-github-workflows/BUILD.yml'
+                @(& $script:realGit show --name-only --format= HEAD) | Should -Not -Contain '.github/workflows/BUILD.yml'
+            }
+            finally {
+                Pop-Location
+            }
         }
     }
 }

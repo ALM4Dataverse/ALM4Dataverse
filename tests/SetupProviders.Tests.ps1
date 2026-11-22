@@ -1697,6 +1697,24 @@ Describe 'Azure DevOps pipeline and endpoint reconciliation' {
             Should -Invoke Set-AzDoAccessControlEntry -Times 1 -Exactly
         }
 
+        It 'grants Contribute, CreateBranch and PullRequestContribute together' {
+            Mock Get-AzDoBuildServiceIdentity { 'service-descriptor' }
+            Mock Get-AzDoSecurityNamespaceByName { [pscustomobject]@{ Id = 'namespace-id' } }
+            Mock Get-AzDoSecurityNamespaceActionBit {
+                switch ($ActionName) {
+                    'Contribute' { 4 }
+                    'CreateBranch' { 16 }
+                    'PullRequestContribute' { 64 }
+                }
+            }
+            Mock Get-AzDoAccessControlEntry { $null }
+            Mock Set-AzDoAccessControlEntry { }
+
+            Initialize-AzDoBuildServiceRepositoryPermission -ProjectName 'example-project' -ProjectId 'project-id' -RepositoryId 'repository-id'
+
+            Should -Invoke Set-AzDoAccessControlEntry -Times 1 -Exactly -ParameterFilter { $Allow -eq 84 -and $Deny -eq 0 }
+        }
+
         It 'leaves existing variable-group Approval and ExclusiveLock checks untouched' {
             $script:existingChecks = [pscustomobject]@{
                 count = 2

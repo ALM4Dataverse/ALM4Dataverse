@@ -9,18 +9,24 @@ out safely.
 
 ## Setup
 
-### GitHub Apply Configuration Works Without A Token
+### Apply Configuration Opens A Pull Request
 
-**You'll see:** on GitHub, an APPLY-CONFIG run that changes caller workflows no longer
-needs the `ALM4DATAVERSE_APPLY_TOKEN` secret to finish. Without it the run fails with a
-message that the built-in token cannot create or update workflow files, and uploads the
-changed workflow files as the `apply-config-workflows` artifact. Before this change the
-same run failed without that artifact.
+**You'll see:** APPLY-CONFIG pushes an `apply-config` branch and opens a pull request into
+the default branch, instead of committing to the default branch. It needs no secret. On
+GitHub, the built-in token cannot change files under `.github/workflows/`, so the pull
+request puts the regenerated workflow files in `replace-github-workflows/` and its
+description explains how to apply them. On Azure DevOps, the pipeline uploads the
+`apply-config-files` artifact only when the pull request cannot be created.
 
-**Do this:** to apply the changes without a secret, download the artifact and copy its
-`.github/workflows/` files into the repository, or run `setup-github.ps1 -ApplyConfig -Commit`
-from a workstation. To let the workflow commit directly again, store a token with the
-Workflows permission as `ALM4DATAVERSE_APPLY_TOKEN`; see [apply configuration token](../config/github-secrets.md#apply-configuration-token).
+**Do this:** on GitHub, enable **Allow GitHub Actions to create and approve pull requests**
+under **Settings > Actions > General > Workflow permissions**. Guided setup turns it on;
+manual setup must do it. Then merge the pull request, delete `.github/workflows`, and rename
+`replace-github-workflows` to `.github/workflows`. BUILD fails until you do. The BUILD check
+comes from the shared build action, so it applies once your caller's shared workflow
+reference includes this change (the default `stable` reference does after the next release).
+On Azure DevOps, run guided setup once (`setup-azdo.ps1`
+without `-ApplyConfig`) so the Build Service can create branches and pull requests. See
+[apply configuration](../config/github-secrets.md#apply-configuration).
 
 ### Azure DevOps Pipeline Names Include The Repository Name
 
@@ -84,37 +90,13 @@ files. See [GitHub manual setup](../setup/github-manual-setup.md) or
 **You'll see:** guided setup asks once where to publish, instead of once per branch, and
 writes the workflows or pipelines for every configured branch in a single commit or pull
 request. Applying committed configuration with `-ApplyConfig -Commit`, or with the
-APPLY-CONFIG pipeline or workflow, commits directly to the repository's default branch.
+APPLY-CONFIG pipeline or workflow, opens a pull request into the repository's default branch.
 
 **Do this:** when reviewing the publication, check that every configured branch appears
-in the single change. To review the changes before they are committed, run the
+in the single change. To review the changes before they are merged, run the
 APPLY-CONFIG pipeline or workflow with its preview option enabled (or
-`-ApplyConfig -PreviewOnly` on a workstation); `-ApplyConfig -Commit` always commits
-directly to the repository's default branch.
-
-### GitHub APPLY-CONFIG Needs A Token That Can Write Workflows
-
-**You'll see:** the GitHub **APPLY-CONFIG** workflow fails while pushing with
-`refusing to allow a GitHub App to create or update workflow ... without `workflows`
-permission`. GitHub never lets the built-in Actions token create or update workflow files
-on the default branch, and the workflow's only job is to commit regenerated workflows.
-
-**Do this:** create a token that has the Workflows permission (a classic personal access
-token with the `workflow` scope, or a fine-grained token with **Workflows: read and
-write** and **Contents: read and write** for the repository), store it as the
-`ALM4DATAVERSE_APPLY_TOKEN` repository secret, and pass it to the action from
-`.github/workflows/APPLY-CONFIG.yml`:
-
-```yaml
-        with:
-          github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
-```
-
-Setup writes this line for new and regenerated APPLY-CONFIG callers; an existing caller
-keeps its own line until it is regenerated. Rerun the workflow after storing the secret.
-Keep using the built-in token for builds and deployments. Preview-only runs work with the
-built-in token because they do not push. See
-[apply configuration token](../config/github-secrets.md#apply-configuration-token).
+`-ApplyConfig -PreviewOnly` on a workstation); `-ApplyConfig -Commit` always opens a pull
+request instead of committing directly.
 
 ### Guided Setup Defers More Writes Until Apply
 

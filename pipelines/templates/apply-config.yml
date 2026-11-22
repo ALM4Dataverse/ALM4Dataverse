@@ -49,3 +49,14 @@ steps:
   env:
     ALM_ORGANIZATION_URI: ${{ parameters.organizationUri }}
     ALM_ACCESS_TOKEN: $(System.AccessToken)
+    APPLY_CONFIG_ARTIFACT_DIR: $(Build.ArtifactStagingDirectory)/apply-config-files
+
+# Only used when the pull request could not be created: the changed files are then
+# published so they can be applied manually from the pushed branch.
+- task: PublishPipelineArtifact@1
+  displayName: 'Publish apply-config files if the pull request failed'
+  condition: failed()
+  continueOnError: true
+  inputs:
+    targetPath: $(Build.ArtifactStagingDirectory)/apply-config-files
+    artifact: apply-config-files

@@ -77,36 +77,29 @@ store one as an environment secret named `WORKFLOW_DISPATCH_TOKEN` (or legacy al
 
 This token is separate from the Dataverse/Azure credentials shown below.
 
-## Apply configuration token
+## Apply configuration
 
-The `APPLY-CONFIG` workflow regenerates the caller workflows and commits them to the
-default branch. GitHub never lets the built-in Actions token create or update files under
-`.github/workflows/`, so a run that changes those files cannot push them with that token.
-No secret is required:
+The `APPLY-CONFIG` workflow regenerates the caller workflows and opens a pull request for
+them. It uses the run's built-in `GITHUB_TOKEN`, so no secret is required:
 
 - If the regenerated files are already up to date, the run succeeds and changes nothing.
-- If they changed, the run fails and uploads the changed `.github/workflows/` files as the
-  `apply-config-workflows` artifact. The failure message explains where they are.
+- Otherwise it pushes an `apply-config` branch and opens a pull request into the default
+  branch.
+- GitHub never lets the built-in token create or update files under `.github/workflows/`.
+  The pull request therefore puts the regenerated workflow files in
+  `replace-github-workflows/`. Its description explains how to apply them: delete
+  `.github/workflows`, rename `replace-github-workflows` to `.github/workflows`, and commit.
+  Until you do, the BUILD workflow fails.
+- If the pull request cannot be created, the run fails after pushing the branch and uploads
+  the workflow files as the `apply-config-files` artifact. The failure message explains what
+  to do.
 
-To apply them, download the artifact and copy its `.github/workflows/` files into the
-repository's default branch, then commit them. Committing them needs credentials with the
-Workflows permission (see below). Alternatively, run `setup-github.ps1 -ApplyConfig -Commit`
-on a workstation, which uses your own sign-in.
+The pull request needs the repository setting **Allow GitHub Actions to create and approve
+pull requests** (**Settings > Actions > General > Workflow permissions**). Guided setup turns
+it on. Manual setup must turn it on (see [GitHub manual setup](../setup/github-manual-setup.md)).
+If an organization policy forbids it, the run takes the failure path above.
 
-To let the workflow commit directly instead, store a token with the Workflows permission
-as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret. The scaffolded caller already passes
-it:
-
-```yaml
-        with:
-          github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
-```
-
-Create a classic personal access token with the `workflow` and `repo` scopes, or a
-fine-grained token for the repository with **Contents: read and write** and
-**Workflows: read and write**. Preview runs never push, so they never need a token.
-
-This token is separate from the Dataverse/Azure credentials shown below.
+Preview runs never push, so they need neither the setting nor a token.
 
 ## Release and cleanup permissions
 
