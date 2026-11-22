@@ -106,8 +106,8 @@ the Entra object ID.
 
 In the Power Platform admin center, select the environment, then **Settings > Users +
 permissions > Application users**. Add the app, choose its business unit, and assign the
-System Administrator role used by the standard setup. A narrower custom role requires
-validation against every solution, process and hook operation you use.
+System Administrator and System Customizer roles used by the standard setup. A narrower
+custom role requires validation against every solution, process and hook operation you use.
 
 The process-owner user is separate from the application user. It must already exist, be
 enabled, and be able to own and activate the relevant processes and connections.

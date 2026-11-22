@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     This script packs the solutions from the source directory into managed and unmanaged
-    zip files in the artifact staging directory. It also copies any additional assets
-    defined in alm-config.psd1 and creates a lock file for script dependencies.
+    zip files in the artifact staging directory. It also builds configured Code Apps and
+    CMR apps, copies additional assets, and creates a lock file for script dependencies.
 
     Hooks defined in alm-config.psd1 are invoked at various stages of the build process
     to allow for custom pre- and post-build actions.
@@ -25,8 +25,11 @@
     Run installdependencies.ps1 first in this process. Requires PowerShell 7 for
     parallel packing/checks. Checker failures write reports before throwing;
     missing assets or unresolved installed dependency versions also fail the build.
-    Artifact contents include deployment scripts, configuration and exact dependency
-    versions. When build.versionCollisionGuard is enabled, each solution package
+    Artifact contents include deployment scripts, configuration, CMR client build
+    output and deployment metadata, and exact dependency versions. Source-mode CMR
+    artifacts also include filtered project source; CMR configuration, installed
+    dependencies, and unsafe files are excluded. When
+    build.versionCollisionGuard is enabled, each solution package
     version is claimed against its content using a remote annotated Git tag; the
     build identity then needs permission to create tags. IMPORT skips this claim
     because its temporary package is deployed directly rather than published.
@@ -47,6 +50,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot 'cmr-apps.ps1')
 
 Write-Host "##[section]Building Artifacts"
 
@@ -858,6 +862,8 @@ foreach ($solution in $config.solutions) {
     }
 }
 
+Build-CmrApp -Config $config -SourceDirectory $SourceDirectory -ArtifactStagingDirectory $ArtifactStagingDirectory
+
 $buildCommandPlans = @(Get-SolutionBuildCommandPlan -MappingPlans $mappingPlans -SourceDirectory $SourceDirectory)
 if ($buildCommandPlans.Count -gt 0) {
     # Consecutive flag groups, rather than a global parallel/sequential partition,
@@ -1174,6 +1180,8 @@ Copy-Item (Join-Path $SourceDirectory 'alm-config.psd1') -Destination (Join-Path
 $lockConfig = @{
     scriptDependencies = $config.scriptDependencies.Clone()
     pacCliVersion = [string]$config.pacCliVersion
+    cmrCliVersion = [string]$config.cmrCliVersion
+    cmrNodeVersion = [string]$config.cmrNodeVersion
 }
 foreach ($moduleName in ([string[]] $lockConfig.scriptDependencies.Keys)) {
     $module = Get-Module -Name $moduleName

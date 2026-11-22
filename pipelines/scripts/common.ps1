@@ -516,7 +516,9 @@ function Get-DefaultAzureCredentialAccessToken {
         return [string]$token.Token
     }
     finally {
-        $credential.Dispose()
+        if ($credential -is [System.IDisposable]) {
+            ([System.IDisposable]$credential).Dispose()
+        }
     }
 }
 

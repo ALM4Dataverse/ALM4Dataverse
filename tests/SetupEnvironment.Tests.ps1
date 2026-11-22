@@ -189,6 +189,7 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
     Context 'Dataverse users and role assignments' {
         BeforeEach {
             $script:missingTable = ''
+            $script:missingRoleName = ''
             $script:existingUser = $false
             $script:existingRole = $false
             Mock Get-DataverseConnection {
@@ -198,10 +199,16 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
                 [pscustomobject]@{ ConnectedOrgFriendlyName = 'Test' }
             }
             Mock Get-DataverseRecord {
-                if ($TableName -eq $script:missingTable) { return $null }
+                if ($TableName -eq $script:missingTable -or
+                    ($TableName -eq 'role' -and [string]$FilterValues.name -eq $script:missingRoleName)) {
+                    return $null
+                }
                 switch ($TableName) {
                     businessunit { [pscustomobject]@{ businessunitid = 'business-unit' } }
-                    role { [pscustomobject]@{ roleid = 'admin-role' } }
+                    role {
+                        $roleId = if ($FilterValues.name -eq 'System Customizer') { 'customizer-role' } else { 'admin-role' }
+                        [pscustomobject]@{ roleid = $roleId }
+                    }
                     systemuser { if ($script:existingUser) { [pscustomobject]@{ systemuserid = 'user-id'; fullname = 'Service Account' } } }
                     systemuserroles { if ($script:existingRole) { [pscustomobject]@{ systemuserroleid = 'association-id' } } }
                 }
@@ -223,10 +230,16 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
             else {
                 Initialize-DataverseServiceAccountUser -EnvironmentUrl https://test.example.com -ServiceAccountUPN service@example.com -TenantId example.com
             }
-            $writes = if ($Exists) { 0 } else { 1 }
-            Should -Invoke Set-DataverseRecord -Times $writes -Exactly -ParameterFilter { $TableName -eq 'systemuser' -and $CreateOnly -and $PassThru }
-            Should -Invoke Set-DataverseRecord -Times $writes -Exactly -ParameterFilter { $TableName -eq 'systemuserroles' -and $CreateOnly }
-            Should -Invoke Get-DataverseRecord -Times 1 -Exactly -ParameterFilter { $TableName -eq 'systemuserroles' -and $FilterValues.systemuserid -eq 'user-id' -and $FilterValues.roleid -eq 'admin-role' }
+            $userWrites = if ($Exists) { 0 } else { 1 }
+            $roleCount = if ($Kind -eq 'application') { 2 } else { 1 }
+            $roleWrites = if ($Exists) { 0 } else { $roleCount }
+            Should -Invoke Set-DataverseRecord -Times $userWrites -Exactly -ParameterFilter { $TableName -eq 'systemuser' -and $CreateOnly -and $PassThru }
+            Should -Invoke Set-DataverseRecord -Times $roleWrites -Exactly -ParameterFilter { $TableName -eq 'systemuserroles' -and $CreateOnly }
+            Should -Invoke Get-DataverseRecord -Times $roleCount -Exactly -ParameterFilter { $TableName -eq 'systemuserroles' -and $FilterValues.systemuserid -eq 'user-id' }
+            if ($Kind -eq 'application') {
+                Should -Invoke Get-DataverseRecord -Times 1 -Exactly -ParameterFilter { $TableName -eq 'systemuserroles' -and $FilterValues.roleid -eq 'admin-role' }
+                Should -Invoke Get-DataverseRecord -Times 1 -Exactly -ParameterFilter { $TableName -eq 'systemuserroles' -and $FilterValues.roleid -eq 'customizer-role' }
+            }
             Should -Invoke Get-AuthToken -Times 1 -Exactly -ParameterFilter { $ResourceUrl -eq 'https://test.example.com' -and $TenantId -eq 'example.com' }
         }
 
@@ -234,11 +247,15 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
             @{ Missing = 'connection'; Message = '*Failed to connect*' }
             @{ Missing = 'businessunit'; Message = '*root business unit*' }
             @{ Missing = 'role'; Message = '*System Administrator*' }
+            @{ Missing = 'customizer role'; Message = '*System Customizer*' }
         ) {
             if ($Missing -eq 'connection') { Mock Get-DataverseConnection { $null } }
+            elseif ($Missing -eq 'customizer role') { $script:missingRoleName = 'System Customizer' }
             else { $script:missingTable = $Missing }
             { Initialize-DataverseApplicationUser -EnvironmentUrl https://test.example.com -ApplicationId app-id -TenantId example.com } | Should -Throw $Message
-            { Initialize-DataverseServiceAccountUser -EnvironmentUrl https://test.example.com -ServiceAccountUPN service@example.com -TenantId example.com } | Should -Throw $Message
+            if ($Missing -ne 'customizer role') {
+                { Initialize-DataverseServiceAccountUser -EnvironmentUrl https://test.example.com -ServiceAccountUPN service@example.com -TenantId example.com } | Should -Throw $Message
+            }
             Should -Invoke Set-DataverseRecord -Times 0 -Exactly
         }
     }

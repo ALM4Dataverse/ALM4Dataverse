@@ -2,10 +2,10 @@
 .SYNOPSIS
     Installs required dependencies as defined in alm-config.psd1 with optional lock file.
 .DESCRIPTION
-    This script reads the alm-config.psd1 file to determine which PowerShell modules
-    and PAC CLI version are needed for the scripts to run. Use -ForBuild when the
-    operation may build configured Power Apps code apps; Node.js is installed only
-    when that operation has at least one configured code app.
+    This script reads alm-config.psd1 to determine which PowerShell modules and PAC
+    CLI version are needed. Configured CMR apps install their pinned Node.js runtime
+    for every pipeline phase; use -ForBuild to install nodeVersion when solutions
+    configure Power Apps code apps.
 
     It supports version pinning via a scriptDependencies.lock.json file which is used
     for consistent dependency versions in the version that goes into artifacts.
@@ -34,6 +34,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 . $PSScriptRoot/common.ps1
+. (Join-Path $PSScriptRoot 'cmr-apps.ps1')
 
 function Get-NodePlatform {
     $architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
@@ -237,6 +238,27 @@ Write-Host "##[group] Installing Dependencies"
 
 $config = Get-AlmConfig
 
+$lockFile = 'scriptDependencies.lock.json'
+if (Test-Path $lockFile) {
+    $lockData = Get-Content $lockFile -Raw | ConvertFrom-Json -AsHashtable
+    $config.scriptDependencies = $lockData.scriptDependencies
+    foreach ($name in @('pacCliVersion', 'cmrCliVersion', 'cmrNodeVersion')) {
+        if ($lockData.ContainsKey($name)) {
+            $config[$name] = $lockData[$name]
+        }
+    }
+    Write-Host "Using pinned versions from lock file"
+}
+
+$configuredCmrApps = @(Get-CmrAppEntry -Config $config -BaseDirectory (Get-Location).Path -AllowMissingProject)
+if ($configuredCmrApps.Count -gt 0) {
+    if ([string]::IsNullOrWhiteSpace([string]$config.cmrNodeVersion)) {
+        throw 'cmrNodeVersion must be configured when cmrApps are configured.'
+    }
+    Assert-CmrCliVersionSpecifier -VersionSpecifier ([string]$config.cmrCliVersion)
+    Install-ConfiguredNodeVersion -VersionSpecifier ([string]$config.cmrNodeVersion)
+}
+
 if ($ForBuild) {
     $configuredCodeApps = @()
     foreach ($solution in $config.solutions) {
@@ -252,16 +274,6 @@ if ($ForBuild) {
     else {
         Write-Host 'No Power Apps code apps are configured; skipping Node.js installation.'
     }
-}
-
-$lockFile = 'scriptDependencies.lock.json'
-if (Test-Path $lockFile) {
-    $lockData = Get-Content $lockFile -Raw | ConvertFrom-Json -AsHashtable
-    $config.scriptDependencies = $lockData.scriptDependencies
-    if ($lockData.ContainsKey('pacCliVersion')) {
-        $config.pacCliVersion = $lockData.pacCliVersion
-    }
-    Write-Host "Using pinned versions from lock file"
 }
 
 # Load Az modules first so Dataverse dependencies cannot pre-load conflicting Azure assemblies.

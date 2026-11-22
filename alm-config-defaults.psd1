@@ -16,6 +16,13 @@
     # Set a major version to use an installed compatible release or download the latest stable patch.
     nodeVersion = '22'
 
+    # CMR CLI and Node.js versions used when cmrApps are configured.
+    # CMR CLI 1.0.1 requires Node.js 24.11 or newer; Node 24 remains isolated from codeApps' nodeVersion.
+    # cmrCliVersion accepts '' (latest stable), 'prerelease', or an exact npm version.
+    cmrCliVersion = '1.0.1'
+    cmrNodeVersion = '24.11.1'
+    cmrApps = @()
+
     # Timeout in seconds for each solution import operation.
     # Increase this value if solution imports time out in large or complex environments.
     importTimeoutSeconds = 10800

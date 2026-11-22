@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
-    Deploy Dataverse solutions from artifacts.
+    Deploy Dataverse solutions and configured CMR apps.
 .DESCRIPTION
-    This script deploys the Dataverse solutions found in the specified artifacts path
-    to the connected Dataverse environment. It supports both managed and unmanaged
-    solutions based on the provided parameter.
+    This script deploys the Dataverse solutions and configured CMR app build outputs found
+    in the specified artifacts path to the connected environment. It supports both
+    managed and unmanaged solutions based on the provided parameter.
 
     It also sets connection references and environment variables based on environment
     variables prefixed with "DataverseConnRef_" and "DataverseEnvVar_" respectively.
@@ -31,6 +31,10 @@
     Code apps are patched into existing solution components by default before imports.
     Setting codeAppPublishMethod to 'pac' retains the PAC push path and its Power
     Platform API RBAC requirements.
+    CMR artifact deployment provisions a no-repository app and target-environment
+    Dataverse SSO connections; the target environment must allow external artifact
+    deployment. Source deployment uses a platform-managed Git app and requires Git
+    push access instead.
 .EXAMPLE
     .\pipelines\scripts\deploy.ps1 -ArtifactsPath .\artifacts
 #>
@@ -47,6 +51,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot 'cmr-apps.ps1')
 
 Write-Host "##[section]Deploying "
 
@@ -304,6 +309,8 @@ foreach ($solution in $solutions) {
         }
     }
 }
+
+Deploy-CmrApp -Config $solutionsConfig -ArtifactsPath $ArtifactsPath -EnvironmentContext $powerPlatformEnvironmentContext
 
 Invoke-Hook -HookType "postDeploy" -BaseDirectory $ArtifactsPath -Config $solutionsConfig -AdditionalContext @{
     ArtifactsPath = $ArtifactsPath

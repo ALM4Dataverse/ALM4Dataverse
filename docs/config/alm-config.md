@@ -53,6 +53,9 @@ The supplied template additionally includes the `data` asset and example data ho
 | `scriptDependencies` | Hashtable of module names and versions | `Az.Accounts = '5.5.0'` (pinned to avoid Azure assembly conflicts with Dataverse PowerShell); `Rnwood.Dataverse.Data.PowerShell = '3.4.0'`. |
 | `pacCliVersion` | String | `'2.13.1'`. |
 | `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
+| `cmrApps` | Array of app IDs or hashtables | Empty; opt-in CMR apps to export, build and deploy. |
+| `cmrCliVersion` | String | `'1.0.1'`; exact npm version, `''`/`'latest'` for latest stable, or `'prerelease'`. Floating selections resolve to an exact version in the BUILD lock file. |
+| `cmrNodeVersion` | Major or exact version string | `'24.11.1'`; Node.js runtime for the CMR CLI, independent of `nodeVersion`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
 | `provider` | String | Empty until setup; `GitHub` or `azDO`. |
 | `repository`, `ref` | Strings | Shared ALM4Dataverse repository and source ref used by generated callers. |
@@ -349,6 +352,93 @@ application user used to authenticate.
 > [Azure DevOps variable reference](azdo-environment-variable-group.md) or
 > [GitHub variable reference](github-secrets.md).
 
+### Copilot Managed Runtime Apps
+
+Configure each CMR app independently of `solutions`. Use the source app's CMR app ID
+as its stable identity; there is no separate CMR schema name needed. Source code is
+stored at `cmr-apps/<appId>`:
+
+```powershell
+cmrApps = @(
+    @{
+        appId = '<managed-app-id-guid>'
+        deploymentMode = 'artifact' # or 'source'
+        # targetDisplayName = 'Customer Contacts (ALM4Dataverse)'
+    }
+)
+```
+
+Each item can be an app ID string or a hashtable with `appId`, `deploymentMode`, and
+optional `targetDisplayName`. The source app must use a platform-managed Git
+repository (`repoType = 'native'`). EXPORT clones the app from the currently
+connected environment into the derived path and removes the nested `.git` directory
+so the source belongs to the application repository. The configured ID must match
+the app ID in the exported `ms.config.json`.
+
+When `targetDisplayName` is omitted, the source app display name plus
+`(ALM4Dataverse)` is used. BUILD saves that resolved name and deployment mode in the
+artifact manifest, so target configuration does not need to repeat them.
+
+`deploymentMode = 'artifact'` is the default. BUILD runs `npm ci` and `ms app pack`,
+then stages the configured client build output and deployment metadata. DEPLOY creates
+or reuses a target app with no source repository and uploads the ZIP with
+`ms app deploy --artifact`.
+
+`deploymentMode = 'source'` also runs the local build during BUILD, and includes a
+filtered source tree in the build artifact. During DEPLOY, ALM4Dataverse creates or
+reuses a target app with a platform-managed Git repository, applies target-specific
+configuration and Dataverse connections, commits and pushes the source, then asks CMR
+to build and deploy that commit. This mode does not require external artifact
+deployment to be enabled. It does require Git push access to the target app's managed
+repository. CMR performs a remote build, so deployment takes longer and depends on
+the platform builder and its package-registry access. The source artifact excludes
+`ms.config.json`, Git metadata, `node_modules`, the local build output, and files
+whose names indicate secrets or credentials; those unsafe filenames fail the build.
+Do not rely on local `.npmrc` credentials or local environment files in a remote
+build.
+
+DEPLOY and IMPORT create a separate target app with no source repository, or reuse
+the app with the resolved target display name in the connected environment. Source
+mode uses a Git-backed target app instead. Names must be unique within the target
+environment. Automated target connection provisioning currently supports Dataverse
+table data sources only; it creates/reuses an SSO connection bound to the target
+environment rather than carrying the source connection ID forward.
+
+For artifact mode, enable **AllowExternalArtifactDeployment** on every target
+environment. In Dataverse-enabled environments, the pipeline identity must be an
+application user with the **System Administrator** and **System Customizer** roles.
+Guided setup assigns both roles to setup-created service principals in each configured
+environment; manually selected identities need the roles assigned separately.
+Power Platform API delegated OAuth scopes are not service-principal permissions:
+Microsoft documents delegated scopes for user-context applications and RBAC for
+service-principal access. Microsoft's CMR deployment guide documents client-secret
+service-principal authentication. The current `ms-app-deploy` action metadata says
+its end-to-end flow is supported only in the `test` cloud, but the current Learn guide
+doesn't explain that limitation. In tests against the configured public-cloud
+environment, WIF and client-secret app-only `ms app list` requests returned HTTP 403.
+A direct client-credentials token request succeeded, but `ms app deploy` with that
+client secret was rejected by the public `uploadBuild` endpoint with HTTP 403
+`AuthorizationFailed` and a user-delegated credential message; no artifact was
+accepted. The configured public environment ID also has no resolvable endpoint in
+the CMR `test` cloud, so these tests don't establish whether the documented flow
+works with a valid test-cloud environment.
+
+ALM4Dataverse requires `AZURE_CLIENT_SECRET` for CMR API operations. BUILD can still
+run the local `ms app pack` command without credentials: the CLI otherwise treats
+`CI=true` as requiring service-principal credentials even for this local operation,
+so ALM4Dataverse disables that implicit mode only for the pack subprocess. This does
+not enable EXPORT or DEPLOY without supported API authentication. EXPORT and source
+mode also require Git and Git Credential Manager on the runner.
+See Microsoft's [CMR deployment prerequisites and permissions](https://learn.microsoft.com/microsoft-365/copilot-managed-runtime/developer/apps/deploy-managed-apps-github-actions?view=o365-worldwide)
+and [Power Platform API authentication and service-principal RBAC](https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2).
+
+`cmrCliVersion` accepts `''` or `'latest'` to select the npm `latest` tag,
+`'prerelease'` to select the newest published prerelease, or an exact version such as
+`'1.0.1'`. BUILD resolves floating selections and records the exact version in
+`scriptDependencies.lock.json`. `cmrNodeVersion` accepts a major version or an exact
+release; the installed runtime must be Node.js 24.11 or newer. CMR uses its own Node
+runtime so it does not change `nodeVersion` for existing Code Apps.
+
 ### Node.js for Code Apps
 
 `nodeVersion` accepts a major version such as `'22'` or an exact release such as
@@ -357,7 +447,8 @@ Node.js version or downloads the latest stable patch from nodejs.org. Exact vers
 are pinned. Downloads are checksum-verified and cached under the runner user's
 `.alm4dataverse/tools/node` directory. This setup runs only when the dependency installer
 is invoked with its build flag by BUILD or IMPORT and at least one `codeApps` path is
-configured; EXPORT and deployment-only jobs do not install Node.js.
+configured. Configured CMR apps install their separate `cmrNodeVersion` for EXPORT,
+BUILD, DEPLOY and IMPORT.
 
 ### Export Processing
 
