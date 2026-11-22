@@ -9,6 +9,19 @@ out safely.
 
 ## Setup
 
+### GitHub Apply Configuration Works Without A Token
+
+**You'll see:** on GitHub, an APPLY-CONFIG run that changes caller workflows no longer
+needs the `ALM4DATAVERSE_APPLY_TOKEN` secret to finish. Without it the run fails with a
+message that the built-in token cannot create or update workflow files, and uploads the
+changed workflow files as the `apply-config-workflows` artifact. Before this change the
+same run failed without that artifact.
+
+**Do this:** to apply the changes without a secret, download the artifact and copy its
+`.github/workflows/` files into the repository, or run `setup-github.ps1 -ApplyConfig -Commit`
+from a workstation. To let the workflow commit directly again, store a token with the
+Workflows permission as `ALM4DATAVERSE_APPLY_TOKEN`; see [apply configuration token](../config/github-secrets.md#apply-configuration-token).
+
 ### Azure DevOps Pipeline Names Include The Repository Name
 
 **You'll see:** the pipelines setup creates are named `<repository>-BUILD`,

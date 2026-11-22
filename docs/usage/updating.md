@@ -78,8 +78,9 @@ EXPORT and IMPORT, which setup regenerates from `alm-config.psd1` on both platfo
 every `DEPLOY-<branch>` caller. To apply committed configuration changes, run
 `setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig`, or run the APPLY-CONFIG
 pipeline or workflow in the repository, which commits the regenerated files for you. On
-GitHub, the workflow needs the `ALM4DATAVERSE_APPLY_TOKEN` secret because GitHub blocks the
-built-in token from committing workflow files; see
+GitHub, the built-in token cannot commit changes to workflow files, so a run that changes
+them fails and uploads the changed files as the `apply-config-workflows` artifact. Store the
+`ALM4DATAVERSE_APPLY_TOKEN` secret to have the workflow commit them directly; see
 [apply configuration token](../config/github-secrets.md#apply-configuration-token).
 
 > [!CAUTION]

@@ -1,28 +1,96 @@
+function Test-GitHubWorkflowPermissionRejection {
+    <#
+    .SYNOPSIS
+        Reports whether git push output shows GitHub refusing workflow-file changes.
+    .DESCRIPTION
+        Matches both the GitHub App wording (Actions token, "workflows permission") and
+        the OAuth wording (gh sign-in, "workflow scope").
+    .PARAMETER Output
+        Merged stdout/stderr lines captured from the git push call.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][object[]]$Output
+    )
+
+    $details = @($Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    return (($details -join [Environment]::NewLine) -match 'without .?workflows?.? (permission|scope)')
+}
+
+function Save-GitHubUnpushedWorkflow {
+    <#
+    .SYNOPSIS
+        Copies generated workflow files that could not be pushed into a run artifact folder.
+    .DESCRIPTION
+        Acts only when APPLY_CONFIG_WORKFLOW_DIR is set, which the apply-config action sets
+        and uploads as a run artifact. Copies each workflow file that HEAD adds or changes
+        relative to origin/BranchName, keeping its .github/workflows/ path. Returns the
+        folder, or $null when the rejection is not a workflow restriction or no folder is
+        configured. Deleted workflows are not copied. Call from inside the clone.
+    .PARAMETER Output
+        Merged stdout/stderr lines captured from the git push call.
+    .PARAMETER BranchName
+        Branch that was pushed; the changes are compared with its remote-tracking ref.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][object[]]$Output,
+        [Parameter(Mandatory)][string]$BranchName
+    )
+
+    $workflowDirectory = $env:APPLY_CONFIG_WORKFLOW_DIR
+    if ([string]::IsNullOrWhiteSpace($workflowDirectory) -or -not (Test-GitHubWorkflowPermissionRejection -Output $Output)) {
+        return $null
+    }
+
+    $changedWorkflows = @(& git diff --name-only --diff-filter=AM "origin/$BranchName" HEAD -- .github/workflows 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to list the generated workflow files for '$BranchName'."
+    }
+
+    foreach ($workflowPath in $changedWorkflows) {
+        $destination = Join-Path $workflowDirectory $workflowPath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath $workflowPath -Destination $destination -Force
+    }
+
+    return $workflowDirectory
+}
+
 function Assert-GitHubPushSucceeded {
     <#
     .SYNOPSIS
         Throws a diagnosable error for a failed git push.
     .DESCRIPTION
         Call this only when git push reported a nonzero exit code: it always throws.
-        The message includes the captured CLI output, and explains the workflow-file
-        restriction separately because the built-in Actions token can never create or
-        update workflow files on the default branch.
+        The message includes the captured CLI output. Workflow-file rejections get
+        specific guidance: with a WorkflowFilesPath the generated workflow files were
+        copied there; without one the push credentials need the workflow permission.
     .PARAMETER Output
         Merged stdout/stderr lines captured from the git push call.
     .PARAMETER Target
         Branch or ref that was pushed, used in the error message.
+    .PARAMETER WorkflowFilesPath
+        Folder holding the workflow files that could not be pushed, when they were copied.
     #>
     [CmdletBinding()]
     param(
         [Parameter()][object[]]$Output,
-        [Parameter(Mandatory)][string]$Target
+        [Parameter(Mandatory)][string]$Target,
+        [Parameter()][string]$WorkflowFilesPath
     )
 
-    $details = @($Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    if (($details -join [Environment]::NewLine) -match 'without .?workflows.? permission') {
-        throw "Git push of '$Target' was rejected because GitHub does not let the Actions workflow token create or update workflow files. Store a token with the Workflows permission as the ALM4DATAVERSE_APPLY_TOKEN repository secret and pass it to the apply-config action with github-token: `${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}."
+    if (Test-GitHubWorkflowPermissionRejection -Output $Output) {
+        $guidance = if ($WorkflowFilesPath) {
+            "The generated workflow files were not pushed. Copies are in '$WorkflowFilesPath' and uploaded as this run's artifact. Copy them into .github/workflows and commit, or run setup-github.ps1 -ApplyConfig -Commit from a workstation."
+        }
+        else {
+            "Make sure the push credentials have the workflow permission. For GitHub CLI sign-in, run 'gh auth refresh -s workflow'."
+        }
+        throw "Git push of '$Target' was rejected because GitHub does not allow these credentials to create or update workflow files. $guidance"
     }
 
+    $details = @($Output | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $detailText = if ($details.Count -gt 0) { " $($details -join ' ')" } else { '' }
     throw "Git push of '$Target' failed.$detailText"
 }
@@ -84,7 +152,8 @@ function Publish-GitHubRepoChange {
         $pushExitCode = $LASTEXITCODE
         $pushOutput | Out-Host
         if ($pushExitCode -ne 0) {
-            Assert-GitHubPushSucceeded -Output $pushOutput -Target $PublishPlan.BranchName
+            $workflowFilesPath = Save-GitHubUnpushedWorkflow -Output $pushOutput -BranchName $PublishPlan.BranchName
+            Assert-GitHubPushSucceeded -Output $pushOutput -Target $PublishPlan.BranchName -WorkflowFilesPath $workflowFilesPath
         }
 
         $pullRequestUrl = $null

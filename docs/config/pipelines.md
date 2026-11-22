@@ -40,7 +40,7 @@ callers, so the static `APPLY-CONFIG` caller workflow never needs regeneration. 
 
 | Input | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `github-token` | Yes | None | Token used to clone and push the application repository. The caller passes `${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}` because GitHub blocks the built-in token from committing workflow files. See [apply configuration token](github-secrets.md#apply-configuration-token). |
+| `github-token` | No | `github.token` | Token used to clone and push the application repository. Optional: the built-in token cannot push workflow files, so a run that changes them uploads those files as the `apply-config-workflows` artifact and fails. The caller passes `${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}` so a Workflows-capable secret commits them directly. See [apply configuration token](github-secrets.md#apply-configuration-token). |
 | `repository` | No | `${{ github.repository }}` | Application repository as `owner/name`. |
 | `preview` | No | `false` | When `true`, applies the committed configuration and shows the resulting file changes without committing or pushing them. |
 | `shared-repository` | Yes | None | Shared ALM4Dataverse repository that contains the action and the setup source; generated callers pass the repository recorded in `alm-config.psd1`. |

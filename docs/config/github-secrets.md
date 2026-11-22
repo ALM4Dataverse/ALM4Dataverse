@@ -81,26 +81,30 @@ This token is separate from the Dataverse/Azure credentials shown below.
 
 The `APPLY-CONFIG` workflow regenerates the caller workflows and commits them to the
 default branch. GitHub never lets the built-in Actions token create or update files under
-`.github/workflows/`, so that commit needs a token with the Workflows permission:
+`.github/workflows/`, so a run that changes those files cannot push them with that token.
+No secret is required:
 
-1. Create a classic personal access token with the `workflow` and `repo` scopes, or a
-   fine-grained token for the repository with **Contents: read and write** and
-   **Workflows: read and write**.
-2. Store it as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret (Settings > Secrets and
-   variables > Actions).
-3. Pass it to the action as `github-token` from `.github/workflows/APPLY-CONFIG.yml`.
-   The scaffold workflow setup copies uses:
+- If the regenerated files are already up to date, the run succeeds and changes nothing.
+- If they changed, the run fails and uploads the changed `.github/workflows/` files as the
+  `apply-config-workflows` artifact. The failure message explains where they are.
 
-   ```yaml
-           with:
-             github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
-   ```
+To apply them, download the artifact and copy its `.github/workflows/` files into the
+repository's default branch, then commit them. Committing them needs credentials with the
+Workflows permission (see below). Alternatively, run `setup-github.ps1 -ApplyConfig -Commit`
+on a workstation, which uses your own sign-in.
 
-Without the secret the built-in token is used and a run that has changes to commit fails
-with `refusing to allow a GitHub App to create or update workflow ... without
-`workflows` permission`. Preview runs work with the built-in token because they do not
-push. Running `setup-github.ps1 -ApplyConfig -Commit` on a workstation uses the signed-in
-user's own credentials instead of this secret.
+To let the workflow commit directly instead, store a token with the Workflows permission
+as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret. The scaffolded caller already passes
+it:
+
+```yaml
+        with:
+          github-token: ${{ secrets.ALM4DATAVERSE_APPLY_TOKEN || github.token }}
+```
+
+Create a classic personal access token with the `workflow` and `repo` scopes, or a
+fine-grained token for the repository with **Contents: read and write** and
+**Workflows: read and write**. Preview runs never push, so they never need a token.
 
 This token is separate from the Dataverse/Azure credentials shown below.
 

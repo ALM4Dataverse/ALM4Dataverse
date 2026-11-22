@@ -1920,19 +1920,76 @@ Describe 'GitHub push failure diagnostics' {
         }
     }
 
-    It 'explains the workflow permission restriction with the secret to add' {
+    It 'explains the workflow permission restriction and where the workflow files are' {
         $output = @(
             'To https://github.com/owner/repo.git'
             ' ! [remote rejected] main -> main (refusing to allow a GitHub App to create or update workflow `.github/workflows/BUILD.yml` without `workflows` permission)'
             'error: failed to push some refs to https://github.com/owner/repo.git'
         )
 
+        { Assert-GitHubPushSucceeded -Target main -Output $output -WorkflowFilesPath 'workflow-files' } |
+            Should -Throw "*Copies are in 'workflow-files'*"
+    }
+
+    It 'asks for the workflow scope on the push credentials when no workflow files were copied' {
+        $output = @(' ! [remote rejected] main -> main (refusing to allow an OAuth App to create or update workflow `.github/workflows/BUILD.yml` without `workflow` scope)')
+
         { Assert-GitHubPushSucceeded -Target main -Output $output } |
-            Should -Throw '*ALM4DATAVERSE_APPLY_TOKEN*'
+            Should -Throw '*gh auth refresh -s workflow*'
     }
 
     It 'includes the captured output for other push failures' {
         { Assert-GitHubPushSucceeded -Target main -Output @('remote: Repository not found.', 'fatal: repository not found') } |
             Should -Throw '*Repository not found*'
+    }
+
+    Context 'copying unpushed workflow files' {
+        BeforeEach {
+            $script:workflowRejection = @(' ! [remote rejected] main -> main (refusing to allow a GitHub App to create or update workflow `.github/workflows/BUILD.yml` without `workflows` permission)')
+            $script:workflowDirectory = Join-Path $TestDrive 'apply-config-workflows'
+            Remove-Item -LiteralPath $script:workflowDirectory -Recurse -Force -ErrorAction SilentlyContinue
+            $script:clone = Join-Path $TestDrive 'clone'
+            New-Item -ItemType Directory -Path (Join-Path $script:clone '.github/workflows') -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $script:clone '.github/workflows/BUILD.yml') -Value 'name: BUILD'
+            $env:APPLY_CONFIG_WORKFLOW_DIR = $script:workflowDirectory
+            # Stands in for `git diff --name-only` against origin/main.
+            Mock git {
+                $global:LASTEXITCODE = 0
+                $script:diffArgs = @($args)
+                @('.github/workflows/BUILD.yml')
+            }
+        }
+        AfterEach {
+            $env:APPLY_CONFIG_WORKFLOW_DIR = $null
+        }
+
+        It 'copies changed workflow files into the artifact folder keeping their .github/workflows path' {
+            Push-Location $script:clone
+            try {
+                $result = Save-GitHubUnpushedWorkflow -Output $script:workflowRejection -BranchName main
+            }
+            finally {
+                Pop-Location
+            }
+
+            $result | Should -Be $script:workflowDirectory
+            Get-Content -LiteralPath (Join-Path $script:workflowDirectory '.github/workflows/BUILD.yml') | Should -Be 'name: BUILD'
+            $script:diffArgs | Should -Contain 'origin/main'
+        }
+
+        It 'does not copy anything for other push failures' {
+            $result = Save-GitHubUnpushedWorkflow -Output @('remote: Repository not found.') -BranchName main
+
+            $result | Should -BeNullOrEmpty
+            Test-Path $script:workflowDirectory | Should -BeFalse
+        }
+
+        It 'does not copy anything when no artifact folder is configured' {
+            $env:APPLY_CONFIG_WORKFLOW_DIR = $null
+
+            $result = Save-GitHubUnpushedWorkflow -Output $script:workflowRejection -BranchName main
+
+            $result | Should -BeNullOrEmpty
+        }
     }
 }
