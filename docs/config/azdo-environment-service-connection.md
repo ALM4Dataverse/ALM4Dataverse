@@ -96,7 +96,7 @@ See [Service Principal Setup](../setup/azdo-manual-setup.md#4-service-principal-
 
 ### Security
 
-- **System Administrator Role**: Assign the System Administrator security role to the application user in each Dataverse environment to allow solution import and export.
+- **Dataverse security roles**: Assign the System Administrator and System Customizer security roles to the application user in each Dataverse environment. These are also required for CMR app deployment. Microsoft's CMR deployment guide documents service-principal authentication with a client secret, but public-cloud tests returned HTTP 403 for both WIF and client-secret app-only access, including `ms app deploy` at `uploadBuild`. The action metadata says its end-to-end flow is supported only in the `test` cloud; a reachable test-cloud environment hasn't been available to validate that path. See [CMR app configuration](./alm-config.md#copilot-managed-runtime-apps).
 - **Dedicated Service Principals**: Create separate service principals for each environment (e.g. separate app registrations for Dev, TEST, UAT, and PROD).
 - **Client Secret Rotation**: Rotate client secrets periodically and track expiration dates to prevent authentication failures.
 

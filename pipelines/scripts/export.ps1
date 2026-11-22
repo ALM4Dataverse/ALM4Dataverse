@@ -1,10 +1,11 @@
 <#
 .SYNOPSIS
-    Exports Dataverse solutions from a specified environment and unpacks them into the source directory.
+    Exports Dataverse solutions and configured CMR app source into the repository.
 .DESCRIPTION
     This script exports the Dataverse solutions defined in alm-config.psd1 from the connected
-    Dataverse environment. Parallel mode exports managed and unmanaged packages to a
-    working directory under TempDirectory before unpacking into the source tree.
+    Dataverse environment. Configured platform-managed CMR apps are cloned from their managed
+    repositories into the configured source paths. Parallel mode exports managed and unmanaged
+    packages to a working directory under TempDirectory before unpacking into the source tree.
     ArtifactStagingDirectory receives export diagnostics, not deployment packages.
 
     After exporting, it unpacks each solution into the source directory's solution folders.
@@ -37,7 +38,8 @@
     Emits Parallel, TotalSeconds and WorkerTimings after successful completion.
 .NOTES
     Requires installed dependencies, a default Dataverse connection and Git access
-    to push reservation tags to origin. The default connection is captured before
+    to push reservation tags to origin. CMR app export also requires CMR API permissions
+    and Git Credential Manager. The default connection is captured before
     package workers start and restored after workers finish so main-runspace hooks
     and Dataverse commands can continue using it.
     Changed solutions reserve a version before updating source XML and Dataverse.
@@ -71,6 +73,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot 'common.ps1')
+. (Join-Path $PSScriptRoot 'cmr-apps.ps1')
 . (Join-Path $PSScriptRoot 'parallel-export.ps1')
 
 $exportClock = [System.Diagnostics.Stopwatch]::StartNew()
@@ -374,6 +377,7 @@ if ($null -ne $exportPipeline) {
     $solutionHookResults = $exportPipeline.SolutionHookResults
     $parallelExportSolutionHookResults = $exportPipeline.ParallelExportSolutionHookResults
 }
+Export-CmrApp -Config $solutionsConfig -SourceDirectory $SourceDirectory
 Invoke-Hook -HookType "postExport" -BaseDirectory $SourceDirectory -Config $solutionsConfig -LogContext:$false -AdditionalContext ($exportHookContext + @{
         SolutionHookResults = $solutionHookResults
         ParallelExportSolutionHookResults = $parallelExportSolutionHookResults

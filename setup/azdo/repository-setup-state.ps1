@@ -381,9 +381,9 @@ stages:
 }
 
 function Initialize-DataverseApplicationUser {
-    # Ensure an app-ID systemuser and its root-business-unit System Administrator role.
+    # Ensure an app-ID systemuser and its root-business-unit administrator/customizer roles.
     # Uses interactive tenant-scoped tokens, not the app's credentials; missing root BU,
-    # role or connection throws. Existing user/role associations are retained.
+    # roles or connection throws. Existing user/role associations are retained.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$EnvironmentUrl,
@@ -405,11 +405,14 @@ function Initialize-DataverseApplicationUser {
     if (-not $rootBu) { throw "Could not find root business unit." }
     $rootBuId = $rootBu.businessunitid
 
-    # 2. Get System Administrator Role
-    $roleName = "System Administrator"
-    $role = Get-DataverseRecord -Connection $conn -TableName "role" -FilterValues @{ name = $roleName; businessunitid = $rootBuId } -Columns "roleid" | Select-Object -First 1
-    if (-not $role) { throw "Could not find '$roleName' role in root business unit." }
-    $roleId = $role.roleid
+    # Role IDs are business-unit-specific, so resolve both roles from the root BU.
+    $roles = @(
+        foreach ($roleName in @('System Administrator', 'System Customizer')) {
+            $role = Get-DataverseRecord -Connection $conn -TableName "role" -FilterValues @{ name = $roleName; businessunitid = $rootBuId } -Columns "roleid" | Select-Object -First 1
+            if (-not $role) { throw "Could not find '$roleName' role in root business unit." }
+            [pscustomobject]@{ Name = $roleName; Id = $role.roleid }
+        }
+    )
 
     # 3. Check/Create System User
     $user = Get-DataverseRecord -Connection $conn -TableName "systemuser" -FilterValues @{ applicationid = $ApplicationId } -Columns "systemuserid" | Select-Object -First 1
@@ -430,18 +433,20 @@ function Initialize-DataverseApplicationUser {
         Write-Host "User created. ID: $userId"
     }
 
-    # 4. Associate User with Role
-    $existingAssociation = Get-DataverseRecord -Connection $conn -TableName "systemuserroles" -FilterValues @{ systemuserid = $userId; roleid = $roleId } -Top 1
-    if (-not $existingAssociation) {
-        Write-Host "Associating user with '$roleName' role..."
-        @{
-            systemuserid = $userId
-            roleid = $roleId
-        } | Set-DataverseRecord -Connection $conn -TableName "systemuserroles" -CreateOnly
-        Write-Host "Association successful."
-    }
-    else {
-        Write-Host "User is already associated with '$roleName' role."
+    # 4. Associate User with each role.
+    foreach ($role in $roles) {
+        $existingAssociation = Get-DataverseRecord -Connection $conn -TableName "systemuserroles" -FilterValues @{ systemuserid = $userId; roleid = $role.Id } -Top 1
+        if (-not $existingAssociation) {
+            Write-Host "Associating user with '$($role.Name)' role..."
+            @{
+                systemuserid = $userId
+                roleid = $role.Id
+            } | Set-DataverseRecord -Connection $conn -TableName "systemuserroles" -CreateOnly
+            Write-Host "Association successful."
+        }
+        else {
+            Write-Host "User is already associated with '$($role.Name)' role."
+        }
     }
 }
 

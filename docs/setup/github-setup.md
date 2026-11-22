@@ -38,7 +38,7 @@ with the [GitHub quickstart](../getting-started/quickstart-github.md).
 > Use separate application identities for production and non-production. The application
 > user authenticates automation; the service-account user owns and activates processes.
 > They are not interchangeable. The standard setup assigns the application user the
-> Dataverse System Administrator role. Treat workflow and hook changes as privileged code
+> Dataverse System Administrator and System Customizer roles. Treat workflow and hook changes as privileged code
 > changes.
 
 ## Automated Setup

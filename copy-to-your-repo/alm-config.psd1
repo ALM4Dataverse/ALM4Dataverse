@@ -113,6 +113,18 @@
         # }
     )
 
+    # Optional Copilot Managed Runtime app IDs, or hashtables with appId,
+    # deploymentMode ('artifact' or 'source') and optional targetDisplayName.
+    # EXPORT stores source under cmr-apps/<appId>. An omitted targetDisplayName
+    # uses the source app name plus '(ALM4Dataverse)' and is saved with the build.
+    cmrApps = @(
+        # @{
+        #     appId = '<managed-app-id-guid>'
+        #     deploymentMode = 'artifact' # or 'source' to use a platform-managed target Git repository
+        #     targetDisplayName = 'Customer Contacts (ALM4Dataverse)' # Optional
+        # }
+    )
+
     # Organization-table columns applied before deployment.
     # Example: @{ IsCustomControlsInCanvasAppsEnabled = $true }
     # Column names: https://learn.microsoft.com/en-us/power-apps/developer/data-platform/reference/entities/organization

@@ -77,7 +77,7 @@ Describe 'Dependency installation' {
         Mock Test-Path {
             param($Path, $LiteralPath)
             $testPath = if ($Path) { $Path } else { $LiteralPath }
-            if ($testPath -match '[\\/]\.alm4dataverse[\\/]tools') {
+            if ($testPath -match '[\\/]\.alm4dataverse[\\/]tools(?:[\\/]pac)?$') {
                 return $true
             }
             $fullPath = if ([System.IO.Path]::IsPathRooted($testPath)) {
@@ -224,9 +224,11 @@ Describe 'Dependency installation' {
         $platform = if ($IsWindows) { 'win-x64' } else { 'linux-x64' }
         $cachedDirectory = Join-Path $script:dependencyDirectory ".alm4dataverse/tools/node/v$($nodeRuntime.Version)-$platform"
         $cachedNodePath = Join-Path $cachedDirectory $(if ($IsWindows) { 'node.exe' } else { 'bin/node' })
+        $cachedNpmPath = Join-Path $cachedDirectory $(if ($IsWindows) { 'npm.cmd' } else { 'bin/npm' })
         Set-Variable -Name HOME -Value $script:dependencyDirectory -Scope Global -Force
-        New-Item -ItemType Directory -Path (Join-Path $script:dependencyDirectory 'apps/code'), (Split-Path -Parent $cachedNodePath) -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $script:dependencyDirectory 'apps/code'), (Split-Path -Parent $cachedNodePath), (Split-Path -Parent $cachedNpmPath) -Force | Out-Null
         Get-TestNodeLink -Path $cachedNodePath -Target $nodeRuntime.Path
+        Set-Content -LiteralPath $cachedNpmPath -Value ''
         Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ nodeVersion = '$($nodeRuntime.Version.Major)'; solutions = @(@{ name = 'Contoso'; codeApps = @('apps/code') }) }"
         Mock Get-Command { [pscustomobject]@{ Source = 'pwsh' } } -ParameterFilter { $Name -eq 'node' }
         Mock Invoke-WebRequest {}

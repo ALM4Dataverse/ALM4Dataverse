@@ -50,8 +50,9 @@ before production depends on the automation.
   `alm-config.psd1` on a deployment branch can change what runs with deployment
   credentials. Treat those changes as privileged.
 - **Application identity permissions.** Standard setup gives each application user the
-  System Administrator role. Use separate identities for production and
-  non-production, and reduce roles if your organization requires it.
+  System Administrator and System Customizer roles required by CMR app deployment.
+  Use separate identities for production and non-production, and reduce roles if your
+  organization requires it.
 
 ### Credentials And Settings
 
