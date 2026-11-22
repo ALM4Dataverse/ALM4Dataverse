@@ -241,11 +241,13 @@ See
 
 > [!IMPORTANT]
 > GitHub does not let the built-in Actions token create or update files under
-> `.github/workflows/`, so the APPLY-CONFIG **workflow** needs a token with the
-> Workflows permission. Store it as the `ALM4DATAVERSE_APPLY_TOKEN` repository secret;
-> the copied caller workflow passes it to the action. Preview runs work without it.
-> Running `-ApplyConfig -Commit` locally uses your own sign-in instead. See
-> [apply configuration token](../config/github-secrets.md#apply-configuration-token).
+> `.github/workflows/`. The APPLY-CONFIG **workflow** therefore opens a pull request that
+> puts the regenerated workflow files in `replace-github-workflows/`. Merge it, replace
+> `.github/workflows` with that folder, and commit; BUILD fails until you do. Guided setup
+> enables **Allow GitHub Actions to create and approve pull requests** so the workflow can
+> open the pull request. Preview runs never change anything. Running `-ApplyConfig -Commit`
+> on a workstation uses your own sign-in and opens a pull request the same way. See
+> [apply configuration](../config/github-secrets.md#apply-configuration).
 
 ## Manual Setup
 

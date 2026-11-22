@@ -428,7 +428,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         }
     }
 
-    It 'commits generated changes directly without prompts or the wizard when Commit is used' {
+    It 'publishes generated changes as a pull request without prompts or the wizard when Commit is used' {
         $script:wizardParameters.ApplyConfig = $true
         $script:wizardParameters.Commit = $true
         $script:postApplyCalled = $false
@@ -444,12 +444,12 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $script:postApplyCalled | Should -BeTrue
         if ($Provider -eq 'GitHub') {
             Should -Invoke Publish-GitHubBranchSetupChange -Times 1 -Exactly -ParameterFilter {
-                $PublishPlan.Mode -eq 'Direct' -and $ConfiguredBranch -eq 'main'
+                $PublishPlan.Mode -eq 'PullRequest' -and $ConfiguredBranch -eq 'main'
             }
         }
         else {
             Should -Invoke Publish-AzDoBranchSetupChange -Times 1 -Exactly -ParameterFilter {
-                $PublishPlan.Mode -eq 'Direct' -and $ConfiguredBranch -eq 'main'
+                $PublishPlan.Mode -eq 'PullRequest' -and $ConfiguredBranch -eq 'main'
             }
         }
         Should -Invoke Get-BranchTargetedRepoChangePublishPlan -Times 0 -Exactly

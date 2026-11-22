@@ -1016,6 +1016,11 @@ function Invoke-GitHubBranchAwareSetup {
                     -ExistingPlan $wizardState.PublishPlan `
                     -DocRelativePath 'docs/setup/github-setup.md' `
                     -Ref $ALM4DataverseRef
+
+                if ($wizardState.PublishPlan.Mode -eq 'PullRequest') {
+                    $repoParts = $RepoFullName.Split('/', 2)
+                    Initialize-GitHubPullRequestCreationPolicy -Owner $repoParts[0] -Repo $repoParts[1]
+                }
             }
         }
         $setupSteps = @($PrerequisiteSteps) +
@@ -1042,15 +1047,17 @@ function Invoke-GitHubBranchAwareSetup {
                 throw 'Commit requires ApplyConfig.'
             }
 
-            # Unattended publication: all generated files for every configured branch
-            # are committed directly to the default branch without prompts.
+            # Unattended publication opens a pull request from a timestamped branch so
+            # the default token can be used. The apply-config run artifact carries any
+            # workflow files that GitHub refuses to accept from that token.
+            $applyConfigTitle = 'Apply alm-config.psd1 settings for all configured branches'
             $wizardState.PublishPlan = [pscustomobject]@{
-                Mode                   = 'Direct'
+                Mode                   = 'PullRequest'
                 TargetBranch           = $DefaultBranch
-                BranchName             = $DefaultBranch
-                CommitMessage          = 'Apply alm-config.psd1 settings for all configured branches'
-                PullRequestTitle       = ''
-                PullRequestDescription = ''
+                BranchName             = Get-DefaultSetupBranchName -BaseBranch $DefaultBranch -Context 'apply-config'
+                CommitMessage          = $applyConfigTitle
+                PullRequestTitle       = $applyConfigTitle
+                PullRequestDescription = 'This pull request regenerates the GitHub workflow files from the committed alm-config.psd1 settings for all configured branches.'
             }
             $applyResult = Invoke-GitHubBranchAwareSetupApply `
                 -CloneRoot $CloneRoot `

@@ -1,3 +1,38 @@
+function Copy-ApplyConfigArtifactFile {
+    <#
+    .SYNOPSIS
+        Copies generated repository files into the apply-config artifact folder.
+    .DESCRIPTION
+        Acts only when APPLY_CONFIG_ARTIFACT_DIR is set, which the apply-config workflows
+        set and upload as a run artifact. Each path keeps its repository-relative location
+        under the folder so users can copy the files back in place. Returns the folder, or
+        $null when none is configured. Paths must name existing files under RepoRoot.
+    .PARAMETER RepoRoot
+        Repository root that RelativePaths are resolved against.
+    .PARAMETER RelativePaths
+        Repository-relative file paths to copy.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [Parameter()][AllowEmptyCollection()][string[]]$RelativePaths
+    )
+
+    $artifactDirectory = $env:APPLY_CONFIG_ARTIFACT_DIR
+    if ([string]::IsNullOrWhiteSpace($artifactDirectory)) {
+        return $null
+    }
+
+    foreach ($relativePath in @($RelativePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $destination = Join-Path $artifactDirectory $relativePath
+        New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $RepoRoot $relativePath) -Destination $destination -Force
+    }
+
+    return $artifactDirectory
+}
+
 function Get-DefaultSetupBranchName {
     # Sanitization can erase a name, so use setup/main fallbacks. UTC seconds make
     # readable suggestions, not collision-proof branch reservations.

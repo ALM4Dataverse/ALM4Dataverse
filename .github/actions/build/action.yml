@@ -72,6 +72,13 @@ runs:
         path: self
         fetch-depth: 1
 
+    # Setup cannot write .github/workflows with the default token, so it leaves the
+    # generated workflows in replace-github-workflows/ until the user applies them.
+    - name: Require generated workflows to be applied
+      shell: pwsh
+      run: |
+        & "${{ github.action_path }}/../common/validate-replacement-workflows.ps1" -RepositoryRoot "${{ github.workspace }}/self"
+
     # Branch identity drives versioning and downstream dispatch, independently of
     # source-ref checkout. A non-branch workflow ref needs an explicit branch override.
     - name: Resolve SemVer build version

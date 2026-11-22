@@ -77,10 +77,10 @@ Other scaffold files that differ from the release are replaced. That includes BU
 EXPORT and IMPORT, which setup regenerates from `alm-config.psd1` on both platforms, and
 every `DEPLOY-<branch>` caller. To apply committed configuration changes, run
 `setup-github.ps1 -ApplyConfig` or `setup-azdo.ps1 -ApplyConfig`, or run the APPLY-CONFIG
-pipeline or workflow in the repository, which commits the regenerated files for you. On
-GitHub, the workflow needs the `ALM4DATAVERSE_APPLY_TOKEN` secret because GitHub blocks the
-built-in token from committing workflow files; see
-[apply configuration token](../config/github-secrets.md#apply-configuration-token).
+pipeline or workflow in the repository, which opens a pull request with the regenerated
+files. On GitHub, the built-in token cannot change workflow files, so the pull request puts
+them in `replace-github-workflows/`. Replace `.github/workflows` with that folder and commit,
+or BUILD fails; see [apply configuration](../config/github-secrets.md#apply-configuration).
 
 > [!CAUTION]
 > Setup is not a generic merge tool for arbitrary customization. If interrupted, inspect

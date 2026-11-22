@@ -199,11 +199,12 @@ function Set-AzDoAccessControlEntry {
 function Initialize-AzDoBuildServiceRepositoryPermission {
     <#
     .SYNOPSIS
-    Grants project Build Service Contribute on one repository.
+    Grants project Build Service the repository actions needed to push a branch and open a pull request.
     .NOTES
-    Preserves observed unrelated mask bits and clears only the Contribute deny bit.
-    An unreadable ACE is treated as zero masks by the lookup helper; this is not
-    effective/inherited-permission evaluation.
+    Grants Contribute (push), CreateBranch (push a new branch) and PullRequestContribute
+    (create pull requests). Preserves observed unrelated mask bits and clears only the
+    deny bits of the granted actions. An unreadable ACE is treated as zero masks by the
+    lookup helper; this is not effective/inherited-permission evaluation.
     #>
     [CmdletBinding()]
     param(
@@ -217,7 +218,12 @@ function Initialize-AzDoBuildServiceRepositoryPermission {
     Write-Host "Found Build Service descriptor: $descriptor" -ForegroundColor DarkGray
 
     $ns = Get-AzDoSecurityNamespaceByName  -Name 'Git Repositories'
-    $contributeBit = Get-AzDoSecurityNamespaceActionBit -Namespace $ns -ActionName 'Contribute'
+    $actionNames = @('Contribute', 'CreateBranch', 'PullRequestContribute')
+    $requiredBits = @($actionNames | ForEach-Object {
+            Get-AzDoSecurityNamespaceActionBit -Namespace $ns -ActionName $_
+        })
+    $requiredMask = [long]0
+    foreach ($bit in $requiredBits) { $requiredMask = $requiredMask -bor $bit }
 
     # Repo token format for Git Repositories namespace:
     #   repoV2/<projectId>/<repoId>
@@ -232,20 +238,20 @@ function Initialize-AzDoBuildServiceRepositoryPermission {
         if ($existing.PSObject.Properties.Name -contains 'deny') { $existingDeny = [long]$existing.deny }
     }
 
-    $alreadyAllowed = (($existingAllow -band $contributeBit) -ne 0)
-    $isDenied = (($existingDeny -band $contributeBit) -ne 0)
+    $missingAllow = (($existingAllow -band $requiredMask) -ne $requiredMask)
+    $hasDeny = (($existingDeny -band $requiredMask) -ne 0)
 
-    if ($alreadyAllowed -and -not $isDenied) {
-        Write-Host "Build Service already has 'Contribute' on repo."
+    if (-not $missingAllow -and -not $hasDeny) {
+        Write-Host "Build Service already has $($actionNames -join ', ') on repo."
         return
     }
 
-    $desiredAllow = ($existingAllow -bor $contributeBit)
-    $desiredDeny = ($existingDeny -band (-bnot $contributeBit))
+    $desiredAllow = ($existingAllow -bor $requiredMask)
+    $desiredDeny = ($existingDeny -band (-bnot $requiredMask))
 
-    Write-Host "Granting Build Service 'Contribute' on repo..." -ForegroundColor Yellow
+    Write-Host "Granting Build Service $($actionNames -join ', ') on repo..." -ForegroundColor Yellow
     Set-AzDoAccessControlEntry  -NamespaceId $ns.Id -Token $token -Descriptor $descriptor -Allow $desiredAllow -Deny $desiredDeny | out-null
-    Write-Host "Granted 'Contribute' to Build Service on repository."
+    Write-Host "Granted $($actionNames -join ', ') to Build Service on repository."
 }
 
 function Initialize-AzDoYamlPipelineDefinition {

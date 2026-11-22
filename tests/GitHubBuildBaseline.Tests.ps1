@@ -205,4 +205,16 @@ Describe 'Shared template version validation for GitHub callers' {
         { & $script:callerVersionValidator -ActualVersion '0' } |
             Should -Throw '*generated for shared template version*setup-github.ps1 -ApplyConfig*do not edit*'
     }
+
+    It 'stops the build while replace-github-workflows is present and passes once it has been applied' {
+        $validator = Join-Path $repoRoot '.github/actions/common/validate-replacement-workflows.ps1'
+        $callerRoot = Join-Path $TestDrive 'caller'
+        New-Item -ItemType Directory -Path (Join-Path $callerRoot 'replace-github-workflows') -Force | Out-Null
+
+        { & $validator -RepositoryRoot $callerRoot } |
+            Should -Throw '*Delete .github/workflows, rename replace-github-workflows to .github/workflows*'
+
+        Remove-Item -LiteralPath (Join-Path $callerRoot 'replace-github-workflows') -Recurse
+        { & $validator -RepositoryRoot $callerRoot } | Should -Not -Throw
+    }
 }

@@ -164,4 +164,9 @@ Describe 'Workflow and pipeline YAML validation' {
             $action | Should -Match ([regex]::Escape('validate-caller-version.ps1'))
         }
     }
+
+    It 'stops the GitHub build action while generated workflows await replacement' {
+        $action = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/build/action.yml') -Raw
+        $action | Should -Match ([regex]::Escape('validate-replacement-workflows.ps1'))
+    }
 }
