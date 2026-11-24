@@ -51,8 +51,8 @@ The supplied template additionally includes the `data` asset and example data ho
 | `powerPlatformSettings` | Hashtable of setting names to values | Empty; patched before deployment through the Power Platform API. |
 | `postDeployPowerPlatformSettings` | Hashtable of setting names to values | Empty; patched after the `postDeploy` hook. |
 | `scriptDependencies` | Hashtable of module names and versions | `Az.Accounts = '5.5.0'` (pinned to avoid Azure assembly conflicts with Dataverse PowerShell); `Rnwood.Dataverse.Data.PowerShell = '3.4.0'`. |
-| `pacCliVersion` | String | `'2.13.1'`. |
-| `nodeVersion` | String | `'22'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
+| `pacCliVersion` | String | `'2.16.1'`. |
+| `nodeVersion` | String | `'26'`; used only by BUILD/IMPORT when at least one solution configures `codeApps`. |
 | `importTimeoutSeconds` | Number of seconds | `10800` per import. |
 | `provider` | String | Empty until setup; `GitHub` or `azDO`. |
 | `repository`, `ref` | Strings | Shared ALM4Dataverse repository and source ref used by generated callers. |
@@ -351,8 +351,8 @@ application user used to authenticate.
 
 ### Node.js for Code Apps
 
-`nodeVersion` accepts a major version such as `'22'` or an exact release such as
-`'22.14.0'`. For a major version, the installer reuses an already available compatible
+`nodeVersion` accepts a major version such as `'26'` or an exact release such as
+`'26.0.0'`. For a major version, the installer reuses an already available compatible
 Node.js version or downloads the latest stable patch from nodejs.org. Exact versions
 are pinned. Downloads are checksum-verified and cached under the runner user's
 `.alm4dataverse/tools/node` directory. This setup runs only when the dependency installer
@@ -663,19 +663,35 @@ The build writes the exact loaded module versions and installed PAC version to `
 
 ### PAC CLI Version
 
-The pipeline scripts require Power Apps CLI (`pac`) for solution operations (for example export/unpack). `installdependencies.ps1` installs PAC automatically using the configured version.
+The pipeline scripts require Power Apps CLI (`pac`) for solution operations (for example export/unpack). The installer uses the .NET tool package `Microsoft.PowerApps.CLI.Tool` (rather than an npm package) and installs it automatically using the configured version.
 
 ```powershell
-pacCliVersion = '2.13.1'
+pacCliVersion = '2.16.1'
 ```
 
 **Version Specifications:**
 
 - Empty string (`''`): Installs the latest stable version
 - `'prerelease'`: Installs the latest prerelease version
-- Specific version (for example `'2.13.1'`): Installs that exact version
+- Specific version (for example `'2.16.1'`): Installs that exact version
 
 For reproducible builds/deployments, pin an explicit version.
+
+The selector is chosen in this order:
+
+1. Start with `pacCliVersion` from the application configuration merged with
+   [the shared defaults](../../alm-config-defaults.psd1). The default is
+   `'2.16.1'`.
+2. During BUILD, `installdependencies.ps1` installs or updates
+   `Microsoft.PowerApps.CLI.Tool` using that selector. An empty value means the
+   latest stable release, `'prerelease'` means the latest prerelease, and an
+   explicit version means that exact NuGet version.
+3. BUILD reads the installed tool version and writes the exact value to
+   `scriptDependencies.lock.json` in the artifact.
+4. Later dependency-installation and cache-resolution steps use
+   `scriptDependencies.lock.json` when it is present, so its `pacCliVersion`
+   overrides the merged configuration and prevents floating selectors from
+   being resolved again.
 
 > [!NOTE]
 > **Advanced: PAC on Azure DevOps.**

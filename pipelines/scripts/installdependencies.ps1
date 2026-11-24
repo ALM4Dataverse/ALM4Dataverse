@@ -14,6 +14,10 @@
     - '' (empty string): installs the latest version
     - 'prerelease': installs the latest prerelease version
     - specific version number (e.g. '1.2.3' or '1.2.3-beta.1'): installs that specific version
+
+    The PAC CLI selector is read from the merged alm-config.psd1 configuration.
+    When scriptDependencies.lock.json is present, its pacCliVersion value takes
+    precedence and pins the exact version recorded by BUILD.
 .NOTES
     Run from the directory containing alm-config.psd1 and any lock file. Installs
     modules for CurrentUser, imports their exact installed manifests in this process
@@ -117,7 +121,7 @@ function Install-ConfiguredNodeVersion {
 
     $trimmedSpecifier = $VersionSpecifier.Trim() -replace '^v', ''
     if ($trimmedSpecifier -notmatch '^(\d+|\d+\.\d+\.\d+)$') {
-        throw "nodeVersion '$VersionSpecifier' is invalid. Use a major version such as '22' or an exact version such as '22.14.0'."
+        throw "nodeVersion '$VersionSpecifier' is invalid. Use a major version such as '26' or an exact version such as '26.0.0'."
     }
 
     $platform = Get-NodePlatform
