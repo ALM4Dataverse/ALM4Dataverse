@@ -370,7 +370,7 @@ Describe 'Deployment options' {
         } -ParameterFilter { $Name -in @('Az.Accounts', 'Rnwood.Dataverse.Data.PowerShell') }
         Mock Get-Command { [pscustomobject]@{ Source = 'Invoke-DeploymentTestDotnet' } } -ParameterFilter { $Name -eq 'dotnet' }
         Mock Test-Path { $true } -ParameterFilter { $Path -match '[\\/]\.alm4dataverse[\\/]tools$' }
-        Mock Invoke-DeploymentTestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.13.1 pac' }
+        Mock Invoke-DeploymentTestDotnet { $global:LASTEXITCODE = 0; 'microsoft.powerapps.cli.tool 2.16.1 pac' }
         $savedExitCode = $global:LASTEXITCODE
         try {
             & (Join-Path $repoRoot 'pipelines/scripts/import.ps1') -SourceDirectory $TestDrive -ArtifactStagingDirectory (Join-Path $TestDrive 'artifacts')
