@@ -61,8 +61,8 @@ runs:
         # authenticate git itself in addition to gh. Keep all Git settings
         # process-scoped so reusable runners do not retain credentials or identity.
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
-        $gitExtraHeaderKey = 'http.https://github.com/.extraheader'
         $gitConfigNames = @(
+            'GIT_CONFIG_GLOBAL'
             'GIT_CONFIG_COUNT'
             'GIT_CONFIG_KEY_0'
             'GIT_CONFIG_VALUE_0'
@@ -75,14 +75,10 @@ runs:
         foreach ($name in $gitConfigNames) {
             $previousGitConfig[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
-        $removeLegacyGitHeader = {
-            & git config --global --unset-all $gitExtraHeaderKey 2>$null
-            if ($LASTEXITCODE -notin @(0, 5)) {
-                throw "Unable to remove the legacy global GitHub authorization header (exit code $LASTEXITCODE)."
-            }
-        }
+        $isolatedGlobalConfig = $null
         try {
-            & $removeLegacyGitHeader
+            $isolatedGlobalConfig = New-TemporaryFile
+            $env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig.FullName
             $env:GIT_CONFIG_COUNT = '3'
             $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
             $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
@@ -101,7 +97,9 @@ runs:
             foreach ($name in $gitConfigNames) {
                 [Environment]::SetEnvironmentVariable($name, $previousGitConfig[$name], 'Process')
             }
-            & $removeLegacyGitHeader
+            if ($null -ne $isolatedGlobalConfig) {
+                Remove-Item -LiteralPath $isolatedGlobalConfig.FullName -Force -ErrorAction Stop
+            }
         }
 
     # Runs even when the apply step fails. The folder exists only when the pull request

@@ -76,8 +76,8 @@ Describe 'Workflow and pipeline YAML validation' {
         $applyConfigAction | Should -Match "\`$env:GIT_CONFIG_COUNT = '3'"
         $applyConfigAction | Should -Match "\`$env:GIT_CONFIG_KEY_1 = 'user.name'"
         $applyConfigAction | Should -Match "\`$env:GIT_CONFIG_KEY_2 = 'user.email'"
-        $applyConfigAction | Should -Not -Match 'git config --global http\.https://github\.com/\.extraheader'
-        $applyConfigAction | Should -Match 'git config --global --unset-all \$gitExtraHeaderKey'
+        $applyConfigAction | Should -Match ([regex]::Escape('$env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig.FullName'))
+        $applyConfigAction | Should -Not -Match 'git config --global'
     }
 
     It 'keeps the branch validation map authoritative over the fallback variable group' {
