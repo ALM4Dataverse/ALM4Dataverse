@@ -91,6 +91,14 @@ jobs:
           ACTIONLINT_REQUIRED: ${{ runner.os == 'Linux' }}
           AZURE_PIPELINES_SCHEMA_REQUIRED: ${{ runner.os == 'Linux' }}
         run: ./scripts/Test-PowerShell.ps1 -BaseRef $env:COVERAGE_BASE_REF -HeadRef $env:COVERAGE_HEAD_REF
+      - name: Upload PowerShell validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: powershell-validation-${{ matrix.os }}
+          path: TestResults/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Generate setup installers for Windows PowerShell syntax checks
         if: runner.os == 'Windows'
         shell: pwsh

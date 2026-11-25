@@ -25,6 +25,42 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'coverage.ps1')
 $policy = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'powershell-validation.psd1')
+
+function New-PesterFailureSummary {
+    param(
+        [Parameter(Mandatory)]
+        $Result
+    )
+
+    if ($Result.FailedCount -eq 0 -and $Result.FailedContainersCount -eq 0) {
+        return $null
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('# Failed PowerShell tests')
+    $lines.Add('')
+    $lines.Add(('| Tests: {0} failed, {1} containers failed' -f $Result.FailedCount, $Result.FailedContainersCount))
+    $lines.Add('')
+    $failedTests = @()
+    if ($null -ne $Result.PSObject.Properties['Tests']) {
+        $failedTests = @($Result.Tests | Where-Object Result -eq 'Failed')
+    }
+    if ($failedTests.Count -gt 0) {
+        $lines.Add('| Test | Error |')
+        $lines.Add('|---|---|')
+        foreach ($test in $failedTests) {
+            $name = ([string]$test.ExpandedName -replace '\|', '\|') -replace '[\r\n]+', ' '
+            $error = if ($null -ne $test.ErrorRecord) { [string]$test.ErrorRecord } else { 'See the detailed test result artifact.' }
+            $error = ($error -replace '\|', '\|') -replace '[\r\n]+', ' '
+            $lines.Add("| $name | $error |")
+        }
+    }
+    else {
+        $lines.Add('Individual failed tests were not reported; inspect the detailed test result artifact for container-level failures.')
+    }
+    $lines -join [Environment]::NewLine
+}
+
 foreach ($tool in $policy.Tools.GetEnumerator()) {
     Import-Module -Name $tool.Key -RequiredVersion $tool.Value -ErrorAction Stop
 }
@@ -164,6 +200,13 @@ $summaryText = $summary -join [Environment]::NewLine
 $summaryText | Set-Content -LiteralPath (Join-Path $repoRoot 'TestResults/coverage-summary.md') -Encoding utf8
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
     $summaryText | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+}
+$failureSummary = New-PesterFailureSummary -Result $result
+if (-not [string]::IsNullOrWhiteSpace($failureSummary)) {
+    $failureSummary | Set-Content -LiteralPath (Join-Path $repoRoot 'TestResults/failed-tests-summary.md') -Encoding utf8
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
+        $failureSummary | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+    }
 }
 Write-Output $summaryText
 if ($result.TotalCount -eq 0 -or $result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {

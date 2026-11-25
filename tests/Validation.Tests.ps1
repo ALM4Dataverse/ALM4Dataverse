@@ -133,6 +133,29 @@ Describe 'Validation orchestration and coverage enforcement' {
         Test-Path (Join-Path $TestDrive 'coverage-files.json') | Should -BeTrue
     }
 
+    It 'adds failed test names and errors to the job summary' {
+        Mock Invoke-Pester {
+            [pscustomobject]@{
+                TotalCount = 2; FailedCount = 1; FailedContainersCount = 0; PassedCount = 1
+                Tests = @(
+                    [pscustomobject]@{
+                        Result = 'Failed'
+                        ExpandedName = 'Deployment options fails when PAC output is invalid'
+                        ErrorRecord = 'Expected HTTP error status: 403'
+                    }
+                )
+                CodeCoverage = @{ CommandsExecuted = @(); CommandsMissed = @() }
+            }
+        }
+
+        { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') } | Should -Throw '*Pester failed*'
+        $jobSummary = Get-Content $env:GITHUB_STEP_SUMMARY -Raw
+        $jobSummary | Should -Match '# Failed PowerShell tests'
+        $jobSummary | Should -Match 'Deployment options fails when PAC output is invalid'
+        $jobSummary | Should -Match 'Expected HTTP error status: 403'
+        Get-Content (Join-Path $TestDrive 'failed-tests-summary.md') -Raw | Should -Match 'Tests: 1 failed, 0 containers failed'
+    }
+
     It 'fails immediately if Git cannot enumerate repository files' {
         Mock git { $global:LASTEXITCODE = 1 }
         { & (Join-Path $repoRoot 'scripts/Test-PowerShell.ps1') } | Should -Throw '*Could not enumerate repository files*'
