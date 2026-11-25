@@ -2491,6 +2491,16 @@ Describe 'Setup repository change review' {
     }
 }
 
+Describe 'Side-by-side diff blank lines' {
+    It 'preserves added and deleted blank lines' {
+        $addedRows = @(Get-SetupSideBySideDiffRow -BeforeContent 'first' -AfterContent "first`n`nlast")
+        $deletedRows = @(Get-SetupSideBySideDiffRow -BeforeContent "first`n`nlast" -AfterContent 'first')
+
+        $addedRows | Where-Object { $_.Type -eq 'Added' } | ForEach-Object RightText | Should -Contain ''
+        $deletedRows | Where-Object { $_.Type -eq 'Deleted' } | ForEach-Object LeftText | Should -Contain ''
+    }
+}
+
 Describe 'Setup configuration and validation helpers' {
     It 'imports committed config text and resolves branch settings case-insensitively' {
         $configContent = "@{ branches = @{ main = @{ developmentEnvironment = 'Dev-main' } } }"

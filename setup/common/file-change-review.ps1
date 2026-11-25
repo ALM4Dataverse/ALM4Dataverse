@@ -93,8 +93,8 @@ function Add-SetupSideBySideChangeBlock {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.Generic.List[object]]$Rows,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$DeletedLines,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]]$AddedLines
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$DeletedLines,
+        [Parameter(Mandatory)][AllowEmptyCollection()][AllowEmptyString()][string[]]$AddedLines
     )
 
     $pairedCount = [Math]::Min($DeletedLines.Count, $AddedLines.Count)
