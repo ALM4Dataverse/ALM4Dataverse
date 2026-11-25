@@ -72,8 +72,10 @@ Describe 'Workflow and pipeline YAML validation' {
 
         $applyConfigAction = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/apply-config/action.yml') -Raw
         $applyConfigAction | Should -Match 'token: \$\{\{ inputs\.github-token \|\| github\.token \}\}'
+        ([regex]::Matches($applyConfigAction, 'persist-credentials: false')).Count | Should -Be 2
         $applyConfigAction | Should -Match '\$env:GIT_CONFIG_COUNT'
         $applyConfigAction | Should -Not -Match 'git config --global http\.https://github\.com/\.extraheader'
+        $applyConfigAction | Should -Match 'git config --global --unset-all \$gitExtraHeaderKey'
     }
 
     It 'keeps the branch validation map authoritative over the fallback variable group' {

@@ -33,6 +33,7 @@ runs:
       with:
         path: application
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Checkout shared ALM4Dataverse source
       uses: actions/checkout@v4
@@ -41,6 +42,7 @@ runs:
         repository: ${{ inputs.shared-repository }}
         ref: ${{ inputs.shared-ref }}
         path: shared
+        persist-credentials: false
 
     - name: Apply configuration and commit changes
       shell: pwsh
@@ -61,12 +63,20 @@ runs:
         git config --global user.name 'ALM4Dataverse Setup'
         git config --global user.email 'setup@alm4dataverse.local'
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
+        $gitExtraHeaderKey = 'http.https://github.com/.extraheader'
         $gitConfigNames = @('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0')
         $previousGitConfig = @{}
         foreach ($name in $gitConfigNames) {
             $previousGitConfig[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
+        $removeLegacyGitHeader = {
+            & git config --global --unset-all $gitExtraHeaderKey 2>$null
+            if ($LASTEXITCODE -notin @(0, 5)) {
+                throw "Unable to remove the legacy global GitHub authorization header (exit code $LASTEXITCODE)."
+            }
+        }
         try {
+            & $removeLegacyGitHeader
             $env:GIT_CONFIG_COUNT = '1'
             $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
             $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
@@ -81,6 +91,7 @@ runs:
             foreach ($name in $gitConfigNames) {
                 [Environment]::SetEnvironmentVariable($name, $previousGitConfig[$name], 'Process')
             }
+            & $removeLegacyGitHeader
         }
 
     # Runs even when the apply step fails. The folder exists only when the pull request
