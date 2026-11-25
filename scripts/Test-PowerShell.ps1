@@ -26,7 +26,7 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 . (Join-Path $PSScriptRoot 'coverage.ps1')
 $policy = Import-PowerShellDataFile (Join-Path $PSScriptRoot 'powershell-validation.psd1')
 
-function New-PesterFailureSummary {
+function Format-PesterFailureSummary {
     param(
         [Parameter(Mandatory)]
         $Result
@@ -50,9 +50,9 @@ function New-PesterFailureSummary {
         $lines.Add('|---|---|')
         foreach ($test in $failedTests) {
             $name = ([string]$test.ExpandedName -replace '\|', '\|') -replace '[\r\n]+', ' '
-            $error = if ($null -ne $test.ErrorRecord) { [string]$test.ErrorRecord } else { 'See the detailed test result artifact.' }
-            $error = ($error -replace '\|', '\|') -replace '[\r\n]+', ' '
-            $lines.Add("| $name | $error |")
+            $errorText = if ($null -ne $test.ErrorRecord) { [string]$test.ErrorRecord } else { 'See the detailed test result artifact.' }
+            $errorText = ($errorText -replace '\|', '\|') -replace '[\r\n]+', ' '
+            $lines.Add("| $name | $errorText |")
         }
     }
     else {
@@ -201,7 +201,7 @@ $summaryText | Set-Content -LiteralPath (Join-Path $repoRoot 'TestResults/covera
 if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
     $summaryText | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
 }
-$failureSummary = New-PesterFailureSummary -Result $result
+$failureSummary = Format-PesterFailureSummary -Result $result
 if (-not [string]::IsNullOrWhiteSpace($failureSummary)) {
     $failureSummary | Set-Content -LiteralPath (Join-Path $repoRoot 'TestResults/failed-tests-summary.md') -Encoding utf8
     if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
