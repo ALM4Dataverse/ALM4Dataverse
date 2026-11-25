@@ -32,25 +32,48 @@ function Format-PesterFailureSummary {
         $Result
     )
 
-    if ($Result.FailedCount -eq 0 -and $Result.FailedContainersCount -eq 0) {
+    $failedBlocksCount = if ($null -ne $Result.PSObject.Properties['FailedBlocksCount']) {
+        [int]$Result.FailedBlocksCount
+    }
+    else {
+        0
+    }
+    if ($Result.FailedCount -eq 0 -and $Result.FailedContainersCount -eq 0 -and $failedBlocksCount -eq 0) {
         return $null
     }
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add('# Failed PowerShell tests')
     $lines.Add('')
-    $lines.Add(('| Tests: {0} failed, {1} containers failed' -f $Result.FailedCount, $Result.FailedContainersCount))
+    $lines.Add(('| Tests: {0} failed, {1} containers failed, {2} blocks failed' -f $Result.FailedCount, $Result.FailedContainersCount, $failedBlocksCount))
     $lines.Add('')
     $failedTests = @()
     if ($null -ne $Result.PSObject.Properties['Tests']) {
         $failedTests = @($Result.Tests | Where-Object Result -eq 'Failed')
     }
-    if ($failedTests.Count -gt 0) {
+    $failedBlocks = @()
+    if ($null -ne $Result.PSObject.Properties['Blocks']) {
+        $failedBlocks = @($Result.Blocks | Where-Object Result -eq 'Failed')
+    }
+    if ($failedTests.Count -gt 0 -or $failedBlocks.Count -gt 0) {
         $lines.Add('| Test | Error |')
         $lines.Add('|---|---|')
-        foreach ($test in $failedTests) {
+        foreach ($test in @($failedTests) + @($failedBlocks)) {
             $name = ([string]$test.ExpandedName -replace '\|', '\|') -replace '[\r\n]+', ' '
-            $errorText = if ($null -ne $test.ErrorRecord) { [string]$test.ErrorRecord } else { 'See the detailed test result artifact.' }
+            $errorRecords = if ($null -ne $test.PSObject.Properties['ErrorRecord']) { @($test.ErrorRecord) } else { @() }
+            $errorText = if ($errorRecords.Count -gt 0) {
+                (@($errorRecords | ForEach-Object {
+                    if ($null -ne $_.PSObject.Properties['Exception'] -and $null -ne $_.Exception) {
+                        [string]$_.Exception.Message
+                    }
+                    else {
+                        [string]$_
+                    }
+                }) -join '; ')
+            }
+            else {
+                'See the detailed test result artifact.'
+            }
             $errorText = ($errorText -replace '\|', '\|') -replace '[\r\n]+', ' '
             $lines.Add("| $name | $errorText |")
         }
@@ -209,8 +232,14 @@ if (-not [string]::IsNullOrWhiteSpace($failureSummary)) {
     }
 }
 Write-Output $summaryText
-if ($result.TotalCount -eq 0 -or $result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0) {
-    throw "Pester failed: $($result.FailedCount) tests and $($result.FailedContainersCount) containers failed."
+$failedBlocksCount = if ($null -ne $result.PSObject.Properties['FailedBlocksCount']) {
+    [int]$result.FailedBlocksCount
+}
+else {
+    0
+}
+if ($result.TotalCount -eq 0 -or $result.FailedCount -gt 0 -or $result.FailedContainersCount -gt 0 -or $failedBlocksCount -gt 0) {
+    throw "Pester failed: $($result.FailedCount) tests, $($result.FailedContainersCount) containers, and $failedBlocksCount blocks failed."
 }
 Write-Output "Passed $($result.PassedCount) PowerShell tests."
 $underCoveredFiles = @($coverageReport | Where-Object { -not $_.Passed })
