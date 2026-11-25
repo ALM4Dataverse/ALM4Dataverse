@@ -33,13 +33,16 @@ runs:
       with:
         path: application
         fetch-depth: 0
+        persist-credentials: false
 
     - name: Checkout shared ALM4Dataverse source
       uses: actions/checkout@v4
       with:
+        token: ${{ inputs.github-token || github.token }}
         repository: ${{ inputs.shared-repository }}
         ref: ${{ inputs.shared-ref }}
         path: shared
+        persist-credentials: false
 
     - name: Apply configuration and commit changes
       shell: pwsh
@@ -55,16 +58,48 @@ runs:
       run: |
         $ErrorActionPreference = 'Stop'
         # Setup clones a disposable application copy and pushes with plain git, so
-        # authenticate git itself in addition to gh.
-        git config --global user.name 'ALM4Dataverse Setup'
-        git config --global user.email 'setup@alm4dataverse.local'
+        # authenticate git itself in addition to gh. Keep all Git settings
+        # process-scoped so reusable runners do not retain credentials or identity.
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
-        git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $basic"
-        if ($env:APPLY_CONFIG_PREVIEW -eq 'true') {
-            & ./setup-github.ps1 -ApplyConfig -PreviewOnly -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+        $gitConfigNames = @(
+            'GIT_CONFIG_GLOBAL'
+            'GIT_CONFIG_COUNT'
+            'GIT_CONFIG_KEY_0'
+            'GIT_CONFIG_VALUE_0'
+            'GIT_CONFIG_KEY_1'
+            'GIT_CONFIG_VALUE_1'
+            'GIT_CONFIG_KEY_2'
+            'GIT_CONFIG_VALUE_2'
+        )
+        $previousGitConfig = @{}
+        foreach ($name in $gitConfigNames) {
+            $previousGitConfig[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
-        else {
-            & ./setup-github.ps1 -ApplyConfig -Commit -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+        $isolatedGlobalConfig = $null
+        try {
+            $isolatedGlobalConfig = New-TemporaryFile
+            $env:GIT_CONFIG_GLOBAL = $isolatedGlobalConfig.FullName
+            $env:GIT_CONFIG_COUNT = '3'
+            $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
+            $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
+            $env:GIT_CONFIG_KEY_1 = 'user.name'
+            $env:GIT_CONFIG_VALUE_1 = 'ALM4Dataverse Setup'
+            $env:GIT_CONFIG_KEY_2 = 'user.email'
+            $env:GIT_CONFIG_VALUE_2 = 'setup@alm4dataverse.local'
+            if ($env:APPLY_CONFIG_PREVIEW -eq 'true') {
+                & ./setup-github.ps1 -ApplyConfig -PreviewOnly -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+            }
+            else {
+                & ./setup-github.ps1 -ApplyConfig -Commit -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+            }
+        }
+        finally {
+            foreach ($name in $gitConfigNames) {
+                [Environment]::SetEnvironmentVariable($name, $previousGitConfig[$name], 'Process')
+            }
+            if ($null -ne $isolatedGlobalConfig) {
+                Remove-Item -LiteralPath $isolatedGlobalConfig.FullName -Force -ErrorAction Stop
+            }
         }
 
     # Runs even when the apply step fails. The folder exists only when the pull request
