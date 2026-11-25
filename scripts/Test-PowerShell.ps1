@@ -60,7 +60,11 @@ function Format-PesterFailureSummary {
         $lines.Add('|---|---|')
         foreach ($test in @($failedTests) + @($failedBlocks)) {
             $name = ([string]$test.ExpandedName -replace '\|', '\|') -replace '[\r\n]+', ' '
-            $errorRecords = if ($null -ne $test.PSObject.Properties['ErrorRecord']) { @($test.ErrorRecord) } else { @() }
+            $errorRecords = @(
+                if ($null -ne $test.PSObject.Properties['ErrorRecord']) {
+                    @($test.ErrorRecord)
+                }
+            )
             $errorText = if ($errorRecords.Count -gt 0) {
                 (@($errorRecords | ForEach-Object {
                     if ($null -ne $_.PSObject.Properties['Exception'] -and $null -ne $_.Exception) {
