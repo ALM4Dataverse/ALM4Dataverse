@@ -37,6 +37,7 @@ runs:
     - name: Checkout shared ALM4Dataverse source
       uses: actions/checkout@v4
       with:
+        token: ${{ inputs.github-token || github.token }}
         repository: ${{ inputs.shared-repository }}
         ref: ${{ inputs.shared-ref }}
         path: shared
@@ -55,16 +56,31 @@ runs:
       run: |
         $ErrorActionPreference = 'Stop'
         # Setup clones a disposable application copy and pushes with plain git, so
-        # authenticate git itself in addition to gh.
+        # authenticate git itself in addition to gh. Keep the header process-scoped
+        # so reusable runners do not retain the supplied token.
         git config --global user.name 'ALM4Dataverse Setup'
         git config --global user.email 'setup@alm4dataverse.local'
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
-        git config --global http.https://github.com/.extraheader "AUTHORIZATION: basic $basic"
-        if ($env:APPLY_CONFIG_PREVIEW -eq 'true') {
-            & ./setup-github.ps1 -ApplyConfig -PreviewOnly -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+        $gitConfigNames = @('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0')
+        $previousGitConfig = @{}
+        foreach ($name in $gitConfigNames) {
+            $previousGitConfig[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         }
-        else {
-            & ./setup-github.ps1 -ApplyConfig -Commit -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+        try {
+            $env:GIT_CONFIG_COUNT = '1'
+            $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
+            $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
+            if ($env:APPLY_CONFIG_PREVIEW -eq 'true') {
+                & ./setup-github.ps1 -ApplyConfig -PreviewOnly -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+            }
+            else {
+                & ./setup-github.ps1 -ApplyConfig -Commit -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
+            }
+        }
+        finally {
+            foreach ($name in $gitConfigNames) {
+                [Environment]::SetEnvironmentVariable($name, $previousGitConfig[$name], 'Process')
+            }
         }
 
     # Runs even when the apply step fails. The folder exists only when the pull request

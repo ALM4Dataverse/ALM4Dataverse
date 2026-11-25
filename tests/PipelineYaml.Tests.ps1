@@ -63,6 +63,19 @@ Describe 'Workflow and pipeline YAML validation' {
         $applyConfigTemplate | Should -Not -Match 'Build\.SourcesDirectory\)/alm'
     }
 
+    It 'handles legacy Azure DevOps collection URIs and scopes GitHub action credentials' {
+        $applyConfigTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/apply-config.yml') -Raw
+        $legacyHostCheck = $applyConfigTemplate.IndexOf("if (`$organizationUri.Host -match '^([^.]+)\.visualstudio\.com$')")
+        $pathFallback = $applyConfigTemplate.IndexOf('$organizationName = @($organizationUri.AbsolutePath')
+        $legacyHostCheck | Should -BeGreaterThan -1
+        $legacyHostCheck | Should -BeLessThan $pathFallback
+
+        $applyConfigAction = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/apply-config/action.yml') -Raw
+        $applyConfigAction | Should -Match 'token: \$\{\{ inputs\.github-token \|\| github\.token \}\}'
+        $applyConfigAction | Should -Match '\$env:GIT_CONFIG_COUNT'
+        $applyConfigAction | Should -Not -Match 'git config --global http\.https://github\.com/\.extraheader'
+    }
+
     It 'keeps the branch validation map authoritative over the fallback variable group' {
         $buildTemplate = Get-Content -LiteralPath (Join-Path $repoRoot 'pipelines/templates/build.yml') -Raw
 
