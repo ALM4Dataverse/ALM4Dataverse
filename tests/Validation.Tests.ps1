@@ -141,9 +141,9 @@ Describe 'Validation orchestration and coverage enforcement' {
                     [pscustomobject]@{
                         Result = 'Failed'
                         ExpandedName = 'Deployment options fails when PAC output is invalid'
-                        ErrorRecord = @([pscustomobject]@{
+                        ErrorRecord = [pscustomobject]@{
                             Exception = [Exception]::new('Expected HTTP error status: 403')
-                        })
+                        }
                     }
                 )
                 CodeCoverage = @{ CommandsExecuted = @(); CommandsMissed = @() }
