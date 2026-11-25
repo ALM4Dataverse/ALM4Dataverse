@@ -52,8 +52,8 @@ function Format-PesterFailureSummary {
         $failedTests = @($Result.Tests | Where-Object Result -eq 'Failed')
     }
     $failedBlocks = @()
-    if ($null -ne $Result.PSObject.Properties['Blocks']) {
-        $failedBlocks = @($Result.Blocks | Where-Object Result -eq 'Failed')
+    if ($null -ne $Result.PSObject.Properties['FailedBlocks']) {
+        $failedBlocks = @($Result.FailedBlocks | Where-Object Result -eq 'Failed')
     }
     if ($failedTests.Count -gt 0 -or $failedBlocks.Count -gt 0) {
         $lines.Add('| Test | Error |')

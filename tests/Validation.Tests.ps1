@@ -162,7 +162,7 @@ Describe 'Validation orchestration and coverage enforcement' {
         Mock Invoke-Pester {
             [pscustomobject]@{
                 TotalCount = 1; FailedCount = 0; FailedContainersCount = 0; FailedBlocksCount = 1; PassedCount = 1
-                Blocks = @(
+                FailedBlocks = @(
                     [pscustomobject]@{
                         Result = 'Failed'
                         ExpandedName = 'Validation orchestration'
