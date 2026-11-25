@@ -73,7 +73,9 @@ Describe 'Workflow and pipeline YAML validation' {
         $applyConfigAction = Get-Content -LiteralPath (Join-Path $repoRoot '.github/actions/apply-config/action.yml') -Raw
         $applyConfigAction | Should -Match 'token: \$\{\{ inputs\.github-token \|\| github\.token \}\}'
         ([regex]::Matches($applyConfigAction, 'persist-credentials: false')).Count | Should -Be 2
-        $applyConfigAction | Should -Match '\$env:GIT_CONFIG_COUNT'
+        $applyConfigAction | Should -Match "\`$env:GIT_CONFIG_COUNT = '3'"
+        $applyConfigAction | Should -Match "\`$env:GIT_CONFIG_KEY_1 = 'user.name'"
+        $applyConfigAction | Should -Match "\`$env:GIT_CONFIG_KEY_2 = 'user.email'"
         $applyConfigAction | Should -Not -Match 'git config --global http\.https://github\.com/\.extraheader'
         $applyConfigAction | Should -Match 'git config --global --unset-all \$gitExtraHeaderKey'
     }

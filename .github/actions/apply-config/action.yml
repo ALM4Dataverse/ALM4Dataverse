@@ -58,13 +58,19 @@ runs:
       run: |
         $ErrorActionPreference = 'Stop'
         # Setup clones a disposable application copy and pushes with plain git, so
-        # authenticate git itself in addition to gh. Keep the header process-scoped
-        # so reusable runners do not retain the supplied token.
-        git config --global user.name 'ALM4Dataverse Setup'
-        git config --global user.email 'setup@alm4dataverse.local'
+        # authenticate git itself in addition to gh. Keep all Git settings
+        # process-scoped so reusable runners do not retain credentials or identity.
         $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
         $gitExtraHeaderKey = 'http.https://github.com/.extraheader'
-        $gitConfigNames = @('GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0')
+        $gitConfigNames = @(
+            'GIT_CONFIG_COUNT'
+            'GIT_CONFIG_KEY_0'
+            'GIT_CONFIG_VALUE_0'
+            'GIT_CONFIG_KEY_1'
+            'GIT_CONFIG_VALUE_1'
+            'GIT_CONFIG_KEY_2'
+            'GIT_CONFIG_VALUE_2'
+        )
         $previousGitConfig = @{}
         foreach ($name in $gitConfigNames) {
             $previousGitConfig[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
@@ -77,9 +83,13 @@ runs:
         }
         try {
             & $removeLegacyGitHeader
-            $env:GIT_CONFIG_COUNT = '1'
+            $env:GIT_CONFIG_COUNT = '3'
             $env:GIT_CONFIG_KEY_0 = 'http.https://github.com/.extraheader'
             $env:GIT_CONFIG_VALUE_0 = "AUTHORIZATION: basic $basic"
+            $env:GIT_CONFIG_KEY_1 = 'user.name'
+            $env:GIT_CONFIG_VALUE_1 = 'ALM4Dataverse Setup'
+            $env:GIT_CONFIG_KEY_2 = 'user.email'
+            $env:GIT_CONFIG_VALUE_2 = 'setup@alm4dataverse.local'
             if ($env:APPLY_CONFIG_PREVIEW -eq 'true') {
                 & ./setup-github.ps1 -ApplyConfig -PreviewOnly -RepositoryFullName $env:APPLY_CONFIG_REPOSITORY
             }
