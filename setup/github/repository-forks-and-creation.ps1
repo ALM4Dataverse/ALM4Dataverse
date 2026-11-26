@@ -356,6 +356,254 @@ function Get-GitHubForkSyncState {
     }
 }
 
+function Invoke-GitHubSharedWorkflowRepositorySync {
+    <#
+    .SYNOPSIS
+        Checks a shared workflow repository against upstream and optionally applies an update strategy.
+    .DESCRIPTION
+        Clones RepositoryFullName into WorkRoot, compares its default branch with Reference, and
+        returns the update kind and status. A repository that matches the canonical upstream
+        default branch is reported as Align because a new fork starts at upstream's default
+        rather than the selected release ref. CheckOnly never changes the remote.
+        PromptForStrategy reproduces the interactive update flow used by direct
+        Initialize-GitHubSharedWorkflowFork callers. Otherwise UpdateStrategy must name a
+        supported strategy and the remote is reconciled without prompts. The caller owns
+        WorkRoot cleanup.
+    .PARAMETER RepositoryFullName
+        Owner/repository name of the shared workflow repository.
+    .PARAMETER DefaultBranch
+        Default branch updated by reconciliation pushes.
+    .PARAMETER WorkRoot
+        Clone directory. Existing content is replaced by Get-GitHubForkSyncState.
+    .PARAMETER UpstreamFullName
+        Canonical upstream used to detect a fork that still matches upstream's default branch.
+    .PARAMETER UpstreamGitSource
+        Git source used to locate upstream commits.
+    .PARAMETER Reference
+        Upstream template ref to compare with and reconcile to.
+    .PARAMETER CheckOnly
+        Returns the comparison status without changing repository history.
+    .PARAMETER UpdateStrategy
+        Update to perform without prompting. Use None or LeaveUnchanged to leave history alone.
+    .PARAMETER PromptForStrategy
+        Uses the interactive confirmation and divergence menus instead of UpdateStrategy.
+    .PARAMETER AlignNewRepository
+        Treats a mismatched repository as needing alignment even if it does not match the
+        canonical upstream default. Used immediately after repository creation.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. UpdateKind, UpdateStatus, PendingUpdate,
+    CanFastForward, IsAhead, MatchesCanonicalUpstreamDefault and Changed.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'WorkRoot', Justification = 'Used by the nested repository comparison and update callbacks.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository comparison callback.')]
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryFullName,
+        [Parameter(Mandatory)][string]$DefaultBranch,
+        [Parameter(Mandatory)][string]$WorkRoot,
+        [Parameter(Mandatory)][string]$UpstreamFullName,
+        [Parameter(Mandatory)][string]$UpstreamGitSource,
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter()][switch]$CheckOnly,
+        [Parameter()][ValidateSet('', 'None', 'Seed', 'FastForward', 'Rebase', 'Reset', 'LeaveUnchanged')][string]$UpdateStrategy = '',
+        [Parameter()][switch]$PromptForStrategy,
+        [Parameter()][switch]$AlignNewRepository
+    )
+
+    $forkSyncState = Invoke-WithSpectreStatus -Status "Checking shared workflow repository '$RepositoryFullName' against upstream '$UpstreamFullName'..." -ScriptBlock {
+        Get-GitHubForkSyncState `
+            -ForkFullName $RepositoryFullName `
+            -WorkRoot $WorkRoot `
+            -UpstreamGitSource $UpstreamGitSource `
+            -UpstreamFullName $UpstreamFullName `
+            -Reference $Reference `
+            -DefaultBranch $DefaultBranch
+    }
+
+    $updateKind = 'UpToDate'
+    $updateStatus = "Already up to date with '$Reference'."
+    if ($forkSyncState.LocalHash -ne $forkSyncState.UpstreamHash) {
+        if ($AlignNewRepository -or $forkSyncState.MatchesCanonicalUpstreamDefault) {
+            $updateKind = 'Align'
+            $updateStatus = "Align to '$Reference' is required."
+        }
+        elseif ($forkSyncState.CanFastForward) {
+            $updateKind = 'FastForward'
+            $updateStatus = "Fast-forward from '$Reference' is available."
+        }
+        elseif ($forkSyncState.IsAhead) {
+            $updateKind = 'Ahead'
+            $updateStatus = "Ahead of '$Reference'; no update is required."
+        }
+        else {
+            $updateKind = 'Diverged'
+            $updateStatus = "Diverged from '$Reference'; define an update strategy."
+        }
+    }
+
+    $result = [pscustomobject]@{
+        UpdateKind                      = $updateKind
+        UpdateStatus                    = $updateStatus
+        PendingUpdate                   = $updateKind -in @('Align', 'FastForward', 'Diverged')
+        CanFastForward                  = [bool]$forkSyncState.CanFastForward
+        IsAhead                         = [bool]$forkSyncState.IsAhead
+        MatchesCanonicalUpstreamDefault = [bool]$forkSyncState.MatchesCanonicalUpstreamDefault
+        Changed                         = $false
+    }
+
+    if ($CheckOnly) {
+        return $result
+    }
+
+    $effectiveStrategy = $UpdateStrategy
+    if ($PromptForStrategy) {
+        switch ($updateKind) {
+            'UpToDate' {
+                Write-Host "Shared workflow repository is already up to date for ref '$Reference'."
+                $effectiveStrategy = 'None'
+            }
+            'Ahead' {
+                Write-Host "Shared workflow repository is ahead of upstream for ref '$Reference'." -ForegroundColor Yellow
+                $effectiveStrategy = 'None'
+            }
+            'Align' {
+                # New forks and canonical-default matches were aligned automatically before
+                # the strategy menu existed, so keep that behavior for direct callers.
+                $effectiveStrategy = 'Reset'
+            }
+            'FastForward' {
+                $effectiveStrategy = if (Read-YesNo -Prompt "Updates are available from upstream (fast-forward). Update '$RepositoryFullName'?" ) {
+                    'FastForward'
+                }
+                else {
+                    'LeaveUnchanged'
+                }
+            }
+            'Diverged' {
+                $divergedMenuItems = @(
+                    "Rebase '$RepositoryFullName' onto ref '$Reference'",
+                    "Reset '$RepositoryFullName' '$DefaultBranch' to ref '$Reference' (force push)",
+                    "Leave '$RepositoryFullName' unchanged"
+                )
+                $divergedSelection = Select-FromMenu -Title "Shared workflow repository '$RepositoryFullName' has diverged from upstream. Choose how to update it." -Items $divergedMenuItems -PromptGuidanceLines @(
+                    'Choose how to reconcile divergence between your shared repository and upstream templates.',
+                    'Rebase preserves local commits, reset force-aligns to upstream, and leave keeps the current state.'
+                ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
+
+                $effectiveStrategy = switch ($divergedSelection) {
+                    0 { 'Rebase' }
+                    1 { 'Reset' }
+                    default { 'LeaveUnchanged' }
+                }
+            }
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($effectiveStrategy)) {
+        if ($result.PendingUpdate) {
+            throw "No update strategy was selected for shared workflow repository '$RepositoryFullName'."
+        }
+        $effectiveStrategy = 'None'
+    }
+
+    if ($effectiveStrategy -in @('None', 'LeaveUnchanged')) {
+        if ($result.PendingUpdate) {
+            Write-Host "Leaving shared workflow repository unchanged." -ForegroundColor Yellow
+        }
+        return $result
+    }
+
+    if ($effectiveStrategy -eq 'Seed') {
+        throw "Shared workflow repository '$RepositoryFullName' already has history and cannot be seeded."
+    }
+
+    switch ($effectiveStrategy) {
+        'FastForward' {
+            if ($updateKind -in @('UpToDate', 'Ahead')) {
+                return $result
+            }
+            if ($updateKind -ne 'FastForward') {
+                throw "Fast-forward is no longer available for shared workflow repository '$RepositoryFullName'. Reopen setup and choose an update strategy again."
+            }
+
+            Invoke-WithErrorHandling -OperationName "Fast-forwarding shared workflow repository '$RepositoryFullName'" -StatusMessage "Fast-forwarding shared workflow repository '$RepositoryFullName'..." -CaptureOutputInPanel -ScriptBlock {
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Continue'
+
+                    & git -C $WorkRoot merge --ff-only $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) { throw 'Git merge failed.' }
+
+                    & git -C $WorkRoot push origin $DefaultBranch 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+            } | Out-Null
+        }
+        'Rebase' {
+            if ($updateKind -eq 'UpToDate') {
+                return $result
+            }
+            if ($updateKind -ne 'Diverged') {
+                throw "Rebase is not available for shared workflow repository '$RepositoryFullName'. Reopen setup and choose an update strategy again."
+            }
+
+            Invoke-WithErrorHandling -OperationName "Rebasing shared workflow repository '$RepositoryFullName'" -StatusMessage "Rebasing shared workflow repository '$RepositoryFullName' onto '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Continue'
+
+                    & git -C $WorkRoot rebase $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Git rebase failed - resolve conflicts manually in '$RepositoryFullName'."
+                    }
+
+                    & git -C $WorkRoot push --force-with-lease origin $DefaultBranch 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+            } | Out-Null
+        }
+        'Reset' {
+            if ($updateKind -eq 'UpToDate') {
+                return $result
+            }
+
+            Invoke-WithErrorHandling -OperationName "Resetting shared workflow repository '$RepositoryFullName'" -StatusMessage "Resetting shared workflow repository '$RepositoryFullName' to '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
+                $previousErrorActionPreference = $ErrorActionPreference
+                try {
+                    $ErrorActionPreference = 'Continue'
+
+                    & git -C $WorkRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Failed to reset shared workflow repository '$RepositoryFullName' to ref '$Reference'."
+                    }
+
+                    & git -C $WorkRoot push --force-with-lease origin $DefaultBranch 2>&1 | Out-Host
+                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                }
+                finally {
+                    $ErrorActionPreference = $previousErrorActionPreference
+                }
+            } | Out-Null
+        }
+        default {
+            throw "Unsupported update strategy '$effectiveStrategy' for shared workflow repository '$RepositoryFullName'."
+        }
+    }
+
+    Write-Host "Shared workflow repository updated successfully."
+    $result.UpdateStatus = if ($updateKind -eq 'Align') { "Aligned to '$Reference'." } else { "Updated to '$Reference'." }
+    $result.PendingUpdate = $false
+    $result.Changed = $true
+    return $result
+}
+
 function Get-GitHubAccessibleForksOfRepository {
     <#
     .SYNOPSIS
@@ -460,7 +708,6 @@ function Initialize-GitHubSharedWorkflowFork {
     .PARAMETER UsePreferredRepository
         Skips the selection menu and loads PreferredRepositoryFullName directly.
     #>
-    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository-operation callback.')]
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$UpstreamFullName,
@@ -683,131 +930,15 @@ function Initialize-GitHubSharedWorkflowFork {
     New-DirectoryIfMissing -Path $workParent
 
     try {
-        $forkSyncState = Invoke-WithSpectreStatus -Status "Checking shared workflow repository '$selectedSharedRepositoryFullName' against upstream '$UpstreamFullName'..." -ScriptBlock {
-            Get-GitHubForkSyncState `
-                -ForkFullName $selectedSharedRepositoryFullName `
-                -WorkRoot $workRoot `
-                -UpstreamGitSource $UpstreamGitSource `
-                -UpstreamFullName $UpstreamFullName `
-                -Reference $Reference `
-                -DefaultBranch $defaultBranch
-        }
-
-        if ($forkSyncState.LocalHash -eq $forkSyncState.UpstreamHash) {
-            Write-Host "Shared workflow repository is already up to date for ref '$Reference'."
-        }
-        else {
-            # A freshly created fork starts at upstream's default, not necessarily the
-            # selected release ref. Align that initial state before offering merge flows.
-            if ($createdNewSharedRepository -or $forkSyncState.MatchesCanonicalUpstreamDefault) {
-                Invoke-WithErrorHandling -OperationName "Aligning shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Aligning shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
-                    $previousErrorActionPreference = $ErrorActionPreference
-                    try {
-                        $ErrorActionPreference = 'Continue'
-
-                        & git -C $workRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                        if ($LASTEXITCODE -ne 0) {
-                            throw "Failed to align shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'."
-                        }
-
-                        & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
-                        if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
-                    }
-                    finally {
-                        $ErrorActionPreference = $previousErrorActionPreference
-                    }
-                } | Out-Null
-
-                Write-Host "Shared workflow repository aligned successfully."
-                return Get-GitHubRepo -Owner $sharedRepoOwnerName -Repo $sharedRepoName
-            }
-
-            if ($forkSyncState.CanFastForward) {
-                if (Read-YesNo -Prompt "Updates are available from upstream (fast-forward). Update '$selectedSharedRepositoryFullName'?" ) {
-                    Invoke-WithErrorHandling -OperationName "Fast-forwarding shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Fast-forwarding shared workflow repository '$selectedSharedRepositoryFullName'..." -CaptureOutputInPanel -ScriptBlock {
-                        $previousErrorActionPreference = $ErrorActionPreference
-                        try {
-                            $ErrorActionPreference = 'Continue'
-
-                            & git -C $workRoot merge --ff-only $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                            if ($LASTEXITCODE -ne 0) { throw 'Git merge failed.' }
-
-                            & git -C $workRoot push origin $defaultBranch 2>&1 | Out-Host
-                            if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
-                        }
-                        finally {
-                            $ErrorActionPreference = $previousErrorActionPreference
-                        }
-                    } | Out-Null
-
-                    Write-Host "Shared workflow repository updated successfully."
-                }
-            }
-            else {
-                if ($forkSyncState.IsAhead) {
-                    Write-Host "Shared workflow repository is ahead of upstream for ref '$Reference'." -ForegroundColor Yellow
-                }
-                else {
-                    $divergedMenuItems = @(
-                        "Rebase '$selectedSharedRepositoryFullName' onto ref '$Reference'",
-                        "Reset '$selectedSharedRepositoryFullName' '$defaultBranch' to ref '$Reference' (force push)",
-                        "Leave '$selectedSharedRepositoryFullName' unchanged"
-                    )
-                    $divergedSelection = Select-FromMenu -Title "Shared workflow repository '$selectedSharedRepositoryFullName' has diverged from upstream. Choose how to update it." -Items $divergedMenuItems -PromptGuidanceLines @(
-                        'Choose how to reconcile divergence between your shared repository and upstream templates.',
-                        'Rebase preserves local commits, reset force-aligns to upstream, and leave keeps the current state.'
-                    ) -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' -PromptGuidanceRef $ALM4DataverseRef
-
-                    switch ($divergedSelection) {
-                        0 {
-                            Invoke-WithErrorHandling -OperationName "Rebasing shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Rebasing shared workflow repository '$selectedSharedRepositoryFullName' onto '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
-                                $previousErrorActionPreference = $ErrorActionPreference
-                                try {
-                                    $ErrorActionPreference = 'Continue'
-
-                                    & git -C $workRoot rebase $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                                    if ($LASTEXITCODE -ne 0) {
-                                        throw "Git rebase failed - resolve conflicts manually in '$selectedSharedRepositoryFullName'."
-                                    }
-
-                                    & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
-                                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
-                                }
-                                finally {
-                                    $ErrorActionPreference = $previousErrorActionPreference
-                                }
-                            } | Out-Null
-
-                            Write-Host "Shared workflow repository updated successfully."
-                        }
-                        1 {
-                            Invoke-WithErrorHandling -OperationName "Resetting shared workflow repository '$selectedSharedRepositoryFullName'" -StatusMessage "Resetting shared workflow repository '$selectedSharedRepositoryFullName' to '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
-                                $previousErrorActionPreference = $ErrorActionPreference
-                                try {
-                                    $ErrorActionPreference = 'Continue'
-
-                                    & git -C $workRoot reset --hard $forkSyncState.UpstreamRef 2>&1 | Out-Host
-                                    if ($LASTEXITCODE -ne 0) {
-                                        throw "Failed to reset shared workflow repository '$selectedSharedRepositoryFullName' to ref '$Reference'."
-                                    }
-
-                                    & git -C $workRoot push --force-with-lease origin $defaultBranch 2>&1 | Out-Host
-                                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
-                                }
-                                finally {
-                                    $ErrorActionPreference = $previousErrorActionPreference
-                                }
-                            } | Out-Null
-
-                            Write-Host "Shared workflow repository updated successfully."
-                        }
-                        default {
-                            Write-Host "Leaving shared workflow repository unchanged." -ForegroundColor Yellow
-                        }
-                    }
-                }
-            }
-        }
+        [void](Invoke-GitHubSharedWorkflowRepositorySync `
+            -RepositoryFullName $selectedSharedRepositoryFullName `
+            -DefaultBranch $defaultBranch `
+            -WorkRoot $workRoot `
+            -UpstreamFullName $UpstreamFullName `
+            -UpstreamGitSource $UpstreamGitSource `
+            -Reference $Reference `
+            -PromptForStrategy `
+            -AlignNewRepository:$createdNewSharedRepository)
     }
     finally {
         try { Remove-Item -LiteralPath $workParent -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared workflow repository; continuing cleanup.' }

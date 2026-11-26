@@ -152,16 +152,22 @@ function Update-GitHubSharedWorkflowRepositoryState {
     Uses the selected repository without reopening the selection menu. Its configured ref is
     preserved for generated workflows while the repository is reconciled to Reference.
     Repository reconciliation and the Actions access-policy update are gated by ShouldProcess.
-    CheckOnly performs only the read-only comparison and never changes the repository.
+    CheckOnly performs only the read-only comparison and never changes the repository;
+    ContinueOnCheckError records a failed comparison on the state instead of throwing.
     .PARAMETER RepositoryState
     Mutable repository/ref state shared with setup previews and publication.
     .PARAMETER Reference
     Upstream template ref used to reconcile the selected repository.
     .PARAMETER CheckOnly
     Resolves the selected repository and compares its default branch with Reference
-    without changing repository content or the Actions access policy. Records
-    PendingUpdate and UpdateStatus on RepositoryState so preview can disclose the
-    reconciliation that Apply will perform.
+    without changing repository content or the Actions access policy. Records UpdateKind,
+    PendingUpdate and UpdateStatus on RepositoryState so the menu and preview can disclose
+    the update that Apply will perform.
+    .PARAMETER UpdateStrategy
+    Update to perform when not using CheckOnly. FastForward, Rebase, Reset and LeaveUnchanged
+    are supported; an update is required by the current comparison when this is empty.
+    .PARAMETER ContinueOnCheckError
+    With CheckOnly, records a failed comparison as UpdateKind Error and returns the state.
     #>
     [CmdletBinding(SupportsShouldProcess = $true)]
     [OutputType([System.Collections.IDictionary])]
@@ -171,103 +177,164 @@ function Update-GitHubSharedWorkflowRepositoryState {
         [Parameter(Mandatory)][string]$DefaultOwner,
         [Parameter(Mandatory)][string]$UpstreamGitSource,
         [Parameter(Mandatory)][string]$Reference,
-        [Parameter()][switch]$CheckOnly
+        [Parameter()][switch]$CheckOnly,
+        [Parameter()][ValidateSet('', 'None', 'Seed', 'FastForward', 'Rebase', 'Reset', 'LeaveUnchanged')][string]$UpdateStrategy = '',
+        [Parameter()][switch]$ContinueOnCheckError
     )
 
     $currentRepository = [string]$RepositoryState.Repository
     if ([string]::IsNullOrWhiteSpace($currentRepository)) {
-        throw 'A shared workflow repository must be selected before its version can be checked.'
+        $message = 'A shared workflow repository must be selected before its version can be checked.'
+        if ($CheckOnly -and $ContinueOnCheckError) {
+            $RepositoryState.UpdateKind = 'Error'
+            $RepositoryState.PendingUpdate = $false
+            $RepositoryState.UpdateStrategy = ''
+            $RepositoryState.UpdateStatus = "Check failed: $message"
+            $RepositoryState.Changed = $false
+            return $RepositoryState
+        }
+        throw $message
+    }
+    if (-not $CheckOnly -and [string]::IsNullOrWhiteSpace($UpdateStrategy)) {
+        throw 'UpdateStrategy is required when not using CheckOnly.'
+    }
+    if (-not $CheckOnly -and -not $PSCmdlet.ShouldProcess($currentRepository, 'Update shared workflow repository and Actions access policy')) {
+        return $RepositoryState
     }
 
-    if ($CheckOnly) {
-        # Resolve and compare without opening the selection menu or changing the
-        # repository. The temporary clone is discarded after the comparison.
-        $sharedWorkflowRepo = Initialize-GitHubSharedWorkflowFork `
-            -UpstreamFullName $UpstreamFullName `
-            -DefaultOwner $DefaultOwner `
-            -UpstreamGitSource $UpstreamGitSource `
-            -Reference $Reference `
-            -PreferredRepositoryFullName $currentRepository `
-            -SelectOnly `
-            -UsePreferredRepository
-        $selectedRepository = [string]$sharedWorkflowRepo.nameWithOwner
-        if ([string]::IsNullOrWhiteSpace($selectedRepository)) {
-            throw 'Shared workflow repository check did not return a valid owner/repository name.'
-        }
-        $defaultBranch = 'main'
-        if ($sharedWorkflowRepo.defaultBranchRef -and $sharedWorkflowRepo.defaultBranchRef.name) {
-            $defaultBranch = [string]$sharedWorkflowRepo.defaultBranchRef.name
-        }
-
-        $workParent = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-ForkCheck-" + [guid]::NewGuid().ToString('n'))
-        $workRoot = Join-Path $workParent 'repo'
-        New-DirectoryIfMissing -Path $workParent
+    $workParent = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-ForkCheck-" + [guid]::NewGuid().ToString('n'))
+    $workRoot = Join-Path $workParent 'repo'
+    New-DirectoryIfMissing -Path $workParent
+    try {
         try {
-            $forkSyncState = Invoke-WithSpectreStatus -Status "Checking shared workflow repository '$selectedRepository' against upstream '$UpstreamFullName'..." -ScriptBlock {
-                Get-GitHubForkSyncState `
-                    -ForkFullName $selectedRepository `
-                    -WorkRoot $workRoot `
-                    -UpstreamGitSource $UpstreamGitSource `
-                    -UpstreamFullName $UpstreamFullName `
-                    -Reference $Reference `
-                    -DefaultBranch $defaultBranch
+            # Resolve without opening the selection menu. The temporary clone is
+            # discarded after the comparison or reconciliation.
+            $sharedWorkflowRepo = Initialize-GitHubSharedWorkflowFork `
+                -UpstreamFullName $UpstreamFullName `
+                -DefaultOwner $DefaultOwner `
+                -UpstreamGitSource $UpstreamGitSource `
+                -Reference $Reference `
+                -PreferredRepositoryFullName $currentRepository `
+                -SelectOnly `
+                -UsePreferredRepository
+            $selectedRepository = [string]$sharedWorkflowRepo.nameWithOwner
+            if ([string]::IsNullOrWhiteSpace($selectedRepository)) {
+                throw 'Shared workflow repository check did not return a valid owner/repository name.'
             }
+            $defaultBranch = 'main'
+            if ($sharedWorkflowRepo.defaultBranchRef -and $sharedWorkflowRepo.defaultBranchRef.name) {
+                $defaultBranch = [string]$sharedWorkflowRepo.defaultBranchRef.name
+            }
+
+            $syncResult = Invoke-GitHubSharedWorkflowRepositorySync `
+                -RepositoryFullName $selectedRepository `
+                -DefaultBranch $defaultBranch `
+                -WorkRoot $workRoot `
+                -UpstreamFullName $UpstreamFullName `
+                -UpstreamGitSource $UpstreamGitSource `
+                -Reference $Reference `
+                -CheckOnly:$CheckOnly `
+                -UpdateStrategy $UpdateStrategy
 
             $RepositoryState.Repository = $selectedRepository
-            if ($forkSyncState.LocalHash -eq $forkSyncState.UpstreamHash) {
-                $RepositoryState.PendingUpdate = $false
-                $RepositoryState.UpdateStatus = "Already up to date with '$Reference'."
-            }
-            elseif ($forkSyncState.CanFastForward) {
-                $RepositoryState.PendingUpdate = $true
-                $RepositoryState.UpdateStatus = "Fast-forward from '$Reference' is available."
-            }
-            elseif ($forkSyncState.IsAhead) {
-                $RepositoryState.PendingUpdate = $false
-                $RepositoryState.UpdateStatus = "Ahead of '$Reference'; no update is required."
-            }
-            else {
-                $RepositoryState.PendingUpdate = $true
-                $RepositoryState.UpdateStatus = "Diverged from '$Reference'; reconciliation will ask how to update."
+            $RepositoryState.UpdateKind = [string]$syncResult.UpdateKind
+            $RepositoryState.PendingUpdate = [bool]$syncResult.PendingUpdate
+            $RepositoryState.UpdateStatus = [string]$syncResult.UpdateStatus
+            $RepositoryState.CanFastForward = [bool]$syncResult.CanFastForward
+            $RepositoryState.IsAhead = [bool]$syncResult.IsAhead
+            $RepositoryState.MatchesCanonicalUpstreamDefault = [bool]$syncResult.MatchesCanonicalUpstreamDefault
+            $RepositoryState.Changed = [bool]$syncResult.Changed
+            if ($CheckOnly) {
+                $RepositoryState.UpdateStrategy = if ([bool]$syncResult.PendingUpdate) { '' } else { 'None' }
             }
         }
-        finally {
-            if (Test-Path -LiteralPath $workParent) {
-                try { Remove-Item -LiteralPath $workParent -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared workflow repository check clone; continuing cleanup.' }
+        catch {
+            if (-not $CheckOnly -or -not $ContinueOnCheckError) {
+                throw
             }
+
+            $message = ([string]$_.Exception.Message -replace '\s+', ' ').Trim()
+            $RepositoryState.UpdateKind = 'Error'
+            $RepositoryState.PendingUpdate = $false
+            $RepositoryState.UpdateStrategy = ''
+            $RepositoryState.UpdateStatus = "Check failed: $message"
+            $RepositoryState.CanFastForward = $false
+            $RepositoryState.IsAhead = $false
+            $RepositoryState.MatchesCanonicalUpstreamDefault = $false
+            $RepositoryState.Changed = $false
+            return $RepositoryState
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $workParent) {
+            try { Remove-Item -LiteralPath $workParent -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared workflow repository check clone; continuing cleanup.' }
+        }
+    }
+
+    if (-not $CheckOnly) {
+        $selectedRepositoryParts = ([string]$RepositoryState.Repository).Split('/', 2)
+        if (
+            $selectedRepositoryParts.Count -ne 2 -or
+            [string]::IsNullOrWhiteSpace($selectedRepositoryParts[0]) -or
+            [string]::IsNullOrWhiteSpace($selectedRepositoryParts[1])
+        ) {
+            throw 'Shared workflow repository update did not return a valid owner/repository name.'
         }
 
-        return $RepositoryState
+        Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workflow repository '$($RepositoryState.Repository)'..." -ScriptBlock {
+            Initialize-GitHubSharedWorkflowAccessPolicy -Owner $selectedRepositoryParts[0] -Repo $selectedRepositoryParts[1]
+        } | Out-Null
     }
 
-    if (-not $PSCmdlet.ShouldProcess($currentRepository, 'Check and update shared workflow repository and Actions access policy')) {
-        return $RepositoryState
-    }
-
-    $sharedWorkflowRepo = Initialize-GitHubSharedWorkflowFork `
-        -UpstreamFullName $UpstreamFullName `
-        -DefaultOwner $DefaultOwner `
-        -UpstreamGitSource $UpstreamGitSource `
-        -Reference $Reference `
-        -PreferredRepositoryFullName $currentRepository `
-        -UsePreferredRepository
-    $selectedRepository = [string]$sharedWorkflowRepo.nameWithOwner
-    if ([string]::IsNullOrWhiteSpace($selectedRepository)) {
-        throw 'Shared workflow repository update did not return a valid owner/repository name.'
-    }
-    $selectedRepositoryParts = $selectedRepository.Split('/', 2)
-    if (
-        $selectedRepositoryParts.Count -ne 2 -or
-        [string]::IsNullOrWhiteSpace($selectedRepositoryParts[0]) -or
-        [string]::IsNullOrWhiteSpace($selectedRepositoryParts[1])
-    ) {
-        throw 'Shared workflow repository update did not return a valid owner/repository name.'
-    }
-
-    Invoke-WithSpectreStatus -Status "Checking Actions access policy on shared workflow repository '$selectedRepository'..." -ScriptBlock {
-        Initialize-GitHubSharedWorkflowAccessPolicy -Owner $selectedRepositoryParts[0] -Repo $selectedRepositoryParts[1]
-    } | Out-Null
-
-    $RepositoryState.Repository = $selectedRepository
     return $RepositoryState
+}
+
+function Get-GitHubSharedWorkflowRepositoryUpdateSummary {
+    <#
+    .SYNOPSIS
+    Formats the shared workflow repository update state for the guided setup menu.
+    .DESCRIPTION
+    Returns a short status that distinguishes a required strategy, a selected strategy
+    and a completed comparison with no action required. Errors are returned verbatim so
+    the user can see why the check failed.
+    .PARAMETER RepositoryState
+    State recorded by Update-GitHubSharedWorkflowRepositoryState.
+    .PARAMETER Reference
+    Upstream template ref used in strategy descriptions.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$RepositoryState,
+        [Parameter(Mandatory)][string]$Reference
+    )
+
+    $updateKind = [string](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'UpdateKind')
+    $updateStatus = [string](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'UpdateStatus')
+    $pendingUpdate = [bool](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'PendingUpdate')
+    $updateStrategy = [string](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'UpdateStrategy')
+
+    if ($updateKind -eq 'Error') {
+        return $updateStatus
+    }
+
+    switch ($updateStrategy) {
+        'FastForward' { return "Fast-forward to '$Reference' on apply" }
+        'Rebase' { return "Rebase onto '$Reference' on apply" }
+        'Reset' { return "Reset to '$Reference' on apply" }
+        'LeaveUnchanged' { return 'Leave unchanged (no repository update on apply)' }
+        'None' { return "No action needed. $updateStatus" }
+    }
+
+    if ($pendingUpdate) {
+        if ([string]::IsNullOrWhiteSpace($updateStatus)) {
+            return "Update strategy required against '$Reference'"
+        }
+        return "Update strategy required. $updateStatus"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($updateStatus)) {
+        return "Check against '$Reference'"
+    }
+    return "No action needed. $updateStatus"
 }

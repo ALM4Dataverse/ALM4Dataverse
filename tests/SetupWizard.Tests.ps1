@@ -46,7 +46,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $script:existingState = [pscustomobject]@{
             DevEnvironment = $script:dev
             DeploymentEnvironments = @($script:target)
-            DeploymentBranchMappings = @([pscustomobject]@{ BranchName = 'main'; Environments = @($script:target) })
+            DeploymentBranchMappings = @([pscustomobject]@{ BranchName = 'main'; Environments = @($script:target); ExistingDevEnvironment = $script:dev })
             BranchStates = @([pscustomobject]@{
                 BranchName = 'main'
                 ExistingDevEnvironment = $script:dev
@@ -262,6 +262,53 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         Should -Invoke Confirm-SetupReviewAction -Times 0 -Exactly
     }
 
+    It 'starts the branch and environment step complete for a complete saved configuration' {
+        Mock Invoke-SetupWizard {
+            $script:branchStepIsComplete = [bool](@($Steps | Where-Object { $_.Name -eq 'Configure branches, dev and deployment envs' })[0].IsComplete)
+            [pscustomobject]@{ BranchStates = @(); PublishResults = @() }
+        }
+
+        $null = & $Wizard @script:wizardParameters
+
+        $script:branchStepIsComplete | Should -BeTrue
+    }
+
+    It 'starts the branch and environment step incomplete for <Scenario>' -ForEach @(
+        @{ Scenario = 'a saved environment without credentials'; Prepare = { $script:target.Credentials = $null } }
+        @{ Scenario = 'a new repository'; Prepare = { $script:wizardParameters.IsNewRepository = $true } }
+    ) {
+        & $Prepare
+        Mock Invoke-SetupWizard {
+            $script:branchStepIsComplete = [bool](@($Steps | Where-Object { $_.Name -eq 'Configure branches, dev and deployment envs' })[0].IsComplete)
+            [pscustomobject]@{ BranchStates = @(); PublishResults = @() }
+        }
+
+        $null = & $Wizard @script:wizardParameters
+
+        $script:branchStepIsComplete | Should -BeFalse
+    }
+
+    It 'does not rediscover a DEV environment for saved branches without one' -Skip:($Provider -ne 'GitHub') {
+        $script:existingState.DevEnvironment = $null
+        $script:existingState.DeploymentBranchMappings = @(
+            [pscustomobject]@{ BranchName = 'main'; Environments = @(); ExistingDevEnvironment = $null }
+            [pscustomobject]@{ BranchName = 'release'; Environments = @($script:target); ExistingDevEnvironment = $null }
+        )
+        Mock Invoke-SetupWizard {
+            $branchStep = @($Steps | Where-Object { $_.Name -eq 'Configure branches, dev and deployment envs' })[0]
+            $script:branchMenuItems = @(& $branchStep.SubItems)
+            [pscustomobject]@{ BranchStates = @(); PublishResults = @() }
+        }
+
+        $null = & $Wizard @script:wizardParameters
+
+        $devMenuItems = @($script:branchMenuItems | Where-Object { $_.Target.Kind -eq 'DevEnvironment' })
+        $devMenuItems.Count | Should -Be 2
+        $devMenuItems.Label | Should -Be @('DEV: Not configured', 'DEV: Not configured')
+        $devMenuItems.Target.EnvironmentName | Should -Be @('', '')
+        Should -Invoke Get-GitHubExistingEnvironmentState -Times 0 -Exactly
+    }
+
     It 'keeps optional preview separate from required provider setup choices' {
         $null = & $Wizard @script:wizardParameters
 
@@ -296,7 +343,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
                 }
             }
             $sharedRepositoryVersionStep = [pscustomobject]@{
-                Name = 'Check and update shared workflow repository version'
+                Name = 'Define shared repository update strategy'
                 Action = {}
             }
             Mock Invoke-GitHubBranchAwareSetupApply {
@@ -323,7 +370,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
                 }
             }
             $sharedRepositoryVersionStep = [pscustomobject]@{
-                Name = 'Check and update shared repository version'
+                Name = 'Define shared repository update strategy'
                 Action = {}
             }
             Mock Invoke-AzDoBranchAwareSetupApply {
@@ -346,9 +393,9 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
             $script:sharedRepositoryApply.Repository | Should -Be 'owner/selected'
             $script:sharedRepositoryApply.Ref | Should -Be stable
             $script:setupWizardSteps | Should -Contain 'Select shared workflow repository'
-            $script:setupWizardSteps | Should -Contain 'Check and update shared workflow repository version'
+            $script:setupWizardSteps | Should -Contain 'Define shared repository update strategy'
             [System.Array]::IndexOf($script:setupWizardSteps, 'Select shared workflow repository') |
-                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Check and update shared workflow repository version'))
+                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Define shared repository update strategy'))
         }
         else {
             $script:setupWizardSteps[0] | Should -Be 'Select shared repository'
@@ -359,9 +406,9 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
             $script:sharedRepositoryPreview.CopyRoot | Should -Be $script:wizardParameters.MainRepoWorkingRoot
             $script:sharedRepositoryApply.CopyRoot | Should -Be $script:wizardParameters.MainRepoWorkingRoot
             $script:setupWizardSteps | Should -Contain 'Select shared repository'
-            $script:setupWizardSteps | Should -Contain 'Check and update shared repository version'
+            $script:setupWizardSteps | Should -Contain 'Define shared repository update strategy'
             [System.Array]::IndexOf($script:setupWizardSteps, 'Select shared repository') |
-                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Check and update shared repository version'))
+                Should -BeLessThan ([System.Array]::IndexOf($script:setupWizardSteps, 'Define shared repository update strategy'))
         }
     }
 
@@ -643,6 +690,32 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
         $script:branchEditorBuildValidationCalls | Should -Be 1
     }
 
+    It 'opens the DEV detail menu with the enable step when the saved branch has no DEV environment' {
+        $script:existingState.DevEnvironment = $null
+        if ($Provider -eq 'GitHub') {
+            $script:existingState.DeploymentBranchMappings[0].ExistingDevEnvironment = $null
+        }
+        else {
+            $script:existingState.BranchStates[0].ExistingDevEnvironment = $null
+        }
+        $script:mappings[0].DevEnvironmentConfiguration = $null
+        $script:mappings[0].ExistingDevEnvironment = $script:dev
+        Mock Select-BranchEnvironmentMapping {
+            $mapping = $script:mappings[0]
+            $null = & $EditDevEnvironmentScriptBlock @($script:mappings) $mapping
+            return @($mapping)
+        }
+
+        $null = & $Wizard @script:wizardParameters
+
+        Should -Invoke Invoke-SetupEnvironmentConfigurationWizard -Times 1 -Exactly -ParameterFilter {
+            $OptionalConfiguration -and $InitialTargetName -like 'Dev-*'
+        }
+        Should -Invoke Read-YesNo -Times 0 -Exactly -ParameterFilter {
+            $Prompt -like 'Configure a DEV*'
+        }
+    }
+
     It 'applies target-name callbacks when adding and editing deployment environments' -Skip:($Provider -ne 'GitHub') {
         $script:environmentTargetNames = @()
         Mock Invoke-SetupEnvironmentConfigurationWizard {
@@ -772,7 +845,7 @@ Describe '<Provider> branch-aware setup orchestration' -ForEach @(
     }
 
     It 'keeps default-branch workflow availability and retires removed branch deployment workflows' -Skip:($Provider -ne 'GitHub') {
-        $script:existingState.DeploymentBranchMappings += [pscustomobject]@{ BranchName = 'retired'; Environments = @() }
+        $script:existingState.DeploymentBranchMappings += [pscustomobject]@{ BranchName = 'retired'; Environments = @(); ExistingDevEnvironment = $null }
         $script:mappings = @([pscustomobject]@{ BranchName = 'release'; DevEnvironmentConfiguration = $script:dev; ExistingDevEnvironment = $script:dev; Environments = @($script:target) })
         $script:wizardParameters.UseGitHubEnvironments = $false
         $result = & $Wizard @script:wizardParameters
@@ -986,6 +1059,26 @@ Describe 'Provider setup artifact preview scopes' {
                 -UseRepositoryVariablePrefix $true `
                 -EnableEnvironmentApprovals $false)
         ($unknownOidcChanges | Where-Object { $_.Resource -eq 'GitHub repository OIDC setting' }).Action | Should -Be 'Leave'
+
+        $sharedRepositoryChanges = @(Get-GitHubSetupResourceChange `
+                -BranchStates $branchStates `
+                -RepoIdentity ([pscustomobject]@{ UseImmutableSubject = $true }) `
+                -RepoFullName owner/repo `
+                -UseImmutableWifSubject $true `
+                -UseGitHubEnvironments $false `
+                -UseRepositoryVariablePrefix $true `
+                -EnableEnvironmentApprovals $false `
+                -SharedWorkflowRepositoryState ([ordered]@{
+                    Repository = 'owner/shared'
+                    Reference = 'stable'
+                    UpdateKind = 'FastForward'
+                    PendingUpdate = $true
+                    UpdateStatus = "Fast-forward from 'stable' is available."
+                    UpdateStrategy = 'FastForward'
+                }))
+        $sharedRepositoryChange = $sharedRepositoryChanges | Where-Object { $_.Resource -eq 'Shared workflow repository' }
+        $sharedRepositoryChange.Action | Should -Be 'Reconcile'
+        $sharedRepositoryChange.Details | Should -Match 'Fast-forward'
     }
 
     It 'plans Azure DevOps pipelines, permissions, service connections, checks, and Dataverse roles' {
@@ -1050,5 +1143,20 @@ Describe 'Provider setup artifact preview scopes' {
         ($changes | Where-Object { $_.Target -eq 'example-project/Environment-PROD' -and $_.Resource -eq 'Azure DevOps variable group and checks' }).Details |
             Should -Match 'exclusive lock.*approval check'
         ($changes | ConvertTo-Json -Depth 5 -Compress) | Should -Not -Match 'azure-preview-secret|azure-existing-secret'
+
+        $sharedRepositoryChanges = @(Get-AzDoSetupResourceChange `
+                -BranchStates $branchStates `
+                -SelectedProject ([pscustomobject]@{ Name = 'example-project' }) `
+                -MainRepo ([pscustomobject]@{ Name = 'sample-app' }) `
+                -SharedRepositoryName ALM4Dataverse `
+                -SharedRepositoryState ([ordered]@{
+                    Name = 'ALM4Dataverse'
+                    VersionUpdatedDuringSetup = $false
+                    UpdateStatus = "Already up to date with 'stable'."
+                    UpdateStrategy = 'None'
+                }))
+        $sharedRepositoryChange = $sharedRepositoryChanges | Where-Object { $_.Resource -eq 'Shared repository history' }
+        $sharedRepositoryChange.Action | Should -Be 'Verify'
+        $sharedRepositoryChange.Details | Should -Match 'No repository update is required'
     }
 }

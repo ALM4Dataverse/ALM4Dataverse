@@ -328,8 +328,8 @@ function Get-AzDoSetupResourceChange {
     Describes Azure DevOps and Dataverse changes deferred until setup is applied.
     .DESCRIPTION
     The plan contains resource names and settings only; credential values are omitted.
-    When SharedRepositoryState is supplied, shared-repository creation and version
-    reconciliation already performed during setup are disclosed as applied.
+    When SharedRepositoryState is supplied, shared-repository creation, version
+    reconciliation, and a deliberately unchanged history are disclosed.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -357,12 +357,31 @@ function Get-AzDoSetupResourceChange {
                     Details  = 'Created during setup before preview; Apply reuses it and does not create another.'
                 })
         }
-        if ([bool](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'VersionUpdatedDuringSetup')) {
+        $versionUpdatedDuringSetup = [bool](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'VersionUpdatedDuringSetup')
+        $updateStatus = [string](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'UpdateStatus')
+        $updateStrategy = [string](Get-OptionalObjectPropertyValue -InputObject $SharedRepositoryState -PropertyName 'UpdateStrategy')
+        if ($versionUpdatedDuringSetup) {
             $changes.Add([pscustomobject]@{
                     Action   = 'Already applied'
                     Resource = 'Shared repository history'
                     Target   = $sharedName
                     Details  = 'Checked and reconciled during setup before preview; Apply uses the updated template source.'
+                })
+        }
+        elseif ($updateStrategy -eq 'LeaveUnchanged') {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Leave'
+                    Resource = 'Shared repository history'
+                    Target   = $sharedName
+                    Details  = "$updateStatus The repository history is left unchanged."
+                })
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($updateStatus)) {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Verify'
+                    Resource = 'Shared repository history'
+                    Target   = $sharedName
+                    Details  = "$updateStatus No repository update is required."
                 })
         }
     }

@@ -37,9 +37,7 @@
             @{ Action = 'Wait'; Text = 'Select the shared repository' }
             @{ Action = 'Select'; Text = 'Use existing repository: {{azdo.sharedRepositoryName}}' }
             @{ Action = 'Wait'; Text = 'Azure DevOps ALM4Dataverse setup menu'; TimeoutSeconds = 300 }
-            @{ Action = 'Select'; Text = 'Check and update shared repository version' }
-            @{ Action = 'Wait'; Text = 'Check and update shared repository' }
-            @{ Action = 'Keys'; Keys = '{ENTER}' }
+            @{ Action = 'Select'; Text = 'Define shared repository update strategy' }
             @{ Action = 'Wait'; Text = 'Azure DevOps ALM4Dataverse setup menu'; TimeoutSeconds = 300 }
             @{ Action = 'Select'; Text = 'Configure branches, dev and deployment envs' }
             @{ Action = 'Wait'; Text = 'Choose a branching strategy' }
@@ -173,8 +171,7 @@
             @{ Action = 'Wait'; Text = 'Select shared workflow repository'; TimeoutSeconds = 180 }
             @{ Action = 'Select'; Text = 'Use existing fork: {{github.sharedRepository}}' }
             @{ Action = 'Wait'; Text = 'GitHub Actions ALM4Dataverse setup menu'; TimeoutSeconds = 600 }
-            @{ Action = 'Select'; Text = 'Check and update shared workflow repository version' }
-            @{ Action = 'Sleep'; Milliseconds = 2000 }
+            @{ Action = 'Select'; Text = 'Define shared repository update strategy' }
             @{ Action = 'Wait'; Text = 'GitHub Actions ALM4Dataverse setup menu'; TimeoutSeconds = 600 }
 
             @{ Action = 'Select'; Text = 'Configure branches, dev and deployment envs' }

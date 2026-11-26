@@ -142,8 +142,8 @@ function Get-OptionalObjectPropertyValue {
         return $null
     }
 
-    if ($InputObject -is [hashtable]) {
-        if ($InputObject.ContainsKey($PropertyName)) {
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($PropertyName)) {
             return $InputObject[$PropertyName]
         }
 

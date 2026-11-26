@@ -771,12 +771,13 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             -UpstreamFullName upstream/shared `
             -DefaultOwner owner `
             -UpstreamGitSource $repoRoot `
-            -Reference stable
+            -Reference stable `
+            -UpdateStrategy FastForward
 
         $result.Repository | Should -Be owner/current
         $result.Reference | Should -Be saved
         Should -Invoke Initialize-GitHubSharedWorkflowFork -Times 1 -Exactly -ParameterFilter {
-            $PreferredRepositoryFullName -eq 'owner/current' -and $UsePreferredRepository -and $Reference -eq 'stable'
+            $PreferredRepositoryFullName -eq 'owner/current' -and $UsePreferredRepository -and $SelectOnly -and $Reference -eq 'stable'
         }
         Should -Invoke Initialize-GitHubSharedWorkflowAccessPolicy -Times 1 -Exactly -ParameterFilter {
             $Owner -eq 'owner' -and $Repo -eq 'current'
@@ -797,6 +798,7 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
             -DefaultOwner owner `
             -UpstreamGitSource $repoRoot `
             -Reference stable `
+            -UpdateStrategy FastForward `
             -WhatIf
 
         $result.Repository | Should -Be 'owner/current'
@@ -1143,6 +1145,243 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         if ($Provider -eq 'GitHub') { { Initialize-GitHubSharedWorkflowFork -UpstreamFullName upstream/shared -DefaultOwner owner -UpstreamGitSource $repoRoot -Reference stable } | Should -Throw '*merge failed*' }
         else { { Initialize-AzDoProjectAndRepository } | Should -Throw '*merge failed*' }
         @(Get-ChildItem $TestDrive -Directory -Filter 'ALM4Dataverse-*').Count | Should -Be 0
+    }
+
+    It 'records the automatic GitHub shared repository comparison without changing the repository' -Skip:($Provider -ne 'GitHub') {
+        $script:selectedSharedWorkflowRepo = [pscustomobject]@{
+            nameWithOwner = 'owner/current'
+            defaultBranchRef = [pscustomobject]@{ name = 'main' }
+        }
+        $script:sync = [pscustomobject]@{
+            LocalHash = 'local'
+            UpstreamHash = 'upstream'
+            UpstreamRef = 'upstream/stable'
+            CanFastForward = $true
+            IsAhead = $false
+            MatchesCanonicalUpstreamDefault = $false
+        }
+        $state = [ordered]@{
+            Repository = 'owner/current'
+            Reference = 'saved'
+            UpdateKind = ''
+            PendingUpdate = $false
+            UpdateStatus = ''
+            UpdateStrategy = ''
+            CanFastForward = $false
+            IsAhead = $false
+            MatchesCanonicalUpstreamDefault = $false
+        }
+        Mock Initialize-GitHubSharedWorkflowFork { $script:selectedSharedWorkflowRepo }
+        Mock Initialize-GitHubSharedWorkflowAccessPolicy {}
+
+        $result = Update-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $state `
+            -UpstreamFullName upstream/shared `
+            -DefaultOwner owner `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -CheckOnly
+
+        $result.UpdateKind | Should -Be FastForward
+        $result.PendingUpdate | Should -BeTrue
+        $result.UpdateStrategy | Should -Be ''
+        $result.CanFastForward | Should -BeTrue
+        Should -Invoke git -Times 0 -Exactly
+        Should -Invoke Initialize-GitHubSharedWorkflowAccessPolicy -Times 0 -Exactly
+    }
+
+    It 'marks a matching GitHub shared repository as needing no update strategy' -Skip:($Provider -ne 'GitHub') {
+        $script:selectedSharedWorkflowRepo = [pscustomobject]@{
+            nameWithOwner = 'owner/current'
+            defaultBranchRef = [pscustomobject]@{ name = 'main' }
+        }
+        $script:sync = [pscustomobject]@{
+            LocalHash = 'same'
+            UpstreamHash = 'same'
+            UpstreamRef = 'upstream/stable'
+            CanFastForward = $false
+            IsAhead = $false
+            MatchesCanonicalUpstreamDefault = $false
+        }
+        $state = [ordered]@{
+            Repository = 'owner/current'
+            Reference = 'saved'
+            UpdateKind = ''
+            PendingUpdate = $false
+            UpdateStatus = ''
+            UpdateStrategy = ''
+        }
+        Mock Initialize-GitHubSharedWorkflowFork { $script:selectedSharedWorkflowRepo }
+        Mock Initialize-GitHubSharedWorkflowAccessPolicy {}
+
+        $result = Update-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $state `
+            -UpstreamFullName upstream/shared `
+            -DefaultOwner owner `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -CheckOnly
+
+        $result.UpdateKind | Should -Be UpToDate
+        $result.PendingUpdate | Should -BeFalse
+        $result.UpdateStrategy | Should -Be None
+        Get-GitHubSharedWorkflowRepositoryUpdateSummary -RepositoryState $result -Reference stable |
+            Should -Match 'No action needed'
+    }
+
+    It 'applies a selected GitHub fast-forward strategy without prompting' -Skip:($Provider -ne 'GitHub') {
+        $script:selectedSharedWorkflowRepo = [pscustomobject]@{
+            nameWithOwner = 'owner/current'
+            defaultBranchRef = [pscustomobject]@{ name = 'main' }
+        }
+        $script:sync = [pscustomobject]@{
+            LocalHash = 'local'
+            UpstreamHash = 'upstream'
+            UpstreamRef = 'upstream/stable'
+            CanFastForward = $true
+            IsAhead = $false
+            MatchesCanonicalUpstreamDefault = $false
+        }
+        $state = [ordered]@{
+            Repository = 'owner/current'
+            Reference = 'saved'
+            UpdateKind = ''
+            PendingUpdate = $false
+            UpdateStatus = ''
+            UpdateStrategy = ''
+        }
+        Mock Initialize-GitHubSharedWorkflowFork { $script:selectedSharedWorkflowRepo }
+        Mock Initialize-GitHubSharedWorkflowAccessPolicy {}
+
+        $result = Update-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $state `
+            -UpstreamFullName upstream/shared `
+            -DefaultOwner owner `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -UpdateStrategy FastForward
+
+        $result.PendingUpdate | Should -BeFalse
+        $result.Changed | Should -BeTrue
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains '--ff-only' }
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains 'push' }
+        Should -Invoke Read-YesNo -Times 0 -Exactly
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
+        Should -Invoke Initialize-GitHubSharedWorkflowAccessPolicy -Times 1 -Exactly
+    }
+
+    It 'records a GitHub shared repository check failure without stopping setup' -Skip:($Provider -ne 'GitHub') {
+        Mock Initialize-GitHubSharedWorkflowFork { throw 'repository not found' }
+        $state = [ordered]@{
+            Repository = 'owner/missing'
+            Reference = 'saved'
+            UpdateKind = ''
+            PendingUpdate = $false
+            UpdateStatus = ''
+            UpdateStrategy = ''
+        }
+
+        $result = Update-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $state `
+            -UpstreamFullName upstream/shared `
+            -DefaultOwner owner `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -CheckOnly `
+            -ContinueOnCheckError
+
+        $result.UpdateKind | Should -Be Error
+        $result.UpdateStatus | Should -Match 'repository not found'
+        $result.PendingUpdate | Should -BeFalse
+    }
+
+    It 'reports an empty Azure DevOps shared repository as needing a seed' -Skip:($Provider -ne 'Azure DevOps') {
+        Mock Test-AzDoGitRepositoryCommit { $false }
+
+        $result = Get-AzDoSharedRepositoryUpdateState `
+            -ProjectName project `
+            -RepositoryId shared-id `
+            -RepositoryName shared `
+            -RepositoryRemoteUrl 'https://example.invalid/shared' `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -AccessToken fake-token
+
+        $result.UpdateKind | Should -Be Seed
+        $result.PendingUpdate | Should -BeTrue
+        Should -Invoke Get-AzDoSharedRepositorySyncState -Times 0 -Exactly
+        Should -Invoke git -Times 0 -Exactly
+    }
+
+    It 'applies an Azure DevOps fast-forward strategy without prompting' -Skip:($Provider -ne 'Azure DevOps') {
+        $script:sync.UpstreamHash = 'two'
+        $script:sync.CanFastForward = $true
+
+        $result = Invoke-AzDoSharedRepositorySync `
+            -ProjectName project `
+            -RepositoryId shared-id `
+            -RepositoryName shared `
+            -RepositoryRemoteUrl 'https://example.invalid/shared' `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -AccessToken fake-token `
+            -UpdateStrategy FastForward
+
+        $result.PendingUpdate | Should -BeFalse
+        $result.Changed | Should -BeTrue
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains '--ff-only' }
+        Should -Invoke git -Times 1 -Exactly -ParameterFilter { $args -contains 'push' }
+        Should -Invoke Read-YesNo -Times 0 -Exactly
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
+    }
+
+    It 'leaves an Azure DevOps shared repository unchanged when selected' -Skip:($Provider -ne 'Azure DevOps') {
+        $script:sync.UpstreamHash = 'two'
+        $script:sync.CanFastForward = $true
+
+        $result = Invoke-AzDoSharedRepositorySync `
+            -ProjectName project `
+            -RepositoryId shared-id `
+            -RepositoryName shared `
+            -RepositoryRemoteUrl 'https://example.invalid/shared' `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -AccessToken fake-token `
+            -UpdateStrategy LeaveUnchanged
+
+        $result.Changed | Should -BeFalse
+        Should -Invoke git -Times 0 -Exactly
+    }
+
+    It 'records an Azure DevOps shared repository check failure without stopping setup' -Skip:($Provider -ne 'Azure DevOps') {
+        Mock Get-AzDoSharedRepositorySyncState { throw 'service unavailable' }
+
+        $result = Get-AzDoSharedRepositoryUpdateState `
+            -ProjectName project `
+            -RepositoryId shared-id `
+            -RepositoryName shared `
+            -RepositoryRemoteUrl 'https://example.invalid/shared' `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable `
+            -AccessToken fake-token `
+            -ContinueOnError
+
+        $result.UpdateKind | Should -Be Error
+        $result.UpdateStatus | Should -Match 'service unavailable'
+        $result.PendingUpdate | Should -BeFalse
+    }
+
+    It 'formats an Azure DevOps update strategy for the menu' -Skip:($Provider -ne 'Azure DevOps') {
+        $state = [ordered]@{
+            UpdateKind = 'FastForward'
+            UpdateStatus = "Fast-forward from 'stable' is available."
+            PendingUpdate = $true
+            UpdateStrategy = ''
+            VersionUpdatedDuringSetup = $false
+        }
+
+        Get-AzDoSharedRepositoryUpdateSummary -RepositoryState $state -Reference stable |
+            Should -Match 'Update strategy required'
     }
 
     It 'initializes an empty shared repository from the requested upstream ref' {

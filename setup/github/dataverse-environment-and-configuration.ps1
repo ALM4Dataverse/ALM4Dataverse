@@ -570,6 +570,7 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
         [Parameter()][scriptblock]$SelectBaselineAction,
         [Parameter()][AllowEmptyString()][string]$InitialBaselineRelease = '',
         [Parameter()][switch]$BaselineConfigured,
+        [Parameter()][switch]$OptionalConfiguration,
         [Parameter()][AllowEmptyString()][string]$ExcludedUrl = '',
         [Parameter()][AllowEmptyString()][string]$PreferredSelectionSummary = '',
         [Parameter()][array]$ExistingCredentials,
@@ -641,6 +642,7 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
         -SelectBaselineAction $SelectBaselineAction `
         -InitialBaselineRelease $InitialBaselineRelease `
         -BaselineConfigured:$BaselineConfigured `
+        -OptionalConfiguration:$OptionalConfiguration `
         -HelpDocRelativePath $HelpDocRelativePath `
         -HelpRef $HelpRef
     if ($null -eq $environmentConfiguration) {

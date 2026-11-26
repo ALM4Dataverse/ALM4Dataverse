@@ -29,12 +29,15 @@ function Invoke-GitHubBranchAwareSetup {
         config. Publication and provider configuration are not transactional.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'environmentNameToEdit', Justification = 'Focused editor target retained in the nested branch-editor callback contracts.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested template-fetch callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseGitHubEnvironments', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseRepositoryVariablePrefix', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'EnableEnvironmentApprovals', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RequiredReviewerIds', Justification = 'Captured by the nested review action.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoFullName', Justification = 'Captured by the nested branch publication and Apply actions.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoOwner', Justification = 'Captured by the nested branch editor and environment callbacks.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoName', Justification = 'Captured by the nested branch editor and environment callbacks.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SkipChangeReview', Justification = 'Captured by the nested change-review action.')]
     [CmdletBinding()]
     param(
@@ -99,15 +102,10 @@ function Invoke-GitHubBranchAwareSetup {
     $branchStates = @()
     foreach ($mapping in $initialBranchMappings) {
         $branchName = [string]$mapping.BranchName
+        # The mapping carries DEV state from the saved configuration, or from the
+        # Dev-<branch> discovery used when no branch configuration exists. Probing here
+        # would re-show a DEV environment that the saved configuration no longer has.
         $existingDevEnvironment = Get-OptionalObjectPropertyValue -InputObject $mapping -PropertyName 'ExistingDevEnvironment'
-        if ($null -eq $existingDevEnvironment -and -not $ApplyConfig) {
-            $existingDevEnvironment = if ($branchName -ieq $DefaultBranch) {
-                $ExistingSetupState.DevEnvironment
-            }
-            else {
-                Get-GitHubExistingEnvironmentState -Owner $RepoOwner -Repo $RepoName -EnvironmentName "Dev-$branchName" -TenantId $TenantId
-            }
-        }
 
         $branchState = New-GitHubBranchSetupState `
             -BranchName $branchName `
@@ -157,10 +155,20 @@ function Invoke-GitHubBranchAwareSetup {
             PublishPlan = $null
         }
 
+        # Existing repositories do not need to visit this step when the saved mappings
+        # already contain every value it would prompt for; new repositories start empty.
+        $branchStepIsComplete = (
+            -not $IsNewRepository -and
+            (Test-BranchEnvironmentConfigurationComplete `
+                -BranchStates @($wizardState.BranchStates) `
+                -LegacyConfigurationConversion $wizardState.LegacyConfigurationConversion)
+        )
+
         $branchSetupSteps = @(
             [pscustomobject]@{
                 Name = 'Configure branches, dev and deployment envs'
                 HelpDocRelativePath = 'docs/setup/github-setup.md'
+                IsComplete = $branchStepIsComplete
                 SubItems = {
                     Get-SetupBranchMenuItem -BranchStates @($wizardState.BranchStates)
                 }
@@ -215,19 +223,6 @@ function Invoke-GitHubBranchAwareSetup {
                                     Get-GitHubExistingEnvironmentSelectionSummary -ExistingEnvironment $existingDevEnvironment
                                 }
 
-                                $hasExistingDevConfiguration = ($currentDevConfiguration -or $existingDevEnvironment)
-                                if ([string]::IsNullOrWhiteSpace($environmentNameToEdit)) {
-                                    if ($hasExistingDevConfiguration) {
-                                        $shouldConfigureDevEnvironment = Read-YesNo -Prompt "Configure a DEV Dataverse environment for branch '$branchName'?"
-                                    }
-                                    else {
-                                        $shouldConfigureDevEnvironment = Read-YesNo -Prompt "Configure a DEV Dataverse environment for branch '$branchName'?" -DefaultNo
-                                    }
-                                    if (-not $shouldConfigureDevEnvironment) {
-                                        return $null
-                                    }
-                                }
-
                                 $updatedDevConfiguration = Invoke-GitHubEnvironmentConfigurationWizard `
                                     -Title "Configure DEV environment for branch '$branchName'" `
                                     -DataverseEnvironmentPrompt "Select the DEV Dataverse environment for branch '$branchName'" `
@@ -235,6 +230,7 @@ function Invoke-GitHubBranchAwareSetup {
                                     -InitialTargetName "Dev-$branchName" `
                                     -TargetNameStepName 'Target name' `
                                     -TargetNameIsFixed `
+                                    -OptionalConfiguration:(-not $currentDevConfiguration) `
                                     -PreferredSelectionSummary $existingDevEnvironmentSummary `
                                     -ExistingCredentials $cachedCredentials `
                                     -ExistingServiceAccounts $cachedServiceAccounts `

@@ -28,6 +28,7 @@ function Invoke-AzDoBranchAwareSetup {
     is not transactional.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'allMappings', Justification = 'Required first positional argument in the nested branch-editor callback contracts.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'environmentNameToEdit', Justification = 'Focused editor target retained in the nested branch-editor callback contracts.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectedProject', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'OrganizationName', Justification = 'Captured by the nested wizard actions.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Captured by the nested wizard actions.')]
@@ -126,10 +127,21 @@ function Invoke-AzDoBranchAwareSetup {
     }
 
     $ProviderOptions['azDOUseAlm4DataverseExtension'] = $UseAlm4DataverseExtension
+
+    # Existing repositories do not need to visit this step when the saved mappings
+    # already contain every value it would prompt for; new repositories start empty.
+    $branchStepIsComplete = (
+        -not $IsNewRepository -and
+        (Test-BranchEnvironmentConfigurationComplete `
+            -BranchStates @($wizardState.BranchStates) `
+            -LegacyConfigurationConversion $wizardState.LegacyConfigurationConversion)
+    )
+
     $branchSetupSteps = @(
         [pscustomobject]@{
             Name = 'Configure branches, dev and deployment envs'
             HelpDocRelativePath = 'docs/setup/azdo-automated-setup.md'
+            IsComplete = $branchStepIsComplete
             SubItems = {
                 Get-SetupBranchMenuItem -BranchStates @($wizardState.BranchStates)
             }
@@ -179,13 +191,6 @@ function Invoke-AzDoBranchAwareSetup {
                             }
                         }
 
-                        if ([string]::IsNullOrWhiteSpace($environmentNameToEdit)) {
-                            $configureDevEnvironment = Read-YesNo -Prompt "Configure a DEV environment for branch '$($mappingToEdit.BranchName)'?"
-                            if (-not $configureDevEnvironment) {
-                                return $null
-                            }
-                        }
-
                         $updatedDevConfiguration = Invoke-WithErrorHandling -OperationName "Configuring DEV environment for branch '$($mappingToEdit.BranchName)'" -ScriptBlock {
                             Invoke-AzDoEnvironmentConfigurationWizard `
                                 -Title "Configure DEV environment for branch '$($mappingToEdit.BranchName)'" `
@@ -194,6 +199,7 @@ function Invoke-AzDoBranchAwareSetup {
                                 -InitialTargetName "Dev-$($mappingToEdit.BranchName)" `
                                 -TargetNameStepName 'Target name' `
                                 -TargetNameIsFixed `
+                                -OptionalConfiguration:(-not $currentDevConfiguration) `
                                 -ExistingCredentials $credentialsCache `
                                 -ExistingServiceAccounts $serviceAccountsCache `
                                 -TenantId $TenantId `
