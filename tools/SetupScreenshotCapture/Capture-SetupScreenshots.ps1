@@ -188,9 +188,16 @@ function Get-CaptureScene {
             Interactions = @()
         },
         [pscustomobject]@{
-            Name = 'azdo-shared-repository-version'
+            Name = 'azdo-shared-repository-update'
             Provider = 'azdo'
-            ExpectedText = '[y/n]'
+            ExpectedText = 'Fast-forward'
+            Rows = 32
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'github-shared-repository-update'
+            Provider = 'github'
+            ExpectedText = 'Fast-forward'
             Rows = 32
             Interactions = @()
         },
@@ -239,7 +246,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'github-menu-existing-repository'
             Provider = 'common'
-            ExpectedText = 'Deployment: PROD (main)'
+            ExpectedText = 'Deployment: PROD -'
             Rows = 48
             Interactions = @()
         },
@@ -260,7 +267,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-menu-existing-repository'
             Provider = 'common'
-            ExpectedText = 'Deployment: PROD (main)'
+            ExpectedText = 'Deployment: PROD -'
             Rows = 48
             Interactions = @()
         },
@@ -306,9 +313,9 @@ function Get-CaptureScene {
             Interactions = @([pscustomobject]@{ WaitForText = 'Add a branch mapping'; Input = "`r" })
         },
         [pscustomobject]@{
-            Name = 'github-dev-confirmation'
+            Name = 'github-dev-menu'
             Provider = 'github'
-            ExpectedText = '[y/n]'
+            ExpectedText = 'DEV environment - Not configured'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" })
         },
@@ -319,7 +326,8 @@ function Get-CaptureScene {
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = "Configure a DEV Dataverse environment for branch 'main'"; Input = "y`r" }
+                [pscustomobject]@{ WaitForText = 'DEV environment - Not configured'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'DEV environment - Enabled'; Input = "$([char]27)[B`r" }
             )
         },
         [pscustomobject]@{
@@ -393,9 +401,9 @@ function Get-CaptureScene {
             Interactions = @()
         },
         [pscustomobject]@{
-            Name = 'azdo-dev-confirmation'
+            Name = 'azdo-dev-menu'
             Provider = 'azdo'
-            ExpectedText = '[y/n]'
+            ExpectedText = 'DEV environment - Not configured'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" })
         },
@@ -406,7 +414,8 @@ function Get-CaptureScene {
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = "Configure a DEV environment for branch 'main'"; Input = "`r" }
+                [pscustomobject]@{ WaitForText = 'DEV environment - Not configured'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'DEV environment - Enabled'; Input = "$([char]27)[B`r" }
             )
         },
         [pscustomobject]@{
@@ -604,6 +613,17 @@ function Get-CaptureWalkthroughStep {
             HasPromptHelp = $false
         },
         [pscustomobject]@{
+            SceneName = 'azdo-shared-repository-update'
+            ExpectedText = 'Fast-forward'
+            CaptionLines = @(
+                'Choose an update strategy only when the shared repo differs.'
+                'When it is current, setup shows no action needed.'
+            )
+            Interactions = @()
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
             SceneName = 'branch-strategy'
             ExpectedText = 'develop'
             CaptionLines = @(
@@ -641,12 +661,32 @@ function Get-CaptureWalkthroughStep {
                     Input = $enter
                 },
                 [pscustomobject]@{
-                    WaitForText = "Configure a DEV environment for branch 'main'"
-                    Input = "y`r"
+                    WaitForText = 'DEV environment - Not configured'
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'DEV environment - Enabled'
+                    Input = "$arrowDown$enter"
                     CaptureAfter = $true
                 },
                 [pscustomobject]@{
                     WaitForText = "Select the DEV environment for branch 'main'"
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Dataverse environment - Contoso Development'
+                    Input = "$arrowDown$arrowDown$arrowDown$enter"
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Credentials - WIF - Example deployment credential'
+                    Input = "$arrowDown$arrowDown$arrowDown$arrowDown$enter"
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Service account - automation@example.invalid'
                     Input = $enter
                     CaptureAfter = $true
                 },
@@ -656,12 +696,32 @@ function Get-CaptureWalkthroughStep {
                     CaptureAfter = $true
                 },
                 [pscustomobject]@{
-                    WaitForText = "Configure a DEV environment for branch 'develop'"
-                    Input = "y`r"
+                    WaitForText = 'DEV environment - Not configured'
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'DEV environment - Enabled'
+                    Input = "$arrowDown$enter"
                     CaptureAfter = $true
                 },
                 [pscustomobject]@{
                     WaitForText = "Select the DEV environment for branch 'develop'"
+                    Input = $enter
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Dataverse environment - Contoso Development'
+                    Input = "$arrowDown$arrowDown$arrowDown$enter"
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Credentials - WIF - Example deployment credential'
+                    Input = "$arrowDown$arrowDown$arrowDown$arrowDown$enter"
+                    CaptureAfter = $true
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Service account - automation@example.invalid'
                     Input = $enter
                     CaptureAfter = $true
                 },
@@ -774,7 +834,7 @@ function Get-CaptureWalkthroughStep {
         },
         [pscustomobject]@{
             SceneName = 'github-menu-existing-repository'
-            ExpectedText = 'Deployment: PROD (main)'
+            ExpectedText = 'Deployment: PROD -'
             CaptionLines = @(
                 'Available for both Azure DevOps and GitHub Actions!'
             )
@@ -1087,28 +1147,52 @@ $devEnvironmentEditor = {
     if ($provider -eq 'github') {
         Write-Host "Preparing GitHub environment 'Dev-$branchName' for the DEV Dataverse environment." -ForegroundColor Green
         Write-Host ''
-        $configurePrompt = "Configure a DEV Dataverse environment for branch '$branchName'?"
-        $selectPrompt = "Select the DEV Dataverse environment for branch '$branchName'"
-        $configureArguments = @{ Prompt = $configurePrompt; DefaultNo = $true }
+    }
+
+    # The menu scenes show every step unconfigured. Selection scenes prefill credentials
+    # and ownership so the walkthrough can finish the detail menu after picking Dataverse.
+    $initialConfiguration = if ($scene -in @('github-dev-menu', 'azdo-dev-menu')) {
+        $mapping.DevEnvironmentConfiguration
     }
     else {
-        $configurePrompt = "Configure a DEV environment for branch '$branchName'?"
-        $selectPrompt = "Select the DEV environment for branch '$branchName'"
-        $configureArguments = @{ Prompt = $configurePrompt }
+        [pscustomobject]@{
+            ShortName         = "Dev-$branchName"
+            Credentials       = $credential
+            ServiceAccountUPN = $serviceAccount
+        }
     }
 
-    if (-not (Read-YesNo @configureArguments)) {
+    $selectPrompt = if ($provider -eq 'github') {
+        "Select the DEV Dataverse environment for branch '$branchName'"
+    }
+    else {
+        "Select the DEV environment for branch '$branchName'"
+    }
+    $environmentConfiguration = Invoke-SetupEnvironmentConfigurationWizard `
+        -Title "Configure DEV environment for branch '$branchName'" `
+        -InitialConfiguration $initialConfiguration `
+        -InitialTargetName "Dev-$branchName" `
+        -TargetNameStepName 'Target name' `
+        -TargetNameIsFixed `
+        -OptionalConfiguration:(-not $mapping.DevEnvironmentConfiguration) `
+        -SelectDataverseEnvironmentAction {
+            $selectedEnvironment = Select-DataverseEnvironment -Prompt $selectPrompt
+            if ($null -eq $selectedEnvironment) {
+                return $null
+            }
+            return [pscustomobject]@{
+                FriendlyName = $selectedEnvironment.FriendlyName
+                Url = $selectedEnvironment.Endpoints['WebApplication']
+            }
+        }.GetNewClosure() `
+        -SelectCredentialsAction { $credential } `
+        -SelectServiceAccountAction { $serviceAccount } `
+        -HelpDocRelativePath $(if ($provider -eq 'github') { 'docs/setup/github-setup.md' } else { 'docs/setup/azdo-automated-setup.md' }) `
+        -HelpRef $script:ALM4DataverseRef
+    if ($null -eq $environmentConfiguration) {
         return $null
     }
-
-    $selectedEnvironment = Select-DataverseEnvironment -Prompt $selectPrompt
-    return [pscustomobject]@{
-        ShortName = "Dev-$branchName"
-        FriendlyName = $selectedEnvironment.FriendlyName
-        Url = $selectedEnvironment.Endpoints['WebApplication']
-        Credentials = $credential
-        ServiceAccountUPN = $serviceAccount
-    }
+    return $environmentConfiguration
 }.GetNewClosure()
 
 $deploymentEnvironmentEditor = {
@@ -1181,15 +1265,35 @@ switch ($scene) {
             -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
             -PromptGuidanceRef $script:ALM4DataverseRef)
     }
-    'azdo-shared-repository-version' {
-        [void](Read-YesNo `
-            -Prompt "Check and update shared repository 'ALM4Dataverse' now, before preview?" `
+    'azdo-shared-repository-update' {
+        Select-FromMenu `
+            -Title "Choose how to update shared repository 'ALM4Dataverse'" `
+            -Items @(
+                "Fast-forward 'ALM4Dataverse' to 'stable'"
+                "Leave 'ALM4Dataverse' unchanged"
+            ) `
             -PromptGuidanceLines @(
-                'This step can create, seed, fast-forward, rebase, or reset the shared repository history immediately.'
-                'Choose No to defer the update until you are ready; the preview lists the shared repository state as updated during setup.'
+                "The repository differs from the ALM4Dataverse ref 'stable'.",
+                'Rebase preserves local commits, reset force-aligns to the upstream ref, and leave keeps the current history.',
+                'The selected update runs now so the preview uses the updated template source.'
             ) `
             -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
-            -PromptGuidanceRef $script:ALM4DataverseRef)
+            -PromptGuidanceRef $script:ALM4DataverseRef | Out-Null
+    }
+    'github-shared-repository-update' {
+        Select-FromMenu `
+            -Title "Choose how to update shared workflow repository 'example-org/ALM4Dataverse'" `
+            -Items @(
+                "Fast-forward 'example-org/ALM4Dataverse' to 'stable'"
+                "Leave 'example-org/ALM4Dataverse' unchanged"
+            ) `
+            -PromptGuidanceLines @(
+                "The repository differs from the ALM4Dataverse ref 'stable'.",
+                'Rebase preserves local commits, reset force-aligns to the upstream ref, and leave keeps the current history.',
+                'The selected update runs when you choose Apply changes.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
+            -PromptGuidanceRef $script:ALM4DataverseRef | Out-Null
     }
     'github-authentication' {
         Select-FromMenu `
@@ -1358,10 +1462,18 @@ switch ($scene) {
             IsComplete = -not $isSharedRepositoryUnavailable
         }
         $sharedRepositoryVersionStep = [pscustomobject]@{
-            Name = if ($isGitHubSetup) { 'Check and update shared workflow repository version' } else { 'Check and update shared repository version' }
-            Summary = 'Upstream ref: stable'
+            Name = 'Define shared repository update strategy'
+            Summary = if ($isSharedRepositoryUnavailable) {
+                'Update strategy unavailable until a shared repository is selected'
+            }
+            elseif ($isExistingRepository) {
+                "No action needed. Already up to date with 'stable'."
+            }
+            else {
+                "Seed from 'stable' during setup"
+            }
             Action = {}
-            IsComplete = $false
+            IsComplete = -not $isSharedRepositoryUnavailable
         }
         $branchSteps = @(
             foreach ($stepName in $stepNames) {
@@ -1381,6 +1493,10 @@ switch ($scene) {
                         -InputObject $step `
                         -NotePropertyName 'SubItems' `
                         -NotePropertyValue @(Get-SetupBranchMenuItem -BranchStates @($branchStates))
+                    Add-Member `
+                        -InputObject $step `
+                        -NotePropertyName 'IsComplete' `
+                        -NotePropertyValue (Test-BranchEnvironmentConfigurationComplete -BranchStates @($branchStates))
                 }
                 $step
             }
@@ -1490,7 +1606,7 @@ switch ($scene) {
             -InitialBranchMappings @($mainBranch, $developBranch) `
             -Ref $script:ALM4DataverseRef
     }
-    { $_ -in @('github-dev-confirmation', 'github-dev-environment-selection', 'azdo-dev-confirmation') } {
+    { $_ -in @('github-dev-menu', 'github-dev-environment-selection', 'azdo-dev-menu') } {
         Select-BranchEnvironmentMapping `
             -InitialBranchMappings @($emptyMainBranch) `
             -IsNewRepository `

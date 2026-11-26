@@ -962,6 +962,25 @@ Describe 'Setup selector state transitions' {
         $script:menuAnswers.Count | Should -Be 0
     }
 
+    It 'disables a configured DEV environment from the branch editor' {
+        foreach ($answer in @('Edit a branch mapping', 'main', 'Disable DEV environment', 'Done', 'Done')) { $script:menuAnswers.Enqueue($answer) }
+        $dev = [pscustomobject]@{ ShortName = 'Dev-main'; Url = 'https://dev.example.com' }
+        $initial = @([pscustomobject]@{
+            BranchName = 'main'
+            DevEnvironmentConfiguration = $dev
+            ExistingDevEnvironment = $dev
+            Environments = @()
+        })
+
+        $result = @(Select-BranchEnvironmentMapping `
+            -InitialBranchMappings $initial `
+            -EditDevEnvironmentScriptBlock { throw 'The DEV editor must not open when disabling.' })
+
+        $result.Count | Should -Be 1
+        $result[0].DevEnvironmentConfiguration | Should -BeNullOrEmpty
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
     It 'renames a branch, assigns a target exclusively, then removes another branch' {
         foreach ($answer in @('Edit a branch mapping', 'main', 'Rename branch', 'Assign environments', 'QA - QA [not selected]', 'Done', 'Done', 'Remove a branch mapping', 'develop', 'Done')) { $script:menuAnswers.Enqueue($answer) }
         $script:textAnswers.Enqueue('release')
@@ -1028,6 +1047,7 @@ Describe 'Setup wizard navigation menu' {
         $script:wizardSelections = [System.Collections.Generic.Queue[int]]::new()
         $script:wizardMenuItems = @()
         $script:wizardDimMenuItems = @()
+        $script:wizardItemStyles = @()
         $script:wizardActionMenuItems = @()
         $script:wizardActionSectionsFirst = @()
         $script:wizardPromptGuidanceLines = @()
@@ -1035,6 +1055,7 @@ Describe 'Setup wizard navigation menu' {
         Mock Select-FromMenu {
             $script:wizardMenuItems += ,@($Items)
             $script:wizardDimMenuItems += ,@($DimItems)
+            $script:wizardItemStyles += ,$ItemStyles
             $script:wizardActionMenuItems += ,@($ActionItems)
             $script:wizardActionSectionsFirst += [bool]$ActionSectionFirst
             $script:wizardPromptGuidanceLines += ,@($PromptGuidanceLines)
@@ -1198,6 +1219,52 @@ Describe 'Setup wizard navigation menu' {
         $script:wizardSelections.Count | Should -Be 0
     }
 
+    It 'keeps optional environment steps unavailable until the enable step is completed' {
+        foreach ($selection in @(0, 1, 2, 3, 4, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $script:environmentTestCredential = [pscustomobject]@{
+            Name = 'Example DEV app'
+            ApplicationId = 'example-dev-app'
+            AuthType = 'WIF'
+        }
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title 'Configure DEV environment' `
+            -OptionalConfiguration `
+            -SelectDataverseEnvironmentAction {
+                [pscustomobject]@{ FriendlyName = 'Development'; Url = 'https://dev.example.com/' }
+            } `
+            -SelectTargetNameAction { 'Dev-main' } `
+            -SelectCredentialsAction { $script:environmentTestCredential } `
+            -SelectServiceAccountAction { 'dev@example.com' }
+
+        $result.ShortName | Should -Be 'Dev-main'
+        $result.Url | Should -Be 'https://dev.example.com'
+        $result.Credentials | Should -Be $script:environmentTestCredential
+        $result.ServiceAccountUPN | Should -Be 'dev@example.com'
+        $script:wizardMenuItems[0] | Should -Contain '• DEV environment - Not configured'
+        $script:wizardDimMenuItems[0] | Should -Contain '• Dataverse environment - Not selected'
+        $script:wizardMenuItems[1] | Should -Contain '✓ DEV environment - Enabled'
+        $script:wizardDimMenuItems[1] | Should -Not -Contain '• Dataverse environment - Not selected'
+        $script:wizardSelections.Count | Should -Be 0
+    }
+
+    It 'returns null when the optional configuration is declined from the menu' {
+        $script:wizardSelections.Enqueue(6)
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title 'Configure DEV environment' `
+            -OptionalConfiguration `
+            -SelectDataverseEnvironmentAction { throw 'Declining must not select a Dataverse environment.' } `
+            -SelectTargetNameAction { 'Dev-main' } `
+            -SelectCredentialsAction { throw 'Declining must not select credentials.' } `
+            -SelectServiceAccountAction { throw 'Declining must not select a service account.' }
+
+        $result | Should -BeNullOrEmpty
+        $script:wizardSelections.Count | Should -Be 0
+    }
+
     It 'shows branch-generated DEV target names as complete and locked' {
         Mock Select-FromMenu {
             $script:wizardMenuItems += ,@($Items)
@@ -1264,6 +1331,38 @@ Describe 'Setup wizard navigation menu' {
         $script:wizardSelections.Count | Should -Be 0
     }
 
+    It 'retains credentials when selecting the first Dataverse environment' {
+        foreach ($selection in @(0, 1, 2, 0)) {
+            $script:wizardSelections.Enqueue($selection)
+        }
+        $credential = [pscustomobject]@{ Name = 'DEV app'; ApplicationId = 'dev-app'; AuthType = 'WIF' }
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title 'Configure DEV environment' `
+            -InitialConfiguration ([pscustomobject]@{
+                Credentials = $credential
+                ServiceAccountUPN = 'dev@example.com'
+            }) `
+            -SelectDataverseEnvironmentAction {
+                [pscustomobject]@{ FriendlyName = 'Development'; Url = 'https://dev.example.com' }
+            } `
+            -SelectCredentialsAction {
+                param($environmentState)
+                $environmentState.Credentials | Should -Be $credential
+                $credential
+            } `
+            -SelectServiceAccountAction {
+                param($environmentState)
+                $environmentState.ServiceAccountUPN | Should -Be 'dev@example.com'
+                'dev@example.com'
+            }
+
+        $result.Url | Should -Be 'https://dev.example.com'
+        $result.Credentials | Should -Be $credential
+        $result.ServiceAccountUPN | Should -Be 'dev@example.com'
+        $script:wizardSelections.Count | Should -Be 0
+    }
+
     It 'shows nested step rows and passes the selected subitem target to its action' {
         $script:wizardSelections.Enqueue(2)
         $script:wizardSelections.Enqueue(0)
@@ -1304,6 +1403,8 @@ Describe 'Setup wizard navigation menu' {
             'Exit without applying changes'
         )
         $script:wizardMenuItems[1][2] | Should -Be '✓ Configure branches, dev and deployment envs'
+        $script:wizardItemStyles[0]['  main'] | Should -Be 'bold white'
+        $script:wizardItemStyles[0].ContainsKey('    DEV: Dev-main (main)') | Should -BeFalse
         $script:selectedMenuTargets.Count | Should -Be 1
         $script:selectedMenuTargets[0].Kind | Should -Be DevEnvironment
         $script:selectedMenuTargets[0].BranchName | Should -Be main
@@ -1627,19 +1728,21 @@ Describe 'Setup menu branch items' {
         $items = @(Get-SetupBranchMenuItem -BranchStates $branchStates)
         $items.Label | Should -Be @(
             'main'
-            'Deployment: PROD (main) - Dataverse: Production (https://prod.example.com); Credentials: WIF - Prod deployment; Service account: deploy@example.com'
-            'BUILD validation: Disabled (main) - select to enable'
+            'DEV: Not configured'
+            'BUILD validation: Disabled'
+            'Deployment: PROD - Production (https://prod.example.com) - WIF - Prod deployment - deploy@example.com'
             'develop'
-            'DEV: Dev-develop (develop) - Dataverse: Development (https://dev.example.com); Credentials: WIF - Dev app; Service account: dev@example.com'
-            'Deployment: TEST (develop) - Dataverse: Testing (https://test.example.com); Credentials: Secret - Test app; Service account: test@example.com'
-            'BUILD validation: Build-develop (develop) - Dataverse: Validation (https://build.example.com); Credentials: WIF - Build app; Service account: build@example.com; Baseline: @PROD'
+            'DEV: Dev-develop - Development (https://dev.example.com) - WIF - Dev app - dev@example.com'
+            'BUILD validation: Build-develop - Validation (https://build.example.com) - WIF - Build app - build@example.com - baseline @PROD'
+            'Deployment: TEST - Testing (https://test.example.com) - Secret - Test app - test@example.com'
         )
         ($items.Label -join "`n") | Should -Not -Match 'must-not-be-displayed'
-        $items.Depth | Should -Be @(1, 2, 2, 1, 2, 2, 2)
-        $items.Target.Kind | Should -Be @('Branch', 'DeploymentEnvironment', 'BuildValidation', 'Branch', 'DevEnvironment', 'DeploymentEnvironment', 'BuildValidation')
-        $items[1].Target.EnvironmentName | Should -Be PROD
+        $items.Depth | Should -Be @(1, 2, 2, 2, 1, 2, 2, 2)
+        $items.Target.Kind | Should -Be @('Branch', 'DevEnvironment', 'BuildValidation', 'DeploymentEnvironment', 'Branch', 'DevEnvironment', 'BuildValidation', 'DeploymentEnvironment')
+        $items[1].Target.EnvironmentName | Should -Be ''
         $items[2].Target.EnvironmentName | Should -Be ''
-        $items[5].Target.EnvironmentName | Should -Be TEST
+        $items[3].Target.EnvironmentName | Should -Be PROD
+        $items[7].Target.EnvironmentName | Should -Be TEST
         $items[6].Target.EnvironmentName | Should -Be 'Build-develop'
         @(Get-SetupBranchMenuItem -BranchStates @()).Count | Should -Be 0
         $emptyBranchItems = @(Get-SetupBranchMenuItem -BranchStates @(
@@ -1649,11 +1752,156 @@ Describe 'Setup menu branch items' {
                 BuildValidationEnabled = $false
             }
         ))
-        $emptyBranchItems.Count | Should -Be 2
+        $emptyBranchItems.Count | Should -Be 3
         $emptyBranchItems[0].Label | Should -Be main
         $emptyBranchItems[0].Depth | Should -Be 1
-        $emptyBranchItems[1].Label | Should -Be 'BUILD validation: Disabled (main) - select to enable'
+        $emptyBranchItems[1].Label | Should -Be 'DEV: Not configured'
         $emptyBranchItems[1].Depth | Should -Be 2
+        $emptyBranchItems[2].Label | Should -Be 'BUILD validation: Disabled'
+        $emptyBranchItems[2].Depth | Should -Be 2
+    }
+
+    It 'shows an unconfigured DEV row when DEV was declined' {
+        $items = @(Get-SetupBranchMenuItem -BranchStates @(
+            [pscustomobject]@{
+                BranchName = 'main'
+                DevEnvironmentConfiguration = $null
+                ExistingDevEnvironment = [pscustomobject]@{ ShortName = 'Dev-main'; FriendlyName = 'Development'; Url = 'https://dev.example.com'; Credentials = [pscustomobject]@{ ApplicationId = 'app'; AuthType = 'WIF' }; ServiceAccountUPN = 'dev@example.com' }
+                DeploymentEnvironments = @(
+                    [pscustomobject]@{ ShortName = 'TEST'; FriendlyName = 'Testing'; Url = 'https://test.example.com'; Credentials = $null; ServiceAccountUPN = '' }
+                )
+                BuildValidationEnabled = $false
+            }
+        ))
+
+        $items.Label | Should -Be @(
+            'main'
+            'DEV: Not configured'
+            'BUILD validation: Disabled'
+            'Deployment: TEST - Testing (https://test.example.com) - no credentials - no service account'
+        )
+        $items[1].Target.Kind | Should -Be 'DevEnvironment'
+        $items[1].Target.EnvironmentName | Should -Be ''
+        ($items.Label -join "`n") | Should -Not -Match 'Dev-main'
+
+        $legacyItems = @(Get-SetupBranchMenuItem -BranchStates @(
+            [pscustomobject]@{
+                BranchName = 'main'
+                ExistingDevEnvironment = [pscustomobject]@{ ShortName = 'Dev-main'; FriendlyName = 'Development'; Url = 'https://dev.example.com'; Credentials = [pscustomobject]@{ ApplicationId = 'app'; AuthType = 'WIF' }; ServiceAccountUPN = 'dev@example.com' }
+                DeploymentEnvironments = @()
+                BuildValidationEnabled = $false
+            }
+        ))
+        $legacyItems[1].Label | Should -Be 'DEV: Dev-main - Development (https://dev.example.com) - WIF - app - dev@example.com'
+
+        Get-SetupEnvironmentConfigurationSummary -EnvironmentConfiguration $null -IncludeBaseline |
+            Should -Be 'Dataverse environment not configured - no credentials - no service account - baseline not configured'
+        Get-SetupEnvironmentConfigurationSummary `
+            -EnvironmentConfiguration ([pscustomobject]@{
+                FriendlyName = 'Build'
+                Url = 'https://build.example.com'
+                Credentials = [pscustomobject]@{ ApplicationId = 'app'; AuthType = 'WIF' }
+                ServiceAccountUPN = 'build@example.com'
+            }) `
+            -IncludeBaseline `
+            -BaselineConfigured |
+            Should -Be 'Build (https://build.example.com) - WIF - app - build@example.com - no baseline'
+    }
+
+    It 'detects complete saved branch and environment configuration' {
+        $credential = [pscustomobject]@{ ApplicationId = 'app'; TenantId = 'example.com'; AuthType = 'WIF' }
+        $devEnvironment = [pscustomobject]@{ ShortName = 'Dev-main'; Url = 'https://dev.example.com'; Credentials = $credential; ServiceAccountUPN = 'dev@example.com' }
+        $deploymentEnvironment = [pscustomobject]@{ ShortName = 'TEST'; Url = 'https://test.example.com'; Credentials = $credential; ServiceAccountUPN = 'test@example.com' }
+        $buildEnvironment = [pscustomobject]@{ ShortName = 'Build-main'; Url = 'https://build.example.com'; Credentials = $credential; ServiceAccountUPN = 'build@example.com' }
+
+        $fullyConfiguredBranch = [pscustomobject]@{
+            BranchName = 'main'
+            DevEnvironmentConfiguration = $devEnvironment
+            DeploymentEnvironments = @($deploymentEnvironment)
+            BuildValidationEnabled = $true
+            BuildValidationEnvironmentConfiguration = $buildEnvironment
+        }
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @($fullyConfiguredBranch) |
+            Should -BeTrue
+
+        $deploymentOnlyBranch = [pscustomobject]@{
+            BranchName = 'main'
+            DevEnvironmentConfiguration = $null
+            Environments = @($deploymentEnvironment)
+        }
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @($deploymentOnlyBranch) |
+            Should -BeTrue
+
+        $existingPropertyBranch = [pscustomobject]@{
+            BranchName = 'main'
+            ExistingDevEnvironment = $devEnvironment
+            DeploymentEnvironments = @($deploymentEnvironment)
+            BuildValidationEnabled = $true
+            ExistingBuildValidationEnvironment = $buildEnvironment
+        }
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @($existingPropertyBranch) |
+            Should -BeTrue
+    }
+
+    It 'keeps saved branch configuration incomplete when the <MissingPart> is missing' -ForEach @(
+        @{ MissingPart = 'short name'; MissingField = 'ShortName' }
+        @{ MissingPart = 'Dataverse URL'; MissingField = 'Url' }
+        @{ MissingPart = 'credentials'; MissingField = 'Credentials' }
+        @{ MissingPart = 'service account'; MissingField = 'ServiceAccountUPN' }
+        @{ MissingPart = 'provider configuration'; MissingField = 'ConfigurationPending' }
+    ) {
+        $credential = [pscustomobject]@{ ApplicationId = 'app'; TenantId = 'example.com'; AuthType = 'WIF' }
+        $deploymentEnvironment = [pscustomobject]@{ ShortName = 'TEST'; Url = 'https://test.example.com'; Credentials = $credential; ServiceAccountUPN = 'test@example.com' }
+        switch ($MissingField) {
+            'ShortName' { $deploymentEnvironment.ShortName = '' }
+            'Url' { $deploymentEnvironment.Url = '' }
+            'Credentials' { $deploymentEnvironment.Credentials = $null }
+            'ServiceAccountUPN' { $deploymentEnvironment.ServiceAccountUPN = '' }
+            'ConfigurationPending' { $deploymentEnvironment | Add-Member -NotePropertyName ConfigurationPending -NotePropertyValue $true }
+        }
+        $branchStates = @(
+            [pscustomobject]@{
+                BranchName = 'main'
+                DevEnvironmentConfiguration = [pscustomobject]@{ ShortName = 'Dev-main'; Url = 'https://dev.example.com'; Credentials = $credential; ServiceAccountUPN = 'dev@example.com' }
+                DeploymentEnvironments = @($deploymentEnvironment)
+            }
+        )
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates $branchStates |
+            Should -BeFalse -Because "the deployment environment is missing $MissingPart"
+    }
+
+    It 'keeps saved branch configuration incomplete when it cannot supply a complete mapping' {
+        $credential = [pscustomobject]@{ ApplicationId = 'app'; TenantId = 'example.com'; AuthType = 'WIF' }
+        $completeEnvironment = [pscustomobject]@{ ShortName = 'TEST'; Url = 'https://test.example.com'; Credentials = $credential; ServiceAccountUPN = 'test@example.com' }
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @() |
+            Should -BeFalse
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @(
+            [pscustomobject]@{ BranchName = 'main'; DevEnvironmentConfiguration = $null; DeploymentEnvironments = @() }
+        ) | Should -BeFalse
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @(
+            [pscustomobject]@{ BranchName = 'main'; DevEnvironmentConfiguration = $null; ExistingDevEnvironment = $completeEnvironment; DeploymentEnvironments = @() }
+        ) | Should -BeFalse
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @(
+            [pscustomobject]@{ BranchName = 'main'; ExistingDevEnvironment = $completeEnvironment; DeploymentEnvironments = @() }
+        ) | Should -BeTrue
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @(
+            [pscustomobject]@{ BranchName = 'main'; DevEnvironmentConfiguration = $completeEnvironment; DeploymentEnvironments = @(); BuildValidationEnabled = $true; BuildValidationEnvironmentConfiguration = $null }
+        ) | Should -BeFalse
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @(
+            [pscustomobject]@{ BranchName = 'main'; DevEnvironmentConfiguration = $completeEnvironment; DeploymentEnvironments = @($completeEnvironment) }
+        ) -LegacyConfigurationConversion ([pscustomobject]@{ Status = 'Failed' }) | Should -BeFalse
+
+        Test-BranchEnvironmentConfigurationComplete -BranchStates @(
+            [pscustomobject]@{ BranchName = 'main'; DevEnvironmentConfiguration = $completeEnvironment; DeploymentEnvironments = @($completeEnvironment) }
+            [pscustomobject]@{ BranchName = 'develop'; DevEnvironmentConfiguration = $null; DeploymentEnvironments = @($completeEnvironment) }
+        ) | Should -BeFalse
     }
 
     It 'apologises for a failed legacy conversion and stays silent when none is needed' {
@@ -2118,6 +2366,30 @@ Describe 'Shared setup prompt and rendering contracts' {
         $script:dimPromptChoices | Should -Be @('Available step', '[grey]Locked step[/]')
     }
 
+    It 'styles nested item levels and lets dim choices take precedence' {
+        $script:styledPromptChoices = @()
+        Mock Show-SetupPromptWithInterruptHandling {
+            $script:styledPromptChoices = @($Prompt.Choices)
+            $script:styledPromptChoices | Where-Object { $_ -like '*Locked step*' } | Select-Object -First 1
+        }
+
+        Select-FromMenu `
+            -Title Test `
+            -Items @('main', '  DEV: Dev-main', 'Locked step') `
+            -ItemStyles @{
+                'main' = 'bold white'
+                'Locked step' = 'bold white'
+            } `
+            -DimItems @('Locked step') |
+            Should -Be 2
+
+        $script:styledPromptChoices | Should -Be @(
+            '[bold white]main[/]'
+            '  DEV: Dev-main'
+            '[grey]Locked step[/]'
+        )
+    }
+
     It 'supports searchable menus and requests back navigation from later wizard steps' {
         $items = @(1..10 | ForEach-Object { "Item $_" })
         [Spectre.Console.AnsiConsole]::Answers.Enqueue('Item 10')
@@ -2573,10 +2845,16 @@ Describe 'Setup configuration and validation helpers' {
             [pscustomobject]@{
                 BranchName = 'feature'
                 DevEnvironmentConfiguration = $null
+                ExistingDevEnvironment = [pscustomobject]@{ ShortName = 'Dev-feature' }
                 DeploymentEnvironments = @()
                 BuildValidationEnabled = $false
                 BuildValidationEnvironmentConfiguration = $null
                 BuildValidationBaselineRelease = ''
+            }
+            [pscustomobject]@{
+                BranchName = 'legacy'
+                ExistingDevEnvironment = [pscustomobject]@{ ShortName = 'Dev-legacy' }
+                DeploymentEnvironments = @()
             }
         )
 
@@ -2591,8 +2869,10 @@ Describe 'Setup configuration and validation helpers' {
         $settings.branches.main.deploymentEnvironments | Should -Be @('TEST')
         $settings.branches.main.buildValidation.environmentName | Should -Be Build-main
         $settings.branches.main.buildValidation.baselineRelease | Should -Be '@TEST'
+        $settings.branches.feature.developmentEnvironment | Should -Be ''
         $settings.branches.feature.buildValidation.environmentName | Should -Be ''
         $settings.branches.feature.buildValidation.baselineRelease | Should -Be ''
+        $settings.branches.legacy.developmentEnvironment | Should -Be Dev-legacy
     }
 
     It 'updates provider and branch setup settings while preserving unrelated configuration' {
@@ -2667,12 +2947,14 @@ Describe 'Setup configuration and validation helpers' {
         }
     }
 
-    It 'reads optional hashtable and object values under strict mode without losing false or zero' {
+    It 'reads optional dictionary and object values under strict mode without losing false or zero' {
         Set-StrictMode -Version Latest
         Get-OptionalObjectPropertyValue -InputObject $null -PropertyName key | Should -BeNullOrEmpty
         Get-OptionalObjectPropertyValue -InputObject @{} -PropertyName key | Should -BeNullOrEmpty
         Get-OptionalObjectPropertyValue -InputObject ([pscustomobject]@{ other = 1 }) -PropertyName key | Should -BeNullOrEmpty
         Get-OptionalObjectPropertyValue -InputObject @{ key = $false } -PropertyName key | Should -BeFalse
+        Get-OptionalObjectPropertyValue -InputObject ([ordered]@{ key = 'ordered' }) -PropertyName key | Should -Be ordered
+        Get-OptionalObjectPropertyValue -InputObject ([ordered]@{ other = 1 }) -PropertyName key | Should -BeNullOrEmpty
         Get-OptionalObjectPropertyValue -InputObject ([pscustomobject]@{ key = 0 }) -PropertyName key | Should -Be 0
         ConvertTo-SpectreMarkupLiteral '[value]' | Should -Be '[[value]]'
         ConvertTo-SpectreMarkupLiteral $null | Should -Be ''

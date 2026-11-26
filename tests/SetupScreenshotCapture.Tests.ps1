@@ -27,7 +27,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'defines all documented setup scenes and waits for visible content' {
         $scenes = @(Get-CaptureScene)
 
-        $scenes.Count | Should -Be 45
+        $scenes.Count | Should -Be 46
         foreach ($scene in $scenes) {
             $scene.Name | Should -Not -BeNullOrEmpty
             $scene.Provider | Should -BeIn @('common', 'github', 'azdo')
@@ -50,7 +50,8 @@ Describe 'Setup screenshot capture infrastructure' {
         $scenes.Name | Should -Contain 'azdo-main-repository-selection'
         $scenes.Name | Should -Contain 'azdo-shared-repository-selection'
         $scenes.Name | Should -Contain 'azdo-extension-mode'
-        $scenes.Name | Should -Contain 'azdo-shared-repository-version'
+        $scenes.Name | Should -Contain 'azdo-shared-repository-update'
+        $scenes.Name | Should -Contain 'github-shared-repository-update'
         $scenes.Name | Should -Contain 'github-authentication'
         $scenes.Name | Should -Contain 'github-application-repository'
         $scenes.Name | Should -Contain 'github-shared-workflow-repository'
@@ -60,14 +61,16 @@ Describe 'Setup screenshot capture infrastructure' {
         $scenes.Name | Should -Contain 'github-apply-changes'
         $scenes.Name | Should -Contain 'github-build-validation'
         $scenes.Name | Should -Contain 'azdo-build-validation'
+        $scenes.Name | Should -Contain 'github-dev-menu'
+        $scenes.Name | Should -Contain 'azdo-dev-menu'
         ($scenes | Where-Object Name -eq 'github-menu-new-repository').ExpectedText |
             Should -Be 'main'
         ($scenes | Where-Object Name -eq 'azdo-menu-new-repository').ExpectedText |
             Should -Be 'main'
         ($scenes | Where-Object Name -eq 'github-menu-existing-repository').ExpectedText |
-            Should -Be 'Deployment: PROD (main)'
+            Should -Be 'Deployment: PROD -'
         ($scenes | Where-Object Name -eq 'azdo-menu-existing-repository').ExpectedText |
-            Should -Be 'Deployment: PROD (main)'
+            Should -Be 'Deployment: PROD -'
         ($scenes | Where-Object Name -eq 'github-menu-unavailable-shared-repository').ExpectedText |
             Should -Be 'Unavailable:'
         ($scenes | Where-Object Name -eq 'azdo-menu-unavailable-shared-repository').ExpectedText |
@@ -100,6 +103,7 @@ Describe 'Setup screenshot capture infrastructure' {
             'azdo-project-selection'
             'azdo-main-repository-selection'
             'azdo-shared-repository-selection'
+            'azdo-shared-repository-update'
             'branch-strategy'
             'azdo-dev-environment-selection'
             'azdo-deployment-short-name'
@@ -161,7 +165,7 @@ Describe 'Setup screenshot capture infrastructure' {
         $applyStep = $steps | Where-Object SceneName -EQ 'azdo-apply-changes'
         $applyStep.ExpectedText | Should -Be 'Azure DevOps ALM4Dataverse setup menu'
         $existingMenuStep = $steps | Where-Object SceneName -EQ 'github-menu-existing-repository'
-        $existingMenuStep.ExpectedText | Should -Be 'Deployment: PROD (main)'
+        $existingMenuStep.ExpectedText | Should -Be 'Deployment: PROD -'
         $reviewStep.Interactions[0].WaitForText | Should -Be 'Modified: alm-config.psd1'
         ($steps[-1].CaptionLines -join ' ') | Should -Match 'GitHub Actions'
     }
@@ -689,7 +693,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'runs scene listing without installing or loading the capture runtime' {
         $listedScenes = @(& (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1') -ListScenes)
 
-        $listedScenes.Count | Should -Be 45
+        $listedScenes.Count | Should -Be 46
         $listedScenes | Should -Contain 'branch-mapping'
         $listedScenes | Should -Contain 'environment-detail-menu'
         $listedScenes | Should -Contain 'setup-mode-choice'
@@ -708,7 +712,8 @@ Describe 'Setup screenshot capture infrastructure' {
         $listedScenes | Should -Contain 'azdo-setup-change-review'
         $listedScenes | Should -Contain 'setup-change-side-by-side-diff'
         $listedScenes | Should -Contain 'azdo-extension-mode'
-        $listedScenes | Should -Contain 'azdo-shared-repository-version'
+        $listedScenes | Should -Contain 'azdo-shared-repository-update'
+        $listedScenes | Should -Contain 'github-shared-repository-update'
         $listedScenes | Should -Contain 'github-authentication'
         $listedScenes | Should -Contain 'github-application-repository'
         $listedScenes | Should -Contain 'github-shared-workflow-repository'

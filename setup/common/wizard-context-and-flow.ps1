@@ -378,8 +378,10 @@ function Invoke-SetupWizard {
         LockAfterCompletion prevents repeating one-time setup actions. Summary may
         be a string or scriptblock; scriptblocks are evaluated each time the menu is
         rendered. SubItems may be a scriptblock returning ordered objects with Label,
-        Depth, and Target properties. These rows appear indented beneath their parent,
-        and selecting one passes Target as the Action's first argument. Steps may provide
+        Depth, and Target properties. These rows appear indented beneath their parent;
+        depth 1 branches use bright white, while deeper environment rows keep the
+        standard menu color. Selecting one passes Target as the Action's first argument.
+        Steps may provide
         HelpDocRelativePath and HelpRef to select their own help page and documentation
         revision. InputSignature may be a scriptblock or value identifying the inputs a
         completed step depends on; when an earlier step changes, later completed steps
@@ -395,6 +397,9 @@ function Invoke-SetupWizard {
         When supplied, adds an Apply changes action in a separate menu group. It is
         ready only after all setup steps are complete. Failed applies are reported and
         return to the menu without discarding step state.
+    .PARAMETER CancelActionName
+        Adds an always-available action that returns null without completing a step.
+        Use it for optional nested editors that need an explicit decline.
     .PARAMETER PreApplyAction
         Optional callback invoked immediately before ApplyAction, after the wizard
         context switches to the apply step. Use it to reconcile resources that setup
@@ -439,6 +444,7 @@ function Invoke-SetupWizard {
         [Parameter()][string]$PreviewActionName = 'Preview changes',
         [Parameter()][scriptblock]$ApplyAction,
         [Parameter()][string]$ApplyActionName = 'Apply changes',
+        [Parameter()][string]$CancelActionName,
         [Parameter()][scriptblock]$PreApplyAction,
         [Parameter()][switch]$IsNewRepository,
         [Parameter()][switch]$RequireSequentialSteps,
@@ -462,18 +468,22 @@ function Invoke-SetupWizard {
 
     if ($ApplyAction) {
         $previewActionIndex = -1
-        $applyActionIndex = $Steps.Count
+        $cancelActionIndex = -1
         $exitActionName = 'Exit without applying changes'
         $menuStepNames = @($stepNames)
         if ($PreviewAction) {
-            $previewActionIndex = $Steps.Count
-            $applyActionIndex++
+            $previewActionIndex = $menuStepNames.Count
             $menuStepNames += $PreviewActionName
         }
+        $applyActionIndex = $menuStepNames.Count
         $menuStepNames += $ApplyActionName
+        if (-not [string]::IsNullOrWhiteSpace($CancelActionName)) {
+            $cancelActionIndex = $menuStepNames.Count
+            $menuStepNames += $CancelActionName
+        }
         $exitActionIndex = -1
         if (-not $ReturnToCaller) {
-            $exitActionIndex = $applyActionIndex + 1
+            $exitActionIndex = $menuStepNames.Count
             $menuStepNames += $exitActionName
         }
         $completedSteps = [bool[]]::new($Steps.Count)
@@ -504,6 +514,7 @@ function Invoke-SetupWizard {
                 $stepMenuIndexes = @()
                 $stepMenuTargets = @()
                 $dimMenuItems = @()
+                $subItemStyles = @{}
                 $hasSubItems = $false
                 for ($stepIndex = 0; $stepIndex -lt $Steps.Count; $stepIndex++) {
                     # Spectre's menu search re-parses escaped brackets when it highlights
@@ -589,9 +600,16 @@ function Invoke-SetupWizard {
                             throw "Setup step '$($stepNames[$stepIndex])' returned an invalid SubItems entry."
                         }
 
-                        $stepMenuItems += ('  ' * $subItemDepth) + $subItemLabel
+                        $subItemMenuText = ('  ' * $subItemDepth) + $subItemLabel
+                        $stepMenuItems += $subItemMenuText
+                        # Branches are the bright top level of a nested group; their
+                        # environment rows use the standard menu color so the selection
+                        # highlight remains unambiguous.
+                        if ($subItemDepth -eq 1) {
+                            $subItemStyles[$subItemMenuText] = 'bold white'
+                        }
                         if ($isStepUnavailable) {
-                            $dimMenuItems += ('  ' * $subItemDepth) + $subItemLabel
+                            $dimMenuItems += $subItemMenuText
                         }
                         $stepMenuIndexes += $stepIndex
                         $stepMenuTargets += [pscustomobject]@{
@@ -620,6 +638,9 @@ function Invoke-SetupWizard {
                     $actionMenuItems += $previewMenuLabel
                 }
                 $actionMenuItems += $applyMenuLabel
+                if ($cancelActionIndex -ge 0) {
+                    $actionMenuItems += $CancelActionName
+                }
                 if (-not $ReturnToCaller) {
                     $actionMenuItems += $exitActionName
                 }
@@ -631,6 +652,11 @@ function Invoke-SetupWizard {
                     if ($PreviewAction) {
                         $menuItems += $previewMenuLabel
                         $menuStepIndexes += $previewActionIndex
+                        $menuActionTargets += [pscustomobject]@{ HasTarget = $false; Target = $null }
+                    }
+                    if ($cancelActionIndex -ge 0) {
+                        $menuItems += $CancelActionName
+                        $menuStepIndexes += $cancelActionIndex
                         $menuActionTargets += [pscustomobject]@{ HasTarget = $false; Target = $null }
                     }
                     if (-not $ReturnToCaller) {
@@ -655,6 +681,11 @@ function Invoke-SetupWizard {
                     $menuItems += $applyMenuLabel
                     $menuStepIndexes += $applyActionIndex
                     $menuActionTargets += [pscustomobject]@{ HasTarget = $false; Target = $null }
+                    if ($cancelActionIndex -ge 0) {
+                        $menuItems += $CancelActionName
+                        $menuStepIndexes += $cancelActionIndex
+                        $menuActionTargets += [pscustomobject]@{ HasTarget = $false; Target = $null }
+                    }
                     if (-not $ReturnToCaller) {
                         $menuItems += $exitActionName
                         $menuStepIndexes += $exitActionIndex
@@ -681,6 +712,9 @@ function Invoke-SetupWizard {
                     $promptGuidanceLines += "$PreviewActionName is optional, is available after every setup step is complete, and does not complete a setup step."
                 }
                 $promptGuidanceLines += "$ApplyActionName is available after every setup step has been completed."
+                if ($cancelActionIndex -ge 0) {
+                    $promptGuidanceLines += "Choose $CancelActionName to return without completing this configuration."
+                }
                 if (-not $ReturnToCaller) {
                     $promptGuidanceLines += "$exitActionName asks for confirmation before ending setup without applying the pending changes."
                 }
@@ -692,6 +726,7 @@ function Invoke-SetupWizard {
                     -Title "$Title menu" `
                     -Items $menuItems `
                     -DimItems $dimMenuItems `
+                    -ItemStyles $subItemStyles `
                     -ActionItems $actionMenuItems `
                     -ActionSectionTitle '---' `
                     -ActionSectionFirst:$allStepsCompleted `
@@ -737,6 +772,10 @@ function Invoke-SetupWizard {
                     }
 
                     continue
+                }
+
+                if ($selectedStepIndex -eq $cancelActionIndex) {
+                    return $null
                 }
 
                 if ($selectedStepIndex -eq $applyActionIndex) {

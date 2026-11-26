@@ -412,9 +412,143 @@ function Test-BranchEnvironmentMappingDuplicate {
     return $false
 }
 
+function Get-BranchSetupDevEnvironment {
+    <#
+    .SYNOPSIS
+        Reads the DEV environment a branch setup record currently configures.
+    .DESCRIPTION
+        Returns DevEnvironmentConfiguration even when it is explicitly null, because a
+        saved null records that DEV was declined. ExistingDevEnvironment is discovery
+        metadata and is returned only when the record omits the editable property.
+    #>
+    [CmdletBinding()]
+    [OutputType([object])]
+    param(
+        [Parameter()][AllowNull()][object]$BranchState
+    )
+
+    if ($null -eq $BranchState) {
+        return $null
+    }
+
+    $hasDevEnvironmentProperty = if ($BranchState -is [System.Collections.IDictionary]) {
+        $BranchState.Contains('DevEnvironmentConfiguration')
+    }
+    else {
+        @($BranchState.PSObject.Properties.Name) -contains 'DevEnvironmentConfiguration'
+    }
+    if ($hasDevEnvironmentProperty) {
+        return Get-OptionalObjectPropertyValue -InputObject $BranchState -PropertyName 'DevEnvironmentConfiguration'
+    }
+
+    return Get-OptionalObjectPropertyValue -InputObject $BranchState -PropertyName 'ExistingDevEnvironment'
+}
+
+function Test-BranchEnvironmentConfigurationComplete {
+    <#
+    .SYNOPSIS
+        Tests whether saved branch and environment records need no further editing.
+    .DESCRIPTION
+        Guided setup uses this for an existing repository so its branch and environment
+        step starts complete when the saved configuration already contains every value
+        the step's editors would otherwise ask for. Returns false when the legacy
+        conversion failed because the mappings are unknown, no branch is present, a
+        branch has neither a DEV nor a deployment environment, or an environment still
+        needs input. Deployment targets may be assigned to only one branch. A declared
+        DEV, deployment or enabled BUILD-validation environment is complete only with a
+        short name, Dataverse URL, credentials and service account, and without pending
+        provider configuration.
+    .PARAMETER BranchStates
+        Saved branch records. Each may expose DevEnvironmentConfiguration,
+        DeploymentEnvironments or Environments, and BuildValidationEnabled with
+        BuildValidationEnvironmentConfiguration or ExistingBuildValidationEnvironment.
+        ExistingDevEnvironment is used only when DevEnvironmentConfiguration is omitted.
+    .PARAMETER LegacyConfigurationConversion
+        Optional legacy conversion result. Only Status Failed makes the state incomplete.
+    #>
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter()][AllowNull()][object[]]$BranchStates,
+        [Parameter()][AllowNull()][object]$LegacyConfigurationConversion
+    )
+
+    $conversionStatus = [string](Get-OptionalObjectPropertyValue -InputObject $LegacyConfigurationConversion -PropertyName 'Status')
+    if ($conversionStatus -eq 'Failed') {
+        return $false
+    }
+
+    $branchStates = @($BranchStates | Where-Object { $null -ne $_ })
+    if ($branchStates.Count -eq 0) {
+        return $false
+    }
+
+    $branchMappingsForValidation = @()
+    foreach ($branchState in $branchStates) {
+        $branchName = [string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BranchName')
+        if ([string]::IsNullOrWhiteSpace($branchName)) {
+            return $false
+        }
+
+        $devEnvironment = Get-BranchSetupDevEnvironment -BranchState $branchState
+
+        $deploymentEnvironmentsValue = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments'
+        if ($null -eq $deploymentEnvironmentsValue) {
+            $deploymentEnvironmentsValue = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'Environments'
+        }
+        $deploymentEnvironments = @($deploymentEnvironmentsValue | Where-Object { $null -ne $_ })
+
+        if (-not $devEnvironment -and $deploymentEnvironments.Count -eq 0) {
+            return $false
+        }
+
+        $branchMappingsForValidation += [pscustomobject]@{
+            BranchName   = $branchName
+            Environments = @($deploymentEnvironments)
+        }
+
+        $environmentsToCheck = @()
+        if ($devEnvironment) {
+            $environmentsToCheck += $devEnvironment
+        }
+        $environmentsToCheck += $deploymentEnvironments
+        if ([bool](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnabled')) {
+            $buildValidationEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationEnvironmentConfiguration'
+            if (-not $buildValidationEnvironment) {
+                $buildValidationEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'ExistingBuildValidationEnvironment'
+            }
+            if (-not $buildValidationEnvironment) {
+                return $false
+            }
+            $environmentsToCheck += $buildValidationEnvironment
+        }
+
+        foreach ($environment in $environmentsToCheck) {
+            if ([string]::IsNullOrWhiteSpace([string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ShortName'))) {
+                return $false
+            }
+            if ([string]::IsNullOrWhiteSpace([string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'Url'))) {
+                return $false
+            }
+            if ($null -eq (Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'Credentials')) {
+                return $false
+            }
+            if ([string]::IsNullOrWhiteSpace([string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ServiceAccountUPN'))) {
+                return $false
+            }
+            if ([bool](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ConfigurationPending')) {
+                return $false
+            }
+        }
+    }
+
+    return -not (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappingsForValidation)
+}
+
 function Show-BranchEnvironmentMappingTable {
-    # Prefer configured DEV details over discovered existing DEV details. This is
-    # a display projection only; absent DEV labels render as <none>, not an error.
+    # Only the editable DEV configuration is displayed; discovery metadata must not
+    # show a DEV environment after the user declined one for the branch. This is a
+    # display projection only; an absent DEV renders as <none>, not an error.
     [CmdletBinding()]
     param(
         [Parameter()][array]$BranchMappings
@@ -433,13 +567,7 @@ function Show-BranchEnvironmentMappingTable {
         $branchName = [string]$mapping.BranchName
         $devEnvironmentLabel = '<none>'
 
-        $devEnvironment = $null
-        if ($mapping.PSObject.Properties.Name -contains 'DevEnvironmentConfiguration' -and $mapping.DevEnvironmentConfiguration) {
-            $devEnvironment = $mapping.DevEnvironmentConfiguration
-        }
-        elseif ($mapping.PSObject.Properties.Name -contains 'ExistingDevEnvironment' -and $mapping.ExistingDevEnvironment) {
-            $devEnvironment = $mapping.ExistingDevEnvironment
-        }
+        $devEnvironment = Get-BranchSetupDevEnvironment -BranchState $mapping
 
         if ($devEnvironment) {
             if ($devEnvironment.PSObject.Properties.Name -contains 'ShortName' -and -not [string]::IsNullOrWhiteSpace([string]$devEnvironment.ShortName)) {
@@ -490,10 +618,12 @@ function Show-BranchEnvironmentMappingTable {
 function Get-SetupEnvironmentConfigurationSummary {
     <#
     .SYNOPSIS
-        Summarizes environment configuration without displaying secrets.
+        Summarizes environment configuration for a setup menu row.
     .DESCRIPTION
-        Includes the selected Dataverse environment, credential metadata, service
-        account and, when requested, the BUILD baseline selection.
+        Joins the selected Dataverse environment, credential metadata, service account
+        and, when requested, the BUILD baseline without field-name prefixes or secrets.
+        Present values are shown as-is; missing values are described, for example
+        'no credentials', so a hyphen-separated list remains readable.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -516,7 +646,7 @@ function Get-SetupEnvironmentConfigurationSummary {
         $environmentUrl
     }
     else {
-        'not configured'
+        'Dataverse environment not configured'
     }
 
     $credentials = Get-OptionalObjectPropertyValue -InputObject $EnvironmentConfiguration -PropertyName 'Credentials'
@@ -524,7 +654,7 @@ function Get-SetupEnvironmentConfigurationSummary {
         [string](Get-CredentialSummaryText -Credentials $credentials)
     }
     else {
-        'not configured'
+        'no credentials'
     }
     if ([string]::IsNullOrWhiteSpace($credentialSummary)) {
         $credentialSummary = 'configured'
@@ -532,28 +662,28 @@ function Get-SetupEnvironmentConfigurationSummary {
 
     $serviceAccount = [string](Get-OptionalObjectPropertyValue -InputObject $EnvironmentConfiguration -PropertyName 'ServiceAccountUPN')
     if ([string]::IsNullOrWhiteSpace($serviceAccount)) {
-        $serviceAccount = 'not configured'
+        $serviceAccount = 'no service account'
     }
 
     $summaryParts = @(
-        "Dataverse: $dataverseEnvironment"
-        "Credentials: $credentialSummary"
-        "Service account: $serviceAccount"
+        $dataverseEnvironment
+        $credentialSummary
+        $serviceAccount
     )
     if ($IncludeBaseline) {
         $baselineSummary = if (-not $BaselineConfigured) {
-            'not configured'
+            'baseline not configured'
         }
         elseif ([string]::IsNullOrWhiteSpace($BaselineRelease)) {
-            'none'
+            'no baseline'
         }
         else {
-            $BaselineRelease
+            "baseline $BaselineRelease"
         }
-        $summaryParts += "Baseline: $baselineSummary"
+        $summaryParts += $baselineSummary
     }
 
-    return ($summaryParts -join '; ')
+    return ($summaryParts -join ' - ')
 }
 
 function Invoke-SetupEnvironmentConfigurationWizard {
@@ -564,9 +694,10 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         Uses a nested wizard so Dataverse selection, editable target names,
         credentials, service-account ownership, and an optional BUILD baseline
         have independent completion summaries. A generated target name is locked
-        and pre-completed. Changing the Dataverse URL clears credentials and
+        and pre-completed. Changing a configured Dataverse URL clears credentials and
         ownership selected for a different environment. Done returns the updated
-        state; cancelling returns null to the calling editor.
+        state; cancelling returns null to the calling editor. OptionalConfiguration
+        adds a leading enable step whose completion unlocks the remaining steps.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectDataverseEnvironmentAction', Justification = 'Captured by the nested Dataverse-environment step.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectCredentialsAction', Justification = 'Captured by the nested credential step.')]
@@ -587,6 +718,7 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         [Parameter()][scriptblock]$SelectBaselineAction,
         [Parameter()][AllowEmptyString()][string]$InitialBaselineRelease = '',
         [Parameter()][switch]$BaselineConfigured,
+        [Parameter()][switch]$OptionalConfiguration,
         [Parameter()][string]$HelpDocRelativePath,
         [Parameter()][string]$HelpRef
     )
@@ -612,6 +744,22 @@ function Invoke-SetupEnvironmentConfigurationWizard {
     }
 
     $steps = [System.Collections.Generic.List[object]]::new()
+    if ($OptionalConfiguration) {
+        $optionalConfigurationState = [pscustomobject]@{ Enabled = $false }
+        $steps.Add([pscustomobject]@{
+            Name = 'DEV environment'
+            IsComplete = $false
+            Summary = {
+                if ($optionalConfigurationState.Enabled) {
+                    return 'Enabled'
+                }
+                return 'Not configured'
+            }.GetNewClosure()
+            Action = {
+                $optionalConfigurationState.Enabled = $true
+            }.GetNewClosure()
+        })
+    }
     $steps.Add([pscustomobject]@{
         Name = $DataverseEnvironmentStepName
         IsComplete = -not [string]::IsNullOrWhiteSpace($environmentState.Url)
@@ -635,7 +783,10 @@ function Invoke-SetupEnvironmentConfigurationWizard {
                 & $requestSetupWizardBackCommand
             }
 
-            if ($selectedUrl -ine $environmentState.Url) {
+            if (
+                -not [string]::IsNullOrWhiteSpace($environmentState.Url) -and
+                $selectedUrl -ine $environmentState.Url
+            ) {
                 $environmentState.Credentials = $null
                 $environmentState.ServiceAccountUPN = ''
             }
@@ -738,11 +889,13 @@ function Invoke-SetupEnvironmentConfigurationWizard {
     }
 
     $applyAction = { return $environmentState }.GetNewClosure()
+    $cancelActionName = if ($OptionalConfiguration) { 'Do not configure DEV environment' } else { '' }
     return Invoke-SetupWizard `
         -Title $Title `
         -Steps @($steps.ToArray()) `
         -ApplyAction $applyAction `
         -ApplyActionName 'Done' `
+        -CancelActionName $cancelActionName `
         -RequireSequentialSteps `
         -ReturnToCaller `
         -HelpDocRelativePath $HelpDocRelativePath `
@@ -754,8 +907,13 @@ function Get-SetupBranchMenuItem {
     .SYNOPSIS
         Creates selectable branch and environment rows for the guided setup menu.
     .DESCRIPTION
-        Emits each configured branch and its DEV, deployment, and enabled BUILD-validation
-        environments as indented menu entries with targets for focused editing.
+        Emits each configured branch followed by its DEV environment, BUILD validation
+        and deployment targets, in that order, as indented menu entries with targets for
+        focused editing. A branch without DEV gets a selectable 'DEV: Not configured' row
+        that opens the enable step. ExistingDevEnvironment is discovery metadata and is
+        used only when a record omits DevEnvironmentConfiguration, so a saved decision to
+        have no DEV environment is not shown as configured. Deployment targets keep
+        configured order.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -783,10 +941,7 @@ function Get-SetupBranchMenuItem {
             }
         }
 
-        $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DevEnvironmentConfiguration'
-        if (-not $devEnvironment) {
-            $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'ExistingDevEnvironment'
-        }
+        $devEnvironment = Get-BranchSetupDevEnvironment -BranchState $branchState
         if ($devEnvironment) {
             $devName = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'ShortName')
             if ([string]::IsNullOrWhiteSpace($devName)) {
@@ -797,7 +952,7 @@ function Get-SetupBranchMenuItem {
             }
             $devSummary = Get-SetupEnvironmentConfigurationSummary -EnvironmentConfiguration $devEnvironment
             $menuItems += [pscustomobject]@{
-                Label  = "DEV: $devName ($branchName) - $devSummary"
+                Label  = "DEV: $devName - $devSummary"
                 Depth  = 2
                 Target = [pscustomobject]@{
                     Kind            = 'DevEnvironment'
@@ -806,33 +961,15 @@ function Get-SetupBranchMenuItem {
                 }
             }
         }
-
-        $deploymentEnvironments = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments'
-        if ($null -eq $deploymentEnvironments) {
-            $deploymentEnvironments = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'Environments'
-        }
-        $deploymentIndex = 0
-        foreach ($environment in @($deploymentEnvironments)) {
-            if ($null -eq $environment) {
-                continue
-            }
-
-            $deploymentIndex++
-            $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ShortName')
-            if ([string]::IsNullOrWhiteSpace($environmentName)) {
-                $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'FriendlyName')
-            }
-            if ([string]::IsNullOrWhiteSpace($environmentName)) {
-                $environmentName = "Environment $deploymentIndex"
-            }
-            $environmentSummary = Get-SetupEnvironmentConfigurationSummary -EnvironmentConfiguration $environment
+        else {
+            # An empty target name opens the DEV editor's enable step.
             $menuItems += [pscustomobject]@{
-                Label  = "Deployment: $environmentName ($branchName) - $environmentSummary"
+                Label  = 'DEV: Not configured'
                 Depth  = 2
                 Target = [pscustomobject]@{
-                    Kind            = 'DeploymentEnvironment'
+                    Kind            = 'DevEnvironment'
                     BranchName      = $branchName
-                    EnvironmentName = $environmentName
+                    EnvironmentName = ''
                 }
             }
         }
@@ -859,7 +996,7 @@ function Get-SetupBranchMenuItem {
                 -BaselineRelease ([string](Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'BuildValidationBaselineRelease')) `
                 -BaselineConfigured
             $menuItems += [pscustomobject]@{
-                Label  = "BUILD validation: $buildValidationName ($branchName) - $buildValidationSummary"
+                Label  = "BUILD validation: $buildValidationName - $buildValidationSummary"
                 Depth  = 2
                 Target = [pscustomobject]@{
                     Kind            = 'BuildValidation'
@@ -871,12 +1008,43 @@ function Get-SetupBranchMenuItem {
         else {
             # An empty target name opens the BUILD editor's enable prompt rather than the environment editor.
             $menuItems += [pscustomobject]@{
-                Label  = "BUILD validation: Disabled ($branchName) - select to enable"
+                Label  = 'BUILD validation: Disabled'
                 Depth  = 2
                 Target = [pscustomobject]@{
                     Kind            = 'BuildValidation'
                     BranchName      = $branchName
                     EnvironmentName = ''
+                }
+            }
+        }
+
+        # Deployment targets keep promotion order and follow the branch's DEV/BUILD rows.
+        $deploymentEnvironments = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments'
+        if ($null -eq $deploymentEnvironments) {
+            $deploymentEnvironments = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'Environments'
+        }
+        $deploymentIndex = 0
+        foreach ($environment in @($deploymentEnvironments)) {
+            if ($null -eq $environment) {
+                continue
+            }
+
+            $deploymentIndex++
+            $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'ShortName')
+            if ([string]::IsNullOrWhiteSpace($environmentName)) {
+                $environmentName = [string](Get-OptionalObjectPropertyValue -InputObject $environment -PropertyName 'FriendlyName')
+            }
+            if ([string]::IsNullOrWhiteSpace($environmentName)) {
+                $environmentName = "Environment $deploymentIndex"
+            }
+            $environmentSummary = Get-SetupEnvironmentConfigurationSummary -EnvironmentConfiguration $environment
+            $menuItems += [pscustomobject]@{
+                Label  = "Deployment: $environmentName - $environmentSummary"
+                Depth  = 2
+                Target = [pscustomobject]@{
+                    Kind            = 'DeploymentEnvironment'
+                    BranchName      = $branchName
+                    EnvironmentName = $environmentName
                 }
             }
         }

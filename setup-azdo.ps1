@@ -502,6 +502,12 @@ $script:sharedRepositoryState = [ordered]@{
     ClonePath = $null
     UsesLocalCopyRoot = [bool]$localCopyRoot
     ValidationError = [string](Get-OptionalObjectPropertyValue -InputObject $initialization -PropertyName 'SharedRepositorySelectionError')
+    UpdateKind = 'Unknown'
+    PendingUpdate = $false
+    UpdateStatus = ''
+    UpdateStrategy = ''
+    CanFastForward = $false
+    IsAhead = $false
     CreatedDuringSetup = $false
     VersionUpdatedDuringSetup = $false
 }
@@ -517,6 +523,58 @@ if ([string]::IsNullOrWhiteSpace($sharedRepoName)) {
 $sharedRepositoryRef = [string]$script:sharedRepositoryState.Ref
 $copyRoot = [string]$script:sharedRepositoryState.CopyRoot
 $sharedRepoClone = [string]$script:sharedRepositoryState.ClonePath
+
+# The comparison runs automatically on entry for existing repositories and after the
+# shared repository changes. Selecting the strategy step refreshes it again.
+$refreshSharedRepositoryUpdateState = {
+    if ($ApplyConfig) {
+        return
+    }
+
+    $selectionError = [string]$script:sharedRepositoryState.ValidationError
+    $repository = $script:sharedRepositoryState.Repository
+    if (-not [string]::IsNullOrWhiteSpace($selectionError) -or $null -eq $repository) {
+        $script:sharedRepositoryState.UpdateKind = 'Unavailable'
+        $script:sharedRepositoryState.PendingUpdate = $false
+        $script:sharedRepositoryState.UpdateStatus = if ([string]::IsNullOrWhiteSpace($selectionError)) {
+            'No shared repository is configured.'
+        }
+        else {
+            $selectionError
+        }
+        $script:sharedRepositoryState.UpdateStrategy = ''
+        return
+    }
+
+    $repositoryRemoteUrl = [string](Get-OptionalObjectPropertyValue -InputObject $repository -PropertyName 'remoteUrl')
+    if ([string]::IsNullOrWhiteSpace($repositoryRemoteUrl)) {
+        $script:sharedRepositoryState.UpdateKind = 'Error'
+        $script:sharedRepositoryState.PendingUpdate = $false
+        $script:sharedRepositoryState.UpdateStatus = 'Check failed: Could not determine the shared repository remote URL.'
+        $script:sharedRepositoryState.UpdateStrategy = ''
+        return
+    }
+
+    $updateState = Get-AzDoSharedRepositoryUpdateState `
+        -ProjectName $selectedProject.Name `
+        -RepositoryId ([string](Get-OptionalObjectPropertyValue -InputObject $repository -PropertyName 'Id')) `
+        -RepositoryName ([string]$script:sharedRepositoryState.Name) `
+        -RepositoryRemoteUrl $repositoryRemoteUrl `
+        -UpstreamGitSource $upstreamRepo `
+        -Reference $ALM4DataverseRef `
+        -AccessToken $azDevOpsAccessToken `
+        -ContinueOnError
+
+    $script:sharedRepositoryState.UpdateKind = [string]$updateState.UpdateKind
+    $script:sharedRepositoryState.PendingUpdate = [bool]$updateState.PendingUpdate
+    $script:sharedRepositoryState.UpdateStatus = [string]$updateState.UpdateStatus
+    $script:sharedRepositoryState.CanFastForward = [bool]$updateState.CanFastForward
+    $script:sharedRepositoryState.IsAhead = [bool]$updateState.IsAhead
+    $script:sharedRepositoryState.UpdateStrategy = if ([bool]$updateState.PendingUpdate) { '' } else { 'None' }
+    $script:sharedRepositoryState.VersionUpdatedDuringSetup = $false
+}
+& $refreshSharedRepositoryUpdateState
+
 $initialSetupSteps += [pscustomobject]@{
     Name = 'Select shared repository'
     HelpDocRelativePath = 'docs/setup/azdo-automated-setup.md'
@@ -549,19 +607,22 @@ $initialSetupSteps += [pscustomobject]@{
             -AccessToken $azDevOpsAccessToken `
             -UpstreamGitSource $upstreamRepo)
         $script:sharedRepositoryState.CreatedDuringSetup = [bool](Get-OptionalObjectPropertyValue -InputObject $script:sharedRepositoryState.Repository -PropertyName 'CreatedDuringSetup')
+        & $refreshSharedRepositoryUpdateState
     }
     IsComplete = [string]::IsNullOrWhiteSpace([string]$script:sharedRepositoryState.ValidationError)
     IsLocked = [bool]$ApplyConfig
 }
 $initialSetupSteps += [pscustomobject]@{
-    Name = 'Check and update shared repository version'
+    Name = 'Define shared repository update strategy'
     HelpDocRelativePath = 'docs/setup/azdo-automated-setup.md'
     Summary = {
         if ($ApplyConfig) {
             'Skipped by -ApplyConfig'
         }
         else {
-            "Check against $ALM4DataverseRef"
+            Get-AzDoSharedRepositoryUpdateSummary `
+                -RepositoryState $script:sharedRepositoryState `
+                -Reference $ALM4DataverseRef
         }
     }
     Action = {
@@ -569,38 +630,113 @@ $initialSetupSteps += [pscustomobject]@{
             throw 'The shared repository version cannot be updated while applying committed configuration.'
         }
 
-        # This step can seed or rewrite the shared repository history before the
-        # preview is reviewed. Name the write explicitly so it is a deliberate choice.
-        $confirmSharedRepositoryUpdate = Read-YesNo `
-            -Prompt "Check and update shared repository '$($script:sharedRepositoryState.Name)' now, before preview?" `
-            -PromptGuidanceLines @(
-                'This step can create, seed, fast-forward, rebase, or reset the shared repository history immediately.',
-                'Choose No to defer the update until you are ready; the preview lists the shared repository state as updated during setup.'
-            ) `
-            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
-            -PromptGuidanceRef $ALM4DataverseRef
-        if (-not $confirmSharedRepositoryUpdate) {
+        & $refreshSharedRepositoryUpdateState
+        $updateKind = [string]$script:sharedRepositoryState.UpdateKind
+        if ($updateKind -in @('Error', 'Unavailable')) {
+            Write-Host $script:sharedRepositoryState.UpdateStatus -ForegroundColor Red
             Request-SetupWizardBack
         }
 
-        $updatedInitialization = Initialize-AzDoProjectAndRepository `
-            -SharedRepositoryOnly `
-            -UsePreferredSharedRepository `
-            -SelectedProjectForSharedRepository $selectedProject `
-            -MainRepoForSharedRepository $mainRepo `
-            -MainRepoWorkingTreeForSharedRepository $mainRepoWorkingTree `
-            -MainRepoWorkingRootForSharedRepository $mainRepoWorkingRoot `
-            -AccessTokenForSharedRepository $azDevOpsAccessToken `
-            -PreferredSharedRepositoryName ([string]$script:sharedRepositoryState.Name) `
-            -PreferredSharedRepositoryRef ([string]$script:sharedRepositoryState.Ref)
-        [void](Set-AzDoSharedRepositoryState `
-            -RepositoryState $script:sharedRepositoryState `
-            -Initialization $updatedInitialization `
+        if (-not [bool]$script:sharedRepositoryState.PendingUpdate) {
+            $script:sharedRepositoryState.UpdateStrategy = 'None'
+            Write-Host "Shared repository: $($script:sharedRepositoryState.UpdateStatus)" -ForegroundColor Green
+            return
+        }
+
+        $repositoryName = [string]$script:sharedRepositoryState.Name
+        $menuItems = switch ($updateKind) {
+            'Seed' {
+                @(
+                    "Seed '$repositoryName' from '$ALM4DataverseRef'"
+                    "Leave '$repositoryName' empty"
+                )
+            }
+            'FastForward' {
+                @(
+                    "Fast-forward '$repositoryName' to '$ALM4DataverseRef'"
+                    "Leave '$repositoryName' unchanged"
+                )
+            }
+            default {
+                @(
+                    "Rebase '$repositoryName' onto '$ALM4DataverseRef'"
+                    "Reset '$repositoryName' to '$ALM4DataverseRef' (force push)"
+                    "Leave '$repositoryName' unchanged"
+                )
+            }
+        }
+        $strategies = switch ($updateKind) {
+            'Seed' { @('Seed', 'LeaveUnchanged') }
+            'FastForward' { @('FastForward', 'LeaveUnchanged') }
+            default { @('Rebase', 'Reset', 'LeaveUnchanged') }
+        }
+
+        $selection = Select-FromMenu `
+            -Title "Choose how to update shared repository '$repositoryName'" `
+            -Items $menuItems `
+            -PromptGuidanceLines @(
+                "The repository differs from the ALM4Dataverse ref '$ALM4DataverseRef'.",
+                'Rebase preserves local commits, reset force-aligns to the upstream ref, and leave keeps the current history.',
+                'The selected update runs now so the preview uses the updated template source.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+        if ($null -eq $selection) {
+            Request-SetupWizardBack
+        }
+
+        $updateStrategy = [string]$strategies[$selection]
+        $repository = $script:sharedRepositoryState.Repository
+        $repositoryRemoteUrl = [string](Get-OptionalObjectPropertyValue -InputObject $repository -PropertyName 'remoteUrl')
+        $updateState = Invoke-AzDoSharedRepositorySync `
+            -ProjectName $selectedProject.Name `
+            -RepositoryId ([string](Get-OptionalObjectPropertyValue -InputObject $repository -PropertyName 'Id')) `
+            -RepositoryName $repositoryName `
+            -RepositoryRemoteUrl $repositoryRemoteUrl `
+            -UpstreamGitSource $upstreamRepo `
+            -Reference $ALM4DataverseRef `
             -AccessToken $azDevOpsAccessToken `
-            -UpstreamGitSource $upstreamRepo)
-        $script:sharedRepositoryState.VersionUpdatedDuringSetup = $true
+            -UpdateStrategy $updateStrategy
+
+        $script:sharedRepositoryState.UpdateKind = [string]$updateState.UpdateKind
+        $script:sharedRepositoryState.PendingUpdate = [bool]$updateState.PendingUpdate
+        $script:sharedRepositoryState.UpdateStatus = [string]$updateState.UpdateStatus
+        $script:sharedRepositoryState.CanFastForward = [bool]$updateState.CanFastForward
+        $script:sharedRepositoryState.IsAhead = [bool]$updateState.IsAhead
+        $script:sharedRepositoryState.UpdateStrategy = $updateStrategy
+        $script:sharedRepositoryState.VersionUpdatedDuringSetup = [bool]$updateState.Changed
+
+        if ($updateState.Changed) {
+            # Refresh the template source so preview and Apply use the updated shared history.
+            $updatedInitialization = Initialize-AzDoProjectAndRepository `
+                -SharedRepositoryOnly `
+                -UsePreferredSharedRepository `
+                -SelectedProjectForSharedRepository $selectedProject `
+                -MainRepoForSharedRepository $mainRepo `
+                -MainRepoWorkingTreeForSharedRepository $mainRepoWorkingTree `
+                -MainRepoWorkingRootForSharedRepository $mainRepoWorkingRoot `
+                -AccessTokenForSharedRepository $azDevOpsAccessToken `
+                -PreferredSharedRepositoryName ([string]$script:sharedRepositoryState.Name) `
+                -PreferredSharedRepositoryRef ([string]$script:sharedRepositoryState.Ref) `
+                -SkipSharedRepositoryVersionUpdate
+            [void](Set-AzDoSharedRepositoryState `
+                -RepositoryState $script:sharedRepositoryState `
+                -Initialization $updatedInitialization `
+                -AccessToken $azDevOpsAccessToken `
+                -UpstreamGitSource $upstreamRepo)
+        }
+
+        Write-Host "Shared repository update strategy: $(Get-AzDoSharedRepositoryUpdateSummary -RepositoryState $script:sharedRepositoryState -Reference $ALM4DataverseRef)." -ForegroundColor Green
     }
-    IsComplete = [bool]$ApplyConfig
+    IsComplete = (
+        [bool]$ApplyConfig -or (
+            [string]::IsNullOrWhiteSpace([string]$script:sharedRepositoryState.ValidationError) -and
+            [string]$script:sharedRepositoryState.UpdateKind -notin @('Error', 'Unavailable', 'Unknown') -and (
+                -not [bool]$script:sharedRepositoryState.PendingUpdate -or
+                -not [string]::IsNullOrWhiteSpace([string]$script:sharedRepositoryState.UpdateStrategy)
+            )
+        )
+    )
     IsLocked = [bool]$ApplyConfig
 }
 

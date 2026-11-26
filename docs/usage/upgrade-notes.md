@@ -98,17 +98,43 @@ APPLY-CONFIG pipeline or workflow with its preview option enabled (or
 `-ApplyConfig -PreviewOnly` on a workstation); `-ApplyConfig -Commit` always opens a pull
 request instead of committing directly.
 
+### Shared Repository Checks Run Automatically
+
+**You'll see:** setup now checks the shared repository when it opens an existing
+repository and again after you select a different shared repository. The former
+**Check and update shared repository version** step is now
+**Define shared repository update strategy**. It shows **No action needed** when the
+repository already matches, or is ahead of, the configured ref, and only asks for
+fast-forward, alignment, rebase, reset, or leave when an update is required. A failed
+check is shown on the step and can be retried without restarting setup.
+
+**Do this:** no action is needed for an up-to-date repository; you no longer need to open
+the step just to run the check. Choose the update strategy only when setup reports that
+one is required. On GitHub, the chosen strategy runs during **Apply changes**. On Azure
+DevOps, the chosen strategy runs immediately so the preview uses the updated template
+source.
+
 ### Guided Setup Defers More Writes Until Apply
 
-**You'll see:** shared workflow repository reconciliation, shared repository version
-updates, and client-secret rotation now wait for **Apply changes**, and creating a shared
-repository or Entra application asks for confirmation first. The preview marks changes
-already applied during setup as **Already applied**.
+**You'll see:** GitHub shared workflow repository reconciliation and client-secret
+rotation wait for **Apply changes**, and creating a shared repository or Entra
+application asks for confirmation first. The preview marks changes already applied during
+setup as **Already applied**.
 
 **Do this:** review the preview before applying if you relied on the version step or
 credential step completing immediately. Declining a creation confirmation returns to the
 menu or repository-name prompt without creating anything. With `-ApplyConfig`, no
 repository version changes are made.
+
+### Declined DEV Environments Stay Disabled
+
+**You'll see:** guided setup previously rediscovered a `Dev-<branch>` environment for a
+branch where you chose not to configure DEV, showed it in the branch menu, and wrote
+`developmentEnvironment` back to `alm-config.psd1`.
+
+**Do this:** run guided setup once for the application repository, open each affected
+branch and choose **Disable DEV environment**, then complete the setup. Saving regenerates
+`alm-config.psd1` without the unintended `developmentEnvironment` entry.
 
 ## Configuration
 

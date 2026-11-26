@@ -530,10 +530,11 @@ function ConvertTo-SpectreMarkupLiteral {
 function Get-OptionalObjectPropertyValue {
     <#
     .SYNOPSIS
-        Reads a hashtable key or object property without requiring its presence.
+        Reads a dictionary key or object property without requiring its presence.
     .DESCRIPTION
-        Returns null for a missing property or null input. Present false, zero and
-        empty values are preserved, so callers must not use truthiness as existence.
+        Returns null for a missing property or null input. Dictionaries include ordered
+        dictionaries, whose keys are not exposed as PSObject properties. Present false,
+        zero and empty values are preserved, so callers must not use truthiness as existence.
     #>
     [CmdletBinding()]
     param(
@@ -545,8 +546,8 @@ function Get-OptionalObjectPropertyValue {
         return $null
     }
 
-    if ($InputObject -is [hashtable]) {
-        if ($InputObject.ContainsKey($PropertyName)) {
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        if ($InputObject.Contains($PropertyName)) {
             return $InputObject[$PropertyName]
         }
 

@@ -170,6 +170,7 @@ function Invoke-AzDoEnvironmentConfigurationWizard {
         [Parameter()][scriptblock]$SelectBaselineAction,
         [Parameter()][AllowEmptyString()][string]$InitialBaselineRelease = '',
         [Parameter()][switch]$BaselineConfigured,
+        [Parameter()][switch]$OptionalConfiguration,
         [Parameter()][AllowEmptyString()][string]$ExcludedUrl = '',
         [Parameter()][array]$ExistingCredentials,
         [Parameter()][array]$ExistingServiceAccounts,
@@ -243,6 +244,7 @@ function Invoke-AzDoEnvironmentConfigurationWizard {
         -SelectBaselineAction $SelectBaselineAction `
         -InitialBaselineRelease $InitialBaselineRelease `
         -BaselineConfigured:$BaselineConfigured `
+        -OptionalConfiguration:$OptionalConfiguration `
         -HelpDocRelativePath $HelpDocRelativePath `
         -HelpRef $HelpRef
     if ($null -eq $environmentConfiguration) {

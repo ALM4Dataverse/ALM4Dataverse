@@ -371,6 +371,9 @@ function Select-BranchEnvironmentMapping {
                 $mappingMenuItems = @('Rename branch')
                 if ($EditDevEnvironmentScriptBlock) {
                     $mappingMenuItems += 'Edit DEV environment'
+                    if (Get-BranchSetupDevEnvironment -BranchState $currentMapping) {
+                        $mappingMenuItems += 'Disable DEV environment'
+                    }
                 }
                 if ($EditDeploymentEnvironmentsScriptBlock) {
                     $mappingMenuItems += 'Edit deployment environments'
@@ -451,6 +454,10 @@ function Select-BranchEnvironmentMapping {
                                 $currentMapping.DevEnvironmentConfiguration = & $EditDevEnvironmentScriptBlock @($branchMappings) $currentMapping
                                 $branchMappings[$editIndex] = $currentMapping
                             }
+                        }
+                        'Disable DEV environment' {
+                            $currentMapping.DevEnvironmentConfiguration = $null
+                            $branchMappings[$editIndex] = $currentMapping
                         }
                         'Edit deployment environments' {
                             if ($targetKind -eq 'DeploymentEnvironment') {

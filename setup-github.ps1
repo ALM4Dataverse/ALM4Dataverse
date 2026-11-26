@@ -608,12 +608,40 @@ Write-Host "Shared workflow repository: $sharedWorkflowRepository" -ForegroundCo
 Write-Host "Shared workflow reference: $sharedWorkflowReference" -ForegroundColor Green
 
 $script:sharedWorkflowRepositoryState = [ordered]@{
-    Repository      = $sharedWorkflowRepository
-    Reference       = $sharedWorkflowReference
-    ValidationError = $sharedWorkflowRepositoryValidationError
-    PendingUpdate   = $false
-    UpdateStatus    = ''
+    Repository                      = $sharedWorkflowRepository
+    Reference                       = $sharedWorkflowReference
+    ValidationError                 = $sharedWorkflowRepositoryValidationError
+    UpdateKind                      = 'Unknown'
+    PendingUpdate                   = $false
+    UpdateStatus                    = ''
+    UpdateStrategy                  = ''
+    CanFastForward                  = $false
+    IsAhead                         = $false
+    MatchesCanonicalUpstreamDefault = $false
+    Changed                         = $false
 }
+
+# The comparison runs automatically on entry for existing repositories and after the
+# shared repository changes. Selecting the strategy step refreshes it again.
+$refreshSharedWorkflowRepositoryUpdateState = {
+    if (
+        $ApplyConfig -or
+        [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.Repository) -or
+        -not [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.ValidationError)
+    ) {
+        return
+    }
+
+    [void](Update-GitHubSharedWorkflowRepositoryState `
+        -RepositoryState $script:sharedWorkflowRepositoryState `
+        -UpstreamFullName $upstreamWorkflowRepoFullName `
+        -DefaultOwner $repoOwner `
+        -UpstreamGitSource $upstreamGitSource `
+        -Reference $ALM4DataverseRef `
+        -CheckOnly `
+        -ContinueOnCheckError)
+}
+& $refreshSharedWorkflowRepositoryUpdateState
 $initialSetupSteps += [pscustomobject]@{
     Name = 'Select shared workflow repository'
     HelpDocRelativePath = 'docs/setup/github-setup.md'
@@ -636,47 +664,94 @@ $initialSetupSteps += [pscustomobject]@{
         $selectedReference = [string]$script:sharedWorkflowRepositoryState.Reference
         $script:sharedWorkflowRepository = $selectedRepository
         $script:sharedWorkflowReference = $selectedReference
+        & $refreshSharedWorkflowRepositoryUpdateState
     }
     IsComplete = [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.ValidationError)
     IsLocked = [bool]$ApplyConfig
 }
 $initialSetupSteps += [pscustomobject]@{
-    Name = 'Check and update shared workflow repository version'
+    Name = 'Define shared repository update strategy'
     HelpDocRelativePath = 'docs/setup/github-setup.md'
     Summary = {
         if ($ApplyConfig) {
             'Skipped by -ApplyConfig'
         }
         else {
-            $updateStatus = [string]$script:sharedWorkflowRepositoryState.UpdateStatus
-            if ([string]::IsNullOrWhiteSpace($updateStatus)) {
-                "Check against $ALM4DataverseRef"
-            }
-            else {
-                $updateStatus
-            }
+            Get-GitHubSharedWorkflowRepositoryUpdateSummary `
+                -RepositoryState $script:sharedWorkflowRepositoryState `
+                -Reference $ALM4DataverseRef
         }
     }
     Action = {
-        # Preview and Apply use the local template copy, so the repository is only
-        # compared here. Reconciliation runs in PreApplyAction after the user applies.
-        [void](Update-GitHubSharedWorkflowRepositoryState `
-            -RepositoryState $script:sharedWorkflowRepositoryState `
-            -UpstreamFullName $upstreamWorkflowRepoFullName `
-            -DefaultOwner $repoOwner `
-            -UpstreamGitSource $upstreamGitSource `
-            -Reference $ALM4DataverseRef `
-            -CheckOnly)
-        $script:sharedWorkflowRepository = [string]$script:sharedWorkflowRepositoryState.Repository
-        $script:sharedWorkflowReference = [string]$script:sharedWorkflowRepositoryState.Reference
-        if ([bool]$script:sharedWorkflowRepositoryState.PendingUpdate) {
-            Write-Host "Shared workflow repository update pending: $($script:sharedWorkflowRepositoryState.UpdateStatus) It will run when you choose Apply changes." -ForegroundColor Yellow
+        # Preview and Apply use the local template copy, so the repository is compared
+        # here and reconciled by PreApplyAction only after the user applies.
+        & $refreshSharedWorkflowRepositoryUpdateState
+        $updateKind = [string]$script:sharedWorkflowRepositoryState.UpdateKind
+        if ($updateKind -eq 'Error') {
+            Write-Host $script:sharedWorkflowRepositoryState.UpdateStatus -ForegroundColor Red
+            Request-SetupWizardBack
         }
-        else {
+
+        if (-not [bool]$script:sharedWorkflowRepositoryState.PendingUpdate) {
+            $script:sharedWorkflowRepositoryState.UpdateStrategy = 'None'
             Write-Host "Shared workflow repository: $($script:sharedWorkflowRepositoryState.UpdateStatus)" -ForegroundColor Green
+            return
         }
+
+        $selectedRepository = [string]$script:sharedWorkflowRepositoryState.Repository
+        $menuItems = switch ($updateKind) {
+            'Align' {
+                @(
+                    "Reset '$selectedRepository' to '$ALM4DataverseRef' (force push)"
+                    "Leave '$selectedRepository' unchanged"
+                )
+            }
+            'FastForward' {
+                @(
+                    "Fast-forward '$selectedRepository' to '$ALM4DataverseRef'"
+                    "Leave '$selectedRepository' unchanged"
+                )
+            }
+            default {
+                @(
+                    "Rebase '$selectedRepository' onto '$ALM4DataverseRef'"
+                    "Reset '$selectedRepository' to '$ALM4DataverseRef' (force push)"
+                    "Leave '$selectedRepository' unchanged"
+                )
+            }
+        }
+        $strategies = switch ($updateKind) {
+            'Align' { @('Reset', 'LeaveUnchanged') }
+            'FastForward' { @('FastForward', 'LeaveUnchanged') }
+            default { @('Rebase', 'Reset', 'LeaveUnchanged') }
+        }
+
+        $selection = Select-FromMenu `
+            -Title "Choose how to update shared workflow repository '$selectedRepository'" `
+            -Items $menuItems `
+            -PromptGuidanceLines @(
+                "The repository differs from the ALM4Dataverse ref '$ALM4DataverseRef'.",
+                'Rebase preserves local commits, reset force-aligns to the upstream ref, and leave keeps the current history.',
+                'The selected update runs when you choose Apply changes.'
+            ) `
+            -PromptGuidanceDocRelativePath 'docs/setup/github-setup.md' `
+            -PromptGuidanceRef $ALM4DataverseRef
+        if ($null -eq $selection) {
+            Request-SetupWizardBack
+        }
+
+        $script:sharedWorkflowRepositoryState.UpdateStrategy = [string]$strategies[$selection]
+        Write-Host "Shared workflow repository update strategy: $(Get-GitHubSharedWorkflowRepositoryUpdateSummary -RepositoryState $script:sharedWorkflowRepositoryState -Reference $ALM4DataverseRef)." -ForegroundColor Green
     }
-    IsComplete = [bool]$ApplyConfig
+    IsComplete = (
+        [bool]$ApplyConfig -or (
+            [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.ValidationError) -and
+            [string]$script:sharedWorkflowRepositoryState.UpdateKind -ne 'Error' -and (
+                -not [bool]$script:sharedWorkflowRepositoryState.PendingUpdate -or
+                -not [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.UpdateStrategy)
+            )
+        )
+    )
     IsLocked = [bool]$ApplyConfig
 }
 
@@ -868,7 +943,8 @@ if (-not $ApplyConfig) {
             -UpstreamFullName $upstreamWorkflowRepoFullName `
             -DefaultOwner $repoOwner `
             -UpstreamGitSource $upstreamGitSource `
-            -Reference $ALM4DataverseRef)
+            -Reference $ALM4DataverseRef `
+            -UpdateStrategy ([string]$script:sharedWorkflowRepositoryState.UpdateStrategy))
         $script:sharedWorkflowRepository = [string]$script:sharedWorkflowRepositoryState.Repository
         $script:sharedWorkflowReference = [string]$script:sharedWorkflowRepositoryState.Reference
     }

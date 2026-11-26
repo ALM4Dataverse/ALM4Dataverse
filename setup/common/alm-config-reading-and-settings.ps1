@@ -227,8 +227,9 @@ function Get-AlmSetupConfiguration {
     .DESCRIPTION
         Serializes shared provider/repository/ref keys, flat provider-specific options,
         and each branch's development, deployment and BUILD validation environments.
-        A missing DevEnvironmentConfiguration falls back to ExistingDevEnvironment so a
-        discovered or previously committed DEV target is not dropped from the file.
+        Only DevEnvironmentConfiguration marks a DEV environment; ExistingDevEnvironment
+        is used just when the caller omits that property, so a saved decision to have no
+        DEV environment is preserved.
         Disabled BUILD validation is written explicitly to prevent legacy global
         selectors from being inherited by that branch.
     #>
@@ -258,10 +259,7 @@ function Get-AlmSetupConfiguration {
             throw 'Branch setup state must include a non-empty BranchName.'
         }
 
-        $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DevEnvironmentConfiguration'
-        if ($null -eq $devEnvironment) {
-            $devEnvironment = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'ExistingDevEnvironment'
-        }
+        $devEnvironment = Get-BranchSetupDevEnvironment -BranchState $branchState
         $developmentEnvironmentName = [string](Get-OptionalObjectPropertyValue -InputObject $devEnvironment -PropertyName 'ShortName')
         $deploymentEnvironmentNames = @(
             Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'DeploymentEnvironments' |

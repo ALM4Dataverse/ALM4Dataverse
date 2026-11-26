@@ -772,8 +772,8 @@ function Get-GitHubSetupResourceChange {
         Describes GitHub and Dataverse changes deferred until setup is applied.
     .DESCRIPTION
         The plan contains resource names and settings only; credential values are omitted.
-        When SharedWorkflowRepositoryState is supplied, its check result is disclosed as
-        a repository reconciliation that Apply performs.
+        When SharedWorkflowRepositoryState is supplied, its check result and selected
+        update strategy are disclosed as the repository reconciliation that Apply performs.
     #>
     [CmdletBinding()]
     [OutputType([object[]])]
@@ -795,17 +795,54 @@ function Get-GitHubSetupResourceChange {
         $sharedReference = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'Reference')
         $updateStatus = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'UpdateStatus')
         $pendingUpdate = [bool](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'PendingUpdate')
-        $changes.Add([pscustomobject]@{
-                Action   = if ($pendingUpdate) { 'Reconcile' } else { 'Verify' }
-                Resource = 'Shared workflow repository'
-                Target   = "$sharedRepository@$sharedReference"
-                Details  = if ($pendingUpdate) {
-                    "$updateStatus This repository update runs when you apply changes."
+        $updateKind = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'UpdateKind')
+        $updateStrategy = [string](Get-OptionalObjectPropertyValue -InputObject $SharedWorkflowRepositoryState -PropertyName 'UpdateStrategy')
+
+        if ($updateKind -eq 'Error') {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Review'
+                    Resource = 'Shared workflow repository'
+                    Target   = "$sharedRepository@$sharedReference"
+                    Details  = $updateStatus
+                })
+        }
+        elseif ($pendingUpdate -and $updateStrategy -eq 'LeaveUnchanged') {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Leave'
+                    Resource = 'Shared workflow repository'
+                    Target   = "$sharedRepository@$sharedReference"
+                    Details  = "$updateStatus The repository history is left unchanged."
+                })
+        }
+        elseif ($pendingUpdate) {
+            $strategyDescription = switch ($updateStrategy) {
+                'FastForward' { "Fast-forward to '$sharedReference' when you apply changes." }
+                'Rebase' { "Rebase onto '$sharedReference' when you apply changes." }
+                'Reset' { "Reset to '$sharedReference' (force push) when you apply changes." }
+                default {
+                    if ($updateKind -eq 'Align') {
+                        "Reset to '$sharedReference' when you apply changes to align the repository."
+                    }
+                    else {
+                        "$updateStatus Choose the update strategy in the guided menu."
+                    }
                 }
-                else {
-                    "$updateStatus No repository update is required."
-                }
-            })
+            }
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Reconcile'
+                    Resource = 'Shared workflow repository'
+                    Target   = "$sharedRepository@$sharedReference"
+                    Details  = $strategyDescription
+                })
+        }
+        else {
+            $changes.Add([pscustomobject]@{
+                    Action   = 'Verify'
+                    Resource = 'Shared workflow repository'
+                    Target   = "$sharedRepository@$sharedReference"
+                    Details  = "$updateStatus No repository update is required."
+                })
+        }
     }
     $currentImmutableSubject = Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'UseImmutableSubject'
     if ($UseImmutableWifSubject -and $null -ne $currentImmutableSubject -and -not [bool]$currentImmutableSubject) {

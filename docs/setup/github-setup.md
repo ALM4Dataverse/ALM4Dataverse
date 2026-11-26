@@ -103,17 +103,26 @@ Select an existing fork or private repository, or create one; creating it asks f
 confirmation because it is created before preview. When creating, setup asks for the owner
 and defaults to the owner of the application repository.
 
-The separate **Check and update shared workflow repository version** step compares the
-selected repository with the ALM4Dataverse ref you are running. If it needs a fast-forward
-or reconciliation, setup records the update and performs it only when you choose
-**Apply changes**.
+Setup checks the selected repository automatically when it resolves an existing
+repository and again after you select a different shared repository. The
+**Define shared repository update strategy** step shows **No action needed** when the
+repository already matches, or is ahead of, the ALM4Dataverse ref you are running. If the
+check finds a fast-forward, an alignment, or diverged history, choose the strategy there;
+setup records it and performs the update only when you choose **Apply changes**. Apply
+uses the selected strategy without prompting again. If a check fails, the step shows the
+reason and lets you retry.
 
 ![Selecting or creating the shared workflow repository](./screenshots/github-shared-workflow-repository.png)
+
+![Choosing a shared workflow repository update strategy](./screenshots/github-shared-repository-update.png)
 
 #### 4. Configure branches and environments
 
 **Configure branches, dev and deployment envs** defines each branch, its DEV environment,
-its deployment targets and its BUILD validation. Select the row to start.
+its deployment targets and its BUILD validation. Select the row to start. When an existing
+repository already has a complete saved branch and environment configuration, the step
+starts marked complete and does not need to be visited. The menu lists each branch's DEV
+environment, BUILD validation and deployment targets in that order.
 
 1. **Choose a branch strategy.** For a new repository, choose `main only` or
    `main + develop`. Existing repositories start from the mappings in `alm-config.psd1`
@@ -127,12 +136,14 @@ its deployment targets and its BUILD validation. Select the row to start.
 
    ![Prompt for a new branch name](./screenshots/branch-name.png)
 
-3. **Configure the DEV environment.** Choose whether the branch has a DEV environment. For
-   a new GitHub branch the confirmation defaults to No. If you choose Yes, select the
-   Dataverse environment; setup names it `Dev-<branch>`. Only branches with a DEV
-   environment can be a solution source.
+3. **Configure the DEV environment.** A branch without one shows **DEV: Not configured**.
+   Select it (or **Edit DEV environment**) to open the DEV detail menu, then select **DEV
+   environment** to enable it. The remaining steps stay unavailable until it is enabled;
+   choose **Do not configure DEV environment** to leave it unconfigured. Enable it to
+   select the Dataverse environment; setup names it `Dev-<branch>`. Only branches with a
+   DEV environment can be a solution source.
 
-   ![GitHub DEV environment confirmation](./screenshots/github-dev-confirmation.png)
+   ![GitHub DEV environment detail menu with the enable step](./screenshots/github-dev-menu.png)
 
    ![GitHub DEV environment selection](./screenshots/github-dev-environment-selection.png)
 

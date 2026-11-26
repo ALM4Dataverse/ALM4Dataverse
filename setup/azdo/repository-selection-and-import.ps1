@@ -198,6 +198,552 @@ function Get-AzDoSharedRepositorySyncState {
     }
 }
 
+function Initialize-AzDoSharedRepositoryFromUpstream {
+    <#
+    .SYNOPSIS
+    Seeds an empty Azure DevOps shared repository from the configured upstream ref.
+    .DESCRIPTION
+    Initializes a temporary repository, resolves Reference from UpstreamGitSource,
+    pushes the upstream history to the selected repository, and returns after cleanup.
+    The caller has already established that the target repository has no commits.
+    .PARAMETER RepositoryName
+    Display name used in messages and errors.
+    .PARAMETER RepositoryRemoteUrl
+    Authenticated remote URL of the empty shared repository.
+    .PARAMETER UpstreamGitSource
+    Git source containing the ALM4Dataverse template ref.
+    .PARAMETER Reference
+    Branch or tag to seed into the shared repository.
+    .PARAMETER AccessToken
+    Bearer token used to push to RepositoryRemoteUrl.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepositoryRemoteUrl', Justification = 'Used by the nested repository push callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository seed callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'Reference', Justification = 'Used by the nested repository seed callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Used by the nested repository push callback.')]
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryName,
+        [Parameter(Mandatory)][string]$RepositoryRemoteUrl,
+        [Parameter(Mandatory)][string]$UpstreamGitSource,
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$AccessToken
+    )
+
+    Invoke-WithErrorHandling -OperationName "Initializing Shared Repository" -ScriptBlock {
+        $previousErrorActionPreference = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            Write-Host "Repository '$RepositoryName' has no commits. Seeding it from the upstream repo..." -ForegroundColor Yellow
+
+            $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Init-" + [guid]::NewGuid().ToString('n'))
+            New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
+
+            try {
+                Push-Location $workRoot
+
+                & git init --initial-branch=main | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "Git init failed with exit code $LASTEXITCODE" }
+
+                & git remote add origin $UpstreamGitSource | Out-Null
+                & git fetch origin | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "Git fetch failed with exit code $LASTEXITCODE" }
+
+                & git ls-remote --exit-code origin $Reference | Out-Null
+                if ($LASTEXITCODE -eq 2) {
+                    throw "Could not resolve reference '$Reference' from upstream repository."
+                }
+                if ($LASTEXITCODE -ne 0) {
+                    throw "Git ls-remote failed with exit code $LASTEXITCODE"
+                }
+
+                $lsRemoteOutput = (& git ls-remote origin $Reference | Select-Object -First 1)
+                if ($lsRemoteOutput -match '^([a-f0-9]+)\s+(.+)$') {
+                    $commitSha = $Matches[1]
+                    $fullRef = $Matches[2]
+                    if ($fullRef -match '^refs/heads/(.+)$') {
+                        $targetRef = "origin/$($Matches[1])"
+                    }
+                    elseif ($fullRef -match '^refs/tags/') {
+                        $targetRef = $commitSha
+                    }
+                    else {
+                        $targetRef = $Reference
+                    }
+                }
+                else {
+                    $targetRef = $Reference
+                }
+
+                & git checkout -b main $targetRef | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw "Git checkout failed with exit code $LASTEXITCODE" }
+
+                & git remote set-url origin $RepositoryRemoteUrl | Out-Null
+                & git -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push -u origin main
+                if ($LASTEXITCODE -ne 0) { throw "Git push failed with exit code $LASTEXITCODE" }
+
+                Write-Host "Shared repository initialized successfully."
+            }
+            finally {
+                if ((Get-Location).Path -eq $workRoot) { Pop-Location }
+                try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
+            }
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    } -StatusMessage "Initializing shared repository '$RepositoryName'..." -CaptureOutputInPanel
+}
+
+function Get-AzDoSharedRepositoryUpdateState {
+    <#
+    .SYNOPSIS
+    Checks the shared repository against the configured upstream ref without changing history.
+    .DESCRIPTION
+    An empty repository is reported as needing a seed. Otherwise the shared repository is
+    cloned into a temporary work tree and compared with Reference to report up-to-date,
+    fast-forward, ahead or diverged state. The temporary clone is removed before returning.
+    ContinueOnError records a failed comparison as UpdateKind Error instead of throwing.
+    .PARAMETER ProjectName
+    Project containing the shared repository.
+    .PARAMETER RepositoryId
+    Identifier used to detect an empty repository.
+    .PARAMETER RepositoryName
+    Display name used in status text.
+    .PARAMETER RepositoryRemoteUrl
+    Authenticated remote URL of the shared repository.
+    .PARAMETER UpstreamGitSource
+    Git source containing the ALM4Dataverse template ref.
+    .PARAMETER Reference
+    Branch or tag to compare with.
+    .PARAMETER AccessToken
+    Bearer token used to clone the shared repository.
+    .PARAMETER ContinueOnError
+    Returns an Error result instead of throwing when the comparison fails.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. UpdateKind, UpdateStatus, PendingUpdate,
+    CanFastForward, IsAhead, MatchesCanonicalUpstreamDefault and Changed.
+    #>
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepositoryRemoteUrl', Justification = 'Used by the nested repository check callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UpstreamGitSource', Justification = 'Used by the nested repository check callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'AccessToken', Justification = 'Used by the nested repository check callback.')]
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][string]$ProjectName,
+        [Parameter(Mandatory)][string]$RepositoryId,
+        [Parameter(Mandatory)][string]$RepositoryName,
+        [Parameter(Mandatory)][string]$RepositoryRemoteUrl,
+        [Parameter(Mandatory)][string]$UpstreamGitSource,
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$AccessToken,
+        [Parameter()][switch]$ContinueOnError
+    )
+
+    try {
+        $hasCommits = Test-AzDoGitRepositoryCommit -Project $ProjectName -RepositoryId $RepositoryId
+        if (-not $hasCommits) {
+            return [pscustomobject]@{
+                UpdateKind                      = 'Seed'
+                UpdateStatus                    = "Seed from '$Reference' is required."
+                PendingUpdate                   = $true
+                CanFastForward                  = $false
+                IsAhead                         = $false
+                MatchesCanonicalUpstreamDefault = $false
+                Changed                         = $false
+            }
+        }
+
+        $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Check-" + [guid]::NewGuid().ToString('n'))
+        New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
+        try {
+            $syncState = Invoke-WithSpectreStatus -Status "Checking shared repository '$RepositoryName' against upstream..." -ScriptBlock {
+                Get-AzDoSharedRepositorySyncState `
+                    -RepositoryRemoteUrl $RepositoryRemoteUrl `
+                    -WorkRoot $workRoot `
+                    -UpstreamGitSource $UpstreamGitSource `
+                    -Reference $Reference `
+                    -AccessToken $AccessToken
+            }
+            return ConvertTo-AzDoSharedRepositoryUpdateState -SyncState $syncState -Reference $Reference
+        }
+        finally {
+            if ((Get-Location).Path -eq $workRoot) { Pop-Location }
+            try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
+        }
+    }
+    catch {
+        if (-not $ContinueOnError) {
+            throw
+        }
+
+        $message = ([string]$_.Exception.Message -replace '\s+', ' ').Trim()
+        return [pscustomobject]@{
+            UpdateKind                      = 'Error'
+            UpdateStatus                    = "Check failed: $message"
+            PendingUpdate                   = $false
+            CanFastForward                  = $false
+            IsAhead                         = $false
+            MatchesCanonicalUpstreamDefault = $false
+            Changed                         = $false
+        }
+    }
+}
+
+function ConvertTo-AzDoSharedRepositoryUpdateState {
+    <#
+    .SYNOPSIS
+    Maps an Azure DevOps shared repository comparison to an update kind and status.
+    .PARAMETER SyncState
+    Result from Get-AzDoSharedRepositorySyncState.
+    .PARAMETER Reference
+    Upstream ref used in status text.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][object]$SyncState,
+        [Parameter(Mandatory)][string]$Reference
+    )
+
+    if ([string]$SyncState.LocalHash -eq [string]$SyncState.UpstreamHash) {
+        return [pscustomobject]@{
+            UpdateKind                      = 'UpToDate'
+            UpdateStatus                    = "Already up to date with '$Reference'."
+            PendingUpdate                   = $false
+            CanFastForward                  = $false
+            IsAhead                         = $false
+            MatchesCanonicalUpstreamDefault = $false
+            Changed                         = $false
+        }
+    }
+    if ([bool]$SyncState.CanFastForward) {
+        return [pscustomobject]@{
+            UpdateKind                      = 'FastForward'
+            UpdateStatus                    = "Fast-forward from '$Reference' is available."
+            PendingUpdate                   = $true
+            CanFastForward                  = $true
+            IsAhead                         = $false
+            MatchesCanonicalUpstreamDefault = $false
+            Changed                         = $false
+        }
+    }
+    if ([bool]$SyncState.IsAhead) {
+        return [pscustomobject]@{
+            UpdateKind                      = 'Ahead'
+            UpdateStatus                    = "Ahead of '$Reference'; no update is required."
+            PendingUpdate                   = $false
+            CanFastForward                  = $false
+            IsAhead                         = $true
+            MatchesCanonicalUpstreamDefault = $false
+            Changed                         = $false
+        }
+    }
+    return [pscustomobject]@{
+        UpdateKind                      = 'Diverged'
+        UpdateStatus                    = "Diverged from '$Reference'; define an update strategy."
+        PendingUpdate                   = $true
+        CanFastForward                  = $false
+        IsAhead                         = $false
+        MatchesCanonicalUpstreamDefault = $false
+        Changed                         = $false
+    }
+}
+
+function Invoke-AzDoSharedRepositorySync {
+    <#
+    .SYNOPSIS
+    Checks the shared repository against upstream and reconciles it using a selected strategy.
+    .DESCRIPTION
+    An empty repository is seeded from Reference. A non-empty repository is cloned and
+    compared; FastForward, Rebase, Reset and LeaveUnchanged update the remote without
+    prompts. PromptForStrategy reproduces the interactive flow used by direct
+    Initialize-AzDoProjectAndRepository callers. Temporary clones are removed before returning.
+    .PARAMETER ProjectName
+    Project containing the shared repository.
+    .PARAMETER RepositoryId
+    Identifier used to detect an empty repository.
+    .PARAMETER RepositoryName
+    Display name used in messages and errors.
+    .PARAMETER RepositoryRemoteUrl
+    Authenticated remote URL of the shared repository.
+    .PARAMETER UpstreamGitSource
+    Git source containing the ALM4Dataverse template ref.
+    .PARAMETER Reference
+    Branch or tag to reconcile to.
+    .PARAMETER AccessToken
+    Bearer token used to clone and push the shared repository.
+    .PARAMETER UpdateStrategy
+    Seed, FastForward, Rebase, Reset, None or LeaveUnchanged.
+    .PARAMETER PromptForStrategy
+    Uses the interactive confirmation and divergence menus instead of UpdateStrategy.
+    .OUTPUTS
+    System.Management.Automation.PSCustomObject. UpdateKind, UpdateStatus, PendingUpdate,
+    CanFastForward, IsAhead, MatchesCanonicalUpstreamDefault and Changed.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][string]$ProjectName,
+        [Parameter(Mandatory)][string]$RepositoryId,
+        [Parameter(Mandatory)][string]$RepositoryName,
+        [Parameter(Mandatory)][string]$RepositoryRemoteUrl,
+        [Parameter(Mandatory)][string]$UpstreamGitSource,
+        [Parameter(Mandatory)][string]$Reference,
+        [Parameter(Mandatory)][string]$AccessToken,
+        [Parameter()][ValidateSet('', 'None', 'Seed', 'FastForward', 'Rebase', 'Reset', 'LeaveUnchanged')][string]$UpdateStrategy = '',
+        [Parameter()][switch]$PromptForStrategy
+    )
+
+    try {
+        $hasCommits = Test-AzDoGitRepositoryCommit -Project $ProjectName -RepositoryId $RepositoryId
+        if (-not $hasCommits) {
+            $result = [pscustomobject]@{
+                UpdateKind                      = 'Seed'
+                UpdateStatus                    = "Seed from '$Reference' is required."
+                PendingUpdate                   = $true
+                CanFastForward                  = $false
+                IsAhead                         = $false
+                MatchesCanonicalUpstreamDefault = $false
+                Changed                         = $false
+            }
+            $effectiveStrategy = if ($PromptForStrategy) { 'Seed' } else { $UpdateStrategy }
+            if ([string]::IsNullOrWhiteSpace($effectiveStrategy) -or $effectiveStrategy -in @('None', 'LeaveUnchanged')) {
+                return $result
+            }
+            if ($effectiveStrategy -ne 'Seed') {
+                throw "Shared repository '$RepositoryName' is empty; choose Seed from '$Reference'."
+            }
+
+            [void](Initialize-AzDoSharedRepositoryFromUpstream `
+                -RepositoryName $RepositoryName `
+                -RepositoryRemoteUrl $RepositoryRemoteUrl `
+                -UpstreamGitSource $UpstreamGitSource `
+                -Reference $Reference `
+                -AccessToken $AccessToken)
+            $result.UpdateStatus = "Seeded from '$Reference'."
+            $result.PendingUpdate = $false
+            $result.Changed = $true
+            return $result
+        }
+
+        $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Check-" + [guid]::NewGuid().ToString('n'))
+        New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
+        try {
+            $syncState = Invoke-WithSpectreStatus -Status "Checking shared repository '$RepositoryName' against upstream..." -ScriptBlock {
+                Get-AzDoSharedRepositorySyncState `
+                    -RepositoryRemoteUrl $RepositoryRemoteUrl `
+                    -WorkRoot $workRoot `
+                    -UpstreamGitSource $UpstreamGitSource `
+                    -Reference $Reference `
+                    -AccessToken $AccessToken
+            }
+            $result = ConvertTo-AzDoSharedRepositoryUpdateState -SyncState $syncState -Reference $Reference
+
+            $effectiveStrategy = $UpdateStrategy
+            if ($PromptForStrategy) {
+                switch ($result.UpdateKind) {
+                    'UpToDate' {
+                        Write-Host "Shared repository is already up to date."
+                        $effectiveStrategy = 'None'
+                    }
+                    'Ahead' {
+                        Write-Host "Shared repository is ahead of the shared repo."
+                        $effectiveStrategy = 'None'
+                    }
+                    'FastForward' {
+                        $effectiveStrategy = if (Read-YesNo -Prompt "Updates are available from the shared repo (fast-forward). Update '$RepositoryName'?" ) {
+                            'FastForward'
+                        }
+                        else {
+                            'LeaveUnchanged'
+                        }
+                    }
+                    'Diverged' {
+                        $divergedMenuItems = @(
+                            "Rebase '$RepositoryName' onto ref '$Reference'",
+                            "Reset '$RepositoryName' to ref '$Reference' (force push)",
+                            "Leave '$RepositoryName' unchanged"
+                        )
+                        $divergedSelection = Select-FromMenu `
+                            -Title "The shared repo '$RepositoryName' has diverged. Choose how to update it." `
+                            -Items $divergedMenuItems `
+                            -PromptGuidanceLines @(
+                                "Choose how to reconcile '$RepositoryName' with upstream ALM4Dataverse template history.",
+                                'Rebase preserves local commits, reset force-aligns to upstream, and leave unchanged keeps current state.'
+                            ) `
+                            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
+                            -PromptGuidanceRef $ALM4DataverseRef
+
+                        $effectiveStrategy = switch ($divergedSelection) {
+                            0 { 'Rebase' }
+                            1 { 'Reset' }
+                            default { 'LeaveUnchanged' }
+                        }
+                    }
+                }
+            }
+
+            if ([string]::IsNullOrWhiteSpace($effectiveStrategy)) {
+                if ($result.PendingUpdate) {
+                    throw "No update strategy was selected for shared repository '$RepositoryName'."
+                }
+                $effectiveStrategy = 'None'
+            }
+
+            if ($effectiveStrategy -in @('None', 'LeaveUnchanged')) {
+                if ($result.PendingUpdate) {
+                    Write-Host "Leaving shared repository unchanged." -ForegroundColor Yellow
+                }
+                return $result
+            }
+
+            switch ($effectiveStrategy) {
+                'FastForward' {
+                    if ($result.UpdateKind -in @('UpToDate', 'Ahead')) {
+                        return $result
+                    }
+                    if ($result.UpdateKind -ne 'FastForward') {
+                        throw "Fast-forward is no longer available for shared repository '$RepositoryName'. Reopen setup and choose an update strategy again."
+                    }
+
+                    Invoke-WithErrorHandling -OperationName "Fast-forwarding shared repository '$RepositoryName'" -StatusMessage "Fast-forwarding shared repository '$RepositoryName'..." -CaptureOutputInPanel -ScriptBlock {
+                        $previousErrorActionPreference = $ErrorActionPreference
+                        try {
+                            $ErrorActionPreference = 'Continue'
+
+                            & git -C $workRoot merge --ff-only $syncState.UpstreamRef
+                            if ($LASTEXITCODE -ne 0) { throw 'Git merge failed' }
+
+                            & git -C $workRoot -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push origin
+                            if ($LASTEXITCODE -ne 0) { throw 'Git push failed' }
+                        }
+                        finally {
+                            $ErrorActionPreference = $previousErrorActionPreference
+                        }
+                    } | Out-Null
+                }
+                'Rebase' {
+                    if ($result.UpdateKind -eq 'UpToDate') {
+                        return $result
+                    }
+                    if ($result.UpdateKind -ne 'Diverged') {
+                        throw "Rebase is not available for shared repository '$RepositoryName'. Reopen setup and choose an update strategy again."
+                    }
+
+                    Invoke-WithErrorHandling -OperationName "Rebasing shared repository '$RepositoryName'" -StatusMessage "Rebasing shared repository '$RepositoryName'..." -CaptureOutputInPanel -ScriptBlock {
+                        $previousErrorActionPreference = $ErrorActionPreference
+                        try {
+                            $ErrorActionPreference = 'Continue'
+
+                            & git -C $workRoot rebase $syncState.UpstreamRef
+                            if ($LASTEXITCODE -ne 0) { throw "Git rebase failed - this script can't handle conflicts. You need to rebase your local changes manually." }
+
+                            & git -C $workRoot -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push --force-with-lease origin
+                            if ($LASTEXITCODE -ne 0) { throw 'Git push failed' }
+                        }
+                        finally {
+                            $ErrorActionPreference = $previousErrorActionPreference
+                        }
+                    } | Out-Null
+                }
+                'Reset' {
+                    if ($result.UpdateKind -eq 'UpToDate') {
+                        return $result
+                    }
+
+                    Invoke-WithErrorHandling -OperationName "Resetting shared repository '$RepositoryName'" -StatusMessage "Resetting shared repository '$RepositoryName' to '$Reference'..." -CaptureOutputInPanel -ScriptBlock {
+                        $previousErrorActionPreference = $ErrorActionPreference
+                        try {
+                            $ErrorActionPreference = 'Continue'
+
+                            & git -C $workRoot reset --hard $syncState.UpstreamRef
+                            if ($LASTEXITCODE -ne 0) { throw 'Git reset failed' }
+
+                            & git -C $workRoot -c "http.extraheader=AUTHORIZATION: bearer $AccessToken" push --force-with-lease origin
+                            if ($LASTEXITCODE -ne 0) { throw 'Git push failed' }
+                        }
+                        finally {
+                            $ErrorActionPreference = $previousErrorActionPreference
+                        }
+                    } | Out-Null
+                }
+                default {
+                    throw "Unsupported update strategy '$effectiveStrategy' for shared repository '$RepositoryName'."
+                }
+            }
+
+            Write-Host "Repository updated successfully."
+            $result.UpdateStatus = "Updated to '$Reference'."
+            $result.PendingUpdate = $false
+            $result.Changed = $true
+            return $result
+        }
+        finally {
+            if ((Get-Location).Path -eq $workRoot) { Pop-Location }
+            try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
+        }
+    }
+    catch {
+        Write-Host "Failed to check or update repository: $($_.Exception.Message)" -ForegroundColor Red
+        throw
+    }
+}
+
+function Get-AzDoSharedRepositoryUpdateSummary {
+    <#
+    .SYNOPSIS
+    Formats the Azure DevOps shared repository update state for the guided setup menu.
+    .DESCRIPTION
+    Distinguishes a required strategy, a completed update and a comparison with no
+    action required. Errors are returned verbatim so the user can see why it failed.
+    .PARAMETER RepositoryState
+    State recorded after an Azure DevOps shared repository check or update.
+    .PARAMETER Reference
+    Upstream ref used in strategy descriptions.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$RepositoryState,
+        [Parameter(Mandatory)][string]$Reference
+    )
+
+    $updateKind = [string](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'UpdateKind')
+    $updateStatus = [string](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'UpdateStatus')
+    $pendingUpdate = [bool](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'PendingUpdate')
+    $updateStrategy = [string](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'UpdateStrategy')
+
+    if ($updateKind -eq 'Error') {
+        return $updateStatus
+    }
+
+    if ([bool](Get-OptionalObjectPropertyValue -InputObject $RepositoryState -PropertyName 'VersionUpdatedDuringSetup')) {
+        return $updateStatus
+    }
+
+    switch ($updateStrategy) {
+        'FastForward' { return "Fast-forward to '$Reference' during setup" }
+        'Rebase' { return "Rebase onto '$Reference' during setup" }
+        'Reset' { return "Reset to '$Reference' during setup" }
+        'Seed' { return "Seed from '$Reference' during setup" }
+        'LeaveUnchanged' { return 'Leave unchanged (no repository update)' }
+        'None' { return "No action needed. $updateStatus" }
+    }
+
+    if ($pendingUpdate) {
+        if ([string]::IsNullOrWhiteSpace($updateStatus)) {
+            return "Update strategy required against '$Reference'"
+        }
+        return "Update strategy required. $updateStatus"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($updateStatus)) {
+        return "Check against '$Reference'"
+    }
+    return "No action needed. $updateStatus"
+}
+
 function Initialize-AzDoProjectAndRepository {
     <#
     .SYNOPSIS
@@ -617,197 +1163,20 @@ function Initialize-AzDoProjectAndRepository {
         Write-Section `
             -Message "Creating/updating shared repository '$sharedRepoName'"
 
-    $hasCommits = Test-AzDoGitRepositoryCommit  -Project $selectedProject.Name -RepositoryId $repo.Id
-    $justInitialized = $false
-    if (-not $hasCommits) {
-        $justInitialized = Invoke-WithErrorHandling -OperationName "Initializing Shared Repository" -ScriptBlock {
-            $previousErrorActionPreference = $ErrorActionPreference
-            $ErrorActionPreference = 'Continue'
-            try {
-            Write-Host "Repository '$sharedRepoName' has no commits. Seeding it from the upstream repo..." -ForegroundColor Yellow
-
-            $sharedSourceUrl = $upstreamRepo
-            $destUrl = $repo.remoteUrl
-            if (-not $destUrl) {
-                throw "Could not determine remoteUrl for repository '$sharedRepoName'."
-            }
-
-            $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Init-" + [guid]::NewGuid().ToString('n'))
-            New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
-
-            try {
-                Push-Location $workRoot
-
-                & git init --initial-branch=main | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "Git init failed with exit code $LASTEXITCODE" }
-
-                & git remote add origin $sharedSourceUrl | Out-Null
-                & git fetch origin | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "Git fetch failed with exit code $LASTEXITCODE" }
-
-                & git ls-remote --exit-code origin $ALM4DataverseRef | Out-Null
-                if ($LASTEXITCODE -eq 2) {
-                    throw "Could not resolve reference '$ALM4DataverseRef' from upstream repository."
-                }
-                if ($LASTEXITCODE -ne 0) {
-                    throw "Git ls-remote failed with exit code $LASTEXITCODE"
-                }
-
-                $lsRemoteOutput = (& git ls-remote origin $ALM4DataverseRef | Select-Object -First 1)
-                if ($lsRemoteOutput -match '^([a-f0-9]+)\s+(.+)$') {
-                    $commitSha = $Matches[1]
-                    $fullRef = $Matches[2]
-                    if ($fullRef -match '^refs/heads/(.+)$') {
-                        $targetRef = "origin/$($Matches[1])"
-                    }
-                    elseif ($fullRef -match '^refs/tags/') {
-                        $targetRef = $commitSha
-                    }
-                    else {
-                        $targetRef = $ALM4DataverseRef
-                    }
-                }
-                else {
-                    $targetRef = $ALM4DataverseRef
-                }
-
-                & git checkout -b main $targetRef | Out-Null
-                if ($LASTEXITCODE -ne 0) { throw "Git checkout failed with exit code $LASTEXITCODE" }
-
-                & git remote set-url origin $destUrl | Out-Null
-                & git -c "http.extraheader=AUTHORIZATION: bearer $azDevOpsAccessToken" push -u origin main
-                if ($LASTEXITCODE -ne 0) { throw "Git push failed with exit code $LASTEXITCODE" }
-
-                Write-Host "Shared repository initialized successfully."
-                return $true
-            }
-            finally {
-                if ((Get-Location).Path -eq $workRoot) { Pop-Location }
-                try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
-            }
-            }
-            finally {
-                $ErrorActionPreference = $previousErrorActionPreference
-            }
-        } -StatusMessage "Initializing shared repository '$sharedRepoName'..." -CaptureOutputInPanel
-    }
-
-    if (-not $justInitialized) {
-        $sharedSourceUrl = $upstreamRepo
-        $destUrl = $repo.remoteUrl
-        if (-not $destUrl) {
+        $repositoryRemoteUrl = [string](Get-OptionalObjectPropertyValue -InputObject $repo -PropertyName 'remoteUrl')
+        if ([string]::IsNullOrWhiteSpace($repositoryRemoteUrl)) {
             throw "Could not determine remoteUrl for repository '$sharedRepoName'."
         }
 
-        $workRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ALM4Dataverse-Check-" + [guid]::NewGuid().ToString('n'))
-        New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
-
-        try {
-            $sharedRepoSyncState = Invoke-WithSpectreStatus -Status "Checking shared repository '$sharedRepoName' against upstream..." -ScriptBlock {
-                Get-AzDoSharedRepositorySyncState -RepositoryRemoteUrl $destUrl -WorkRoot $workRoot -UpstreamGitSource $sharedSourceUrl -Reference $ALM4DataverseRef -AccessToken $azDevOpsAccessToken
-            }
-
-            if ($sharedRepoSyncState.LocalHash -eq $sharedRepoSyncState.UpstreamHash) {
-                Write-Host "Shared repository is already up to date."
-            }
-            else {
-                if ($sharedRepoSyncState.CanFastForward) {
-                    if (Read-YesNo -Prompt "Updates are available from the shared repo (fast-forward). Update '$sharedRepoName'?" ) {
-                        Invoke-WithErrorHandling -OperationName "Fast-forwarding shared repository '$sharedRepoName'" -StatusMessage "Fast-forwarding shared repository '$sharedRepoName'..." -CaptureOutputInPanel -ScriptBlock {
-                            $previousErrorActionPreference = $ErrorActionPreference
-                            try {
-                                $ErrorActionPreference = 'Continue'
-
-                                & git -C $workRoot merge --ff-only $sharedRepoSyncState.UpstreamRef
-                                if ($LASTEXITCODE -ne 0) { throw 'Git merge failed' }
-
-                                & git -C $workRoot -c "http.extraheader=AUTHORIZATION: bearer $azDevOpsAccessToken" push origin
-                                if ($LASTEXITCODE -ne 0) { throw 'Git push failed' }
-                            }
-                            finally {
-                                $ErrorActionPreference = $previousErrorActionPreference
-                            }
-                        } | Out-Null
-
-                        Write-Host "Repository updated successfully."
-                    }
-                }
-                else {
-                    if ($sharedRepoSyncState.IsAhead) {
-                        Write-Host "Shared repository is ahead of the shared repo."
-                    }
-                    else {
-                        $divergedMenuItems = @(
-                            "Rebase '$sharedRepoName' onto ref '$ALM4DataverseRef'",
-                            "Reset '$sharedRepoName' to ref '$ALM4DataverseRef' (force push)",
-                            "Leave '$sharedRepoName' unchanged"
-                        )
-                        $divergedSelection = Select-FromMenu `
-                            -Title "The shared repo '$sharedRepoName' has diverged. Choose how to update it." `
-                            -Items $divergedMenuItems `
-                            -PromptGuidanceLines @(
-                                "Choose how to reconcile '$sharedRepoName' with upstream ALM4Dataverse template history.",
-                                'Rebase preserves local commits, reset force-aligns to upstream, and leave unchanged keeps current state.'
-                            ) `
-                            -PromptGuidanceDocRelativePath 'docs/setup/azdo-automated-setup.md' `
-                            -PromptGuidanceRef $ALM4DataverseRef
-
-                        switch ($divergedSelection) {
-                            0 {
-                                Invoke-WithErrorHandling -OperationName "Rebasing shared repository '$sharedRepoName'" -StatusMessage "Rebasing shared repository '$sharedRepoName'..." -CaptureOutputInPanel -ScriptBlock {
-                                    $previousErrorActionPreference = $ErrorActionPreference
-                                    try {
-                                        $ErrorActionPreference = 'Continue'
-
-                                        & git -C $workRoot rebase $sharedRepoSyncState.UpstreamRef
-                                        if ($LASTEXITCODE -ne 0) { throw "Git rebase failed - this script can't handle conflicts. You need to rebase your local changes manually." }
-
-                                        & git -C $workRoot -c "http.extraheader=AUTHORIZATION: bearer $azDevOpsAccessToken" push --force-with-lease origin
-                                        if ($LASTEXITCODE -ne 0) { throw 'Git push failed' }
-                                    }
-                                    finally {
-                                        $ErrorActionPreference = $previousErrorActionPreference
-                                    }
-                                } | Out-Null
-
-                                Write-Host "Repository updated successfully."
-                            }
-                            1 {
-                                Invoke-WithErrorHandling -OperationName "Resetting shared repository '$sharedRepoName'" -StatusMessage "Resetting shared repository '$sharedRepoName' to '$ALM4DataverseRef'..." -CaptureOutputInPanel -ScriptBlock {
-                                    $previousErrorActionPreference = $ErrorActionPreference
-                                    try {
-                                        $ErrorActionPreference = 'Continue'
-
-                                        & git -C $workRoot reset --hard $sharedRepoSyncState.UpstreamRef
-                                        if ($LASTEXITCODE -ne 0) { throw 'Git reset failed' }
-
-                                        & git -C $workRoot -c "http.extraheader=AUTHORIZATION: bearer $azDevOpsAccessToken" push --force-with-lease origin
-                                        if ($LASTEXITCODE -ne 0) { throw 'Git push failed' }
-                                    }
-                                    finally {
-                                        $ErrorActionPreference = $previousErrorActionPreference
-                                    }
-                                } | Out-Null
-
-                                Write-Host "Repository updated successfully."
-                            }
-                            default {
-                                Write-Host "Leaving shared repository unchanged." -ForegroundColor Yellow
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        catch {
-            Write-Host "Failed to check or update repository: $($_.Exception.Message)" -ForegroundColor Red
-            throw
-        }
-        finally {
-            if ((Get-Location).Path -eq $workRoot) { Pop-Location }
-            try { Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the temporary repository; continuing cleanup.' }
-        }
-    }
+        [void](Invoke-AzDoSharedRepositorySync `
+            -ProjectName $selectedProject.Name `
+            -RepositoryId ([string]$repo.Id) `
+            -RepositoryName $sharedRepoName `
+            -RepositoryRemoteUrl $repositoryRemoteUrl `
+            -UpstreamGitSource $upstreamRepo `
+            -Reference $ALM4DataverseRef `
+            -AccessToken $azDevOpsAccessToken `
+            -PromptForStrategy)
     }
 
     return [pscustomobject]@{

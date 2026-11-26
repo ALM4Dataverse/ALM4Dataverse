@@ -64,6 +64,10 @@ and approval checks are not replaced by updating Git files.
 Use a reviewed released setup script. Select existing resources deliberately, review
 generated diffs, and keep custom hooks/settings under source control.
 
+Setup checks the shared repository automatically and asks for an update strategy only
+when the configured ref differs. Review that strategy before continuing, especially when
+the shared repository has local changes.
+
 Setup copies the scaffold again when it re-runs. It keeps these application files and
 settings:
 

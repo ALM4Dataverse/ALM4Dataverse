@@ -124,6 +124,9 @@ function Select-FromMenu {
     .PARAMETER DimItems
         Displays matching choices in grey. Callers remain responsible for preventing
         unavailable choices from running.
+    .PARAMETER ItemStyles
+        Optional map from original item text to a Spectre style applied after escaping.
+        Use it to distinguish nested menu levels. DimItems takes precedence.
     .PARAMETER ActionSectionTitle
         Separator text preceding the optional action group.
     .PARAMETER ActionSectionFirst
@@ -144,7 +147,8 @@ function Select-FromMenu {
         [Parameter()][string[]]$ActionItems = @(),
         [Parameter()][string]$ActionSectionTitle = '---',
         [Parameter()][switch]$ActionSectionFirst,
-        [Parameter()][string[]]$DimItems = @()
+        [Parameter()][string[]]$DimItems = @(),
+        [Parameter()][System.Collections.IDictionary]$ItemStyles
     )
 
     if ($Items.Count -eq 0) { return $null }
@@ -243,6 +247,12 @@ function Select-FromMenu {
             }
             if ($DimItems -contains $item) {
                 $displayItem = "[grey]$displayItem[/]"
+            }
+            elseif ($null -ne $ItemStyles -and $ItemStyles.Contains($item)) {
+                $itemStyle = [string]$ItemStyles[$item]
+                if (-not [string]::IsNullOrWhiteSpace($itemStyle)) {
+                    $displayItem = "[$itemStyle]$displayItem[/]"
+                }
             }
             if ($hasActionSection -and $ActionItems -contains $item) {
                 $displayItem = "[bold deepskyblue1]$displayItem[/]"

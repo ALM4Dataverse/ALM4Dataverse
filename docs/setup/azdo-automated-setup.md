@@ -106,19 +106,27 @@ tooling only; workload identity federation requires it. See
 
 The shared `ALM4Dataverse` repository holds the templates your pipelines use. Select an
 existing repository in the project or create one; creating it asks for confirmation
-because the repository is created before preview. Then run **Check and update shared
-repository version** to seed a new repository or compare an existing one with the
-ALM4Dataverse ref you are running. That step can rewrite shared history, so setup asks
-for confirmation before changing it.
+because the repository is created before preview.
+
+Setup checks the selected repository automatically when it resolves an existing
+repository and again after you select a different shared repository. The
+**Define shared repository update strategy** step shows **No action needed** when the
+repository already matches, or is ahead of, the ALM4Dataverse ref you are running. If the
+check finds an empty repository, a fast-forward, or diverged history, choose the strategy
+there. Setup applies the selected strategy immediately so the preview uses the updated
+template source. If a check fails, the step shows the reason and lets you retry.
 
 ![Azure DevOps shared repository selection and creation confirmation](./screenshots/azdo-shared-repository-selection.png)
 
-![Confirmation before checking and updating the shared repository version](./screenshots/azdo-shared-repository-version.png)
+![Choosing a shared repository update strategy](./screenshots/azdo-shared-repository-update.png)
 
 ### 4. Configure branches and environments
 
 **Configure branches, dev and deployment envs** defines each branch, its DEV environment,
-its deployment targets and its BUILD validation. Select the row to start.
+its deployment targets and its BUILD validation. Select the row to start. When an existing
+repository already has a complete saved branch and environment configuration, the step
+starts marked complete and does not need to be visited. The menu lists each branch's DEV
+environment, BUILD validation and deployment targets in that order.
 
 1. **Choose a branch strategy.** For a new repository, choose `main only` or
    `main + develop`. Existing repositories start from the mappings in `alm-config.psd1`
@@ -132,11 +140,14 @@ its deployment targets and its BUILD validation. Select the row to start.
 
    ![Prompt for a new branch name](./screenshots/branch-name.png)
 
-3. **Configure the DEV environment.** Choose whether the branch has a DEV environment. If
-   you choose Yes, select the Dataverse environment; setup names it `Dev-<branch>`. Only
-   branches with a DEV environment can be a solution source.
+3. **Configure the DEV environment.** A branch without one shows **DEV: Not configured**.
+   Select it (or **Edit DEV environment**) to open the DEV detail menu, then select **DEV
+   environment** to enable it. The remaining steps stay unavailable until it is enabled;
+   choose **Do not configure DEV environment** to leave it unconfigured. Enable it to
+   select the Dataverse environment; setup names it `Dev-<branch>`. Only branches with a
+   DEV environment can be a solution source.
 
-   ![Azure DevOps DEV environment confirmation](./screenshots/azdo-dev-confirmation.png)
+   ![Azure DevOps DEV environment detail menu with the enable step](./screenshots/azdo-dev-menu.png)
 
    ![Azure DevOps DEV environment selection](./screenshots/azdo-dev-environment-selection.png)
 
