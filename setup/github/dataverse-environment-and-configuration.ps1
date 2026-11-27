@@ -513,7 +513,12 @@ function Get-GitHubEnvironmentConfiguration {
         [Parameter()][string]$TenantId,
         [Parameter()][string]$RepoName,
         [Parameter()][object]$ExistingCredential,
-        [Parameter()][string]$ExistingServiceAccountUPN
+        [Parameter()][string]$ExistingServiceAccountUPN,
+        [Parameter()][AllowEmptyString()][string]$RepoOwner,
+        [Parameter()][AllowEmptyString()][string]$RepoFullName,
+        [Parameter()][long]$RepoOwnerId,
+        [Parameter()][long]$RepoId,
+        [Parameter()][bool]$UseImmutableWifSubject
     )
 
     $creds = Get-GitHubCredentialsForEnvironment `
@@ -521,7 +526,12 @@ function Get-GitHubEnvironmentConfiguration {
         -TenantId $TenantId `
         -RepoName $RepoName `
         -EnvironmentName $EnvironmentName `
-        -ExistingCredential $ExistingCredential
+        -ExistingCredential $ExistingCredential `
+        -RepoOwner $RepoOwner `
+        -RepoFullName $RepoFullName `
+        -RepoOwnerId $RepoOwnerId `
+        -RepoId $RepoId `
+        -UseImmutableWifSubject $UseImmutableWifSubject
 
     $serviceAccountUPN = Get-DataverseServiceAccountUPN `
         -ExistingServiceAccounts $ExistingServiceAccounts `
@@ -554,6 +564,11 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'ExistingServiceAccounts', Justification = 'Captured by the nested service-account callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Captured by nested configuration callbacks.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoName', Justification = 'Captured by the nested credential callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoOwner', Justification = 'Captured by the nested credential callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoFullName', Justification = 'Captured by the nested credential callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoOwnerId', Justification = 'Captured by the nested credential callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'RepoId', Justification = 'Captured by the nested credential callback.')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'UseImmutableWifSubject', Justification = 'Captured by the nested credential callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'PromptGuidanceLines', Justification = 'Captured by the nested Dataverse-selection callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'PromptGuidanceDocRelativePath', Justification = 'Captured by the nested Dataverse-selection callback.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'PromptGuidanceRef', Justification = 'Captured by the nested Dataverse-selection callback.')]
@@ -577,6 +592,11 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
         [Parameter()][array]$ExistingServiceAccounts,
         [Parameter()][string]$TenantId,
         [Parameter()][string]$RepoName,
+        [Parameter()][AllowEmptyString()][string]$RepoOwner,
+        [Parameter()][AllowEmptyString()][string]$RepoFullName,
+        [Parameter()][long]$RepoOwnerId,
+        [Parameter()][long]$RepoId,
+        [Parameter()][bool]$UseImmutableWifSubject,
         [Parameter()][string[]]$PromptGuidanceLines,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
         [Parameter()][string]$PromptGuidanceRef,
@@ -619,7 +639,12 @@ function Invoke-GitHubEnvironmentConfigurationWizard {
             -TenantId $TenantId `
             -RepoName $RepoName `
             -EnvironmentName $environmentState.ShortName `
-            -ExistingCredential $environmentState.Credentials
+            -ExistingCredential $environmentState.Credentials `
+            -RepoOwner $RepoOwner `
+            -RepoFullName $RepoFullName `
+            -RepoOwnerId $RepoOwnerId `
+            -RepoId $RepoId `
+            -UseImmutableWifSubject $UseImmutableWifSubject
     }.GetNewClosure()
     $selectServiceAccount = {
         param($environmentState)

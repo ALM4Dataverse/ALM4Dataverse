@@ -153,9 +153,48 @@ environment, BUILD validation and deployment targets in that order.
    registration asks whether to use workload identity federation or a client secret. If
    you choose a client secret, store it as a GitHub secret; never put it in
    `alm-config.psd1` or source control. Rotating an existing secret is deferred until you
-   choose **Apply changes**.
+   choose **Apply changes**. Setup first checks your Entra ID permissions; actions your
+   signed-in account cannot perform, such as creating an app registration or adding a
+   federated credential, are dimmed and cannot be selected. See
+   [app registration permissions](../config/github-secrets.md#app-registration-permissions).
+
+   When you enter an existing application ID, setup checks that it exists, has the
+   Dataverse `user_impersonation` permission, has an enterprise application and has a
+   usable client secret or federated credential. For WIF, it also requires the exact
+   federated credential issuer and subject for the selected repository and environment.
+   Problems
+   are shown with **Continue with this application**, **Recheck application setup** and
+   **Enter a different application ID** options, and the next
+   authentication menu offers only the methods configured on the app. **Create a new
+   application manually (with instructions)** shows the Entra portal steps, including the
+   `user_impersonation` scope and manual WIF credential steps, and then validates the ID
+   you enter. WIF and client secret are alternatives; WIF is recommended.
+   **Search for an existing application by name** searches this tenant by display-name
+   prefix when your account can list applications.
 
    ![GitHub credential choices](./screenshots/github-credentials.png)
+
+   ![GitHub manual application creation instructions](./screenshots/github-manual-instructions.png)
+
+   The manual instructions show the exact WIF subject for the selected repository and
+   environment. Setup computes it from the repository's current OIDC mode, so legacy
+   name-based and immutable owner/repository-ID subjects are not interchangeable. Do not
+   copy a subject from another repository or from a generic example.
+
+   Setup explains each validation problem and offers **Continue**, **Recheck**, or
+   **Enter a different application ID**. The validation dialog is shared by both setup
+   providers.
+
+   | Validation problem | What setup reports |
+   | --- | --- |
+   | Application not found | ![Validation: application not found](./screenshots/validation-application-not-found.png) |
+   | Dataverse user_impersonation permission missing | ![Validation: Dataverse permission missing](./screenshots/validation-missing-dataverse-permission.png) |
+   | Enterprise application missing | ![Validation: enterprise application missing](./screenshots/validation-missing-enterprise-app.png) |
+   | No usable client secret or federated credential | ![Validation: no usable credential](./screenshots/validation-missing-credentials.png) |
+   | Client secret expired | ![Validation: expired client secret](./screenshots/validation-expired-secret.png) |
+   | Federated credential uses the wrong issuer or audience | ![Validation: wrong federated credential](./screenshots/validation-wrong-federated-credential.png) |
+   | Federated credential uses the wrong subject | ![Validation: wrong federated subject](./screenshots/validation-wrong-federated-subject.png) |
+   | Validation could not complete | ![Validation: check failed](./screenshots/validation-check-failed.png) |
 
    ![GitHub authentication type choices](./screenshots/github-authentication-type.png)
 

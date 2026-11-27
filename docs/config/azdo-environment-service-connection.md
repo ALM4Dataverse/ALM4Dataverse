@@ -72,6 +72,66 @@ See [Service Principal Setup](../setup/azdo-manual-setup.md#4-service-principal-
 3. Creating an application user in each Dataverse environment
 4. Creating the service connection in Azure DevOps
 
+### App registration permissions
+
+Setup checks the signed-in account's Entra ID directory roles, app-registration
+ownership and the tenant's **Users can register applications** setting before it
+offers app-registration changes. Actions the account cannot perform are dimmed and
+cannot be selected:
+
+- **Create new App Registration (Entra ID)** needs permission to create an app
+  registration and its enterprise application. The Application Administrator,
+  Cloud Application Administrator, Global Administrator and Application Developer
+  roles grant it; otherwise the tenant must allow users to register applications.
+- **Generate a new client secret when changes are applied** adds a password
+  credential, and choosing **Workload Identity Federation** for an existing app
+  registration adds a federated identity credential. Both need ownership of the app
+  registration or an application-administration role.
+- **Reuse** of a WIF credential for another environment adds a federated identity
+  credential with that service connection's subject, so it needs the same access.
+- Reusing an existing service connection does not change the Entra application and
+  remains available.
+
+When Microsoft Graph cannot answer, setup leaves the action available rather than
+block a permitted account after a transient read failure; the later write still
+requires Graph authorization and can fail. Custom directory roles are not inspected,
+and an application owner can still be denied by the client application's granted
+Graph scopes.
+
+### Existing application validation
+
+When you select **Enter existing Service Principal details** or a search result, setup
+reads the App Registration and checks:
+
+- The client ID exists in the tenant.
+- An enterprise application (service principal) exists.
+- The app registration requests the Dataverse `user_impersonation` delegated
+  permission (**API permissions** > **Dynamics CRM** > **Delegated permissions** >
+  `user_impersonation`). An Entra administrator must grant admin consent.
+- A non-expired client secret exists, a federated identity credential with audience
+  `api://AzureADTokenExchange`, the exact required issuer and the exact required subject
+  exists, or both. The issuer and subject are checked when setup knows them: the GitHub
+  repository and environment values, or the Azure DevOps service connection values.
+
+The Dataverse application user grants access to the environment; the
+`user_impersonation` permission is the scope the deployment identity requests.
+
+Problems are shown before the authentication step with **Continue with this
+application**, **Recheck application setup**, and **Enter a different application ID**.
+Continuing records the explicit choice but does not change the app. The authentication
+menu offers only the configured methods; if neither method is usable, both remain
+available after the warning. When WIF is not already usable, WIF is dimmed if setup can
+definitively determine that your account cannot manage credentials on the app; an
+unknown capability remains available. When extension mode is disabled, WIF is never
+offered. Setup never displays or retrieves an existing secret value, so client secret
+authentication still asks for the value.
+
+**Create a new application manually (with instructions)** displays the Entra portal
+steps and then validates the application ID you enter. **Search for an existing
+application by name** lists applications whose display name starts with the text you
+enter; it is dimmed when the account cannot list applications. Reusing an existing
+service connection does not validate or change its Entra application.
+
 ## Example Service Connection Configuration
 
 ### Development Environment (Dev-main)

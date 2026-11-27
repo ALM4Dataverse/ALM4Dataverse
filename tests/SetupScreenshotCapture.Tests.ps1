@@ -27,7 +27,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'defines all documented setup scenes and waits for visible content' {
         $scenes = @(Get-CaptureScene)
 
-        $scenes.Count | Should -Be 46
+        $scenes.Count | Should -Be 58
         foreach ($scene in $scenes) {
             $scene.Name | Should -Not -BeNullOrEmpty
             $scene.Provider | Should -BeIn @('common', 'github', 'azdo')
@@ -59,6 +59,18 @@ Describe 'Setup screenshot capture infrastructure' {
         $scenes.Name | Should -Contain 'github-oidc-identity'
         $scenes.Name | Should -Contain 'azdo-apply-changes'
         $scenes.Name | Should -Contain 'github-apply-changes'
+        $scenes.Name | Should -Contain 'github-manual-instructions'
+        $scenes.Name | Should -Contain 'azdo-manual-instructions'
+        $scenes.Name | Should -Contain 'azdo-validation-wrong-federated-credential'
+        $scenes.Name | Should -Contain 'validation-application-not-found'
+        $scenes.Name | Should -Contain 'validation-missing-enterprise-app'
+        $scenes.Name | Should -Contain 'validation-missing-credentials'
+        $scenes.Name | Should -Contain 'validation-expired-secret'
+        $scenes.Name | Should -Contain 'validation-wrong-federated-credential'
+        $scenes.Name | Should -Contain 'validation-check-failed'
+        $scenes.Name | Should -Contain 'validation-missing-dataverse-permission'
+        $scenes.Name | Should -Contain 'validation-wrong-federated-subject'
+        $scenes.Name | Should -Contain 'azdo-validation-wrong-federated-subject'
         $scenes.Name | Should -Contain 'github-build-validation'
         $scenes.Name | Should -Contain 'azdo-build-validation'
         $scenes.Name | Should -Contain 'github-dev-menu'
@@ -111,6 +123,8 @@ Describe 'Setup screenshot capture infrastructure' {
             'azdo-authentication-type'
             'azdo-setup-change-review'
             'azdo-apply-changes'
+            'azdo-manual-instructions'
+            'validation-missing-credentials'
             'github-menu-existing-repository'
         )
 
@@ -164,6 +178,13 @@ Describe 'Setup screenshot capture infrastructure' {
         $reviewStep.ExpectedText | Should -Be 'Up/Down=scroll'
         $applyStep = $steps | Where-Object SceneName -EQ 'azdo-apply-changes'
         $applyStep.ExpectedText | Should -Be 'Azure DevOps ALM4Dataverse setup menu'
+        $manualInstructionsStep = $steps | Where-Object SceneName -EQ 'azdo-manual-instructions'
+        $manualInstructionsStep.ExpectedText | Should -Be 'Grant admin consent'
+        ($manualInstructionsStep.CaptionLines -join ' ') | Should -Match 'manually'
+        $validationStep = $steps | Where-Object SceneName -EQ 'validation-missing-credentials'
+        $validationStep.ExpectedText |
+            Should -Be 'no usable client secret or federated identity credential'
+        ($validationStep.CaptionLines -join ' ') | Should -Match 'validated'
         $existingMenuStep = $steps | Where-Object SceneName -EQ 'github-menu-existing-repository'
         $existingMenuStep.ExpectedText | Should -Be 'Deployment: PROD -'
         $reviewStep.Interactions[0].WaitForText | Should -Be 'Modified: alm-config.psd1'
@@ -693,7 +714,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'runs scene listing without installing or loading the capture runtime' {
         $listedScenes = @(& (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1') -ListScenes)
 
-        $listedScenes.Count | Should -Be 46
+        $listedScenes.Count | Should -Be 58
         $listedScenes | Should -Contain 'branch-mapping'
         $listedScenes | Should -Contain 'environment-detail-menu'
         $listedScenes | Should -Contain 'setup-mode-choice'
@@ -720,5 +741,12 @@ Describe 'Setup screenshot capture infrastructure' {
         $listedScenes | Should -Contain 'solutions-configuration'
         $listedScenes | Should -Contain 'github-oidc-identity'
         $listedScenes | Should -Contain 'github-apply-changes'
+        $listedScenes | Should -Contain 'github-manual-instructions'
+        $listedScenes | Should -Contain 'azdo-manual-instructions'
+        $listedScenes | Should -Contain 'azdo-validation-wrong-federated-credential'
+        $listedScenes | Should -Contain 'validation-missing-credentials'
+        $listedScenes | Should -Contain 'validation-missing-dataverse-permission'
+        $listedScenes | Should -Contain 'validation-wrong-federated-subject'
+        $listedScenes | Should -Contain 'azdo-validation-wrong-federated-subject'
     }
 }

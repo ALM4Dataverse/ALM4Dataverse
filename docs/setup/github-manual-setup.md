@@ -28,14 +28,25 @@ covers the resource creation only. For Azure DevOps, use
 ## 1. Prepare Application Identities
 
 For each target, register an app in Entra ID and record its application/client ID and
-tenant ID. In the Power Platform admin center, select the Dataverse environment, add an
-**Application user** for that app, and assign the required role.
+tenant ID. Under **API permissions**, add **Dynamics CRM** > **Delegated permissions** >
+`user_impersonation` and grant admin consent. The Dataverse application user grants
+access to the environment; the `user_impersonation` permission is the scope the
+deployment identity requests. In the Power Platform admin center, select the Dataverse
+environment, add an **Application user** for that app, and assign the required role.
+Guided setup validates the app registration, its Dataverse permission, enterprise
+application and configured client secret or federated credential when you enter an
+existing application ID.
 
-Choose authentication:
+Choose one authentication method; WIF/OIDC is recommended because it avoids client
+secrets:
 
-- **WIF/OIDC:** add a federated credential with issuer
-  `https://token.actions.githubusercontent.com`, audience `api://AzureADTokenExchange`,
-  and the exact job subject. No client secret is needed.
+- **WIF/OIDC:** in **Certificates & secrets** > **Federated credentials**, add a
+  GitHub Actions credential with issuer `https://token.actions.githubusercontent.com`,
+  audience `api://AzureADTokenExchange`, and the exact job subject for this repository
+  and environment. The subject uses either the legacy name-based format or the immutable
+  owner/repository-ID format, depending on the repository's current OIDC setting; do not
+  substitute a subject from another repository or a generic example. Add one credential
+  for each environment. No client secret is needed.
 - **Client secret:** create a secret and store its value in GitHub Secrets, not source
   control. Track its expiry and rotation process.
 

@@ -96,7 +96,15 @@ See [application repository layout](../concepts/application-repository.md).
 
 For each target, create or select an Entra app registration. Prefer separate identities
 for production and non-production. Record the application/client ID and tenant ID, not
-the Entra object ID.
+the Entra object ID. Under **API permissions**, add **Dynamics CRM** > **Delegated
+permissions** > `user_impersonation` and grant admin consent. The Dataverse application
+user grants access to the environment; the `user_impersonation` permission is the scope
+the deployment identity requests. Guided setup validates the app registration, its
+Dataverse permission, enterprise application and configured client secret or federated
+credential when you enter an existing application ID.
+
+Choose one authentication method; workload identity federation is recommended because it
+avoids client secrets:
 
 - **Client secret:** create one under **Certificates & secrets**, store its value
   securely, and record the expiry.

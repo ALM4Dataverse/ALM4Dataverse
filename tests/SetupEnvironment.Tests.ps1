@@ -68,6 +68,30 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
         }
         Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
         Mock Invoke-RestMethod { [pscustomobject]@{ value = @() } }
+        $script:entraState = [pscustomobject]@{
+            TenantId                 = 'example.com'
+            UserObjectId             = 'example-user'
+            DirectoryRoles           = @()
+            CanCreateApplications    = $true
+            CanManageAllApplications = $true
+            CanReadApplications      = $true
+        }
+        Mock Get-EntraIdApplicationManagementState { $script:entraState }
+        Mock Test-EntraIdApplicationManagement { $true }
+        $script:validatedCredential = [pscustomobject]@{
+            Name                        = 'Manual'
+            ApplicationId               = '00000000-0000-0000-0000-000000000001'
+            ApplicationObjectId         = 'object-id'
+            ClientSecret                = 'fake-client-secret-value'
+            TenantId                    = 'example.com'
+            AuthType                    = 'WIF'
+            RotateSecret                = $false
+            IsExistingServiceConnection = $false
+            Validation                  = [pscustomobject]@{ HasServicePrincipal = $true }
+        }
+        Mock Read-SetupEntraIdApplicationCredential { $script:validatedCredential }
+        $script:searchedApplication = [pscustomobject]@{ appId = 'searched-app'; displayName = 'Searched App'; id = 'searched-object' }
+        Mock Select-EntraIdApplicationBySearch { $null }
         Mock Get-VSTeamServiceEndpoint { @() }
         Mock Resolve-EntraIdApplicationByAppId { [pscustomobject]@{ id = 'object-id'; displayName = 'App' } }
         Mock New-EntraIdApplicationSecret { 'fake-rotated-secret' }
@@ -119,25 +143,121 @@ Describe '<Provider> credential and environment configuration' -ForEach @(
     }
 
     It 'reuses cached credentials by identity' {
-        $script:credentialAnswers.Enqueue(2)
+        $script:credentialAnswers.Enqueue(4)
         $script:credentialParameters.ExistingCredentials = @($script:environmentCredential)
         & $CredentialHelper @script:credentialParameters | Should -Be $script:environmentCredential
     }
 
-    It 'accepts manual application details for both supported authentication modes' -ForEach @(
-        @{ AuthType = 'WIF' }
-        @{ AuthType = 'Secret' }
-    ) {
+    It 'validates a manually entered application before returning it' {
         $script:credentialAnswers.Enqueue(1)
-        $index = if ($Provider -eq 'GitHub') { $(if ($AuthType -eq 'WIF') { 0 } else { 1 }) } else { $(if ($AuthType -eq 'WIF') { 1 } else { 0 }) }
-        $script:credentialAnswers.Enqueue($index)
         $result = & $CredentialHelper @script:credentialParameters
-        $result.AuthType | Should -Be $AuthType
-        $result.Name | Should -Be Manual
-        $result.ApplicationId | Should -Be '00000000-0000-0000-0000-000000000001'
-        if ($AuthType -eq 'Secret') { $result.ClientSecret | Should -Be 'fake-client-secret-value' }
-        else { $result.ClientSecret | Should -BeNullOrEmpty }
+        $result | Should -Be $script:validatedCredential
+        Should -Invoke Read-SetupEntraIdApplicationCredential -Times 1 -Exactly -ParameterFilter {
+            $Name -eq 'Manual' -and
+            [string]::IsNullOrWhiteSpace($ApplicationId) -and
+            $ProviderName -eq $(if ($Provider -eq 'GitHub') { 'GitHub' } else { 'AzureDevOps' })
+        }
+        Should -Invoke Initialize-EntraIdServicePrincipal -Times 1 -Exactly -ParameterFilter { $CreateIfMissing -eq $true }
+    }
+
+    It 'guides manual application creation and validates the resulting ID' {
+        $script:credentialAnswers.Enqueue(2)
+        $result = & $CredentialHelper @script:credentialParameters
+        $result | Should -Be $script:validatedCredential
+        Should -Invoke Read-SetupEntraIdApplicationCredential -Times 1 -Exactly -ParameterFilter {
+            [bool]$ShowCreationInstructions
+        }
         Should -Invoke Initialize-EntraIdServicePrincipal -Times 1 -Exactly
+    }
+
+    It 'searches for an existing application and validates the selection' {
+        Mock Select-EntraIdApplicationBySearch { $script:searchedApplication }
+        $script:credentialAnswers.Enqueue(3)
+        $result = & $CredentialHelper @script:credentialParameters
+        $result | Should -Be $script:validatedCredential
+        Should -Invoke Select-EntraIdApplicationBySearch -Times 1 -Exactly
+        Should -Invoke Read-SetupEntraIdApplicationCredential -Times 1 -Exactly -ParameterFilter {
+            $ApplicationId -eq 'searched-app'
+        }
+        Should -Invoke Initialize-EntraIdServicePrincipal -Times 1 -Exactly
+    }
+
+    It 'returns to the credential menu when search is cancelled' {
+        $script:credentialAnswers.Enqueue(3)
+        $script:credentialAnswers.Enqueue(1)
+        $result = & $CredentialHelper @script:credentialParameters
+        $result | Should -Be $script:validatedCredential
+        Should -Invoke Select-EntraIdApplicationBySearch -Times 1 -Exactly
+        Should -Invoke Read-SetupEntraIdApplicationCredential -Times 1 -Exactly
+        Should -Invoke Select-FromMenu -Times 2 -Exactly
+    }
+
+    It 'disables application search when the account cannot list applications' {
+        $script:entraState.CanReadApplications = $false
+        $script:credentialAnswers.Enqueue(3)
+        $script:credentialAnswers.Enqueue(1)
+        $result = & $CredentialHelper @script:credentialParameters
+        $result | Should -Be $script:validatedCredential
+        Should -Invoke Select-FromMenu -Times 2 -Exactly -ParameterFilter {
+            $DimItems -contains 'Search for an existing application by name [requires Entra ID permissions]'
+        }
+    }
+
+    It 'disables creating an application when the signed-in account cannot create app registrations' {
+        $script:entraState.CanCreateApplications = $false
+        $script:validatedCredential.Validation.HasServicePrincipal = $false
+        $script:credentialAnswers.Enqueue(0) # Dimmed Create new
+        $script:credentialAnswers.Enqueue(1) # Enter existing details
+        $result = & $CredentialHelper @script:credentialParameters
+        $result | Should -Be $script:validatedCredential
+        Should -Invoke New-EntraIdApplication -Times 0 -Exactly
+        Should -Invoke Read-SetupEntraIdApplicationCredential -Times 1 -Exactly
+        Should -Invoke Initialize-EntraIdServicePrincipal -Times 1 -Exactly -ParameterFilter { $CreateIfMissing -eq $false }
+        Should -Invoke Select-FromMenu -Times 2 -Exactly -ParameterFilter {
+            $DimItems -contains 'Create new App Registration (Entra ID) [requires Entra ID permissions]'
+        }
+    }
+
+    It 'disables rotating an existing secret when the account cannot manage the application' {
+        Mock Test-EntraIdApplicationManagement { $false }
+        $script:environmentCredential.AuthType = 'Secret'
+        $script:credentialParameters.ExistingCredential = $script:environmentCredential
+        $script:credentialAnswers.Enqueue(0) # Use existing
+        $script:credentialAnswers.Enqueue(1) # Dimmed rotation
+        $script:credentialAnswers.Enqueue(0) # Keep
+        $result = & $CredentialHelper @script:credentialParameters
+        $result.RotateSecret | Should -BeFalse
+        Should -Invoke New-EntraIdApplicationSecret -Times 0 -Exactly
+        Should -Invoke Select-FromMenu -Times 2 -Exactly -ParameterFilter {
+            $DimItems -contains 'Generate a new client secret when changes are applied [requires Entra ID permissions]'
+        }
+    }
+
+    It 'disables reusing a WIF credential when the account cannot manage its application' {
+        Mock Test-EntraIdApplicationManagement { $false }
+        $script:credentialParameters.ExistingCredentials = @($script:environmentCredential)
+        $script:credentialAnswers.Enqueue(4) # Dimmed cached WIF credential
+        $script:credentialAnswers.Enqueue(0) # Create new
+        $script:credentialAnswers.Enqueue(0) # Supported auth type for a new application
+        $result = & $CredentialHelper @script:credentialParameters
+        $result.ApplicationId | Should -Be 'new-app'
+        Should -Invoke New-EntraIdApplication -Times 1 -Exactly
+        Should -Invoke Select-FromMenu -Times 2 -Exactly -ParameterFilter {
+            $DimItems -contains 'Reuse: App (00000000-0000-0000-0000-000000000001) [requires Entra ID permissions]'
+        }
+    }
+
+    It 'keeps write actions available when permission detection cannot answer' {
+        $script:entraState.CanCreateApplications = $null
+        $script:entraState.CanManageAllApplications = $null
+        Mock Test-EntraIdApplicationManagement { $null }
+        $script:environmentCredential.AuthType = 'Secret'
+        $script:credentialParameters.ExistingCredential = $script:environmentCredential
+        $script:credentialAnswers.Enqueue(0) # Use existing
+        $script:credentialAnswers.Enqueue(1) # Rotation remains selectable
+        $result = & $CredentialHelper @script:credentialParameters
+        $result.RotateSecret | Should -BeTrue
+        Should -Invoke Select-FromMenu -Times 2 -Exactly
     }
 
     It 'does not choose credentials after a cancelled selection' {
@@ -495,6 +615,19 @@ Describe 'Identity and environment discovery in <Provider>' -ForEach @(
         $creates = if ($Existing) { 0 } else { 1 }
         Should -Invoke Invoke-RestMethod -Times $creates -Exactly -ParameterFilter { $Method -eq 'Post' -and $Uri -like '*/applications' }
         Should -Invoke Invoke-RestMethod -Times $creates -Exactly -ParameterFilter { $Method -eq 'Post' -and $Uri -like '*/servicePrincipals' }
+        if (-not $Existing) {
+            Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+                if ($Method -ne 'Post' -or $Uri -notlike '*/applications') { return $false }
+                $payload = $Body | ConvertFrom-Json
+                $resource = @($payload.requiredResourceAccess | Where-Object {
+                        $_.resourceAppId -eq '00000007-0000-0000-c000-000000000000'
+                    })
+                $scope = @($resource.resourceAccess | Where-Object {
+                        $_.id -eq '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4' -and $_.type -eq 'Scope'
+                    })
+                $scope.Count -eq 1
+            }
+        }
         if ($AuthType -eq 'Secret') { $result.ClientSecret | Should -Be fake-secret }
         else { $result.ClientSecret | Should -BeNullOrEmpty }
     }
