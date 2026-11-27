@@ -68,7 +68,7 @@ jobs:
           Run this command in Windows PowerShell to set up ALM4Dataverse with Azure DevOps:
           
           \`\`\`powershell
-          iwr https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/setup-azdo.ps1 | iex
+          iex ((irm https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/setup-azdo.ps1).TrimStart([char]0xFEFF))
           \`\`\`
           
           ### GitHub Actions — Automated Setup
@@ -76,7 +76,7 @@ jobs:
           Run this command in Windows PowerShell to set up ALM4Dataverse with GitHub Actions:
           
           \`\`\`powershell
-          iwr https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/setup-github.ps1 | iex
+          iex ((irm https://github.com/${{ github.repository }}/releases/download/${TAG_NAME}/setup-github.ps1).TrimStart([char]0xFEFF))
           \`\`\`
           
           📚 **Documentation:**

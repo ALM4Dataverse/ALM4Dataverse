@@ -51,7 +51,7 @@ If you have already reviewed and trust the release, you can run the one-line boo
 instead:
 
 ```powershell
-iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1 | iex
+iex ((irm https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1).TrimStart([char]0xFEFF))
 ```
 
 To select a tenant or a specific shared-code ref, see
