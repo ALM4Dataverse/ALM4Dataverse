@@ -105,6 +105,8 @@ Suites live under `tests/`, grouped by the behaviour they own:
     Dataverse module and temporary Git repositories; they do not contact Dataverse.
 - Dependency installation, cache outputs, and update automation:
     `PipelineDependencies`, `DependencyCache`, and `DependencyUpdates`.
+- Fork upstream release tracking for GitHub and Azure DevOps forks, against
+    temporary Git repositories with mocked platform APIs: `UpstreamReleaseTracking`.
 - Azure DevOps and GitHub baseline selection: `BuildBaseline` and
     `GitHubBuildBaseline`.
 - GitHub deployment gates, environment mapping, and authentication:

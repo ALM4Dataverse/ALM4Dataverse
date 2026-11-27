@@ -12,6 +12,11 @@ preparation/publication, test boundaries, and dependency-update operation.
 | [test-dependency-workflow.ps1](test-dependency-workflow.ps1) | Offline dependency-data/update-pattern smoke checks. |
 | [test-documentation.ps1](test-documentation.ps1) | Local links/anchors, fenced example syntax, and reference-name coverage. |
 
+The [Track Upstream Release workflow](../workflows/track-upstream-release.yml) runs scripts
+from [scripts/upstream-release](../../scripts/upstream-release), which the Azure DevOps
+pipeline shares; see [track upstream releases](../../docs/usage/updating.md#track-upstream-releases)
+and its [implementation notes](../../docs/maintainers.md#upstream-release-tracking).
+
 ## Automated Dependency Update Workflow
 
 The [workflow](../workflows/update-dependencies.yml) runs daily at **02:00 UTC** or from

@@ -1,0 +1,9 @@
+# actionlint configuration, read by the Repository Validation workflow and local runs.
+paths:
+  .github/workflows/track-upstream-release.yml:
+    ignore:
+      # actionlint's built-in metadata for actions/create-github-app-token@v3 predates its
+      # 'client-id' input, which replaces the deprecated 'app-id'. Remove these entries once
+      # the pinned actionlint version knows 'client-id'.
+      - 'input "client-id" is not defined in action "actions/create-github-app-token@v3"'
+      - 'missing input "app-id" which is required by action "actions/create-github-app-token@v3"'

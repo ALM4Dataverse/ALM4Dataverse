@@ -1,0 +1,94 @@
+# Opens a pull request that merges each new GitHub upstream release into this Azure Repos
+# fork. It is the Azure DevOps counterpart of
+# .github/workflows/track-upstream-release.yml and runs the same script.
+# Configuration and permissions: docs/usage/updating.md#track-upstream-releases.
+#
+# Optional pipeline variables:
+#   UPSTREAM_REPOSITORY            Upstream 'owner/name' (default ALM4Dataverse/ALM4Dataverse).
+#   UPSTREAM_BASE_BRANCH           Fork branch the pull request targets (default main).
+#   UPSTREAM_INCLUDE_PRERELEASES   'true' to consider upstream prereleases.
+#   UPSTREAM_READ_TOKEN (secret)   GitHub token that can read a private upstream.
+
+trigger: none
+pr: none
+
+schedules:
+- cron: '30 3 * * *'
+  displayName: Daily upstream release check
+  branches:
+    include:
+    - main
+  # Run even without new commits in the fork: the upstream is what changes.
+  always: true
+
+parameters:
+# Azure Pipelines rejects empty string defaults, so a single space means "not set";
+# the script trims these values.
+- name: targetTag
+  displayName: Upstream release tag to merge instead of the newest eligible release
+  type: string
+  default: ' '
+- name: currentTag
+  displayName: Upstream release tag the base branch already contains (only when it cannot be detected)
+  type: string
+  default: ' '
+- name: includePrereleases
+  displayName: Consider upstream prereleases
+  type: string
+  default: pipeline-setting
+  values:
+  - pipeline-setting
+  - 'true'
+  - 'false'
+- name: dryRun
+  displayName: Report what would happen without pushing or changing pull requests
+  type: boolean
+  default: false
+
+pool:
+  vmImage: ubuntu-latest
+
+jobs:
+- job: TrackUpstreamRelease
+  displayName: Track upstream release
+  timeoutInMinutes: 30
+  steps:
+  - checkout: self
+    fetchDepth: 0
+    fetchTags: false
+    # The script authenticates each fetch and push itself, so that the job token is
+    # never sent to GitHub and the upstream token is never sent to Azure Repos.
+    persistCredentials: false
+
+  - pwsh: |
+      $ErrorActionPreference = 'Stop'
+      # An undefined secret variable reaches the step as its literal macro text.
+      if ($env:UPSTREAM_READ_TOKEN -like '$(*)') {
+        $env:UPSTREAM_READ_TOKEN = $null
+      }
+      $upstreamRepository = if ($env:UPSTREAM_REPOSITORY) { $env:UPSTREAM_REPOSITORY } else { 'ALM4Dataverse/ALM4Dataverse' }
+      $baseBranch = if ($env:UPSTREAM_BASE_BRANCH) { $env:UPSTREAM_BASE_BRANCH } else { 'main' }
+      $includePrereleases = $env:INCLUDE_PRERELEASES_PARAMETER -eq 'true' -or
+        ($env:INCLUDE_PRERELEASES_PARAMETER -ne 'false' -and $env:UPSTREAM_INCLUDE_PRERELEASES -eq 'true')
+
+      git config user.name 'ALM4Dataverse Upstream Tracking'
+      git config user.email 'upstream-tracking@alm4dataverse.local'
+
+      ./scripts/upstream-release/update-upstream-release-pr.ps1 `
+        -AzureDevOpsRepository $env:BUILD_REPOSITORY_NAME `
+        -UpstreamRepository $upstreamRepository `
+        -BaseBranch $baseBranch `
+        -TargetTag $env:TARGET_TAG `
+        -CurrentTag $env:CURRENT_TAG `
+        -IncludePrereleases:$includePrereleases `
+        -DryRun:($env:DRY_RUN -eq 'True')
+    displayName: Open upstream release pull request
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      UPSTREAM_READ_TOKEN: $(UPSTREAM_READ_TOKEN)
+      # Parameters reach the script through the environment, never by template
+      # expansion into the script text.
+      TARGET_TAG: ${{ parameters.targetTag }}
+      CURRENT_TAG: ${{ parameters.currentTag }}
+      INCLUDE_PRERELEASES_PARAMETER: ${{ parameters.includePrereleases }}
+      DRY_RUN: ${{ parameters.dryRun }}

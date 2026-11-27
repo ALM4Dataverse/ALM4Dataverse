@@ -116,6 +116,10 @@ reason and lets you retry.
 
 ![Choosing a shared workflow repository update strategy](./screenshots/github-shared-repository-update.png)
 
+To get a pull request for each new upstream release afterwards, enable
+[upstream release tracking](../usage/updating.md#track-upstream-releases) in the shared
+workflow repository.
+
 #### 4. Configure branches and environments
 
 **Configure branches, dev and deployment envs** defines each branch, its DEV environment,

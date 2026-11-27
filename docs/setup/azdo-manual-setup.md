@@ -60,7 +60,9 @@ git push origin main
 
 Keep the pipeline repository alias `ALM4Dataverse` even when the resource name includes a
 project prefix. For an existing shared repository, merge upstream changes instead of
-replacing its branch history.
+replacing its branch history;
+[upstream release tracking](../usage/updating.md#track-upstream-releases) can open those
+pull requests for you.
 
 ### Application Repository
 
