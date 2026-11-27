@@ -218,9 +218,9 @@ function Invoke-ProcessSetupScript {
     $content = $content.Replace($ProviderLibraryPlaceholder, $ProviderLibraryContent)
 
     try {
-        # Windows PowerShell 5.1 reads a UTF-8 file without a BOM as ANSI and then
-        # fails to parse the Unicode banner and status markers in the installer.
-        [System.IO.File]::WriteAllText($OutputFile, $content, [System.Text.UTF8Encoding]::new($true))
+        # The documented iwr | iex bootstrap preserves a UTF-8 BOM in the returned
+        # string, which makes PowerShell reject the following CmdletBinding attribute.
+        [System.IO.File]::WriteAllText($OutputFile, $content, [System.Text.UTF8Encoding]::new($false))
     }
     catch {
         Write-Host "ERROR: Could not write $OutputFile`: $($_.Exception.Message)" -ForegroundColor Red
