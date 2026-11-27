@@ -14,7 +14,7 @@
     that differs between the two lives in an adapter file and is reached only through the
     "fork platform interface" in section 7:
 
-      upstream-release-github.ps1        GitHub fork (gh CLI, optional Copilot hand-off).
+      upstream-release-github.ps1        GitHub fork (gh CLI).
       upstream-release-azure-devops.ps1  Azure DevOps fork (REST API with System.AccessToken).
 
     This file is organised in the order a run uses it:
@@ -1641,6 +1641,25 @@ function Format-ForkDifferenceInventory {
     return $lines -join "`n"
 }
 
+function Format-CopilotPrompt {
+    <#
+    .SYNOPSIS
+        Renders a prompt for GitHub Copilot as a fenced text block.
+    .DESCRIPTION
+        A fenced block keeps the prompt's own Markdown, such as inline code, from rendering,
+        and GitHub offers a copy button on it. The prompt keeps its line breaks so it
+        can be read without scrolling; Copilot reads the pasted lines as one request.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$Lines
+    )
+
+    return "``````text`n$($Lines -join "`n")`n``````"
+}
+
 function Format-ConflictTable {
     <#
     .SYNOPSIS
@@ -1684,7 +1703,8 @@ function Get-UpstreamPullRequestContent {
         Follows the pull-request rules in AGENTS.md: End-user changes, Fork comparison,
         Implementation details and Validation. Sections that need human judgement contain
         placeholders; the Fork comparison section is pre-filled with the mechanical file
-        inventory.
+        inventory. The audit and any conflicts each come with a prompt that people can give
+        GitHub Copilot to do that work on a checkout of the update branch.
 
         When CurrentRelease and TargetRelease are the same, the pull request only records
         that release in the state file, and the text says so.
@@ -1763,23 +1783,49 @@ $(Format-ReleaseNoteList -UpstreamRepository $UpstreamRepository -Releases $Incl
 "@
     }
 
+    # Each pending task carries a prompt that people can give GitHub Copilot as it is. The
+    # prompts name everything Copilot needs, because it sees the checkout, not this text.
+    $upstreamTagFetch = "git fetch --no-tags https://github.com/$UpstreamRepository.git refs/tags/$($TargetRelease.Tag)"
+    $forkComparisonPrompt = Format-CopilotPrompt -Lines @(
+        "Compare this branch with upstream $UpstreamRepository $($TargetRelease.Tag). Fetch the release with"
+        "``$upstreamTagFetch``"
+        'and list the differences with `git diff --name-status FETCH_HEAD HEAD`. Classify every'
+        'difference as described in the Fork Difference Audit section of AGENTS.md, and write the'
+        'result in Markdown as the "Fork comparison" section of the pull request description.'
+    )
     $forkComparison = @"
 ## Fork comparison
 
 > [!NOTE]
-> Audit pending. Classify every difference as described in the Fork Difference Audit section of AGENTS.md.
+> Audit pending. Classify every difference below as described in the Fork Difference Audit
+> section of AGENTS.md, then replace this note with the result. GitHub Copilot can do this
+> for you: on a checkout of ``$BranchName``, give it this prompt in agent mode in VS Code or
+> in Copilot CLI.
+
+$forkComparisonPrompt
 
 $(Format-ForkDifferenceInventory -Differences $ForkDifferences -UpstreamTag $TargetRelease.Tag -BranchName $BranchName)
 "@
 
     $conflictSection = ''
     if ($Conflicts.Count -gt 0) {
+        $conflictPrompt = Format-CopilotPrompt -Lines @(
+            "This branch merges upstream $UpstreamRepository $($TargetRelease.Tag) into $BaseBranch, and the merge"
+            'commit contains conflict markers. Find every file that still has them with'
+            '`git grep -l -E "^(<<<<<<<|>>>>>>>) "` and resolve each one: keep the upstream change and'
+            "re-apply the fork's behaviour on top of it, through configuration or hooks where possible."
+            'Explain each resolution, then run the checks in the Checks section of AGENTS.md.'
+        )
         $conflictSection = @"
 ## Unresolved conflicts
 
 > [!IMPORTANT]
 > This draft pull request contains committed conflict markers. Resolve each file below, then
-> mark the pull request ready for review.
+> mark the pull request ready for review. GitHub Copilot can help: on a checkout of
+> ``$BranchName``, give it this prompt in agent mode in VS Code or in Copilot CLI, and review
+> its changes before you push them.
+
+$conflictPrompt
 
 $(Format-ConflictTable -Conflicts $Conflicts)
 "@
@@ -2623,15 +2669,14 @@ function Invoke-UpstreamReleaseTracking {
            step 4, or, when people worked on it, the run stops and asks for it to be closed.
            The run also stops when an open pull request into another branch uses the update
            branch, so that its work is never overwritten.
-        4. Pushes the branch, opens the pull request and, on GitHub, optionally asks
-           Copilot to finish it. Then closes the older update pull requests it replaces,
-           or comments on those people worked on (see the comment at the top of this region).
+        4. Pushes the branch and opens the pull request. Then closes the older update pull
+           requests it replaces, or comments on those people worked on (see the comment at
+           the top of this region).
 
         Expected environment variables:
           GH_TOKEN                        GitHub fork: token for gh and git.
           SYSTEM_ACCESSTOKEN              Azure DevOps fork: job token for REST and git.
           UPSTREAM_READ_TOKEN             Optional: token to read a private upstream.
-          UPSTREAM_TRACKING_COPILOT_TOKEN Optional, GitHub only: user token for Copilot.
     .PARAMETER Fork
         From New-GitHubForkContext or New-AzureDevOpsForkContext.
     .PARAMETER UpstreamRemoteUrl
@@ -2904,11 +2949,6 @@ function Invoke-UpstreamReleaseTracking {
     $pullRequest = Publish-ForkPullRequest -Fork $Fork -BaseBranch $BaseBranch -BranchName $branchName -Head $pushedHead -Content $content
     $result.Outcome = 'Created'
     $result.PullRequestUrl = $pullRequest.Url
-
-    if ($Fork.Platform -eq 'GitHub' -and $Fork.AssignCopilot) {
-        Request-CopilotUpstreamReview -Fork $Fork -PullRequestNumber $pullRequest.Number `
-            -HasConflicts ($content.ConflictCount -gt 0) | Out-Null
-    }
 
     $draftNote = if ($content.ConflictCount -gt 0) { " as a draft with $conflictCount" } else { '' }
     $sentences = @("Created $($pullRequest.Url)${draftNote}: $($content.Title).")

@@ -108,7 +108,8 @@ When creating or updating a pull request, keep end-user information separate fro
 - Do not mix internal mechanics into the end-user section. Omit a section only when there is nothing relevant to report.
 
 The [upstream release tracking](docs/usage/updating.md#track-upstream-releases) automation
-opens version-update PRs in this shape with placeholders and a mechanical file inventory.
+opens version-update PRs in this shape with placeholders, a mechanical file inventory
+and a GitHub Copilot prompt for each pending task (the audit and any conflicts).
 Complete them; on GitHub, keep the hidden `upstream-release-tracking` comment at the end
 of the description unchanged.
 
