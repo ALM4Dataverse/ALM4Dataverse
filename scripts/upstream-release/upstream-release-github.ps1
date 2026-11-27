@@ -23,7 +23,7 @@ function New-GitHubForkContext {
         Kind of token in GH_TOKEN: 'app', 'pat' or 'github-token' (the built-in token, which
         cannot push changes to workflow files).
     .PARAMETER AssignCopilot
-        Assigns the Copilot coding agent after the pull request is published.
+        Asks the Copilot coding agent to finish the pull request after it is published.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory object only.')]
     [CmdletBinding()]
@@ -223,6 +223,10 @@ function Test-GitHubPullRequestActivity {
         code reviewer. An author GitHub no longer knows (a deleted account) counts as a person.
         Review comments on lines belong to a review, so they are covered by the reviews.
 
+        The request that Request-CopilotUpstreamReview posts is ignored: it is written with a
+        person's token but is this automation's own comment. Copilot's work on the request
+        is still seen, because its commits move the branch away from the marker's head.
+
         Each connection is read to the end, through 'gh api --paginate', so a person who
         commented after many bot comments is still seen.
     .OUTPUTS
@@ -239,14 +243,17 @@ function Test-GitHubPullRequestActivity {
     )
 
     $owner, $name = $Fork.Repository.Split('/')
+    $copilotRequestMarker = Get-CopilotRequestMarker
     $activities = [ordered]@{ reviews = 'someone reviewed it'; comments = 'someone commented on it' }
     foreach ($connection in $activities.Keys) {
         # gh --paginate fills $endCursor from pageInfo until hasNextPage is false.
         $query = 'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { repository(owner: $owner, name: $name) { ' +
-            "pullRequest(number: `$number) { $connection(first: 100, after: `$endCursor) { nodes { author { __typename } } " +
+            "pullRequest(number: `$number) { $connection(first: 100, after: `$endCursor) { nodes { author { __typename } body } " +
             'pageInfo { hasNextPage endCursor } } } } }'
-        # The filter prints 'person' or 'bot' per author, so gh's own notices cannot match.
-        $filter = ".data.repository.pullRequest.$connection.nodes[] | if .author.__typename == `"Bot`" then `"bot`" else `"person`" end"
+        # The filter prints 'person' or 'bot' per node, so gh's own notices cannot match. The
+        # Copilot request counts as a bot's; the marker contains no character special to jq.
+        $filter = ".data.repository.pullRequest.$connection.nodes[] | " +
+            "if .author.__typename == `"Bot`" or ((.body // `"`") | contains(`"$copilotRequestMarker`")) then `"bot`" else `"person`" end"
         # -f passes strings as they are; -F converts the number.
         $authors = Invoke-GitHubCli -Arguments @(
             'api', 'graphql', '--paginate', '--jq', $filter,
@@ -500,22 +507,40 @@ function Publish-GitHubPullRequest {
     }
 }
 
+function Get-CopilotRequestMarker {
+    <#
+    .SYNOPSIS
+        Returns the hidden comment that identifies this automation's request to Copilot.
+    .DESCRIPTION
+        Shared by Request-CopilotUpstreamReview, which writes it, and
+        Test-GitHubPullRequestActivity, which skips the comment that carries it.
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    "<!-- $((Get-UpstreamTrackingConvention).MarkerName):copilot-request -->"
+}
+
 function Request-CopilotUpstreamReview {
     <#
     .SYNOPSIS
         Asks the Copilot coding agent to finish the update pull request.
     .DESCRIPTION
-        Assigns Copilot to the pull request through the issues API, asking it to resolve any
-        conflict markers and complete the Fork Difference Audit. GitHub only accepts this
-        from a user token (a personal access token of a user with a Copilot licence); GitHub
-        App and GITHUB_TOKEN tokens are rejected.
+        Posts a comment that mentions @copilot, asking it to resolve any conflict markers and
+        complete the Fork Difference Audit. Copilot then works on the pull request's own
+        branch. Assigning Copilot to an existing pull request does not start it; a mention does.
 
-        The assignment API is in public preview, so every failure is reported as a warning
-        and never fails a run whose pull request was already published.
+        Copilot acts only on a mention by a user who has a Copilot licence and write access,
+        so the comment is posted with a personal access token of such a user. A GitHub App
+        or GITHUB_TOKEN comment is ignored by Copilot.
+
+        This step is optional, so every failure is reported as a warning and never fails a
+        run whose pull request was already published.
     .PARAMETER Token
         User token; defaults to UPSTREAM_TRACKING_COPILOT_TOKEN.
     .OUTPUTS
-        [bool] whether the assignment request succeeded.
+        [bool] whether the comment was posted.
     #>
     [CmdletBinding()]
     [OutputType([bool])]
@@ -527,53 +552,39 @@ function Request-CopilotUpstreamReview {
         [int]$PullRequestNumber,
 
         [Parameter(Mandatory)]
-        [string]$BranchName,
-
-        [Parameter(Mandatory)]
         [bool]$HasConflicts,
 
         [string]$Token = $env:UPSTREAM_TRACKING_COPILOT_TOKEN
     )
 
     if ([string]::IsNullOrEmpty($Token)) {
-        Write-Warning 'Copilot was not assigned: set the UPSTREAM_TRACKING_COPILOT_TOKEN secret to a personal access token of a user with Copilot.'
+        Write-Warning 'Copilot was not asked: set the UPSTREAM_TRACKING_COPILOT_TOKEN secret to a personal access token of a user with Copilot.'
         return $false
     }
 
-    $instructions = [System.Collections.Generic.List[string]]::new()
+    $lines = [System.Collections.Generic.List[string]]::new()
+    $lines.Add('@copilot Please finish this upstream release update:')
+    $lines.Add('')
     if ($HasConflicts) {
-        $instructions.Add('Resolve every conflict listed under "Unresolved conflicts" in the pull request description. Prefer the upstream framework change and re-apply fork-specific behaviour through configuration or hooks where possible.')
+        $lines.Add('- Resolve every conflict listed under "Unresolved conflicts" in the pull request description. Prefer the upstream framework change and re-apply fork-specific behaviour through configuration or hooks where possible.')
     }
-    $instructions.Add('Complete the Fork Difference Audit described in AGENTS.md and replace the placeholders in the "End-user changes", "Fork comparison" and "Validation" sections of the pull request description.')
-    $instructions.Add("Keep the hidden '$((Get-UpstreamTrackingConvention).MarkerName)' comment at the end of the description unchanged.")
-    $instructions.Add('Run the checks listed in AGENTS.md and report their results.')
+    $lines.Add('- Complete the Fork Difference Audit described in AGENTS.md. Put the "End-user changes", "Fork comparison" and "Validation" sections in your reply, so that a maintainer can copy them into the pull request description, which you cannot edit.')
+    $lines.Add('- Run the checks listed in AGENTS.md and report their results.')
+    $lines.Add('')
+    $lines.Add((Get-CopilotRequestMarker))
 
-    $request = @{
-        assignees        = @('copilot-swe-agent[bot]')
-        agent_assignment = @{
-            target_repo         = $Fork.Repository
-            base_branch         = $BranchName
-            custom_instructions = $instructions -join "`n"
-        }
-    }
-
-    $requestFile = New-TemporaryFile
     try {
-        [IO.File]::WriteAllText($requestFile.FullName, ($request | ConvertTo-Json -Depth 4))
         Invoke-GitHubCli -Token $Token -Arguments @(
-            'api', '--method', 'POST', "repos/$($Fork.Repository)/issues/$PullRequestNumber/assignees", '--input', $requestFile.FullName
+            'pr', 'comment', [string]$PullRequestNumber, '--repo', $Fork.Repository, '--body', ($lines -join "`n")
         ) | Out-Null
-        Write-Host "Assigned Copilot to pull request #$PullRequestNumber."
+        Write-Host "Asked Copilot to finish pull request #$PullRequestNumber."
         return $true
     }
     catch {
         # Invoke-GitHubCli threw on gh's exit code, which is still set. The Actions pwsh shell
         # would fail the step with it, although this optional step only warns.
         $global:LASTEXITCODE = 0
-        Write-Warning "Copilot could not be assigned to pull request #${PullRequestNumber}: $($_.Exception.Message) Check that the Copilot coding agent is enabled for the repository and that the token's user has Copilot."
+        Write-Warning "Copilot could not be asked to finish pull request #${PullRequestNumber}: $($_.Exception.Message) Check that the Copilot coding agent is enabled for the repository and that the token's user has Copilot and write access."
         return $false
-    }
-    finally {
-        Remove-Item -LiteralPath $requestFile.FullName -Force -ErrorAction SilentlyContinue
     }
 }

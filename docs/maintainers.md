@@ -183,9 +183,12 @@ once a newer pull request replaces it, `supersededBy`. Before replacing an open 
 pull request for an older release, the engine reads it again and checks for signs that
 people worked on it: a missing marker, a changed content hash, a branch that no longer
 points to `head` (added, amended or force-pushed commits alike), or comments and reviews
-by people. On GitHub, comments and reviews by bots are ignored; on Azure DevOps, system
+by people. On GitHub, comments and reviews by bots are ignored, as is the `@copilot`
+request the engine posts with `UPSTREAM_TRACKING_COPILOT_TOKEN` (it carries a hidden
+`upstream-release-tracking:copilot-request` comment); on Azure DevOps, system
 comments and the comments and vote of the build service identity that created the pull
-request are. Copilot coding agent work counts as people's work.
+request are. Copilot coding agent work counts as people's work: its commits move the
+branch away from `head`.
 
 An untouched pull request is replaced in this order: its marker records `supersededBy`;
 its branch is deleted by a push whose lease names `head`; then it gets a comment and is

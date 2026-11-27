@@ -147,7 +147,7 @@ workflow does nothing in the upstream repository itself.
 | `UPSTREAM_TRACKING_TOKEN` | Secret | Alternative to the App: a fine-grained personal access token with the same permissions. |
 | `UPSTREAM_REPOSITORY_PRIVATE` | Variable | `true` when the upstream is private and the App is also installed on it with contents read access. |
 | `UPSTREAM_READ_TOKEN` | Secret | Alternative for a private upstream: a token with contents read access to it. |
-| `UPSTREAM_TRACKING_ASSIGN_COPILOT`, `UPSTREAM_TRACKING_COPILOT_TOKEN` | Variable, secret | Optional. `true` and a personal access token of a user with Copilot assign the Copilot coding agent to resolve conflicts and complete the audit. |
+| `UPSTREAM_TRACKING_ASSIGN_COPILOT`, `UPSTREAM_TRACKING_COPILOT_TOKEN` | Variable, secret | Optional. With `true`, each new pull request gets an `@copilot` comment asking the Copilot coding agent to resolve conflicts and complete the audit. The secret is a personal access token (fine-grained: pull requests read and write) of a user with a Copilot licence and write access, because Copilot ignores mentions from apps. [Copilot Setup Steps](../../.github/workflows/copilot-setup-steps.yml) installs the validation modules so that Copilot can run the checks. |
 
 Without an App or `UPSTREAM_TRACKING_TOKEN`, the workflow uses the built-in
 `GITHUB_TOKEN`. That needs **Settings > Actions > General > Allow GitHub Actions to create
@@ -175,7 +175,7 @@ is created by that identity, so your branch policies apply to it as usual.
 | `UPSTREAM_READ_TOKEN` (secret) | Required for a private upstream: a GitHub token with contents read access to it. A public upstream is read anonymously. |
 
 Azure DevOps limits a pull-request description to 4,000 characters, so the file list and
-conflicts are posted as an *Upstream release details* comment. Copilot assignment is not
+conflicts are posted as an *Upstream release details* comment. The Copilot hand-off is not
 available for Azure Repos.
 
 ## Re-Run Setup Carefully

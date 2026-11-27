@@ -539,11 +539,12 @@ Describe 'Upstream release tracking for a GitHub fork' {
                 }
                 'pr edit' { $record.body = Get-Content -LiteralPath $option['--body-file'] -Raw }
                 # The workflow's token belongs to an app, so GitHub reports its comments as a bot's.
+                # An explicit token is the Copilot user token, so that comment is a person's.
                 'pr comment' {
                     if ($script:gitHub.FailComment) {
                         throw 'HTTP 502: Bad Gateway'
                     }
-                    $record.comments += @{ author = 'Bot'; body = $option['--body'] }
+                    $record.comments += @{ author = if ($Token) { 'User' } else { 'Bot' }; body = $option['--body'] }
                 }
                 'pr close' {
                     if ($script:gitHub.FailClose) {
@@ -559,7 +560,7 @@ Describe 'Upstream release tracking for a GitHub fork' {
                     $activity = Get-GitHubPullRequestRecord -Number $number
                     $connection = if (($Arguments | Where-Object { $_ -like 'query=*' }) -match '\breviews\(') { 'reviews' } else { 'comments' }
                     foreach ($item in $activity[$connection]) {
-                        if ($item.author -eq 'Bot') { 'bot' } else { 'person' }
+                        if ($item.author -eq 'Bot' -or "$($item['body'])".Contains((Get-CopilotRequestMarker))) { 'bot' } else { 'person' }
                     }
                 }
             }
@@ -917,25 +918,31 @@ Describe 'Upstream release tracking for a GitHub fork' {
         Should -Invoke Invoke-GitHubCli -Times 1 -Exactly -ParameterFilter { $Arguments[0] -eq 'pr' -and $Arguments[1] -ne 'list' } -Because 'only the first run created a pull request'
     }
 
-    It 'assigns Copilot with the user token when requested' {
+    It 'asks Copilot with the user token, and does not count that request as people''s work' {
         $env:UPSTREAM_TRACKING_COPILOT_TOKEN = 'copilot-token'
         $fork = New-GitHubForkContext -Repository 'contoso/fork' -TokenSource app -AssignCopilot
 
-        Invoke-FixtureTracking -Fork $fork | Out-Null
+        Invoke-FixtureTracking -Fork $fork -Options @{ TargetTag = 'v1.1.0' } | Out-Null
 
         Should -Invoke Invoke-GitHubCli -Times 1 -Exactly -ParameterFilter {
-            $Token -eq 'copilot-token' -and $Arguments -contains 'repos/contoso/fork/issues/42/assignees'
+            $Token -eq 'copilot-token' -and $Arguments[0] -eq 'pr' -and $Arguments[1] -eq 'comment' -and $Arguments[2] -eq '42'
         }
+        $request = (Get-GitHubPullRequestRecord -Number 42).comments[-1]
+        $request.body | Should -Match '^@copilot '
+        $request.body | Should -BeLike "*$(Get-CopilotRequestMarker)"
+
+        Invoke-FixtureTracking -Fork $fork -Options @{ IncludePrereleases = $true } | Out-Null
+
+        (Get-GitHubPullRequestRecord -Number 42).state | Should -Be 'closed' -Because 'Copilot never worked on it'
     }
 
-    It 'only warns when Copilot cannot be assigned' {
-        $branch = 'update/upstream-release/v1.1.0'
-        Request-CopilotUpstreamReview -Fork $script:gitHubFork -PullRequestNumber 42 -BranchName $branch -HasConflicts $false -WarningVariable missingToken -WarningAction SilentlyContinue |
+    It 'only warns when Copilot cannot be asked' {
+        Request-CopilotUpstreamReview -Fork $script:gitHubFork -PullRequestNumber 42 -HasConflicts $false -WarningVariable missingToken -WarningAction SilentlyContinue |
             Should -BeFalse
         $missingToken | Should -Match 'UPSTREAM_TRACKING_COPILOT_TOKEN'
 
         Mock Invoke-GitHubCli { $global:LASTEXITCODE = 1; throw 'HTTP 403' }
-        Request-CopilotUpstreamReview -Fork $script:gitHubFork -PullRequestNumber 42 -BranchName $branch -HasConflicts $true -Token 'copilot-token' -WarningVariable rejected -WarningAction SilentlyContinue |
+        Request-CopilotUpstreamReview -Fork $script:gitHubFork -PullRequestNumber 42 -HasConflicts $true -Token 'copilot-token' -WarningVariable rejected -WarningAction SilentlyContinue |
             Should -BeFalse
         $rejected | Should -Match 'HTTP 403'
         $LASTEXITCODE | Should -Be 0 -Because 'the Actions pwsh shell fails the step on a nonzero exit code'

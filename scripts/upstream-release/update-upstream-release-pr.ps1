@@ -17,7 +17,8 @@
 .PARAMETER ForkTokenSource
     GitHub fork: kind of token in GH_TOKEN, 'app', 'pat' or 'github-token'.
 .PARAMETER AssignCopilot
-    GitHub fork: assigns the Copilot coding agent to the pull request after it is published.
+    GitHub fork: after the pull request is published, mentions @copilot in a comment so that
+    the Copilot coding agent finishes it.
 .PARAMETER AzureDevOpsRepository
     The fork's Azure Repos repository name, as in Build.Repository.Name.
 .PARAMETER AzureDevOpsCollectionUri

@@ -2623,9 +2623,9 @@ function Invoke-UpstreamReleaseTracking {
            step 4, or, when people worked on it, the run stops and asks for it to be closed.
            The run also stops when an open pull request into another branch uses the update
            branch, so that its work is never overwritten.
-        4. Pushes the branch, opens the pull request and, on GitHub, optionally assigns
-           Copilot. Then closes the older update pull requests it replaces, or comments on
-           those people worked on (see the comment at the top of this region).
+        4. Pushes the branch, opens the pull request and, on GitHub, optionally asks
+           Copilot to finish it. Then closes the older update pull requests it replaces,
+           or comments on those people worked on (see the comment at the top of this region).
 
         Expected environment variables:
           GH_TOKEN                        GitHub fork: token for gh and git.
@@ -2906,7 +2906,7 @@ function Invoke-UpstreamReleaseTracking {
     $result.PullRequestUrl = $pullRequest.Url
 
     if ($Fork.Platform -eq 'GitHub' -and $Fork.AssignCopilot) {
-        Request-CopilotUpstreamReview -Fork $Fork -PullRequestNumber $pullRequest.Number -BranchName $branchName `
+        Request-CopilotUpstreamReview -Fork $Fork -PullRequestNumber $pullRequest.Number `
             -HasConflicts ($content.ConflictCount -gt 0) | Out-Null
     }
 
