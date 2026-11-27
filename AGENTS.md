@@ -100,6 +100,29 @@ outputs using the existing checks described in the development guide.
 When creating or updating a pull request, keep end-user information separate from implementation details:
 
 - Use `## End-user changes` for observable behavior, configuration options, and user impact in plain language.
+- For an ALM4Dataverse version update, title the PR `Update ALM4Dataverse from v<previous> to v<target>`.
+- For a version update, begin `## End-user changes` with `GitHub release changes from v<previous> to v<target>:` and link the previous and target release notes. Keep this section to release-level user impact; do not put fork mechanics here.
+- In a fork, use `## Fork comparison` immediately after the end-user section for the audit described below.
 - Use `## Implementation details` for internal design, compatibility handling, and test implementation.
 - Use `## Validation` for commands and results, including any failures or known limitations.
 - Do not mix internal mechanics into the end-user section. Omit a section only when there is nothing relevant to report.
+
+The [upstream release tracking](docs/usage/updating.md#track-upstream-releases) automation
+opens version-update PRs in this shape with placeholders and a mechanical file inventory.
+Complete them; on GitHub, keep the hidden `upstream-release-tracking` comment at the end
+of the description unchanged.
+
+## Fork Difference Audit
+
+For a version update in a fork, compare the fork HEAD with the exact upstream
+release tag and inventory every differing file and hunk. In `## Fork comparison`,
+list each changed file, or a folder only when every file in that folder shares the
+same rationale; include file counts for grouped folders. Give every directly
+edited framework file its own purpose, user impact, test coverage, and upstream
+PR or explicit proprietary justification. In particular, explain Code App
+framework changes file-by-file rather than hiding them in a generic category.
+Classify each difference as upstream-compatible, documented proprietary
+config/hook/asset, framework-required, upstream candidate, or unexpected; prefer
+configuration and hooks, record evidence and unresolved items, and include the
+summary in the PR. Submit non-proprietary fixes upstream. Do not claim the audit
+passed while unresolved items remain.

@@ -1,0 +1,123 @@
+name: Track Upstream Release
+
+run-name: ${{ github.event_name == 'schedule' && 'Track upstream release (scheduled)' || format('Track upstream release by @{0}', github.actor) }}
+
+# Opens a pull request that merges each new upstream release into this fork.
+# Configuration and token setup: docs/usage/updating.md#track-upstream-releases.
+
+'on':
+  schedule:
+    - cron: '30 3 * * *'
+  workflow_dispatch:
+    inputs:
+      target-tag:
+        description: 'Upstream release tag to merge instead of the newest eligible release'
+        required: false
+        type: string
+      current-tag:
+        description: 'Upstream release tag the base branch already contains (only when it cannot be detected)'
+        required: false
+        type: string
+      include-prereleases:
+        description: 'Consider upstream prereleases'
+        required: false
+        type: choice
+        default: repository-setting
+        options:
+          - repository-setting
+          - 'true'
+          - 'false'
+      dry-run:
+        description: 'Report what would happen without pushing or changing pull requests'
+        required: false
+        type: boolean
+        default: false
+
+# The built-in token is only a fallback; a GitHub App or PAT is needed to push workflow
+# changes and to let the pull request trigger validation workflows.
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: track-upstream-release
+  cancel-in-progress: false
+
+jobs:
+  track-upstream-release:
+    # Opt-in, so that forks inheriting this file do nothing until they configure it.
+    if: vars.UPSTREAM_TRACKING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      UPSTREAM_REPOSITORY: ${{ vars.UPSTREAM_REPOSITORY || 'ALM4Dataverse/ALM4Dataverse' }}
+    steps:
+      - name: Split upstream repository name
+        id: upstream
+        run: |
+          echo "owner=${UPSTREAM_REPOSITORY%%/*}" >> "$GITHUB_OUTPUT"
+          echo "name=${UPSTREAM_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Create fork token from GitHub App
+        id: fork-app-token
+        if: vars.UPSTREAM_TRACKING_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.UPSTREAM_TRACKING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UPSTREAM_TRACKING_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-workflows: write
+
+      - name: Create upstream read token from GitHub App
+        id: upstream-app-token
+        if: vars.UPSTREAM_TRACKING_APP_CLIENT_ID != '' && vars.UPSTREAM_REPOSITORY_PRIVATE == 'true'
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.UPSTREAM_TRACKING_APP_CLIENT_ID }}
+          private-key: ${{ secrets.UPSTREAM_TRACKING_APP_PRIVATE_KEY }}
+          owner: ${{ steps.upstream.outputs.owner }}
+          repositories: ${{ steps.upstream.outputs.name }}
+          permission-contents: read
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # The script authenticates each fetch and push itself, so that the fork token
+          # is never sent to the upstream and vice versa.
+          persist-credentials: false
+
+      - name: Configure commit identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Open upstream release pull request
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.fork-app-token.outputs.token || secrets.UPSTREAM_TRACKING_TOKEN || github.token }}
+          FORK_TOKEN_SOURCE: ${{ steps.fork-app-token.outputs.token && 'app' || secrets.UPSTREAM_TRACKING_TOKEN && 'pat' || 'github-token' }}
+          UPSTREAM_READ_TOKEN: ${{ steps.upstream-app-token.outputs.token || secrets.UPSTREAM_READ_TOKEN }}
+          UPSTREAM_TRACKING_COPILOT_TOKEN: ${{ secrets.UPSTREAM_TRACKING_COPILOT_TOKEN }}
+          BASE_BRANCH: ${{ vars.UPSTREAM_BASE_BRANCH || github.event.repository.default_branch }}
+          # Inputs reach the script through the environment, never by expression
+          # interpolation into the script text.
+          TARGET_TAG: ${{ inputs.target-tag }}
+          CURRENT_TAG: ${{ inputs.current-tag }}
+          INCLUDE_PRERELEASES: ${{ inputs.include-prereleases == 'true' || (inputs.include-prereleases != 'false' && vars.UPSTREAM_INCLUDE_PRERELEASES == 'true') }}
+          ASSIGN_COPILOT: ${{ vars.UPSTREAM_TRACKING_ASSIGN_COPILOT == 'true' }}
+          DRY_RUN: ${{ inputs.dry-run == true }}
+        run: |
+          ./scripts/upstream-release/update-upstream-release-pr.ps1 `
+            -GitHubRepository $env:GITHUB_REPOSITORY `
+            -ForkTokenSource $env:FORK_TOKEN_SOURCE `
+            -AssignCopilot:($env:ASSIGN_COPILOT -eq 'true') `
+            -UpstreamRepository $env:UPSTREAM_REPOSITORY `
+            -BaseBranch $env:BASE_BRANCH `
+            -TargetTag $env:TARGET_TAG `
+            -CurrentTag $env:CURRENT_TAG `
+            -IncludePrereleases:($env:INCLUDE_PRERELEASES -eq 'true') `
+            -DryRun:($env:DRY_RUN -eq 'true')

@@ -43,7 +43,9 @@ each DEPLOY job, and the reusable cleanup workflow. Keep those references consis
 with the code source you intend future builds to package; see [action contracts](../config/pipelines.md).
 GitHub requires a literal ref in `uses:`, not a runtime expression.
 
-For a fork, change the action/workflow owner consistently. Ensure dispatch-driven
+For a fork, change the action/workflow owner consistently. Your shared workflow repository
+can [track upstream releases](#track-upstream-releases) and open a pull request for each
+new one. Ensure dispatch-driven
 caller definitions exist on the default branch. Review
 permissions, job environments, OIDC subjects, selected secret mappings, and promotion
 conditions when adopting newer callers.
@@ -51,13 +53,130 @@ conditions when adopting newer callers.
 ### Azure DevOps
 
 Fetch and review upstream changes in the shared Azure Repos repository, then merge them
-through your normal review process. Update an application's repository resource `ref`
+through your normal review process, or let the shared repository
+[track upstream releases](#track-upstream-releases) and open that pull request for you.
+Update an application's repository resource `ref`
 if it pins a different branch/tag. Preserve the alias `ALM4Dataverse` used by templates.
 
 Compare copied callers as well as shared templates: build pipeline resource paths,
 branch filters, stage lists, extension mode, variable-group declarations, and explicitly
 mapped secrets may require coordinated updates. Existing pipeline/resource permissions
 and approval checks are not replaced by updating Git files.
+
+## Track Upstream Releases
+
+Every shared repository that setup creates is a copy of an upstream GitHub repository:
+a GitHub fork or private copy, or an imported Azure Repos repository. It contains
+automation that opens a pull request merging each new upstream release into it, so you
+review updates instead of fetching them by hand. It is off until you enable it.
+
+| Shared repository on | Automation | Enable it by |
+| --- | --- | --- |
+| GitHub | [Track Upstream Release workflow](../../.github/workflows/track-upstream-release.yml) | Setting the repository variable `UPSTREAM_TRACKING_ENABLED` to `true`; see [GitHub](#github-shared-repository). |
+| Azure Repos | [Track Upstream Release pipeline](../../pipelines/maintenance/track-upstream-release.yml) | Creating a pipeline from that file; see [Azure DevOps](#azure-devops-shared-repository). |
+
+Both run daily at **03:30 UTC** and on demand. The upstream defaults to
+`ALM4Dataverse/ALM4Dataverse`; set `UPSTREAM_REPOSITORY` when your shared repository was
+created from another fork, such as your organization's. The upstream can be public or
+private.
+
+What a run does:
+
+1. Lists the upstream's GitHub releases and picks the newest. Drafts are ignored;
+   prereleases count only when you enable them.
+2. Works out which release your shared repository already contains, from
+   `.github/upstream-release.json` or from upstream release tags in its history.
+3. Merges the new release into a branch named after it, `update/upstream-release/<tag>`,
+   and opens a pull request. Its description lists the release notes, the files where
+   your repository differs from the release, and a checklist for the
+   [fork difference audit](../../AGENTS.md#fork-difference-audit).
+4. When the merge conflicts, still opens the pull request, as a draft, with the conflict
+   markers committed and the conflicted files listed. Resolve them with your platform's
+   conflict tools or a local checkout, then mark the pull request ready.
+
+Each release gets its own pull request, and the automation never changes a pull request
+after opening it. When a newer release is proposed, each older update pull request is:
+
+- **Closed, and its branch deleted,** when nobody has worked on it.
+- **Left open, with a comment linking the new pull request,** when anyone has pushed to
+  its branch (including amended or force-pushed commits), edited its title or description,
+  commented on it or reviewed it (on Azure DevOps, voted on it), even while the run that
+  replaces it is in progress. Work done by the Copilot coding agent counts too. Merge it
+  first, or close it when you no longer need it.
+
+A scheduled run never proposes an older release than an open pull request does, for
+example the newest stable release after you requested a prerelease. Closing a pull
+request without merging declines that release; the next newer release opens a new one.
+If you retarget an update pull request to another branch, the run stops rather than
+reusing its branch; merge, close or retarget it back first.
+
+> [!NOTE]
+> When your repository has neither, for example because earlier updates were
+> squash-merged, the first run fails and lists what it checked and the recent upstream
+> releases. Run it once manually with `current-tag` (Azure Pipelines: `currentTag`) set to
+> the release your repository contains. Merging the resulting pull request records the
+> release in `.github/upstream-release.json`, so later runs need no input. If that release
+> is already the newest, the pull request only adds that file.
+
+Run it manually to override the defaults:
+
+| Run input (GitHub / Azure Pipelines) | Effect |
+| --- | --- |
+| `target-tag` / `targetTag` | Merge this release instead of the newest one, including a prerelease or a declined release. |
+| `current-tag` / `currentTag` | Release your repository already contains; only needed when the run cannot detect it. An open pull request for the same release built from another release is replaced, unless people worked on it. |
+| `include-prereleases` / `includePrereleases` | `true` or `false` overrides the repository or pipeline setting for this run. |
+| `dry-run` / `dryRun` | Report what would happen without pushing or changing pull requests. |
+
+> [!IMPORTANT]
+> Merging the pull request updates the shared code that application builds use, according
+> to how each application pins it. Test it as described in
+> [update an application](#update-an-application) before relying on it.
+
+### GitHub Shared Repository
+
+Set the repository variable `UPSTREAM_TRACKING_ENABLED` to `true`. GitHub disables
+scheduled workflows in a new fork until you enable Actions in its **Actions** tab. The
+workflow does nothing in the upstream repository itself.
+
+| Setting | Kind | Purpose |
+| --- | --- | --- |
+| `UPSTREAM_REPOSITORY` | Variable | Upstream `owner/name`. Default `ALM4Dataverse/ALM4Dataverse`. |
+| `UPSTREAM_BASE_BRANCH` | Variable | Branch the pull request targets. Default: the repository's default branch. |
+| `UPSTREAM_INCLUDE_PRERELEASES` | Variable | `true` to consider prereleases on scheduled runs. |
+| `UPSTREAM_TRACKING_APP_CLIENT_ID`, `UPSTREAM_TRACKING_APP_PRIVATE_KEY` | Variable, secret | Recommended. A GitHub App installed on the repository with read and write access to contents, issues, pull requests and workflows. |
+| `UPSTREAM_TRACKING_TOKEN` | Secret | Alternative to the App: a fine-grained personal access token with the same permissions. |
+| `UPSTREAM_REPOSITORY_PRIVATE` | Variable | `true` when the upstream is private and the App is also installed on it with contents read access. |
+| `UPSTREAM_READ_TOKEN` | Secret | Alternative for a private upstream: a token with contents read access to it. |
+| `UPSTREAM_TRACKING_ASSIGN_COPILOT`, `UPSTREAM_TRACKING_COPILOT_TOKEN` | Variable, secret | Optional. `true` and a personal access token of a user with Copilot assign the Copilot coding agent to resolve conflicts and complete the audit. |
+
+Without an App or `UPSTREAM_TRACKING_TOKEN`, the workflow uses the built-in
+`GITHUB_TOKEN`. That needs **Settings > Actions > General > Allow GitHub Actions to create
+and approve pull requests**. It cannot push upstream changes to `.github/workflows`, so
+such releases fail with setup guidance, and its pull requests do not start other
+workflows.
+
+### Azure DevOps Shared Repository
+
+Create a pipeline from `pipelines/maintenance/track-upstream-release.yml` in the shared
+repository. Its schedule runs on `main`; change the `branches` filter if your default
+branch differs.
+
+Grant the project's build service identity (*`<Project>` Build Service (`<Organization>`)*)
+these permissions on the shared repository: **Contribute**, **Create branch**,
+**Contribute to pull requests** and **Force push**. Force push lets it delete the branch
+of a pull request it replaces, and replace a branch left by a failed run. The pull request
+is created by that identity, so your branch policies apply to it as usual.
+
+| Pipeline variable | Purpose |
+| --- | --- |
+| `UPSTREAM_REPOSITORY` | Upstream `owner/name`. Default `ALM4Dataverse/ALM4Dataverse`. |
+| `UPSTREAM_BASE_BRANCH` | Branch the pull request targets. Default `main`. |
+| `UPSTREAM_INCLUDE_PRERELEASES` | `true` to consider prereleases on scheduled runs. |
+| `UPSTREAM_READ_TOKEN` (secret) | Required for a private upstream: a GitHub token with contents read access to it. A public upstream is read anonymously. |
+
+Azure DevOps limits a pull-request description to 4,000 characters, so the file list and
+conflicts are posted as an *Upstream release details* comment. Copilot assignment is not
+available for Azure Repos.
 
 ## Re-Run Setup Carefully
 

@@ -22,6 +22,7 @@ Application teams should start with [updating and customizing](usage/updating.md
 | [Dev Container](../.devcontainer) | Maintainer container with PowerShell, Git, GitHub CLI and screenshot dependencies; also mounts the Git common directory when the checkout is a linked worktree. |
 | [Release preparation](../prepare-release.ps1) | Generate standalone setup assets from a source checkout. |
 | [Maintainer workflows](../.github/workflows) and [scripts](../.github/scripts) | Release publication, dependency updates, cleanup, and regression checks. |
+| [Upstream release tracking](../scripts/upstream-release) | Fork automation that opens pull requests merging upstream releases, for GitHub and Azure DevOps forks; see [upstream release tracking](#upstream-release-tracking). |
 
 > [!IMPORTANT]
 > Change a contract's runtime implementation, supplied caller, setup generator, and
@@ -147,6 +148,69 @@ The checker warns if a Gallery query fails, so inspect warnings before treating 
 with no updates as a complete result. It does **not** update `pacCliVersion`, action
 versions, or runner images. Review those separately and verify installer/cache/lock
 behavior when changing them. Existing build artifacts retain their old locked versions.
+
+## Upstream Release Tracking
+
+Users enable this from [track upstream releases](usage/updating.md#track-upstream-releases),
+which also describes its settings and behavior. This section covers how it is built.
+
+| File | Role |
+| --- | --- |
+| [update-upstream-release-pr.ps1](../scripts/upstream-release/update-upstream-release-pr.ps1) | Entry script for the [workflow](../.github/workflows/track-upstream-release.yml) and the [pipeline](../pipelines/maintenance/track-upstream-release.yml); its parameter set chooses the fork's platform. |
+| [upstream-release-functions.ps1](../scripts/upstream-release/upstream-release-functions.ps1) | Platform-neutral engine: release discovery, the state file, the merge and the pull-request content. It reaches the fork only through the *fork platform interface* region. |
+| [upstream-release-github.ps1](../scripts/upstream-release/upstream-release-github.ps1), [upstream-release-azure-devops.ps1](../scripts/upstream-release/upstream-release-azure-devops.ps1) | Adapters implementing that interface with `gh` and the Azure DevOps REST API. |
+| [UpstreamReleaseTracking.Tests.ps1](../tests/UpstreamReleaseTracking.Tests.ps1) | Runs the engine against temporary Git repositories with mocked platform APIs. |
+
+The upstream is always on GitHub and is read with its REST API, never `gh`, so both
+platforms share one implementation.
+
+A fork that squash-merges updates never has the upstream tag commits in its history.
+The engine therefore commits `.github/upstream-release.json` with each update and, when
+the base branch lacks the current release's history, first records that release with a
+merge commit that changes no files. Git then merges only the upstream changes since that
+release.
+
+Each release has its own branch, `update/upstream-release/<tag>`, built once from the base
+branch by the run that opens its pull request; the engine never changes a pull request
+afterwards. Each commit it creates carries an `Upstream-Release-Tracking` Git trailer for
+people reading the history. The commit that records a baseline also carries an
+`Upstream-Release-Baseline` trailer, so a bootstrap pull request whose marker was never
+stored can still be followed up without `current-tag`.
+
+The pull-request marker is a JSON object with `baseline`, `contentHash` (SHA-256 of the
+title and of the description without the marker), `head` (the commit the run pushed) and,
+once a newer pull request replaces it, `supersededBy`. Before replacing an open update
+pull request for an older release, the engine reads it again and checks for signs that
+people worked on it: a missing marker, a changed content hash, a branch that no longer
+points to `head` (added, amended or force-pushed commits alike), or comments and reviews
+by people. On GitHub, comments and reviews by bots are ignored; on Azure DevOps, system
+comments and the comments and vote of the build service identity that created the pull
+request are. Copilot coding agent work counts as people's work.
+
+An untouched pull request is replaced in this order: its marker records `supersededBy`;
+its branch is deleted by a push whose lease names `head`; then it gets a comment and is
+closed. If someone pushed in the meantime the deletion is refused, the original marker is
+restored and the pull request stays open, so no commit is lost and the pull request is
+never closed without its branch. A pull request people worked on is left open with a
+comment linking the replacement, posted only if no comment links it yet, so a rerun after
+a failure neither skips nor repeats it. Pull requests and their activity are read to the
+last page on both platforms. A closed, unmerged pull request without `supersededBy`
+declines its release on scheduled runs; this is checked before a missing baseline is
+reported, so declining a bootstrap pull request needs no `current-tag`.
+
+The marker is written last on Azure DevOps, so a run that fails part-way through leaves a
+pull request without one, which later runs keep. A run that finds its release already
+proposed still replaces the pull requests for older releases, finishing the work of a
+failed run, including closing one whose branch it already deleted. Pull requests from
+other repositories that use the same branch names are ignored. Before replacing an
+existing update branch, the engine lists the open pull requests from it into any branch;
+one into another branch than the base (retargeted, or opened before the base branch was
+changed) stops the run, so its branch is never overwritten.
+
+> [!CAUTION]
+> The script switches branches, commits, force-pushes `update/upstream-release/<tag>`
+> with a lease and closes pull requests. Run it only in its workflow or pipeline checkout,
+> not in a working copy.
 
 ## Prepare Standalone Setup Scripts
 
