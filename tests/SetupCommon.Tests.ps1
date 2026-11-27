@@ -3251,6 +3251,14 @@ Describe 'Entra ID application management detection' {
         $state.CanManageAllApplications | Should -BeFalse
     }
 
+    It 'keeps capabilities unknown for unrecognized or custom directory roles' {
+        $script:entraRoleIds = @('11111111-1111-1111-1111-111111111111')
+        $script:entraAllowedToCreateApps = $false
+        $state = Get-EntraIdApplicationManagementState -TenantId 'custom-role.example.invalid'
+        $state.CanCreateApplications | Should -BeNullOrEmpty
+        $state.CanManageAllApplications | Should -BeNullOrEmpty
+    }
+
     It 'keeps capabilities unknown when the role and policy reads fail' {
         $script:entraGraphFailureUri = '*graph.microsoft.com*'
         $state = Get-EntraIdApplicationManagementState -TenantId 'unavailable.example.invalid'
@@ -3409,8 +3417,9 @@ Describe 'Entra ID application validation and search' {
         $script:validationSearchPermissionDenied = $false
         $script:validationSearchError = $false
         $script:validationFutureSecret = [pscustomobject]@{
-            displayName = 'current'
-            endDateTime = [datetimeoffset]::UtcNow.AddYears(1).ToString('o')
+            displayName   = 'current'
+            startDateTime = [datetimeoffset]::UtcNow.AddDays(-1).ToString('o')
+            endDateTime   = [datetimeoffset]::UtcNow.AddYears(1).ToString('o')
         }
         $script:validationExpiredSecret = [pscustomobject]@{
             displayName = 'expired'
@@ -3516,6 +3525,22 @@ Describe 'Entra ID application validation and search' {
         ($result.Issues -join ' ') | Should -Match 'missing the Dataverse user_impersonation permission'
     }
 
+    It 'reports client secrets that are not valid yet' {
+        $script:validationApplication.passwordCredentials = @(
+            [pscustomobject]@{
+                displayName   = 'future'
+                startDateTime = [datetimeoffset]::UtcNow.AddDays(1).ToString('o')
+                endDateTime   = [datetimeoffset]::UtcNow.AddYears(1).ToString('o')
+            }
+        )
+        $script:validationFederated = @()
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.HasClientSecret | Should -BeTrue
+        $result.HasUsableClientSecret | Should -BeFalse
+        $result.AllowedAuthTypes.Count | Should -Be 0
+        ($result.Issues -join ' ') | Should -Match 'not valid yet'
+    }
+
     It 'reports expired client secrets' {
         $script:validationApplication.passwordCredentials = @($script:validationExpiredSecret)
         $script:validationFederated = @()
@@ -3555,6 +3580,31 @@ Describe 'Entra ID application validation and search' {
             -TenantId 'validation.example.invalid' `
             -ProviderName $Provider
         $result.HasUsableFederatedCredential | Should -Be $Expected
+    }
+
+    It 'requires the exact federated credential issuer when one is supplied' {
+        $script:validationFederated = @(
+            [pscustomobject]@{
+                id        = 'federated-id'
+                issuer    = 'https://vstoken.dev.azure.com/other'
+                subject   = 'sc://example-organization/Example project/TEST'
+                audiences = @('api://AzureADTokenExchange')
+            }
+        )
+        $wrong = Test-EntraIdApplicationRegistration `
+            -ApplicationId 'app-id' `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'AzureDevOps' `
+            -ExpectedFederatedIssuer 'https://vstoken.dev.azure.com/expected'
+        $wrong.HasUsableFederatedCredential | Should -BeFalse
+        ($wrong.Issues -join ' ') | Should -Match 'none use the Azure DevOps issuer'
+
+        $matching = Test-EntraIdApplicationRegistration `
+            -ApplicationId 'app-id' `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'AzureDevOps' `
+            -ExpectedFederatedIssuer 'https://vstoken.dev.azure.com/other'
+        $matching.HasUsableFederatedCredential | Should -BeTrue
     }
 
     It 'requires the exact federated credential subject when one is supplied' {
@@ -3826,15 +3876,18 @@ Describe 'Entra ID application validation and search' {
         $result.Name | Should -Be 'Custom name'
     }
 
-    It 'passes the expected federated credential subject to validation' {
-        $expectedSubject = 'repo:example-owner@123456/example-repository@456789:environment:TEST-main'
+    It 'passes the expected federated issuer and subject to validation' {
+        $expectedIssuer = 'https://vstoken.dev.azure.com/example-organization'
+        $expectedSubject = 'sc://example-organization/Example project/TEST'
         Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture -AllowedAuthTypes @('WIF') }
         [void](Read-SetupEntraIdApplicationCredential `
             -TenantId 'validation.example.invalid' `
-            -ProviderName 'GitHub' `
+            -ProviderName 'AzureDevOps' `
             -ApplicationId 'app-id' `
+            -WorkloadIdentityFederationIssuer $expectedIssuer `
             -WorkloadIdentityFederationSubject $expectedSubject)
         Should -Invoke Test-EntraIdApplicationRegistration -Times 1 -Exactly -ParameterFilter {
+            $ExpectedFederatedIssuer -eq $expectedIssuer -and
             $ExpectedFederatedSubject -eq $expectedSubject
         }
     }

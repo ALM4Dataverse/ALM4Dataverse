@@ -2091,6 +2091,7 @@ switch ($scene) {
             -TenantId 'example.invalid' `
             -ProviderName 'AzureDevOps' `
             -ApplicationId '00000000-0000-0000-0000-0000000000a8' `
+            -WorkloadIdentityFederationIssuer 'https://vstoken.dev.azure.com/example' `
             -WorkloadIdentityFederationSubject 'sc://example-organization/Example project/Dev-main'
     }
     'azdo-service-account' {

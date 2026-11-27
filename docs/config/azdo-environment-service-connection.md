@@ -109,9 +109,9 @@ reads the App Registration and checks:
   permission (**API permissions** > **Dynamics CRM** > **Delegated permissions** >
   `user_impersonation`). An Entra administrator must grant admin consent.
 - A non-expired client secret exists, a federated identity credential with audience
-  `api://AzureADTokenExchange` and the exact required subject exists, or both. The
-  subject is checked when setup knows it: the GitHub repository and environment subject,
-  or the Azure DevOps service connection subject.
+  `api://AzureADTokenExchange`, the exact required issuer and the exact required subject
+  exists, or both. The issuer and subject are checked when setup knows them: the GitHub
+  repository and environment values, or the Azure DevOps service connection values.
 
 The Dataverse application user grants access to the environment; the
 `user_impersonation` permission is the scope the deployment identity requests.

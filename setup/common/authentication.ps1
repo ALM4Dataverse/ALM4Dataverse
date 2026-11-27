@@ -743,7 +743,9 @@ function Get-EntraIdApplicationManagementState {
         CanReadApplications reports whether the signed-in account can list applications
         for the search action. Null means the answer could not be determined, so callers
         must keep the action available rather than block a permitted user after a
-        transient Graph failure. Results are cached per tenant for the setup session.
+        transient Graph failure. Unrecognized or custom directory roles also leave a
+        capability unknown rather than inferring a denial. Results are cached per tenant
+        for the setup session.
         This is an advisory directory-authorization pre-check, not a guarantee that a
         later Graph write succeeds for the client application's granted scopes.
     .PARAMETER TenantId
@@ -817,14 +819,22 @@ function Get-EntraIdApplicationManagementState {
     }
 
     $roleTemplateIds = @()
+    $unrecognizedRoleCount = 0
     $rolesRead = $false
     try {
         $rolesResponse = Invoke-RestMethod -Uri 'https://graph.microsoft.com/v1.0/me/transitiveMemberOf/microsoft.graph.directoryRole?$select=displayName,roleTemplateId' -Headers $headers -Method Get
+        $roleItems = @($rolesResponse.value | Where-Object { $null -ne $_ })
         $roleTemplateIds = @(
-            $rolesResponse.value |
+            $roleItems |
                 ForEach-Object { [string](Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'roleTemplateId') } |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
         )
+        # Custom roles and built-in roles outside the known set can still grant these
+        # capabilities, so they must not be treated as proof of denial.
+        $unrecognizedRoleCount = @($roleItems | Where-Object {
+                $templateId = [string](Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'roleTemplateId')
+                [string]::IsNullOrWhiteSpace($templateId) -or -not $roleDefinitions.Contains($templateId)
+            }).Count
         $rolesRead = $true
     }
     catch {
@@ -873,15 +883,26 @@ function Get-EntraIdApplicationManagementState {
             $definition = $roleDefinitions[[string]$_]
             $definition -and $definition.ManagesAllApplications
         }).Count -gt 0
+    $hasUnrecognizedRoles = $unrecognizedRoleCount -gt 0
 
     $canCreateApplications = if ($hasCreateRole) {
         $true
     }
-    elseif ($rolesRead -and $allowedToCreateApps -eq $false) {
-        $false
-    }
     elseif ($allowedToCreateApps -eq $true) {
         $true
+    }
+    elseif ($rolesRead -and -not $hasUnrecognizedRoles -and $allowedToCreateApps -eq $false) {
+        $false
+    }
+    else {
+        $null
+    }
+
+    $canManageAllApplications = if ($hasManageAllRole) {
+        $true
+    }
+    elseif ($rolesRead -and -not $hasUnrecognizedRoles) {
+        $false
     }
     else {
         $null
@@ -892,7 +913,7 @@ function Get-EntraIdApplicationManagementState {
         UserObjectId             = $userObjectId
         DirectoryRoles           = $directoryRoles
         CanCreateApplications    = $canCreateApplications
-        CanManageAllApplications = $(if ($rolesRead) { $hasManageAllRole } else { $null })
+        CanManageAllApplications = $canManageAllApplications
         CanReadApplications      = $canReadApplications
     }
 
@@ -1030,6 +1051,10 @@ function Test-EntraIdApplicationRegistration {
     .PARAMETER ProviderName
         Provider whose federated credential issuer is accepted. When omitted, any
         issuer is accepted as long as the audience matches.
+    .PARAMETER ExpectedFederatedIssuer
+        Exact federated credential issuer required for this repository or service
+        connection. When supplied, a credential must match this issuer instead of the
+        provider's general issuer pattern. Blank keeps provider matching.
     .PARAMETER ExpectedFederatedSubject
         Exact federated credential subject required for this repository and
         environment. When supplied, a credential must match the issuer, audience and
@@ -1047,6 +1072,7 @@ function Test-EntraIdApplicationRegistration {
         [Parameter()][AllowEmptyString()][AllowNull()][string]$ApplicationId,
         [Parameter()][AllowEmptyString()][AllowNull()][string]$TenantId,
         [Parameter()][ValidateSet('GitHub', 'AzureDevOps')][string]$ProviderName,
+        [Parameter()][AllowEmptyString()][string]$ExpectedFederatedIssuer,
         [Parameter()][AllowEmptyString()][string]$ExpectedFederatedSubject
     )
 
@@ -1162,24 +1188,43 @@ function Test-EntraIdApplicationRegistration {
     )
     $result.HasClientSecret = $passwordCredentials.Count -gt 0
     $now = [datetimeoffset]::UtcNow
+    $expiredSecretCount = 0
+    $futureSecretCount = 0
     $usableSecrets = @($passwordCredentials | Where-Object {
+            $startDateTime = Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'startDateTime'
+            if ($null -ne $startDateTime) {
+                $parsedStart = [datetimeoffset]::MinValue
+                if (
+                    [datetimeoffset]::TryParse([string]$startDateTime, [ref]$parsedStart) -and
+                    $parsedStart -gt $now
+                ) {
+                    $futureSecretCount++
+                    return $false
+                }
+            }
+
             $endDateTime = Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'endDateTime'
             if ($null -eq $endDateTime) {
-                $true
+                return $true
             }
-            else {
-                $parsedEnd = [datetimeoffset]::MinValue
-                if ([datetimeoffset]::TryParse([string]$endDateTime, [ref]$parsedEnd)) {
-                    $parsedEnd -gt $now
-                }
-                else {
-                    $true
-                }
+            $parsedEnd = [datetimeoffset]::MinValue
+            if (-not [datetimeoffset]::TryParse([string]$endDateTime, [ref]$parsedEnd)) {
+                return $true
             }
+            if ($parsedEnd -le $now) {
+                $expiredSecretCount++
+                return $false
+            }
+            return $true
         })
     $result.HasUsableClientSecret = $usableSecrets.Count -gt 0
     if ($result.HasClientSecret -and -not $result.HasUsableClientSecret) {
-        $issues.Add('All client secrets on the app registration have expired.')
+        if ($expiredSecretCount -gt 0) {
+            $issues.Add('One or more client secrets on the app registration have expired.')
+        }
+        if ($futureSecretCount -gt 0) {
+            $issues.Add('The app registration has a client secret that is not valid yet. Wait until its start date or create another secret.')
+        }
     }
 
     try {
@@ -1193,6 +1238,9 @@ function Test-EntraIdApplicationRegistration {
                     return $false
                 }
                 $issuer = [string](Get-OptionalObjectPropertyValue -InputObject $_ -PropertyName 'issuer')
+                if (-not [string]::IsNullOrWhiteSpace($ExpectedFederatedIssuer)) {
+                    return ($issuer -ceq $ExpectedFederatedIssuer)
+                }
                 if ($ProviderName -eq 'GitHub') {
                     return ($issuer -ieq 'https://token.actions.githubusercontent.com')
                 }
@@ -1530,6 +1578,9 @@ function Read-SetupEntraIdApplicationCredential {
         Friendly reuse name. Blank uses the application display name.
     .PARAMETER ShowCreationInstructions
         Shows manual application-creation guidance with the application ID prompt.
+    .PARAMETER WorkloadIdentityFederationIssuer
+        Exact federated credential issuer for this repository or service connection.
+        Used to validate an existing credential when available.
     .PARAMETER WorkloadIdentityFederationSubject
         Exact federated credential subject for this repository and environment. Used to
         validate an existing credential and, for GitHub, in creation guidance.
@@ -1549,6 +1600,7 @@ function Read-SetupEntraIdApplicationCredential {
         [Parameter()][AllowEmptyString()][string]$ApplicationId,
         [Parameter()][string]$Name,
         [Parameter()][switch]$ShowCreationInstructions,
+        [Parameter()][AllowEmptyString()][string]$WorkloadIdentityFederationIssuer,
         [Parameter()][AllowEmptyString()][string]$WorkloadIdentityFederationSubject,
         [Parameter()][switch]$DisableWorkloadIdentityFederation,
         [Parameter()][string]$PromptGuidanceDocRelativePath,
@@ -1586,6 +1638,7 @@ function Read-SetupEntraIdApplicationCredential {
             -ApplicationId $effectiveApplicationId `
             -TenantId $TenantId `
             -ProviderName $ProviderName `
+            -ExpectedFederatedIssuer $WorkloadIdentityFederationIssuer `
             -ExpectedFederatedSubject $WorkloadIdentityFederationSubject
         if ($validation.IsReady) {
             Write-Host "Validated application '$($validation.DisplayName)' ($effectiveApplicationId)." -ForegroundColor Green

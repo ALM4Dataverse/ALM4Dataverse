@@ -14,8 +14,8 @@ out safely.
 **You'll see:** after you enter an existing application ID, guided setup reports whether
 the app exists, requests the Dataverse `user_impersonation` permission, has an enterprise
 application (service principal), and has a usable client secret or federated identity
-credential. For WIF, setup also checks the exact federated credential subject when it
-knows the repository and environment or service connection. It offers **Continue with
+credential. For WIF, setup also checks the exact federated credential issuer and subject
+when it knows the repository and environment or service connection. It offers **Continue with
 this application**, **Recheck application setup** and **Enter a different application
 ID**, and the authentication menu only offers methods configured on the app. If neither
 method is usable, both remain available after the warning.

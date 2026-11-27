@@ -217,7 +217,7 @@ function Get-PowerPlatformSCCredential {
     rotation marks the credential for generation at Apply and clears that marker.
     Cached objects are reused; an existing environment credential is copied before
     rotation. Disabling extension mode limits new/manual choices to secret auth.
-    An existing service connection's exact WIF subject validates a federated credential.
+    An existing service connection's exact WIF issuer and subject validate a federated credential.
     Actions that need Entra app-registration write access are dimmed and rejected when
     the signed-in account's detected directory access cannot perform them; unknown
     detection leaves them available. Cancellation throws.
@@ -235,6 +235,7 @@ function Get-PowerPlatformSCCredential {
     # 1. Try to find existing Service Connection to see if we can reuse its App ID
     $existingEndpoint = $null
     $existingScAppId = $null
+    $existingWifIssuer = $null
     $existingWifSubject = $null
     try {
         $endpoints = @(Get-VSTeamServiceEndpoint -ProjectName $ProjectName -ErrorAction Stop)
@@ -246,6 +247,9 @@ function Get-PowerPlatformSCCredential {
             }
             elseif ($endpointParameters.PSObject.Properties.Name -contains 'serviceprincipalid') {
                 $existingScAppId = $endpointParameters.serviceprincipalid
+            }
+            if ($endpointParameters.PSObject.Properties.Name -contains 'workloadIdentityFederationIssuer') {
+                $existingWifIssuer = [string]$endpointParameters.workloadIdentityFederationIssuer
             }
             if ($endpointParameters.PSObject.Properties.Name -contains 'workloadIdentityFederationSubject') {
                 $existingWifSubject = [string]$endpointParameters.workloadIdentityFederationSubject
@@ -575,6 +579,7 @@ function Get-PowerPlatformSCCredential {
                 -TenantId $TenantId `
                 -ProviderName 'AzureDevOps' `
                 -Name $name `
+                -WorkloadIdentityFederationIssuer $existingWifIssuer `
                 -WorkloadIdentityFederationSubject $existingWifSubject `
                 -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
                 -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
@@ -595,6 +600,7 @@ function Get-PowerPlatformSCCredential {
                 -TenantId $TenantId `
                 -ProviderName 'AzureDevOps' `
                 -ShowCreationInstructions `
+                -WorkloadIdentityFederationIssuer $existingWifIssuer `
                 -WorkloadIdentityFederationSubject $existingWifSubject `
                 -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
                 -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
@@ -623,6 +629,7 @@ function Get-PowerPlatformSCCredential {
                 -TenantId $TenantId `
                 -ProviderName 'AzureDevOps' `
                 -ApplicationId ([string]$searchedApplication.appId) `
+                -WorkloadIdentityFederationIssuer $existingWifIssuer `
                 -WorkloadIdentityFederationSubject $existingWifSubject `
                 -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
                 -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `

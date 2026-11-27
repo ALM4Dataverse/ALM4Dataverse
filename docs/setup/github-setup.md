@@ -161,7 +161,8 @@ environment, BUILD validation and deployment targets in that order.
    When you enter an existing application ID, setup checks that it exists, has the
    Dataverse `user_impersonation` permission, has an enterprise application and has a
    usable client secret or federated credential. For WIF, it also requires the exact
-   federated credential subject for the selected repository and environment. Problems
+   federated credential issuer and subject for the selected repository and environment.
+   Problems
    are shown with **Continue with this application**, **Recheck application setup** and
    **Enter a different application ID** options, and the next
    authentication menu offers only the methods configured on the app. **Create a new
