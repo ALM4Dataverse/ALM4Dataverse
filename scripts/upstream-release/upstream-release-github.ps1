@@ -484,9 +484,16 @@ function Publish-GitHubPullRequest {
         if ($Content.ConflictCount -gt 0) {
             $createArguments += '--draft'
         }
-        # gh prints the new pull request's URL as its last line.
-        $url = [string](Invoke-GitHubCli -Arguments $createArguments | Select-Object -Last 1)
-        return [pscustomobject]@{ Number = [int]($url -replace '^.*/', ''); Url = $url }
+        # gh prints the new pull request's URL on a line of its own. Newer versions follow it
+        # with hints on stderr, which share the output, so the URL is matched rather than
+        # taken from a fixed position.
+        $output = @(Invoke-GitHubCli -Arguments $createArguments)
+        $urlMatch = $output | ForEach-Object { [regex]::Match([string]$_, '^(?<url>https://\S+/pull/(?<number>\d+))\s*$') } |
+            Where-Object Success | Select-Object -First 1
+        if ($null -eq $urlMatch) {
+            throw "gh pr create did not report the new pull request's URL. Output: $($output -join ' ')"
+        }
+        return [pscustomobject]@{ Number = [int]$urlMatch.Groups['number'].Value; Url = $urlMatch.Groups['url'].Value }
     }
     finally {
         Remove-Item -LiteralPath $bodyFile.FullName -Force -ErrorAction SilentlyContinue

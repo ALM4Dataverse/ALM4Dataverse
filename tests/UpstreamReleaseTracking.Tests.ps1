@@ -532,7 +532,10 @@ Describe 'Upstream release tracking for a GitHub fork' {
                         reviews           = @()
                     }
                     $script:gitHub.PullRequests.Add($created)
+                    # gh 2.106 follows the URL with a hint on stderr, which the caller captures too.
                     $created.url
+                    'hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:'
+                    '  - Event subscriptions are in preview and may not be enabled for your account.'
                 }
                 'pr edit' { $record.body = Get-Content -LiteralPath $option['--body-file'] -Raw }
                 # The workflow's token belongs to an app, so GitHub reports its comments as a bot's.
