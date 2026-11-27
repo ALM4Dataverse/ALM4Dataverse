@@ -54,9 +54,7 @@ If you have already reviewed and trust the release, you can run the one-line boo
 instead:
 
 ```powershell
-$s = (iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1).Content
-if ($s.StartsWith([char]0xFEFF)) { $s = $s.Substring(1) }
-iex $s
+iex ((iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1).Content.TrimStart([char]0xFEFF))
 ```
 
 To select a tenant or a specific shared-code ref, see
