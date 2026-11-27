@@ -18,7 +18,8 @@ credential. For WIF, setup also checks the exact federated credential issuer and
 when it knows the repository and environment or service connection. It offers **Continue with
 this application**, **Recheck application setup** and **Enter a different application
 ID**, and the authentication menu only offers methods configured on the app. If neither
-method is usable, both remain available after the warning.
+method is usable, both remain available after the warning, but WIF is dimmed when setup
+can definitively determine that your account cannot manage credentials on the app.
 
 **Do this:** add the missing `user_impersonation` permission, enterprise application or
 credential in Entra, correct a federated credential subject to the exact value setup

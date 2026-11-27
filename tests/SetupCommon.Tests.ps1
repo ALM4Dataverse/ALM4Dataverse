@@ -3384,6 +3384,7 @@ Describe 'Entra ID application validation and search' {
             param(
                 [string[]]$AllowedAuthTypes = @('Secret', 'WIF'),
                 [string[]]$Issues = @(),
+                [bool]$HasUsableFederatedCredential = $true,
                 [bool]$IsReady = $true,
                 [bool]$CheckFailed = $false,
                 [string]$CheckError = ''
@@ -3397,7 +3398,7 @@ Describe 'Entra ID application validation and search' {
                 HasClientSecret              = $true
                 HasUsableClientSecret        = $true
                 HasFederatedCredential       = $true
-                HasUsableFederatedCredential = $true
+                HasUsableFederatedCredential = $HasUsableFederatedCredential
                 AllowedAuthTypes             = @($AllowedAuthTypes)
                 Issues                       = @($Issues)
                 IsReady                      = $IsReady
@@ -3863,6 +3864,56 @@ Describe 'Entra ID application validation and search' {
         Should -Invoke Select-FromMenu -Times 2 -Exactly
         Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
             ($PromptGuidanceLines -join ' ') -match 'Graph unavailable'
+        }
+    }
+
+    It 'dims WIF when continuing an app without a usable WIF credential and management is denied' {
+        Mock Test-EntraIdApplicationRegistration {
+            Get-EntraValidationFixture `
+                -AllowedAuthTypes @() `
+                -HasUsableFederatedCredential $false `
+                -Issues @('Application has no usable credential.') `
+                -IsReady $false
+        }
+        Mock Test-EntraIdApplicationManagement { $false }
+        $script:menuAnswers = [System.Collections.Generic.Queue[int]]::new()
+        $script:menuAnswers.Enqueue(0) # Continue
+        $script:menuAnswers.Enqueue(1) # GitHub client secret
+        Mock Select-FromMenu { $script:menuAnswers.Dequeue() }
+        $result = Read-SetupEntraIdApplicationCredential `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId 'app-id'
+        $result.AuthType | Should -Be 'Secret'
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
+            $Title -eq 'Select authentication type' -and
+            ($DimItems -join ' ') -match 'requires Entra ID permissions'
+        }
+    }
+
+    It 'keeps WIF selectable when management is allowed or unknown' -ForEach @(
+        @{ CanManage = $true }
+        @{ CanManage = $null }
+    ) {
+        Mock Test-EntraIdApplicationRegistration {
+            Get-EntraValidationFixture `
+                -AllowedAuthTypes @() `
+                -HasUsableFederatedCredential $false `
+                -Issues @('Application has no usable credential.') `
+                -IsReady $false
+        }
+        Mock Test-EntraIdApplicationManagement { $CanManage }
+        $script:menuAnswers = [System.Collections.Generic.Queue[int]]::new()
+        $script:menuAnswers.Enqueue(0) # Continue
+        $script:menuAnswers.Enqueue(0) # GitHub WIF
+        Mock Select-FromMenu { $script:menuAnswers.Dequeue() }
+        $result = Read-SetupEntraIdApplicationCredential `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId 'app-id'
+        $result.AuthType | Should -Be 'WIF'
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
+            $Title -eq 'Select authentication type' -and @($DimItems).Count -eq 0
         }
     }
 

@@ -275,7 +275,9 @@ function Get-GitHubCredentialsForEnvironment {
         subject when the repository identity is known, before use. Actions that
         need Entra app-registration write access are dimmed and rejected when the
         signed-in account's detected directory access cannot perform them; unknown
-        detection leaves them available. Cancelled required menus throw rather than
+        detection leaves them available. WIF is likewise dimmed when continuing an app
+        without a usable WIF credential if the account definitively cannot manage it.
+        Cancelled required menus throw rather than
         returning partial credentials. When the repository identity is supplied, the
         manual instructions show the exact environment WIF subject for the repository's
         current legacy or immutable OIDC mode instead of a placeholder.
@@ -526,6 +528,7 @@ function Get-GitHubCredentialsForEnvironment {
                 -TenantId $TenantId `
                 -ProviderName 'GitHub' `
                 -Name $name `
+                -ApplicationManagementState $entraState `
                 -WorkloadIdentityFederationSubject $wifSubject `
                 -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' `
                 -PromptGuidanceRef $ALM4DataverseRef
@@ -545,6 +548,7 @@ function Get-GitHubCredentialsForEnvironment {
                 -TenantId $TenantId `
                 -ProviderName 'GitHub' `
                 -ShowCreationInstructions `
+                -ApplicationManagementState $entraState `
                 -WorkloadIdentityFederationSubject $wifSubject `
                 -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' `
                 -PromptGuidanceRef $ALM4DataverseRef
@@ -572,6 +576,7 @@ function Get-GitHubCredentialsForEnvironment {
                 -TenantId $TenantId `
                 -ProviderName 'GitHub' `
                 -ApplicationId ([string]$searchedApplication.appId) `
+                -ApplicationManagementState $entraState `
                 -WorkloadIdentityFederationSubject $wifSubject `
                 -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' `
                 -PromptGuidanceRef $ALM4DataverseRef

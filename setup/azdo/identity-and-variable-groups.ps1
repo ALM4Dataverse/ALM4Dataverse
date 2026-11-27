@@ -220,7 +220,9 @@ function Get-PowerPlatformSCCredential {
     An existing service connection's exact WIF issuer and subject validate a federated credential.
     Actions that need Entra app-registration write access are dimmed and rejected when
     the signed-in account's detected directory access cannot perform them; unknown
-    detection leaves them available. Cancellation throws.
+    detection leaves them available. WIF is likewise dimmed when continuing an app
+    without a usable WIF credential if the account definitively cannot manage it.
+    Cancellation throws.
     #>
     [CmdletBinding()]
     param(
@@ -579,6 +581,7 @@ function Get-PowerPlatformSCCredential {
                 -TenantId $TenantId `
                 -ProviderName 'AzureDevOps' `
                 -Name $name `
+                -ApplicationManagementState $entraState `
                 -WorkloadIdentityFederationIssuer $existingWifIssuer `
                 -WorkloadIdentityFederationSubject $existingWifSubject `
                 -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
@@ -600,6 +603,7 @@ function Get-PowerPlatformSCCredential {
                 -TenantId $TenantId `
                 -ProviderName 'AzureDevOps' `
                 -ShowCreationInstructions `
+                -ApplicationManagementState $entraState `
                 -WorkloadIdentityFederationIssuer $existingWifIssuer `
                 -WorkloadIdentityFederationSubject $existingWifSubject `
                 -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
@@ -629,6 +633,7 @@ function Get-PowerPlatformSCCredential {
                 -TenantId $TenantId `
                 -ProviderName 'AzureDevOps' `
                 -ApplicationId ([string]$searchedApplication.appId) `
+                -ApplicationManagementState $entraState `
                 -WorkloadIdentityFederationIssuer $existingWifIssuer `
                 -WorkloadIdentityFederationSubject $existingWifSubject `
                 -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `

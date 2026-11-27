@@ -120,8 +120,10 @@ Problems are shown before the authentication step with **Continue with this
 application**, **Recheck application setup**, and **Enter a different application ID**.
 Continuing records the explicit choice but does not change the app. The authentication
 menu offers only the configured methods; if neither method is usable, both remain
-available after the warning. When extension mode is disabled, WIF is never offered.
-Setup never displays or retrieves an existing secret value, so client secret
+available after the warning. When WIF is not already usable, WIF is dimmed if setup can
+definitively determine that your account cannot manage credentials on the app; an
+unknown capability remains available. When extension mode is disabled, WIF is never
+offered. Setup never displays or retrieves an existing secret value, so client secret
 authentication still asks for the value.
 
 **Create a new application manually (with instructions)** displays the Entra portal

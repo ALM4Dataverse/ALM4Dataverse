@@ -1578,6 +1578,10 @@ function Read-SetupEntraIdApplicationCredential {
         Friendly reuse name. Blank uses the application display name.
     .PARAMETER ShowCreationInstructions
         Shows manual application-creation guidance with the application ID prompt.
+    .PARAMETER ApplicationManagementState
+        Previously detected Get-EntraIdApplicationManagementState result. Used to
+        decide whether WIF can be selected when doing so would require adding a
+        federated credential. A definite false dims WIF; unknown remains available.
     .PARAMETER WorkloadIdentityFederationIssuer
         Exact federated credential issuer for this repository or service connection.
         Used to validate an existing credential when available.
@@ -1600,6 +1604,7 @@ function Read-SetupEntraIdApplicationCredential {
         [Parameter()][AllowEmptyString()][string]$ApplicationId,
         [Parameter()][string]$Name,
         [Parameter()][switch]$ShowCreationInstructions,
+        [Parameter()][object]$ApplicationManagementState,
         [Parameter()][AllowEmptyString()][string]$WorkloadIdentityFederationIssuer,
         [Parameter()][AllowEmptyString()][string]$WorkloadIdentityFederationSubject,
         [Parameter()][switch]$DisableWorkloadIdentityFederation,
@@ -1707,38 +1712,63 @@ function Read-SetupEntraIdApplicationCredential {
         Write-Host "Using $methodDescription because it is the only authentication method available for this application." -ForegroundColor Green
     }
     else {
+        $wifLabel = 'Workload Identity Federation (recommended, no secrets)'
+        $secretLabel = 'Service Principal with Secret (traditional)'
         $authTypeItems = if ($ProviderName -eq 'GitHub') {
-            @(
-                'Workload Identity Federation (recommended, no secrets)'
-                'Service Principal with Secret (traditional)'
-            )
+            @($wifLabel, $secretLabel)
         }
         else {
-            @(
-                'Service Principal with Secret (traditional)'
-                'Workload Identity Federation (recommended, no secrets)'
-            )
+            @($secretLabel, $wifLabel)
         }
 
-        $authTypeSelection = Select-FromMenu `
-            -Title 'Select authentication type' `
-            -Items $authTypeItems `
-            -PromptGuidanceLines @(
+        # WIF only needs a Graph write when no usable federated credential already
+        # matches this application. A definite denial hides that choice; unknown stays
+        # available so a transient read failure does not block a permitted user.
+        $dimAuthTypeItems = @()
+        if ($allowedAuthTypes -contains 'WIF' -and $validation.HasUsableFederatedCredential -eq $false) {
+            $canManageApplication = Test-EntraIdApplicationManagement `
+                -TenantId $TenantId `
+                -ApplicationObjectId ([string]$validation.ApplicationObjectId) `
+                -ApplicationId ([string]$validation.ApplicationId) `
+                -State $ApplicationManagementState
+            if ($canManageApplication -eq $false) {
+                $wifIndex = [array]::IndexOf($authTypeItems, $wifLabel)
+                $dimmedWifLabel = "$wifLabel [requires Entra ID permissions]"
+                $authTypeItems[$wifIndex] = $dimmedWifLabel
+                $dimAuthTypeItems += $dimmedWifLabel
+            }
+        }
+
+        $authTypeSelection = $null
+        $authTypePromptNotice = $null
+        while ($null -eq $authTypeSelection) {
+            $authTypeGuidance = @(
                 'Choose the authentication mode for the validated App Registration.',
                 'Methods that are not configured on the application are not offered.'
-            ) `
-            -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
-            -PromptGuidanceRef $PromptGuidanceRef
-        if ($null -eq $authTypeSelection) {
-            throw 'No authentication type selected.'
+            )
+            if ($dimAuthTypeItems.Count -gt 0) {
+                $authTypeGuidance += 'Workload identity federation needs permission to manage credentials on this App Registration. Ask an Entra administrator or choose client-secret authentication.'
+            }
+            if ($authTypePromptNotice) {
+                $authTypeGuidance = @($authTypePromptNotice) + $authTypeGuidance
+            }
+            $authTypeSelection = Select-FromMenu `
+                -Title 'Select authentication type' `
+                -Items $authTypeItems `
+                -DimItems $dimAuthTypeItems `
+                -PromptGuidanceLines $authTypeGuidance `
+                -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
+                -PromptGuidanceRef $PromptGuidanceRef
+            if ($null -eq $authTypeSelection) {
+                throw 'No authentication type selected.'
+            }
+            if ($dimAuthTypeItems -contains $authTypeItems[$authTypeSelection]) {
+                $authTypePromptNotice = 'Workload identity federation is unavailable because the signed-in account cannot manage credentials on this App Registration. Choose client-secret authentication or ask an Entra administrator.'
+                $authTypeSelection = $null
+            }
         }
 
-        if ($ProviderName -eq 'GitHub') {
-            $authType = if ($authTypeSelection -eq 0) { 'WIF' } else { 'Secret' }
-        }
-        else {
-            $authType = if ($authTypeSelection -eq 0) { 'Secret' } else { 'WIF' }
-        }
+        $authType = if ($authTypeItems[$authTypeSelection] -eq $wifLabel) { 'WIF' } else { 'Secret' }
     }
 
     $clientSecret = $null
