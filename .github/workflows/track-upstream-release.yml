@@ -101,20 +101,17 @@ jobs:
           GH_TOKEN: ${{ steps.fork-app-token.outputs.token || secrets.UPSTREAM_TRACKING_TOKEN || github.token }}
           FORK_TOKEN_SOURCE: ${{ steps.fork-app-token.outputs.token && 'app' || secrets.UPSTREAM_TRACKING_TOKEN && 'pat' || 'github-token' }}
           UPSTREAM_READ_TOKEN: ${{ steps.upstream-app-token.outputs.token || secrets.UPSTREAM_READ_TOKEN }}
-          UPSTREAM_TRACKING_COPILOT_TOKEN: ${{ secrets.UPSTREAM_TRACKING_COPILOT_TOKEN }}
           BASE_BRANCH: ${{ vars.UPSTREAM_BASE_BRANCH || github.event.repository.default_branch }}
           # Inputs reach the script through the environment, never by expression
           # interpolation into the script text.
           TARGET_TAG: ${{ inputs.target-tag }}
           CURRENT_TAG: ${{ inputs.current-tag }}
           INCLUDE_PRERELEASES: ${{ inputs.include-prereleases == 'true' || (inputs.include-prereleases != 'false' && vars.UPSTREAM_INCLUDE_PRERELEASES == 'true') }}
-          ASSIGN_COPILOT: ${{ vars.UPSTREAM_TRACKING_ASSIGN_COPILOT == 'true' }}
           DRY_RUN: ${{ inputs.dry-run == true }}
         run: |
           ./scripts/upstream-release/update-upstream-release-pr.ps1 `
             -GitHubRepository $env:GITHUB_REPOSITORY `
             -ForkTokenSource $env:FORK_TOKEN_SOURCE `
-            -AssignCopilot:($env:ASSIGN_COPILOT -eq 'true') `
             -UpstreamRepository $env:UPSTREAM_REPOSITORY `
             -BaseBranch $env:BASE_BRANCH `
             -TargetTag $env:TARGET_TAG `

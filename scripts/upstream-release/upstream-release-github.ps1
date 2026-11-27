@@ -5,8 +5,7 @@
     GitHub fork adapter for upstream release tracking.
 .DESCRIPTION
     Implements the fork platform interface (section 7 of upstream-release-functions.ps1)
-    for a fork hosted on GitHub, using the gh CLI authenticated by GH_TOKEN. Also provides
-    the optional Copilot coding agent hand-off, which exists only on GitHub.
+    for a fork hosted on GitHub, using the gh CLI authenticated by GH_TOKEN.
 
     Loaded by upstream-release-functions.ps1; do not dot-source this file on its own.
 #>
@@ -22,8 +21,6 @@ function New-GitHubForkContext {
     .PARAMETER TokenSource
         Kind of token in GH_TOKEN: 'app', 'pat' or 'github-token' (the built-in token, which
         cannot push changes to workflow files).
-    .PARAMETER AssignCopilot
-        Assigns the Copilot coding agent after the pull request is published.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Constructs an in-memory object only.')]
     [CmdletBinding()]
@@ -34,17 +31,14 @@ function New-GitHubForkContext {
         [string]$Repository,
 
         [ValidateSet('app', 'pat', 'github-token')]
-        [string]$TokenSource = 'github-token',
-
-        [switch]$AssignCopilot
+        [string]$TokenSource = 'github-token'
     )
 
     [pscustomobject]@{
-        Platform      = 'GitHub'
-        DisplayName   = $Repository
-        Repository    = $Repository
-        TokenSource   = $TokenSource
-        AssignCopilot = [bool]$AssignCopilot
+        Platform    = 'GitHub'
+        DisplayName = $Repository
+        Repository  = $Repository
+        TokenSource = $TokenSource
     }
 }
 
@@ -89,9 +83,7 @@ function Get-GitHubGitAuthorization {
 function Invoke-GitHubCli {
     <#
     .SYNOPSIS
-        Runs a gh command, optionally with a different token from the ambient GH_TOKEN.
-    .PARAMETER Token
-        Overrides GH_TOKEN for this call only. When empty, gh uses the ambient GH_TOKEN.
+        Runs a gh command, authenticated by the ambient GH_TOKEN.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -99,12 +91,10 @@ function Invoke-GitHubCli {
         [Parameter(Mandatory)]
         [string[]]$Arguments,
 
-        [string]$Token,
-
         [switch]$AllowFailure
     )
 
-    Invoke-NativeCommandWithEnvironment -Command gh -Arguments $Arguments -Environment @{ GH_TOKEN = $Token } -AllowFailure:$AllowFailure
+    Invoke-NativeCommandWithEnvironment -Command gh -Arguments $Arguments -AllowFailure:$AllowFailure
 }
 
 function Format-GitHubPullRequestMarker {
@@ -497,83 +487,5 @@ function Publish-GitHubPullRequest {
     }
     finally {
         Remove-Item -LiteralPath $bodyFile.FullName -Force -ErrorAction SilentlyContinue
-    }
-}
-
-function Request-CopilotUpstreamReview {
-    <#
-    .SYNOPSIS
-        Asks the Copilot coding agent to finish the update pull request.
-    .DESCRIPTION
-        Assigns Copilot to the pull request through the issues API, asking it to resolve any
-        conflict markers and complete the Fork Difference Audit. GitHub only accepts this
-        from a user token (a personal access token of a user with a Copilot licence); GitHub
-        App and GITHUB_TOKEN tokens are rejected.
-
-        The assignment API is in public preview, so every failure is reported as a warning
-        and never fails a run whose pull request was already published.
-    .PARAMETER Token
-        User token; defaults to UPSTREAM_TRACKING_COPILOT_TOKEN.
-    .OUTPUTS
-        [bool] whether the assignment request succeeded.
-    #>
-    [CmdletBinding()]
-    [OutputType([bool])]
-    param(
-        [Parameter(Mandatory)]
-        [pscustomobject]$Fork,
-
-        [Parameter(Mandatory)]
-        [int]$PullRequestNumber,
-
-        [Parameter(Mandatory)]
-        [string]$BranchName,
-
-        [Parameter(Mandatory)]
-        [bool]$HasConflicts,
-
-        [string]$Token = $env:UPSTREAM_TRACKING_COPILOT_TOKEN
-    )
-
-    if ([string]::IsNullOrEmpty($Token)) {
-        Write-Warning 'Copilot was not assigned: set the UPSTREAM_TRACKING_COPILOT_TOKEN secret to a personal access token of a user with Copilot.'
-        return $false
-    }
-
-    $instructions = [System.Collections.Generic.List[string]]::new()
-    if ($HasConflicts) {
-        $instructions.Add('Resolve every conflict listed under "Unresolved conflicts" in the pull request description. Prefer the upstream framework change and re-apply fork-specific behaviour through configuration or hooks where possible.')
-    }
-    $instructions.Add('Complete the Fork Difference Audit described in AGENTS.md and replace the placeholders in the "End-user changes", "Fork comparison" and "Validation" sections of the pull request description.')
-    $instructions.Add("Keep the hidden '$((Get-UpstreamTrackingConvention).MarkerName)' comment at the end of the description unchanged.")
-    $instructions.Add('Run the checks listed in AGENTS.md and report their results.')
-
-    $request = @{
-        assignees        = @('copilot-swe-agent[bot]')
-        agent_assignment = @{
-            target_repo         = $Fork.Repository
-            base_branch         = $BranchName
-            custom_instructions = $instructions -join "`n"
-        }
-    }
-
-    $requestFile = New-TemporaryFile
-    try {
-        [IO.File]::WriteAllText($requestFile.FullName, ($request | ConvertTo-Json -Depth 4))
-        Invoke-GitHubCli -Token $Token -Arguments @(
-            'api', '--method', 'POST', "repos/$($Fork.Repository)/issues/$PullRequestNumber/assignees", '--input', $requestFile.FullName
-        ) | Out-Null
-        Write-Host "Assigned Copilot to pull request #$PullRequestNumber."
-        return $true
-    }
-    catch {
-        # Invoke-GitHubCli threw on gh's exit code, which is still set. The Actions pwsh shell
-        # would fail the step with it, although this optional step only warns.
-        $global:LASTEXITCODE = 0
-        Write-Warning "Copilot could not be assigned to pull request #${PullRequestNumber}: $($_.Exception.Message) Check that the Copilot coding agent is enabled for the repository and that the token's user has Copilot."
-        return $false
-    }
-    finally {
-        Remove-Item -LiteralPath $requestFile.FullName -Force -ErrorAction SilentlyContinue
     }
 }

@@ -16,8 +16,6 @@
     The fork on GitHub as 'owner/name'. The script does nothing when it equals UpstreamRepository.
 .PARAMETER ForkTokenSource
     GitHub fork: kind of token in GH_TOKEN, 'app', 'pat' or 'github-token'.
-.PARAMETER AssignCopilot
-    GitHub fork: assigns the Copilot coding agent to the pull request after it is published.
 .PARAMETER AzureDevOpsRepository
     The fork's Azure Repos repository name, as in Build.Repository.Name.
 .PARAMETER AzureDevOpsCollectionUri
@@ -44,8 +42,8 @@
 .NOTES
     Run in a disposable checkout of the fork whose 'origin' remote is the fork. The script
     switches branches, commits, and force-pushes the update branch with a lease. Tokens are
-    read from GH_TOKEN (GitHub fork), SYSTEM_ACCESSTOKEN (Azure DevOps fork),
-    UPSTREAM_READ_TOKEN and UPSTREAM_TRACKING_COPILOT_TOKEN.
+    read from GH_TOKEN (GitHub fork), SYSTEM_ACCESSTOKEN (Azure DevOps fork) and
+    UPSTREAM_READ_TOKEN.
 .EXAMPLE
     ./scripts/upstream-release/update-upstream-release-pr.ps1 -GitHubRepository contoso/ALM4Dataverse -UpstreamRepository ALM4Dataverse/ALM4Dataverse -BaseBranch main -DryRun
 .EXAMPLE
@@ -59,9 +57,6 @@ param(
     [Parameter(ParameterSetName = 'GitHub')]
     [ValidateSet('app', 'pat', 'github-token')]
     [string]$ForkTokenSource = 'github-token',
-
-    [Parameter(ParameterSetName = 'GitHub')]
-    [switch]$AssignCopilot,
 
     [Parameter(Mandatory, ParameterSetName = 'AzureDevOps')]
     [string]$AzureDevOpsRepository,
@@ -95,7 +90,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'upstream-release-functions.ps1')
 
 $fork = if ($PSCmdlet.ParameterSetName -eq 'GitHub') {
-    New-GitHubForkContext -Repository $GitHubRepository -TokenSource $ForkTokenSource -AssignCopilot:$AssignCopilot
+    New-GitHubForkContext -Repository $GitHubRepository -TokenSource $ForkTokenSource
 }
 else {
     New-AzureDevOpsForkContext -CollectionUri $AzureDevOpsCollectionUri -Project $AzureDevOpsProject -Repository $AzureDevOpsRepository

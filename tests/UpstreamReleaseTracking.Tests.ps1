@@ -291,7 +291,7 @@ BeforeAll {
         # Saves and clears every variable the engine reads, so a developer's or CI runner's
         # environment cannot change test results. Restore-TrackingEnvironment undoes it.
         $script:savedEnvironment = @{}
-        foreach ($name in 'GH_TOKEN', 'SYSTEM_ACCESSTOKEN', 'UPSTREAM_READ_TOKEN', 'UPSTREAM_TRACKING_COPILOT_TOKEN', 'GITHUB_STEP_SUMMARY', 'GITHUB_ACTIONS', 'GITHUB_WORKFLOW', 'TF_BUILD', 'BUILD_DEFINITIONNAME') {
+        foreach ($name in 'GH_TOKEN', 'SYSTEM_ACCESSTOKEN', 'UPSTREAM_READ_TOKEN', 'GITHUB_STEP_SUMMARY', 'GITHUB_ACTIONS', 'GITHUB_WORKFLOW', 'TF_BUILD', 'BUILD_DEFINITIONNAME') {
             $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
             [Environment]::SetEnvironmentVariable($name, $null)
         }
@@ -632,6 +632,9 @@ Describe 'Upstream release tracking for a GitHub fork' {
         $published = Get-GitHubPullRequestRecord -Number 42
         $published.isDraft | Should -BeTrue
         $published.body | Should -Match '\n\| `shared\.txt` \| '
+        # Each pending task carries a self-contained prompt for GitHub Copilot.
+        $published.body | Should -BeLike "*``````text`n*git fetch --no-tags https://github.com/$script:upstreamRepository.git refs/tags/v1.1.0*Fork Difference Audit*"
+        $published.body | Should -BeLike "*``````text`n*merges upstream $script:upstreamRepository v1.1.0 into main*git grep -l -E*"
     }
 
     It 'reports the fork as up to date from the committed state file' {
@@ -915,30 +918,6 @@ Describe 'Upstream release tracking for a GitHub fork' {
         Get-OriginUpdateBranch | Should -Be 'update/upstream-release/v1.1.0'
         (Get-GitHubPullRequestRecord -Number 42).state | Should -Be 'open'
         Should -Invoke Invoke-GitHubCli -Times 1 -Exactly -ParameterFilter { $Arguments[0] -eq 'pr' -and $Arguments[1] -ne 'list' } -Because 'only the first run created a pull request'
-    }
-
-    It 'assigns Copilot with the user token when requested' {
-        $env:UPSTREAM_TRACKING_COPILOT_TOKEN = 'copilot-token'
-        $fork = New-GitHubForkContext -Repository 'contoso/fork' -TokenSource app -AssignCopilot
-
-        Invoke-FixtureTracking -Fork $fork | Out-Null
-
-        Should -Invoke Invoke-GitHubCli -Times 1 -Exactly -ParameterFilter {
-            $Token -eq 'copilot-token' -and $Arguments -contains 'repos/contoso/fork/issues/42/assignees'
-        }
-    }
-
-    It 'only warns when Copilot cannot be assigned' {
-        $branch = 'update/upstream-release/v1.1.0'
-        Request-CopilotUpstreamReview -Fork $script:gitHubFork -PullRequestNumber 42 -BranchName $branch -HasConflicts $false -WarningVariable missingToken -WarningAction SilentlyContinue |
-            Should -BeFalse
-        $missingToken | Should -Match 'UPSTREAM_TRACKING_COPILOT_TOKEN'
-
-        Mock Invoke-GitHubCli { $global:LASTEXITCODE = 1; throw 'HTTP 403' }
-        Request-CopilotUpstreamReview -Fork $script:gitHubFork -PullRequestNumber 42 -BranchName $branch -HasConflicts $true -Token 'copilot-token' -WarningVariable rejected -WarningAction SilentlyContinue |
-            Should -BeFalse
-        $rejected | Should -Match 'HTTP 403'
-        $LASTEXITCODE | Should -Be 0 -Because 'the Actions pwsh shell fails the step on a nonzero exit code'
     }
 
     It 'ignores pull requests from other repositories that use the same branch name' {
