@@ -158,9 +158,47 @@ environment, BUILD validation and deployment targets in that order.
    service account is the licensed user that owns processes, not the application
    identity. Setup checks the format of a manually entered UPN but does not verify its
    licensing or roles. Rotating an existing client secret is deferred until you choose
-   **Apply changes**.
+   **Apply changes**. Setup first checks your Entra ID permissions; actions your
+   signed-in account cannot perform, such as creating an app registration or adding a
+   federated credential, are dimmed and cannot be selected. See
+   [app registration permissions](../config/azdo-environment-service-connection.md#app-registration-permissions).
+
+   When you enter an existing application ID, setup checks that it exists, has the
+   Dataverse `user_impersonation` permission, has an enterprise application and has a
+   usable client secret or federated credential. For WIF, it also requires the exact
+   federated credential subject when the service connection is available. Problems are
+   shown with **Continue with this application**, **Recheck application setup** and
+   **Enter a different application ID** options, and the next
+   authentication menu offers only the methods configured on the app. **Create a new
+   application manually (with instructions)** shows the Entra portal steps, including the
+   `user_impersonation` scope and manual WIF credential steps, and then validates the ID
+   you enter. WIF and client secret are alternatives; WIF is recommended.
+   **Search for an existing application by name** searches this tenant by display-name
+   prefix when your account can list applications. Reusing an existing service connection
+   does not change its Entra application.
 
    ![Azure DevOps credential choices](./screenshots/azdo-credentials.png)
+
+   ![Azure DevOps manual application creation instructions](./screenshots/azdo-manual-instructions.png)
+
+   The WIF issuer and subject must be copied exactly from the service connection that
+   setup creates. Do not substitute an example or a subject from another organization,
+   project or connection.
+
+   Setup explains each validation problem and offers **Continue**, **Recheck**, or
+   **Enter a different application ID**. The validation dialog is shared by both setup
+   providers.
+
+   | Validation problem | What setup reports |
+   | --- | --- |
+   | Application not found | ![Validation: application not found](./screenshots/validation-application-not-found.png) |
+   | Dataverse user_impersonation permission missing | ![Validation: Dataverse permission missing](./screenshots/validation-missing-dataverse-permission.png) |
+   | Enterprise application missing | ![Validation: enterprise application missing](./screenshots/validation-missing-enterprise-app.png) |
+   | No usable client secret or federated credential | ![Validation: no usable credential](./screenshots/validation-missing-credentials.png) |
+   | Client secret expired | ![Validation: expired client secret](./screenshots/validation-expired-secret.png) |
+   | Federated credential uses the wrong issuer or audience | ![Validation: wrong federated credential](./screenshots/azdo-validation-wrong-federated-credential.png) |
+   | Federated credential uses the wrong subject | ![Validation: wrong federated subject](./screenshots/azdo-validation-wrong-federated-subject.png) |
+   | Validation could not complete | ![Validation: check failed](./screenshots/validation-check-failed.png) |
 
    ![Azure DevOps authentication type choices](./screenshots/azdo-authentication-type.png)
 

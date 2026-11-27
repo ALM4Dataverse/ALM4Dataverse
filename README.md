@@ -41,7 +41,7 @@ deployment using automated setup.
 - [Quickstart: GitHub Actions](docs/getting-started/quickstart-github.md)
 - [Quickstart: Azure DevOps](docs/getting-started/quickstart-azdo.md)
 
-![Interactive walkthrough of ALM4Dataverse automated setup with character-by-character typing: sign-in, project and repository selection, shared repository update strategy, branch environments, authentication, preview, apply, and GitHub support](docs/setup/screenshots/setup-walkthrough.gif)
+![Interactive walkthrough of ALM4Dataverse automated setup with character-by-character typing: sign-in, project and repository selection, shared repository update strategy, branch environments, authentication, manual app-creation instructions, existing-app validation, preview, apply, and GitHub support](docs/setup/screenshots/setup-walkthrough.gif)
 
 Not sure which platform? Read
 [Should I use Azure DevOps or GitHub?](docs/faqs.md#should-i-use-azure-devops-or-github)

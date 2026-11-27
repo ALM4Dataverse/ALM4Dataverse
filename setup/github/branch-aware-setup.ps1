@@ -91,6 +91,8 @@ function Invoke-GitHubBranchAwareSetup {
 
     $cachedCredentials = @()
     $cachedServiceAccounts = @()
+    $repoOwnerId = [long](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'OwnerId')
+    $repoId = [long](Get-OptionalObjectPropertyValue -InputObject $RepoIdentity -PropertyName 'RepositoryId')
     $copyRoot = $null
     $upstreamClone = $null
 
@@ -236,6 +238,11 @@ function Invoke-GitHubBranchAwareSetup {
                                     -ExistingServiceAccounts $cachedServiceAccounts `
                                     -TenantId $TenantId `
                                     -RepoName $RepoName `
+                                    -RepoOwner $RepoOwner `
+                                    -RepoFullName $RepoFullName `
+                                    -RepoOwnerId $repoOwnerId `
+                                    -RepoId $repoId `
+                                    -UseImmutableWifSubject $wizardState.UseImmutableWifSubject `
                                     -PromptGuidanceLines @(
                                         'Choose the branch-specific Dataverse environment used for development and solution discovery.',
                                         'Credentials and service-account ownership are configured in separate steps.'
@@ -328,6 +335,11 @@ function Invoke-GitHubBranchAwareSetup {
                                             -ExistingServiceAccounts $currentServiceAccounts `
                                             -TenantId $TenantId `
                                             -RepoName $RepoName `
+                                            -RepoOwner $RepoOwner `
+                                            -RepoFullName $RepoFullName `
+                                            -RepoOwnerId $repoOwnerId `
+                                            -RepoId $repoId `
+                                            -UseImmutableWifSubject $wizardState.UseImmutableWifSubject `
                                             -PromptGuidanceLines @(
                                                 "Select the Dataverse target that branch '$branchName' should promote through.",
                                                 'The branch DEV environment cannot be selected as a deployment target.'
@@ -398,6 +410,11 @@ function Invoke-GitHubBranchAwareSetup {
                                             -ExistingServiceAccounts $currentServiceAccounts `
                                             -TenantId $TenantId `
                                             -RepoName $RepoName `
+                                            -RepoOwner $RepoOwner `
+                                            -RepoFullName $RepoFullName `
+                                            -RepoOwnerId $repoOwnerId `
+                                            -RepoId $repoId `
+                                            -UseImmutableWifSubject $wizardState.UseImmutableWifSubject `
                                             -PromptGuidanceLines @(
                                                 'Choose the Dataverse target for this deployment stage.',
                                                 'Changing the target invalidates credentials and service-account ownership selected for the previous environment.'
@@ -516,6 +533,11 @@ function Invoke-GitHubBranchAwareSetup {
                                     -ExistingServiceAccounts $cachedServiceAccounts `
                                     -TenantId $TenantId `
                                     -RepoName $RepoName `
+                                    -RepoOwner $RepoOwner `
+                                    -RepoFullName $RepoFullName `
+                                    -RepoOwnerId $repoOwnerId `
+                                    -RepoId $repoId `
+                                    -UseImmutableWifSubject $wizardState.UseImmutableWifSubject `
                                     -PromptGuidanceLines @(
                                         'Choose the Dataverse environment that BUILD should validate deployments against.',
                                         'A separate deployment environment can be selected as the baseline source.'

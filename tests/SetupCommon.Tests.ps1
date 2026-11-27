@@ -3151,6 +3151,742 @@ Describe 'Setup configuration and validation helpers' {
     }
 }
 
+Describe 'Entra ID application management detection' {
+    BeforeEach {
+        $script:entraDetectedUser = 'user-1'
+        $script:entraRoleIds = @()
+        $script:entraAllowedToCreateApps = $false
+        $script:entraManagedOwners = @()
+        $script:entraGraphFailureUri = ''
+        $script:entraPermissionDeniedUri = ''
+        $script:entraIdApplicationManagementStateCache = @{}
+        $script:entraIdApplicationManagementCache = @{}
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
+        Mock Invoke-RestMethod {
+            if (-not [string]::IsNullOrWhiteSpace($script:entraGraphFailureUri) -and $Uri -like $script:entraGraphFailureUri) {
+                throw 'Graph permission denied'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($script:entraPermissionDeniedUri) -and $Uri -like $script:entraPermissionDeniedUri) {
+                throw [Microsoft.PowerShell.Commands.HttpResponseException]::new(
+                    'Forbidden',
+                    [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden))
+            }
+            switch -Wildcard ($Uri) {
+                '*transitiveMemberOf/microsoft.graph.directoryRole*' {
+                    return [pscustomobject]@{
+                        value = @($script:entraRoleIds | ForEach-Object {
+                                [pscustomobject]@{ roleTemplateId = $_; displayName = 'Role' }
+                            })
+                    }
+                }
+                '*graph.microsoft.com/v1.0/me?$select=id' {
+                    return [pscustomobject]@{ id = $script:entraDetectedUser }
+                }
+                '*policies/authorizationPolicy*' {
+                    return [pscustomobject]@{
+                        defaultUserRolePermissions = [pscustomobject]@{ allowedToCreateApps = $script:entraAllowedToCreateApps }
+                    }
+                }
+                '*/owners?*' {
+                    return [pscustomobject]@{
+                        value = @($script:entraManagedOwners | ForEach-Object { [pscustomobject]@{ id = $_ } })
+                    }
+                }
+                default {
+                    return [pscustomobject]@{ value = @() }
+                }
+            }
+        }
+        Mock Resolve-EntraIdApplicationByAppId { [pscustomobject]@{ id = 'resolved-object-id' } }
+    }
+
+    It 'grants creation from the tenant policy without granting management of every application' {
+        $script:entraAllowedToCreateApps = $true
+        $state = Get-EntraIdApplicationManagementState -TenantId 'detection.example.invalid'
+        $state.CanCreateApplications | Should -BeTrue
+        $state.CanManageAllApplications | Should -BeFalse
+        $state.CanReadApplications | Should -BeTrue
+        $state.UserObjectId | Should -Be 'user-1'
+        $state.DirectoryRoles | Should -BeNullOrEmpty
+    }
+
+    It 'marks application search unavailable when the application list is denied' {
+        $script:entraPermissionDeniedUri = '*applications?$top=1*'
+        $state = Get-EntraIdApplicationManagementState -TenantId 'no-search.example.invalid'
+        $state.CanReadApplications | Should -BeFalse
+    }
+
+    It 'recognizes Microsoft Graph authorization failures' {
+        $forbidden = [Microsoft.PowerShell.Commands.HttpResponseException]::new(
+            'Forbidden',
+            [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden))
+        $serverError = [Microsoft.PowerShell.Commands.HttpResponseException]::new(
+            'Server error',
+            [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::InternalServerError))
+        Test-EntraIdPermissionDenied -ErrorRecord ([System.Management.Automation.ErrorRecord]::new(
+                $forbidden, 'Forbidden', [System.Management.Automation.ErrorCategory]::PermissionDenied, $null)) |
+            Should -BeTrue
+        Test-EntraIdPermissionDenied -ErrorRecord ([System.Management.Automation.ErrorRecord]::new(
+                $serverError, 'ServerError', [System.Management.Automation.ErrorCategory]::NotSpecified, $null)) |
+            Should -BeFalse
+    }
+
+    It 'grants create and manage-all access for the <RoleName> role' -ForEach @(
+        @{ RoleName = 'Global Administrator'; RoleId = '62e90394-69f5-4237-9190-012177145e10'; ManagesAll = $true }
+        @{ RoleName = 'Application Administrator'; RoleId = '9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3'; ManagesAll = $true }
+        @{ RoleName = 'Cloud Application Administrator'; RoleId = '158c047a-c907-4556-b7ef-446551a6b5f7'; ManagesAll = $true }
+        @{ RoleName = 'Application Developer'; RoleId = 'cf1c38e5-3621-4004-a7cb-879624dced7c'; ManagesAll = $false }
+    ) {
+        $script:entraRoleIds = @($RoleId)
+        $script:entraAllowedToCreateApps = $false
+        $state = Get-EntraIdApplicationManagementState -TenantId "detection-$RoleId.example.invalid"
+        $state.CanCreateApplications | Should -BeTrue
+        $state.CanManageAllApplications | Should -Be $ManagesAll
+        $state.DirectoryRoles | Should -Contain $RoleName
+    }
+
+    It 'denies creation when the policy disallows it and no role grants it' {
+        $state = Get-EntraIdApplicationManagementState -TenantId 'denied.example.invalid'
+        $state.CanCreateApplications | Should -BeFalse
+        $state.CanManageAllApplications | Should -BeFalse
+    }
+
+    It 'keeps capabilities unknown when the role and policy reads fail' {
+        $script:entraGraphFailureUri = '*graph.microsoft.com*'
+        $state = Get-EntraIdApplicationManagementState -TenantId 'unavailable.example.invalid'
+        $state.CanCreateApplications | Should -BeNullOrEmpty
+        $state.CanManageAllApplications | Should -BeNullOrEmpty
+    }
+
+    It 'does not deny creation from policy alone when directory roles are unavailable' {
+        $script:entraGraphFailureUri = '*transitiveMemberOf/microsoft.graph.directoryRole*'
+        $state = Get-EntraIdApplicationManagementState -TenantId 'roles-unavailable.example.invalid'
+        $state.CanCreateApplications | Should -BeNullOrEmpty
+        $state.CanManageAllApplications | Should -BeNullOrEmpty
+    }
+
+    It 'keeps create access unknown when only the tenant policy is unavailable' {
+        $script:entraGraphFailureUri = '*policies/authorizationPolicy*'
+        $state = Get-EntraIdApplicationManagementState -TenantId 'policy-unavailable.example.invalid'
+        $state.CanCreateApplications | Should -BeNullOrEmpty
+        $state.CanManageAllApplications | Should -BeFalse
+    }
+
+    It 'reuses one tenant detection result until Force is requested' {
+        $script:entraAllowedToCreateApps = $true
+        [void](Get-EntraIdApplicationManagementState -TenantId 'cached.example.invalid')
+        [void](Get-EntraIdApplicationManagementState -TenantId 'cached.example.invalid')
+        Should -Invoke Invoke-RestMethod -Times 4 -Exactly
+        [void](Get-EntraIdApplicationManagementState -TenantId 'cached.example.invalid' -Force)
+        Should -Invoke Invoke-RestMethod -Times 8 -Exactly
+    }
+
+    It 'treats the signed-in user as a permitted owner of the application' {
+        $script:entraManagedOwners = @('user-1', 'user-2')
+        $state = Get-EntraIdApplicationManagementState -TenantId 'owner.example.invalid'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'owner.example.invalid' `
+            -ApplicationObjectId 'application-object' `
+            -State $state | Should -BeTrue
+    }
+
+    It 'denies a user who is not an owner and has no managing role' {
+        $script:entraManagedOwners = @('someone-else')
+        $state = Get-EntraIdApplicationManagementState -TenantId 'nonowner.example.invalid'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'nonowner.example.invalid' `
+            -ApplicationObjectId 'application-object' `
+            -State $state | Should -BeFalse
+    }
+
+    It 'keeps access unknown when the role list is unavailable and the user is not an owner' {
+        $script:entraGraphFailureUri = '*transitiveMemberOf/microsoft.graph.directoryRole*'
+        $script:entraManagedOwners = @('someone-else')
+        $state = Get-EntraIdApplicationManagementState -TenantId 'role-unknown.example.invalid'
+        $state.CanManageAllApplications | Should -BeNullOrEmpty
+        Test-EntraIdApplicationManagement `
+            -TenantId 'role-unknown.example.invalid' `
+            -ApplicationObjectId 'application-object' `
+            -State $state | Should -BeNullOrEmpty
+    }
+
+    It 'allows a managing role without reading application owners' {
+        $script:entraRoleIds = @('9b895d92-2cd3-44c7-9d02-a6ac2d5ea5c3')
+        $state = Get-EntraIdApplicationManagementState -TenantId 'admin.example.invalid'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'admin.example.invalid' `
+            -ApplicationObjectId 'application-object' `
+            -State $state | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly -ParameterFilter { $Uri -like '*/owners?*' }
+    }
+
+    It 'resolves the application object ID from the client ID' {
+        $script:entraManagedOwners = @('user-1')
+        $state = Get-EntraIdApplicationManagementState -TenantId 'resolve.example.invalid'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'resolve.example.invalid' `
+            -ApplicationId 'application-client' `
+            -State $state | Should -BeTrue
+        Should -Invoke Resolve-EntraIdApplicationByAppId -Times 1 -Exactly -ParameterFilter {
+            $ApplicationId -eq 'application-client' -and $TenantId -eq 'resolve.example.invalid'
+        }
+        Should -Invoke Invoke-RestMethod -Times 1 -Exactly -ParameterFilter {
+            $Uri -like '*/applications/resolved-object-id/owners?*'
+        }
+    }
+
+    It 're-detects when a supplied state belongs to another tenant' {
+        $script:entraManagedOwners = @('user-1')
+        $state = Get-EntraIdApplicationManagementState -TenantId 'state-tenant.example.invalid'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'other-tenant.example.invalid' `
+            -ApplicationObjectId 'application-object' `
+            -State $state | Should -BeTrue
+        Should -Invoke Invoke-RestMethod -Times 2 -Exactly -ParameterFilter { $Uri -like '*policies/authorizationPolicy*' }
+    }
+
+    It 'keeps application access unknown when the user identity or owner list is unavailable' {
+        $state = Get-EntraIdApplicationManagementState -TenantId 'unknown.example.invalid'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'unknown.example.invalid' `
+            -ApplicationObjectId 'application-object' `
+            -State ([pscustomobject]@{ UserObjectId = $null; CanManageAllApplications = $false }) |
+            Should -BeNullOrEmpty
+
+        $script:entraManagedOwners = @('user-1')
+        $script:entraGraphFailureUri = '*/owners?*'
+        Test-EntraIdApplicationManagement `
+            -TenantId 'unknown.example.invalid' `
+            -ApplicationObjectId 'application-object-2' `
+            -State $state | Should -BeNullOrEmpty
+    }
+
+    It 'returns unknown capabilities for a blank tenant' {
+        $state = Get-EntraIdApplicationManagementState -TenantId ''
+        $state.TenantId | Should -Be ''
+        $state.CanCreateApplications | Should -BeNullOrEmpty
+        $state.CanManageAllApplications | Should -BeNullOrEmpty
+        Test-EntraIdApplicationManagement -TenantId '' -ApplicationObjectId 'application-object' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Entra ID application validation and search' {
+    BeforeAll {
+        function Get-EntraValidationFixture {
+            param(
+                [string[]]$AllowedAuthTypes = @('Secret', 'WIF'),
+                [string[]]$Issues = @(),
+                [bool]$IsReady = $true,
+                [bool]$CheckFailed = $false,
+                [string]$CheckError = ''
+            )
+            [pscustomobject]@{
+                ApplicationId                = 'app-id'
+                ApplicationObjectId          = 'object-id'
+                DisplayName                  = 'Test App'
+                Exists                       = $true
+                HasServicePrincipal          = $true
+                HasClientSecret              = $true
+                HasUsableClientSecret        = $true
+                HasFederatedCredential       = $true
+                HasUsableFederatedCredential = $true
+                AllowedAuthTypes             = @($AllowedAuthTypes)
+                Issues                       = @($Issues)
+                IsReady                      = $IsReady
+                CheckFailed                  = $CheckFailed
+                CheckError                   = $CheckError
+            }
+        }
+    }
+
+    BeforeEach {
+        $script:validationApplication = $null
+        $script:validationFederated = @()
+        $script:validationServicePrincipals = @([pscustomobject]@{ id = 'sp-id'; appId = 'app-id' })
+        $script:validationAppReadError = $false
+        $script:validationFederatedReadError = $false
+        $script:validationSearchResponse = @()
+        $script:validationSearchPermissionDenied = $false
+        $script:validationSearchError = $false
+        $script:validationFutureSecret = [pscustomobject]@{
+            displayName = 'current'
+            endDateTime = [datetimeoffset]::UtcNow.AddYears(1).ToString('o')
+        }
+        $script:validationExpiredSecret = [pscustomobject]@{
+            displayName = 'expired'
+            endDateTime = [datetimeoffset]::UtcNow.AddDays(-1).ToString('o')
+        }
+        $script:validationWifCredential = [pscustomobject]@{
+            id        = 'federated-id'
+            name      = 'github'
+            issuer    = 'https://token.actions.githubusercontent.com'
+            subject   = 'repo:example/repository:environment:TEST'
+            audiences = @('api://AzureADTokenExchange')
+        }
+        $script:validationApplication = [pscustomobject]@{
+            id                    = 'object-id'
+            appId                 = 'app-id'
+            displayName           = 'Test App'
+            passwordCredentials   = @($script:validationFutureSecret)
+            requiredResourceAccess = @(
+                [pscustomobject]@{
+                    resourceAppId  = '00000007-0000-0000-c000-000000000000'
+                    resourceAccess = @(
+                        [pscustomobject]@{
+                            id   = '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4'
+                            type = 'Scope'
+                        }
+                    )
+                }
+            )
+        }
+        $script:validationFederated = @($script:validationWifCredential)
+
+        Mock Get-AuthToken { [pscustomobject]@{ AccessToken = 'fake-token' } }
+        Mock Write-Warning {}
+        Mock Invoke-RestMethod {
+            if ($Uri -like '*passwordCredentials*') {
+                if ($script:validationAppReadError) { throw 'Application read denied' }
+                return [pscustomobject]@{ value = @($script:validationApplication) }
+            }
+            if ($Uri -like '*servicePrincipals?*') {
+                return [pscustomobject]@{ value = @($script:validationServicePrincipals) }
+            }
+            if ($Uri -like '*federatedIdentityCredentials*') {
+                if ($script:validationFederatedReadError) { throw 'Federated read denied' }
+                return [pscustomobject]@{ value = @($script:validationFederated) }
+            }
+            if ($Uri -like '*startswith(displayName*') {
+                if ($script:validationSearchPermissionDenied) {
+                    throw [Microsoft.PowerShell.Commands.HttpResponseException]::new(
+                        'Forbidden',
+                        [System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::Forbidden))
+                }
+                if ($script:validationSearchError) { throw 'Search failed' }
+                return [pscustomobject]@{ value = @($script:validationSearchResponse) }
+            }
+            return [pscustomobject]@{ value = @() }
+        }
+        Mock Select-FromMenu { 0 }
+        Mock Read-TextWithDefault { 'display-fragment' }
+        Mock Read-SecretText { 'fake-secret-value' }
+        Mock Read-YesNo { $true }
+    }
+
+    It 'validates a ready application with both authentication methods' {
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.IsReady | Should -BeTrue
+        $result.Exists | Should -BeTrue
+        $result.HasServicePrincipal | Should -BeTrue
+        $result.HasDataversePermission | Should -BeTrue
+        $result.HasUsableClientSecret | Should -BeTrue
+        $result.HasUsableFederatedCredential | Should -BeTrue
+        $result.AllowedAuthTypes | Should -Be @('Secret', 'WIF')
+        $result.Issues.Count | Should -Be 0
+        $result.CheckFailed | Should -BeFalse
+    }
+
+    It 'reports the authentication methods configured on the application' -ForEach @(
+        @{ Secret = $true; Wif = $true; Expected = @('Secret', 'WIF') }
+        @{ Secret = $true; Wif = $false; Expected = @('Secret') }
+        @{ Secret = $false; Wif = $true; Expected = @('WIF') }
+    ) {
+        $script:validationApplication.passwordCredentials = @()
+        $script:validationFederated = @()
+        if ($Secret) { $script:validationApplication.passwordCredentials = @($script:validationFutureSecret) }
+        if ($Wif) { $script:validationFederated = @($script:validationWifCredential) }
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.AllowedAuthTypes | Should -Be $Expected
+    }
+
+    It 'reports an application with no usable credentials' {
+        $script:validationApplication.passwordCredentials = @()
+        $script:validationFederated = @()
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.AllowedAuthTypes.Count | Should -Be 0
+        $result.IsReady | Should -BeFalse
+        ($result.Issues -join ' ') | Should -Match 'no usable client secret or federated identity credential'
+    }
+
+    It 'reports a missing Dataverse user_impersonation permission' {
+        $script:validationApplication.requiredResourceAccess = @()
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.HasDataversePermission | Should -BeFalse
+        $result.IsReady | Should -BeFalse
+        ($result.Issues -join ' ') | Should -Match 'missing the Dataverse user_impersonation permission'
+    }
+
+    It 'reports expired client secrets' {
+        $script:validationApplication.passwordCredentials = @($script:validationExpiredSecret)
+        $script:validationFederated = @()
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.HasClientSecret | Should -BeTrue
+        $result.HasUsableClientSecret | Should -BeFalse
+        $result.AllowedAuthTypes.Count | Should -Be 0
+        ($result.Issues -join ' ') | Should -Match 'have expired'
+    }
+
+    It 'reports missing enterprise applications and unusable federated credentials' {
+        $script:validationServicePrincipals = @()
+        $script:validationFederated = @([pscustomobject]@{
+                id        = 'wrong-audience'
+                audiences = @('api://OtherApi')
+            })
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.HasServicePrincipal | Should -BeFalse
+        $result.HasUsableFederatedCredential | Should -BeFalse
+        ($result.Issues -join ' ') | Should -Match 'no enterprise application'
+        ($result.Issues -join ' ') | Should -Match 'none use api://AzureADTokenExchange audience'
+    }
+
+    It 'accepts only the provider-specific federated credential issuer' -ForEach @(
+        @{ Provider = 'GitHub'; Issuer = 'https://token.actions.githubusercontent.com'; Expected = $true }
+        @{ Provider = 'GitHub'; Issuer = 'https://vstoken.dev.azure.com/example'; Expected = $false }
+        @{ Provider = 'AzureDevOps'; Issuer = 'https://vstoken.dev.azure.com/example'; Expected = $true }
+        @{ Provider = 'AzureDevOps'; Issuer = 'https://token.actions.githubusercontent.com'; Expected = $false }
+    ) {
+        $script:validationFederated = @([pscustomobject]@{
+                id        = 'federated-id'
+                issuer    = $Issuer
+                audiences = @('api://AzureADTokenExchange')
+            })
+        $result = Test-EntraIdApplicationRegistration `
+            -ApplicationId 'app-id' `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName $Provider
+        $result.HasUsableFederatedCredential | Should -Be $Expected
+    }
+
+    It 'requires the exact federated credential subject when one is supplied' {
+        $matching = Test-EntraIdApplicationRegistration `
+            -ApplicationId 'app-id' `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ExpectedFederatedSubject 'repo:example/repository:environment:TEST'
+        $matching.HasUsableFederatedCredential | Should -BeTrue
+        $matching.IsReady | Should -BeTrue
+
+        $wrong = Test-EntraIdApplicationRegistration `
+            -ApplicationId 'app-id' `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ExpectedFederatedSubject 'repo:example/repository:environment:PROD'
+        $wrong.HasUsableFederatedCredential | Should -BeFalse
+        $wrong.IsReady | Should -BeFalse
+        ($wrong.Issues -join ' ') | Should -Match 'not the required subject'
+        ($wrong.Issues -join ' ') | Should -Match ([regex]::Escape('repo:example/repository:environment:PROD'))
+    }
+
+    It 'reports a missing application as not existing' {
+        $script:validationApplication = $null
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'missing-app' -TenantId 'validation.example.invalid'
+        $result.Exists | Should -BeFalse
+        $result.IsReady | Should -BeFalse
+        ($result.Issues -join ' ') | Should -Match 'No application with client ID'
+    }
+
+    It 'returns a check failure when the application cannot be read' {
+        $script:validationAppReadError = $true
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.CheckFailed | Should -BeTrue
+        $result.CheckError | Should -Match 'Could not read the application'
+        $result.AllowedAuthTypes.Count | Should -Be 0
+    }
+
+    It 'keeps WIF available when federated credentials cannot be read' {
+        $script:validationFederatedReadError = $true
+        $result = Test-EntraIdApplicationRegistration -ApplicationId 'app-id' -TenantId 'validation.example.invalid'
+        $result.CheckFailed | Should -BeTrue
+        $result.CheckError | Should -Match 'Could not read federated identity credentials'
+        $result.HasUsableFederatedCredential | Should -BeNullOrEmpty
+        $result.AllowedAuthTypes | Should -Contain 'WIF'
+        $result.AllowedAuthTypes | Should -Contain 'Secret'
+    }
+
+    It 'fails validation when the application ID or tenant is blank' {
+        $result = Test-EntraIdApplicationRegistration -ApplicationId '' -TenantId ''
+        $result.CheckFailed | Should -BeTrue
+        $result.CheckError | Should -Match 'client ID and tenant are required'
+    }
+
+    It 'searches applications by display-name prefix and sorts the matches' {
+        $script:validationSearchResponse = @(
+            [pscustomobject]@{ displayName = 'Zulu'; appId = '2' }
+            [pscustomobject]@{ displayName = 'Alpha'; appId = '1' }
+        )
+        $result = Find-EntraIdApplicationByDisplayName -TenantId 'search.example.invalid' -NameFragment 'a'
+        @($result.Applications).Count | Should -Be 2
+        $result.Applications[0].displayName | Should -Be 'Alpha'
+        $result.Applications[1].displayName | Should -Be 'Zulu'
+        $result.PermissionDenied | Should -BeFalse
+        $result.Error | Should -BeNullOrEmpty
+    }
+
+    It 'distinguishes search permission denial from other search failures' {
+        $script:validationSearchPermissionDenied = $true
+        $denied = Find-EntraIdApplicationByDisplayName -TenantId 'search.example.invalid' -NameFragment 'a'
+        $denied.PermissionDenied | Should -BeTrue
+        $denied.Applications.Count | Should -Be 0
+
+        $script:validationSearchPermissionDenied = $false
+        $script:validationSearchError = $true
+        $failed = Find-EntraIdApplicationByDisplayName -TenantId 'search.example.invalid' -NameFragment 'a'
+        $failed.PermissionDenied | Should -BeFalse
+        $failed.Error | Should -Match 'Application search failed'
+    }
+
+    It 'returns no search results for blank input' {
+        $result = Find-EntraIdApplicationByDisplayName -TenantId 'search.example.invalid' -NameFragment ''
+        $result.Applications.Count | Should -Be 0
+        $result.PermissionDenied | Should -BeFalse
+        $result.Error | Should -BeNullOrEmpty
+    }
+
+    It 'selects a searched application from the result menu' {
+        Mock Find-EntraIdApplicationByDisplayName {
+            [pscustomobject]@{
+                Applications     = @([pscustomobject]@{ displayName = 'App One'; appId = 'app-one' })
+                PermissionDenied = $false
+                Error            = $null
+            }
+        }
+        Mock Select-FromMenu { 0 }
+        $result = Select-EntraIdApplicationBySearch -TenantId 'search.example.invalid'
+        $result.appId | Should -Be 'app-one'
+    }
+
+    It 'returns null when search is cancelled or denied' {
+        Mock Find-EntraIdApplicationByDisplayName {
+            [pscustomobject]@{
+                Applications     = @([pscustomobject]@{ displayName = 'App One'; appId = 'app-one' })
+                PermissionDenied = $false
+                Error            = $null
+            }
+        }
+        Mock Select-FromMenu { 2 }
+        Select-EntraIdApplicationBySearch -TenantId 'search.example.invalid' | Should -BeNullOrEmpty
+
+        Mock Find-EntraIdApplicationByDisplayName {
+            [pscustomobject]@{ Applications = @(); PermissionDenied = $true; Error = $null }
+        }
+        Select-EntraIdApplicationBySearch -TenantId 'search.example.invalid' | Should -BeNullOrEmpty
+        Should -Invoke Write-Warning -Times 1 -Exactly
+    }
+
+    It 'offers to search again when no application matched' {
+        $script:searchAttempt = 0
+        Mock Find-EntraIdApplicationByDisplayName {
+            $script:searchAttempt++
+            if ($script:searchAttempt -eq 1) {
+                return [pscustomobject]@{ Applications = @(); PermissionDenied = $false; Error = $null }
+            }
+            return [pscustomobject]@{
+                Applications     = @([pscustomobject]@{ displayName = 'App One'; appId = 'app-one' })
+                PermissionDenied = $false
+                Error            = $null
+            }
+        }
+        $script:searchMenuAnswers = [System.Collections.Generic.Queue[int]]::new()
+        $script:searchMenuAnswers.Enqueue(0) # Search again
+        $script:searchMenuAnswers.Enqueue(0) # Select the result
+        Mock Select-FromMenu { $script:searchMenuAnswers.Dequeue() }
+        $result = Select-EntraIdApplicationBySearch -TenantId 'search.example.invalid'
+        $result.appId | Should -Be 'app-one'
+        Should -Invoke Find-EntraIdApplicationByDisplayName -Times 2 -Exactly
+    }
+
+    It 'returns a validated credential for the selected authentication method' -ForEach @(
+        @{ Provider = 'GitHub'; WifIndex = 0; SecretIndex = 1 }
+        @{ Provider = 'AzureDevOps'; WifIndex = 1; SecretIndex = 0 }
+    ) {
+        Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture }
+        Mock Select-FromMenu { $WifIndex }
+        $wifCredential = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName $Provider -ApplicationId 'app-id'
+        $wifCredential.AuthType | Should -Be 'WIF'
+        $wifCredential.ClientSecret | Should -BeNullOrEmpty
+        $wifCredential.Name | Should -Be 'Test App'
+        $wifCredential.ApplicationObjectId | Should -Be 'object-id'
+        Should -Invoke Read-SecretText -Times 0 -Exactly
+
+        Mock Select-FromMenu { $SecretIndex }
+        $secretCredential = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName $Provider -ApplicationId 'app-id'
+        $secretCredential.AuthType | Should -Be 'Secret'
+        $secretCredential.ClientSecret | Should -Be 'fake-secret-value'
+        Should -Invoke Read-SecretText -Times 1 -Exactly
+    }
+
+    It 'auto-selects the only configured authentication method' -ForEach @(
+        @{ Allowed = @('Secret'); Expected = 'Secret'; SecretPrompts = 1 }
+        @{ Allowed = @('WIF'); Expected = 'WIF'; SecretPrompts = 0 }
+    ) {
+        Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture -AllowedAuthTypes $Allowed }
+        $result = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName 'GitHub' -ApplicationId 'app-id'
+        $result.AuthType | Should -Be $Expected
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
+        Should -Invoke Read-SecretText -Times $SecretPrompts -Exactly
+    }
+
+    It 'shows validation details and continues when the user accepts the problems' {
+        Mock Test-EntraIdApplicationRegistration {
+            Get-EntraValidationFixture -AllowedAuthTypes @('WIF') -Issues @('Application has no usable credential.') -IsReady $false
+        }
+        Mock Select-FromMenu { 0 }
+        $result = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName 'GitHub' -ApplicationId 'app-id'
+        $result.AuthType | Should -Be 'WIF'
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
+            $Title -like '*needs attention*' -and ($PromptGuidanceLines -contains 'Application has no usable credential.')
+        }
+    }
+
+    It 'rechecks the same application until it is valid' {
+        $script:validationAttempt = 0
+        Mock Test-EntraIdApplicationRegistration {
+            $script:validationAttempt++
+            if ($script:validationAttempt -eq 1) {
+                return Get-EntraValidationFixture -AllowedAuthTypes @('WIF') -Issues @('Application has no usable credential.') -IsReady $false
+            }
+            return Get-EntraValidationFixture -AllowedAuthTypes @('WIF')
+        }
+        Mock Select-FromMenu { 1 }
+        $result = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName 'GitHub' -ApplicationId 'app-id'
+        $result.AuthType | Should -Be 'WIF'
+        Should -Invoke Test-EntraIdApplicationRegistration -Times 2 -Exactly
+    }
+
+    It 'prompts for a different application ID when the user declines the current one' {
+        $script:validationAttempt = 0
+        Mock Test-EntraIdApplicationRegistration {
+            $script:validationAttempt++
+            if ($script:validationAttempt -eq 1) {
+                return Get-EntraValidationFixture -AllowedAuthTypes @('WIF') -Issues @('Application has no usable credential.') -IsReady $false
+            }
+            return Get-EntraValidationFixture -AllowedAuthTypes @('WIF')
+        }
+        Mock Select-FromMenu { 2 }
+        $script:applicationIdAnswers = [System.Collections.Generic.Queue[string]]::new()
+        $script:applicationIdAnswers.Enqueue('00000000-0000-0000-0000-000000000001')
+        $script:applicationIdAnswers.Enqueue('00000000-0000-0000-0000-000000000003')
+        Mock Read-TextWithDefault { $script:applicationIdAnswers.Dequeue() }
+        $result = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName 'GitHub'
+        $result.ApplicationId | Should -Be '00000000-0000-0000-0000-000000000003'
+        Should -Invoke Test-EntraIdApplicationRegistration -Times 2 -Exactly
+        Should -Invoke Test-EntraIdApplicationRegistration -Times 1 -Exactly -ParameterFilter {
+            $ApplicationId -eq '00000000-0000-0000-0000-000000000003'
+        }
+    }
+
+    It 'shows creation guidance when prompting for a manually created application' {
+        Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture -AllowedAuthTypes @('WIF') }
+        Mock Read-TextWithDefault { '00000000-0000-0000-0000-000000000001' }
+        $result = Read-SetupEntraIdApplicationCredential `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ShowCreationInstructions
+        $result.AuthType | Should -Be 'WIF'
+        Should -Invoke Read-TextWithDefault -Times 1 -Exactly -ParameterFilter {
+            ($PromptGuidanceLines -join ' ') -match 'Entra admin center'
+        }
+    }
+
+    It 'removes WIF when extension mode does not support it' {
+        Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture }
+        $result = Read-SetupEntraIdApplicationCredential `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'AzureDevOps' `
+            -ApplicationId 'app-id' `
+            -DisableWorkloadIdentityFederation
+        $result.AuthType | Should -Be 'Secret'
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
+        Should -Invoke Read-SecretText -Times 1 -Exactly
+    }
+
+    It 'keeps both methods available after a validation check failure is continued' {
+        Mock Test-EntraIdApplicationRegistration {
+            Get-EntraValidationFixture -AllowedAuthTypes @() -CheckFailed $true -CheckError 'Graph unavailable' -IsReady $false
+        }
+        $script:menuAnswers = [System.Collections.Generic.Queue[int]]::new()
+        $script:menuAnswers.Enqueue(0) # Continue
+        $script:menuAnswers.Enqueue(0) # GitHub WIF
+        Mock Select-FromMenu { $script:menuAnswers.Dequeue() }
+        $result = Read-SetupEntraIdApplicationCredential -TenantId 'validation.example.invalid' -ProviderName 'GitHub' -ApplicationId 'app-id'
+        $result.AuthType | Should -Be 'WIF'
+        Should -Invoke Select-FromMenu -Times 2 -Exactly
+        Should -Invoke Select-FromMenu -Times 1 -Exactly -ParameterFilter {
+            ($PromptGuidanceLines -join ' ') -match 'Graph unavailable'
+        }
+    }
+
+    It 'prefers an explicitly supplied friendly name' {
+        Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture -AllowedAuthTypes @('WIF') }
+        $result = Read-SetupEntraIdApplicationCredential `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId 'app-id' `
+            -Name 'Custom name'
+        $result.Name | Should -Be 'Custom name'
+    }
+
+    It 'passes the expected federated credential subject to validation' {
+        $expectedSubject = 'repo:example-owner@123456/example-repository@456789:environment:TEST-main'
+        Mock Test-EntraIdApplicationRegistration { Get-EntraValidationFixture -AllowedAuthTypes @('WIF') }
+        [void](Read-SetupEntraIdApplicationCredential `
+            -TenantId 'validation.example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId 'app-id' `
+            -WorkloadIdentityFederationSubject $expectedSubject)
+        Should -Invoke Test-EntraIdApplicationRegistration -Times 1 -Exactly -ParameterFilter {
+            $ExpectedFederatedSubject -eq $expectedSubject
+        }
+    }
+
+    It 'warns and re-prompts when a GUID is entered as a secret value' {
+        $script:secretAnswers = [System.Collections.Generic.Queue[string]]::new()
+        $script:secretAnswers.Enqueue('00000000-0000-0000-0000-000000000001')
+        $script:secretAnswers.Enqueue('real-secret-value')
+        Mock Read-SecretText { $script:secretAnswers.Dequeue() }
+        Mock Read-YesNo { $false }
+        Read-SetupEntraIdClientSecret | Should -Be 'real-secret-value'
+        Should -Invoke Read-SecretText -Times 2 -Exactly
+        Should -Invoke Write-Warning -Times 1 -Exactly
+    }
+
+    It 'returns provider-specific manual creation guidance' {
+        $githubLines = Get-SetupEntraIdApplicationCreationGuidance -ProviderName 'GitHub'
+        $githubText = $githubLines -join ' '
+        $githubText | Should -Match 'user_impersonation'
+        $githubText | Should -Match 'Grant admin consent'
+        $githubText | Should -Match 'workload identity federation is recommended'
+        $githubText | Should -Match 'token.actions.githubusercontent.com'
+        $githubText | Should -Match 'Federated credentials'
+        $githubText | Should -Match 'Other issuer'
+        $githubText | Should -Not -Match 'No Dataverse API permission'
+        $githubText | Should -Not -Match 'Setup adds'
+        $githubText | Should -Not -Match 'for example'
+        $githubText | Should -Not -Match 'Power Platform admin center'
+        $githubText | Should -Not -Match 'enterprise application'
+
+        $exactSubject = 'repo:example-owner@123456/example-repository@456789:environment:TEST-main'
+        $exactLines = Get-SetupEntraIdApplicationCreationGuidance `
+            -ProviderName 'GitHub' `
+            -WorkloadIdentityFederationSubject $exactSubject
+        $exactText = $exactLines -join ' '
+        $exactText | Should -Match ([regex]::Escape($exactSubject))
+        $exactText | Should -Not -Match 'the exact subject shown by setup'
+
+        $azdoLines = Get-SetupEntraIdApplicationCreationGuidance -ProviderName 'AzureDevOps'
+        $azdoText = $azdoLines -join ' '
+        $azdoText | Should -Match 'user_impersonation'
+        $azdoText | Should -Match 'Grant admin consent'
+        $azdoText | Should -Match 'workload identity federation is recommended'
+        $azdoText | Should -Match 'service connection'
+        $azdoText | Should -Match 'issuer and subject'
+        $azdoText | Should -Not -Match 'No Dataverse API permission'
+        $azdoText | Should -Not -Match 'Setup adds'
+        $azdoText | Should -Not -Match 'Power Platform admin center'
+        $azdoText | Should -Not -Match 'enterprise application'
+    }
+}
+
 Describe 'Setup shared mutation guards' {
     It 'does not create directories under WhatIf but preserves normal creation' {
         $directory = Join-Path $TestDrive 'guarded-directory'

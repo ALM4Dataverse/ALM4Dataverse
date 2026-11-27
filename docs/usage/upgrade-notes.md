@@ -9,6 +9,25 @@ out safely.
 
 ## Setup
 
+### Guided Setup Validates Existing App Registrations
+
+**You'll see:** after you enter an existing application ID, guided setup reports whether
+the app exists, requests the Dataverse `user_impersonation` permission, has an enterprise
+application (service principal), and has a usable client secret or federated identity
+credential. For WIF, setup also checks the exact federated credential subject when it
+knows the repository and environment or service connection. It offers **Continue with
+this application**, **Recheck application setup** and **Enter a different application
+ID**, and the authentication menu only offers methods configured on the app. If neither
+method is usable, both remain available after the warning.
+
+**Do this:** add the missing `user_impersonation` permission, enterprise application or
+credential in Entra, correct a federated credential subject to the exact value setup
+shows, and choose **Recheck**, or choose **Continue** to proceed with the warning. No
+action is needed for app registrations that already have the permission, an enterprise
+application and a correctly configured authentication method. The new **Create a new
+application manually (with instructions)** and **Search for an existing application by
+name** options are optional.
+
 ### Apply Configuration Opens A Pull Request
 
 **You'll see:** APPLY-CONFIG pushes an `apply-config` branch and opens a pull request into

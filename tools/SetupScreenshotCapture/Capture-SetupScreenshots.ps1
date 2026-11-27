@@ -338,6 +338,69 @@ function Get-CaptureScene {
             Interactions = @()
         },
         [pscustomobject]@{
+            Name = 'github-manual-instructions'
+            Provider = 'github'
+            ExpectedText = 'Grant admin consent'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-application-not-found'
+            Provider = 'github'
+            ExpectedText = 'No application with client ID'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-missing-enterprise-app'
+            Provider = 'github'
+            ExpectedText = 'no enterprise application'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-missing-credentials'
+            Provider = 'github'
+            ExpectedText = 'no usable client secret or federated identity credential'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-expired-secret'
+            Provider = 'github'
+            ExpectedText = 'have expired'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-wrong-federated-credential'
+            Provider = 'github'
+            ExpectedText = 'none use the GitHub Actions issuer'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-check-failed'
+            Provider = 'github'
+            ExpectedText = 'Validation could not complete'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-missing-dataverse-permission'
+            Provider = 'github'
+            ExpectedText = 'missing the Dataverse user_impersonation permission'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'validation-wrong-federated-subject'
+            Provider = 'github'
+            ExpectedText = 'not the required subject'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
             Name = 'github-authentication-type'
             Provider = 'github'
             ExpectedText = 'Workload Identity Federation (recommended, no secrets)'
@@ -431,6 +494,27 @@ function Get-CaptureScene {
             ExpectedText = 'Workload Identity Federation (recommended, no secrets)'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Select Service Principal credentials'; Input = "`r" })
+        },
+        [pscustomobject]@{
+            Name = 'azdo-manual-instructions'
+            Provider = 'azdo'
+            ExpectedText = 'Grant admin consent'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-validation-wrong-federated-credential'
+            Provider = 'azdo'
+            ExpectedText = 'none use the Azure DevOps issuer'
+            Rows = 40
+            Interactions = @()
+        },
+        [pscustomobject]@{
+            Name = 'azdo-validation-wrong-federated-subject'
+            Provider = 'azdo'
+            ExpectedText = 'not the required subject'
+            Rows = 40
+            Interactions = @()
         },
         [pscustomobject]@{
             Name = 'azdo-service-account'
@@ -833,6 +917,28 @@ function Get-CaptureWalkthroughStep {
             HasPromptHelp = $false
         },
         [pscustomobject]@{
+            SceneName = 'azdo-manual-instructions'
+            ExpectedText = 'Grant admin consent'
+            CaptionLines = @(
+                'Create the app manually with in-console instructions,'
+                'then paste the application (client) ID.'
+            )
+            Interactions = @()
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
+            SceneName = 'validation-missing-credentials'
+            ExpectedText = 'no usable client secret or federated identity credential'
+            CaptionLines = @(
+                'Existing apps are validated with details of any problems.'
+                'Continue, recheck, or enter a different application ID.'
+            )
+            Interactions = @()
+            CaptureInitialFrame = $true
+            CaptureFinalFrame = $true
+        },
+        [pscustomobject]@{
             SceneName = 'github-menu-existing-repository'
             ExpectedText = 'Deployment: PROD -'
             CaptionLines = @(
@@ -959,6 +1065,180 @@ function Invoke-RestMethod {
                     accountUri = 'https://dev.azure.com/example-organization'
                 }
             )
+        }
+    }
+
+    $dataverseRequiredResourceAccess = @(
+        [pscustomobject]@{
+            resourceAppId  = '00000007-0000-0000-c000-000000000000'
+            resourceAccess = @(
+                [pscustomobject]@{
+                    id   = '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4'
+                    type = 'Scope'
+                }
+            )
+        }
+    )
+    $validationScenarios = @{
+        '00000000-0000-0000-0000-0000000000a1' = [pscustomobject]@{
+            DisplayName             = 'Example missing application'
+            HasApplication          = $false
+            HasServicePrincipal     = $false
+            PasswordCredentials     = @()
+            FederatedCredentials    = @()
+            RequiredResourceAccess  = @()
+            FailApplicationRead     = $false
+        }
+        '00000000-0000-0000-0000-0000000000a2' = [pscustomobject]@{
+            DisplayName             = 'Example app without enterprise application'
+            HasApplication          = $true
+            HasServicePrincipal     = $false
+            RequiredResourceAccess  = $dataverseRequiredResourceAccess
+            PasswordCredentials     = @(
+                [pscustomobject]@{
+                    displayName = 'current-secret'
+                    endDateTime = (Get-Date).AddYears(1).ToString('o')
+                }
+            )
+            FederatedCredentials    = @()
+            FailApplicationRead     = $false
+        }
+        '00000000-0000-0000-0000-0000000000a3' = [pscustomobject]@{
+            DisplayName             = 'Example app without credentials'
+            HasApplication          = $true
+            HasServicePrincipal     = $true
+            RequiredResourceAccess  = $dataverseRequiredResourceAccess
+            PasswordCredentials     = @()
+            FederatedCredentials    = @()
+            FailApplicationRead     = $false
+        }
+        '00000000-0000-0000-0000-0000000000a4' = [pscustomobject]@{
+            DisplayName             = 'Example app with expired secret'
+            HasApplication          = $true
+            HasServicePrincipal     = $true
+            RequiredResourceAccess  = $dataverseRequiredResourceAccess
+            PasswordCredentials     = @(
+                [pscustomobject]@{
+                    displayName = 'expired-secret'
+                    endDateTime = (Get-Date).AddDays(-1).ToString('o')
+                }
+            )
+            FederatedCredentials    = @()
+            FailApplicationRead     = $false
+        }
+        '00000000-0000-0000-0000-0000000000a5' = [pscustomobject]@{
+            DisplayName             = 'Example app with wrong federated credentials'
+            HasApplication          = $true
+            HasServicePrincipal     = $true
+            RequiredResourceAccess  = $dataverseRequiredResourceAccess
+            PasswordCredentials     = @()
+            FederatedCredentials    = @(
+                [pscustomobject]@{
+                    id        = 'federated-wrong-audience'
+                    name      = 'wrong-audience'
+                    issuer    = 'https://token.actions.githubusercontent.com'
+                    audiences = @('api://WrongAudience')
+                }
+                [pscustomobject]@{
+                    id        = 'federated-wrong-audience-azdo'
+                    name      = 'wrong-audience-azdo'
+                    issuer    = 'https://vstoken.dev.azure.com/example'
+                    audiences = @('api://WrongAudience')
+                }
+                [pscustomobject]@{
+                    id        = 'federated-wrong-issuer'
+                    name      = 'wrong-issuer'
+                    issuer    = 'https://example.invalid/token'
+                    audiences = @('api://AzureADTokenExchange')
+                }
+            )
+            FailApplicationRead     = $false
+        }
+        '00000000-0000-0000-0000-0000000000a6' = [pscustomobject]@{
+            DisplayName             = 'Example unreadable application'
+            HasApplication          = $true
+            HasServicePrincipal     = $true
+            RequiredResourceAccess  = $dataverseRequiredResourceAccess
+            PasswordCredentials     = @()
+            FederatedCredentials    = @()
+            FailApplicationRead     = $true
+        }
+        '00000000-0000-0000-0000-0000000000a7' = [pscustomobject]@{
+            DisplayName             = 'Example app without Dataverse permission'
+            HasApplication          = $true
+            HasServicePrincipal     = $true
+            RequiredResourceAccess  = @()
+            PasswordCredentials     = @(
+                [pscustomobject]@{
+                    displayName = 'current-secret'
+                    endDateTime = (Get-Date).AddYears(1).ToString('o')
+                }
+            )
+            FederatedCredentials    = @()
+            FailApplicationRead     = $false
+        }
+        '00000000-0000-0000-0000-0000000000a8' = [pscustomobject]@{
+            DisplayName             = 'Example app with wrong federated subject'
+            HasApplication          = $true
+            HasServicePrincipal     = $true
+            RequiredResourceAccess  = $dataverseRequiredResourceAccess
+            PasswordCredentials     = @()
+            FederatedCredentials    = @(
+                [pscustomobject]@{
+                    id        = 'federated-wrong-subject-github'
+                    name      = 'wrong-subject-github'
+                    issuer    = 'https://token.actions.githubusercontent.com'
+                    subject   = 'repo:example-owner/example-repository:environment:Other'
+                    audiences = @('api://AzureADTokenExchange')
+                }
+                [pscustomobject]@{
+                    id        = 'federated-wrong-subject-azdo'
+                    name      = 'wrong-subject-azdo'
+                    issuer    = 'https://vstoken.dev.azure.com/example'
+                    subject   = 'sc://example-organization/Example project/Other'
+                    audiences = @('api://AzureADTokenExchange')
+                }
+            )
+            FailApplicationRead     = $false
+        }
+    }
+    foreach ($scenarioId in $validationScenarios.Keys) {
+        $scenario = $validationScenarios[$scenarioId]
+        if ($Uri.Contains("/applications?`$filter=appId eq '$scenarioId'")) {
+            if ($scenario.FailApplicationRead) {
+                throw 'Microsoft Graph is unavailable for this example application.'
+            }
+            if (-not $scenario.HasApplication) {
+                return [pscustomobject]@{ value = @() }
+            }
+            return [pscustomobject]@{
+                value = @(
+                    [pscustomobject]@{
+                        id                     = "$scenarioId-object"
+                        appId                  = $scenarioId
+                        displayName            = $scenario.DisplayName
+                        passwordCredentials    = @($scenario.PasswordCredentials)
+                        requiredResourceAccess = @($scenario.RequiredResourceAccess)
+                    }
+                )
+            }
+        }
+        if ($Uri.Contains("/servicePrincipals?`$filter=appId eq '$scenarioId'")) {
+            if ($scenario.HasServicePrincipal) {
+                return [pscustomobject]@{
+                    value = @(
+                        [pscustomobject]@{
+                            id          = "$scenarioId-service-principal"
+                            appId       = "$scenarioId"
+                            displayName = $scenario.DisplayName
+                        }
+                    )
+                }
+            }
+            return [pscustomobject]@{ value = @() }
+        }
+        if ($Uri.Contains("/applications/$scenarioId-object/federatedIdentityCredentials")) {
+            return [pscustomobject]@{ value = @($scenario.FederatedCredentials) }
         }
     }
 
@@ -1670,6 +1950,70 @@ switch ($scene) {
             -RepoName 'example-repository' `
             -EnvironmentName 'Dev-main'
     }
+    'github-manual-instructions' {
+        $wifSubject = New-GitHubEnvironmentWifSubject `
+            -RepoOwner 'example-owner' `
+            -RepoName 'example-repository' `
+            -RepoFullName 'example-owner/example-repository' `
+            -RepoOwnerId 123456 `
+            -RepoId 456789 `
+            -EnvironmentName 'Dev-main' `
+            -UseImmutableSubject $false
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ShowCreationInstructions `
+            -WorkloadIdentityFederationSubject $wifSubject
+    }
+    'validation-application-not-found' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a1'
+    }
+    'validation-missing-enterprise-app' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a2'
+    }
+    'validation-missing-credentials' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a3'
+    }
+    'validation-expired-secret' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a4'
+    }
+    'validation-wrong-federated-credential' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a5'
+    }
+    'validation-check-failed' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a6'
+    }
+    'validation-missing-dataverse-permission' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a7'
+    }
+    'validation-wrong-federated-subject' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'GitHub' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a8' `
+            -WorkloadIdentityFederationSubject 'repo:example-owner@123456/example-repository@456789:environment:Dev-main'
+    }
     'github-authentication-type' {
         Get-GitHubCredentialsForEnvironment `
             -TenantId 'example.invalid' `
@@ -1729,6 +2073,25 @@ switch ($scene) {
             -TenantId 'example.invalid' `
             -ProjectName 'Example project' `
             -EnvironmentName 'Dev-main'
+    }
+    'azdo-manual-instructions' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'AzureDevOps' `
+            -ShowCreationInstructions
+    }
+    'azdo-validation-wrong-federated-credential' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'AzureDevOps' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a5'
+    }
+    'azdo-validation-wrong-federated-subject' {
+        Read-SetupEntraIdApplicationCredential `
+            -TenantId 'example.invalid' `
+            -ProviderName 'AzureDevOps' `
+            -ApplicationId '00000000-0000-0000-0000-0000000000a8' `
+            -WorkloadIdentityFederationSubject 'sc://example-organization/Example project/Dev-main'
     }
     'azdo-service-account' {
         Get-DataverseServiceAccountUPN `

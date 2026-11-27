@@ -1,9 +1,12 @@
 function Initialize-EntraIdServicePrincipal {
     # Return the first appId match in the tenant or create its enterprise application.
     # Lookup failure warns but still attempts creation; creation failure propagates.
+    # CreateIfMissing false throws with remediation guidance instead of attempting a
+    # write the signed-in account was already detected not to be allowed to make.
     param(
         [Parameter(Mandatory)][string]$ApplicationId,
-        [Parameter(Mandatory)][string]$TenantId
+        [Parameter(Mandatory)][string]$TenantId,
+        [Parameter()][bool]$CreateIfMissing = $true
     )
 
     $graphToken = Get-AuthToken -ResourceUrl "https://graph.microsoft.com" -TenantId $TenantId
@@ -25,6 +28,10 @@ function Initialize-EntraIdServicePrincipal {
         Write-Warning "Failed to check for existing Service Principal: $($_.Exception.Message)"
     }
 
+    if (-not $CreateIfMissing) {
+        throw "Service Principal for App '$ApplicationId' does not exist and the signed-in account cannot create one. Ask an Entra administrator to create the enterprise application, then run setup again."
+    }
+
     # Create SP
     Write-Host "Creating Service Principal for App '$ApplicationId'..." -ForegroundColor Yellow
     $body = @{
@@ -38,7 +45,7 @@ function Initialize-EntraIdServicePrincipal {
         return $sp
     }
     catch {
-        Write-Error "Failed to create Service Principal: $($_.Exception.Message)"
+        Write-Error "Failed to create Service Principal: $($_.Exception.Message) Ensure the signed-in account is allowed to create applications and service principals."
         throw
     }
 }
@@ -108,7 +115,7 @@ function Add-EntraIdFederatedCredential {
         return $credential
     }
     catch {
-        Write-Error "Failed to create federated identity credential: $($_.Exception.Message)"
+        Write-Error "Failed to create federated identity credential: $($_.Exception.Message) Ensure the signed-in account owns the App Registration or has an Entra application administrator role."
         throw
     }
 }
@@ -156,11 +163,24 @@ function New-EntraIdApplication {
     }
     else {
         Write-Host "Creating App Registration '$DisplayName'..." -ForegroundColor Yellow
+        # Request the Dataverse delegated scope used by the deployment token; an Entra
+        # administrator must still grant consent for the tenant.
         $body = @{
             displayName = $DisplayName
             signInAudience = "AzureADMyOrg"
+            requiredResourceAccess = @(
+                @{
+                    resourceAppId = '00000007-0000-0000-c000-000000000000'
+                    resourceAccess = @(
+                        @{
+                            id = '78ce3f0f-a1ce-49c2-8cde-64b5c0896db4'
+                            type = 'Scope'
+                        }
+                    )
+                }
+            )
         }
-        $app = Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/applications" -Headers $headers -Method Post -Body ($body | ConvertTo-Json)
+        $app = Invoke-RestMethod -Uri "https://graph.microsoft.com/v1.0/applications" -Headers $headers -Method Post -Body ($body | ConvertTo-Json -Depth 5)
         $createdApplication = $true
         Write-Host "Created App Registration '$DisplayName' ($($app.appId))."
     }
@@ -197,7 +217,10 @@ function Get-PowerPlatformSCCredential {
     rotation marks the credential for generation at Apply and clears that marker.
     Cached objects are reused; an existing environment credential is copied before
     rotation. Disabling extension mode limits new/manual choices to secret auth.
-    Cancellation throws.
+    An existing service connection's exact WIF subject validates a federated credential.
+    Actions that need Entra app-registration write access are dimmed and rejected when
+    the signed-in account's detected directory access cannot perform them; unknown
+    detection leaves them available. Cancellation throws.
     #>
     [CmdletBinding()]
     param(
@@ -212,15 +235,20 @@ function Get-PowerPlatformSCCredential {
     # 1. Try to find existing Service Connection to see if we can reuse its App ID
     $existingEndpoint = $null
     $existingScAppId = $null
+    $existingWifSubject = $null
     try {
         $endpoints = @(Get-VSTeamServiceEndpoint -ProjectName $ProjectName -ErrorAction Stop)
         $existingEndpoint = $endpoints | Where-Object { $_.name -eq $EnvironmentName } | Select-Object -First 1
         if ($existingEndpoint -and $existingEndpoint.authorization -and $existingEndpoint.authorization.parameters) {
-            if ($existingEndpoint.authorization.parameters.PSObject.Properties.Name -contains 'applicationId') {
-                $existingScAppId = $existingEndpoint.authorization.parameters.applicationId
+            $endpointParameters = $existingEndpoint.authorization.parameters
+            if ($endpointParameters.PSObject.Properties.Name -contains 'applicationId') {
+                $existingScAppId = $endpointParameters.applicationId
             }
-            elseif ($existingEndpoint.authorization.parameters.PSObject.Properties.Name -contains 'serviceprincipalid') {
-                $existingScAppId = $existingEndpoint.authorization.parameters.serviceprincipalid
+            elseif ($endpointParameters.PSObject.Properties.Name -contains 'serviceprincipalid') {
+                $existingScAppId = $endpointParameters.serviceprincipalid
+            }
+            if ($endpointParameters.PSObject.Properties.Name -contains 'workloadIdentityFederationSubject') {
+                $existingWifSubject = [string]$endpointParameters.workloadIdentityFederationSubject
             }
         }
     }
@@ -277,8 +305,12 @@ function Get-PowerPlatformSCCredential {
         Write-Warning "Failed to list applications from Entra ID: $($_.Exception.Message)"
     }
 
+    # Detection failures return null capabilities, so the menu stays available when
+    # Graph cannot answer; only a definite denial dims an action.
+    $entraState = Get-EntraIdApplicationManagementState -TenantId $TenantId
     $menuItems = @()
     $menuActions = @() # To track what each item does
+    $dimMenuItems = @()
 
     if ($ExistingCredential -and -not [string]::IsNullOrWhiteSpace($ExistingCredential.ApplicationId)) {
         $existingLabel = "Use existing: $($ExistingCredential.Name) ($($ExistingCredential.ApplicationId))"
@@ -309,198 +341,301 @@ function Get-PowerPlatformSCCredential {
     }
 
     # Standard Options
-    $menuItems += "Create new App Registration (Entra ID)"
+    $createNewLabel = "Create new App Registration (Entra ID)"
+    if ($entraState.CanCreateApplications -eq $false) {
+        $createNewLabel += ' [requires Entra ID permissions]'
+        $dimMenuItems += $createNewLabel
+    }
+    $menuItems += $createNewLabel
     $menuActions += @{ Type = 'CreateNew' }
 
     $menuItems += "Enter existing Service Principal details"
     $menuActions += @{ Type = 'Manual' }
 
+    $menuItems += "Create a new application manually (with instructions)"
+    $menuActions += @{ Type = 'ManualWithInstructions' }
+
+    $searchLabel = "Search for an existing application by name"
+    if ((Get-OptionalObjectPropertyValue -InputObject $entraState -PropertyName 'CanReadApplications') -eq $false) {
+        $searchLabel += ' [requires Entra ID permissions]'
+        $dimMenuItems += $searchLabel
+    }
+    $menuItems += $searchLabel
+    $menuActions += @{ Type = 'Search' }
+
     # Cached Credentials
     foreach ($c in $ExistingCredentials) {
-        $menuItems += "Reuse: $($c.Name) ($($c.ApplicationId))"
+        $cachedLabel = "Reuse: $($c.Name) ($($c.ApplicationId))"
+        # A reused WIF credential needs a new federated identity credential for this
+        # environment's service connection, which requires ownership or an admin role.
+        $cachedAuthType = [string](Get-OptionalObjectPropertyValue -InputObject $c -PropertyName 'AuthType')
+        if ($UseAlm4DataverseExtension -and $cachedAuthType -eq 'WIF') {
+            $cachedTenantId = [string](Get-OptionalObjectPropertyValue -InputObject $c -PropertyName 'TenantId')
+            if ([string]::IsNullOrWhiteSpace($cachedTenantId)) {
+                $cachedTenantId = $TenantId
+            }
+            $canManageCached = Test-EntraIdApplicationManagement `
+                -TenantId $cachedTenantId `
+                -ApplicationObjectId ([string](Get-OptionalObjectPropertyValue -InputObject $c -PropertyName 'ApplicationObjectId')) `
+                -ApplicationId ([string](Get-OptionalObjectPropertyValue -InputObject $c -PropertyName 'ApplicationId')) `
+                -State $(if ($cachedTenantId -ieq $TenantId) { $entraState } else { $null })
+            if ($canManageCached -eq $false) {
+                $cachedLabel += ' [requires Entra ID permissions]'
+                $dimMenuItems += $cachedLabel
+            }
+        }
+        $menuItems += $cachedLabel
         $menuActions += @{ Type = 'Cached'; Creds = $c }
     }
 
-
-    $selection = Select-FromMenu -Title "Select Service Principal credentials for '$EnvironmentName'" -Items $menuItems -PromptGuidanceLines @(
+    $guidanceLines = @(
         'Service Principal credentials authenticate the pipeline to Dataverse.',
         'Use a separate App Registration per environment and prefer Workload Identity Federation when extension mode is enabled.',
         'Select existing credentials or create new Service Principal credentials for this environment.',
         'Prefer workload identity federation when available to reduce client secret management.'
-    ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
-    if ($null -eq $selection) { throw "No credential selected." }
+    )
+    if ($dimMenuItems.Count -gt 0) {
+        $guidanceLines += 'Dimmed actions need Entra ID app-registration permissions that the signed-in account does not have. Ask an Entra administrator or choose another option.'
+    }
 
-    $action = $menuActions[$selection]
-
-    if ($action.Type -eq 'Existing') {
-        $selectedCredential = $action.Creds.PSObject.Copy()
-
-        if ($selectedCredential.AuthType -eq 'Secret' -and $selectedCredential.HasExistingSecret) {
-            $secretHandlingItems = @(
-                'Keep the existing client secret',
-                'Generate a new client secret when changes are applied'
-            )
-
-            $secretHandlingSelection = Select-FromMenu -Title "How should setup handle the existing client secret for '$EnvironmentName'?" -Items $secretHandlingItems -PromptGuidanceLines @(
-                'Choose whether to keep the existing secret or generate a new one when changes are applied.',
-                'Rotation is deferred until Apply so the preview can list it before any credential changes.',
-                'Rotate when policy requires renewal or when the existing secret is no longer trusted.'
-            ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
-            if ($null -eq $secretHandlingSelection) {
-                throw 'No client secret handling option selected.'
+    $promptNotice = $null
+    while ($true) {
+        $selection = $null
+        while ($null -eq $selection) {
+            $currentGuidanceLines = @($guidanceLines)
+            if ($promptNotice) {
+                $currentGuidanceLines = @($promptNotice) + $currentGuidanceLines
             }
+            $selection = Select-FromMenu `
+                -Title "Select Service Principal credentials for '$EnvironmentName'" `
+                -Items $menuItems `
+                -DimItems $dimMenuItems `
+                -PromptGuidanceLines $currentGuidanceLines `
+                -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+                -PromptGuidanceRef $ALM4DataverseRef
+            if ($null -eq $selection) { throw "No credential selected." }
+            if ($dimMenuItems -contains $menuItems[$selection]) {
+                $promptNotice = 'The selected action is unavailable because the signed-in account does not have the required Entra ID permissions. Choose another option or ask an Entra administrator.'
+                $selection = $null
+            }
+        }
 
-            if ($secretHandlingSelection -eq 1) {
-                if ([string]::IsNullOrWhiteSpace($selectedCredential.ApplicationObjectId)) {
-                    $resolvedApplication = Resolve-EntraIdApplicationByAppId -ApplicationId $selectedCredential.ApplicationId -TenantId $selectedCredential.TenantId
-                    if ($resolvedApplication) {
-                        $selectedCredential.ApplicationObjectId = $resolvedApplication.id
-                        if ([string]::IsNullOrWhiteSpace($selectedCredential.Name) -and -not [string]::IsNullOrWhiteSpace($resolvedApplication.displayName)) {
-                            $selectedCredential.Name = $resolvedApplication.displayName
-                        }
+        $action = $menuActions[$selection]
+
+        if ($action.Type -eq 'Existing') {
+            $selectedCredential = $action.Creds.PSObject.Copy()
+
+            if ($selectedCredential.AuthType -eq 'Secret' -and $selectedCredential.HasExistingSecret) {
+                $credentialTenantId = [string](Get-OptionalObjectPropertyValue -InputObject $selectedCredential -PropertyName 'TenantId')
+                if ([string]::IsNullOrWhiteSpace($credentialTenantId)) {
+                    $credentialTenantId = $TenantId
+                }
+                $canRotateExistingSecret = Test-EntraIdApplicationManagement `
+                    -TenantId $credentialTenantId `
+                    -ApplicationObjectId ([string](Get-OptionalObjectPropertyValue -InputObject $selectedCredential -PropertyName 'ApplicationObjectId')) `
+                    -ApplicationId ([string](Get-OptionalObjectPropertyValue -InputObject $selectedCredential -PropertyName 'ApplicationId')) `
+                    -State $(if ($credentialTenantId -ieq $TenantId) { $entraState } else { $null })
+
+                $secretHandlingItems = @(
+                    'Keep the existing client secret',
+                    'Generate a new client secret when changes are applied'
+                )
+                $secretDimItems = @()
+                if ($canRotateExistingSecret -eq $false) {
+                    $secretHandlingItems[1] += ' [requires Entra ID permissions]'
+                    $secretDimItems += $secretHandlingItems[1]
+                }
+
+                $secretHandlingSelection = $null
+                $secretPromptNotice = $null
+                while ($null -eq $secretHandlingSelection) {
+                    $secretGuidanceLines = @(
+                        'Choose whether to keep the existing secret or generate a new one when changes are applied.',
+                        'Rotation is deferred until Apply so the preview can list it before any credential changes.',
+                        'Rotate when policy requires renewal or when the existing secret is no longer trusted.'
+                    )
+                    if ($secretDimItems.Count -gt 0) {
+                        $secretGuidanceLines += 'Rotation is unavailable because the signed-in account cannot manage credentials on this App Registration. Ask an Entra administrator or keep the existing secret.'
+                    }
+                    if ($secretPromptNotice) {
+                        $secretGuidanceLines = @($secretPromptNotice) + $secretGuidanceLines
+                    }
+                    $secretHandlingSelection = Select-FromMenu `
+                        -Title "How should setup handle the existing client secret for '$EnvironmentName'?" `
+                        -Items $secretHandlingItems `
+                        -DimItems $secretDimItems `
+                        -PromptGuidanceLines $secretGuidanceLines `
+                        -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+                        -PromptGuidanceRef $ALM4DataverseRef
+                    if ($null -eq $secretHandlingSelection) {
+                        throw 'No client secret handling option selected.'
+                    }
+                    if ($secretDimItems -contains $secretHandlingItems[$secretHandlingSelection]) {
+                        $secretPromptNotice = 'That action is unavailable because the signed-in account cannot manage credentials on this App Registration. Choose to keep the existing secret or ask an Entra administrator.'
+                        $secretHandlingSelection = $null
                     }
                 }
 
-                if ([string]::IsNullOrWhiteSpace($selectedCredential.ApplicationObjectId)) {
-                    throw "Cannot generate a new client secret for '$($selectedCredential.ApplicationId)' because the App Registration object id could not be resolved."
+                if ($secretHandlingSelection -eq 1) {
+                    if ([string]::IsNullOrWhiteSpace($selectedCredential.ApplicationObjectId)) {
+                        $resolvedApplication = Resolve-EntraIdApplicationByAppId -ApplicationId $selectedCredential.ApplicationId -TenantId $selectedCredential.TenantId
+                        if ($resolvedApplication) {
+                            $selectedCredential.ApplicationObjectId = $resolvedApplication.id
+                            if ([string]::IsNullOrWhiteSpace($selectedCredential.Name) -and -not [string]::IsNullOrWhiteSpace($resolvedApplication.displayName)) {
+                                $selectedCredential.Name = $resolvedApplication.displayName
+                            }
+                        }
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($selectedCredential.ApplicationObjectId)) {
+                        throw "Cannot generate a new client secret for '$($selectedCredential.ApplicationId)' because the App Registration object id could not be resolved."
+                    }
+
+                    # Defer the write to Apply so preview can list it and the user can
+                    # still change their mind before any credential is rotated.
+                    $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $true -Force
+                    Write-Host 'A new client secret will be generated when changes are applied.' -ForegroundColor Yellow
+                    $selectedCredential.IsExistingServiceConnection = $false
+                }
+                else {
+                    # Revisiting the step copies the previous credential, so clear any
+                    # rotation request the user has now declined.
+                    $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $false -Force
                 }
 
-                # Defer the write to Apply so preview can list it and the user can
-                # still change their mind before any credential is rotated.
-                $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $true -Force
-                Write-Host 'A new client secret will be generated when changes are applied.' -ForegroundColor Yellow
-                $selectedCredential.IsExistingServiceConnection = $false
-            }
-            else {
-                # Revisiting the step copies the previous credential, so clear any
-                # rotation request the user has now declined.
-                $selectedCredential | Add-Member -NotePropertyName RotateSecret -NotePropertyValue $false -Force
+                return $selectedCredential
             }
 
             return $selectedCredential
         }
-
-        return $selectedCredential
-    }
-    elseif ($action.Type -eq 'Cached') {
-        return $action.Creds
-    }
-    elseif ($action.Type -eq 'CreateNew') {
-        $authType = 'Secret'
-        if ($UseAlm4DataverseExtension) {
-            # Prompt for authentication type
-            Write-Host ""
-            $authTypeItems = @(
-                "Workload Identity Federation (recommended, no secrets)",
-                "Service Principal with Secret (traditional)"
-            )
-            $authTypeSelection = Select-FromMenu -Title "Select authentication type for the new service connection" -Items $authTypeItems -PromptGuidanceLines @(
-                'Choose between workload identity federation and client-secret authentication.',
-                'Workload identity federation is recommended when supported.'
-            ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
-            if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
-
-            $authType = if ($authTypeSelection -eq 1) { 'Secret' } else { 'WIF' }
+        elseif ($action.Type -eq 'Cached') {
+            return $action.Creds
         }
-        else {
-            Write-Host "Using Service Principal with Secret authentication because ALM4Dataverse extension mode is disabled." -ForegroundColor Yellow
-        }
+        elseif ($action.Type -eq 'CreateNew') {
+            $authType = 'Secret'
+            if ($UseAlm4DataverseExtension) {
+                # Prompt for authentication type
+                Write-Host ""
+                $authTypeItems = @(
+                    "Workload Identity Federation (recommended, no secrets)",
+                    "Service Principal with Secret (traditional)"
+                )
+                $authTypeSelection = Select-FromMenu -Title "Select authentication type for the new service connection" -Items $authTypeItems -PromptGuidanceLines @(
+                    'Choose between workload identity federation and client-secret authentication.',
+                    'Workload identity federation is recommended when supported.'
+                ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
+                if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
 
-        $appName = "$ProjectName - $EnvironmentName - deployment"
-
-        if ($authType -eq 'WIF') {
-            return New-EntraIdApplication `
-                -DisplayName $appName `
-                -TenantId $TenantId `
-                -AuthType 'WIF'
-        }
-        else {
-            return New-EntraIdApplication `
-                -DisplayName $appName `
-                -TenantId $TenantId `
-                -AuthType 'Secret'
-        }
-    }
-    elseif ($action.Type -eq 'ExistingSCApp') {
-        if (-not $UseAlm4DataverseExtension) {
-            throw "Reusing existing service connection credentials requires ALM4Dataverse extension mode. Enable extension mode or enter Service Principal details manually."
-        }
-        $app = $action.App
-        Write-Host "Using existing service connection with App: $($app.displayName) ($($app.appId))" -ForegroundColor Cyan
-
-        # Since the service connection already exists, we just return a marker object
-        # The credentials are already configured in the existing service connection
-        return [pscustomobject]@{
-            Name = $app.displayName
-            ApplicationId = $app.appId
-            ApplicationObjectId = $app.id
-            ClientSecret = $null
-            TenantId = $TenantId
-            AuthType = 'Unknown' # Existing SC, auth type already configured
-            IsExistingServiceConnection = $true
-        }
-    }
-    else { # Manual
-        Write-Host "Enter Service Principal details:" -ForegroundColor Cyan
-        $name = Read-TextWithDefault -Prompt 'Credential name (for reuse reference)' -AllowEmpty
-        if ([string]::IsNullOrWhiteSpace($name)) { $name = "Credential-" + (Get-Date -Format "HHmm") }
-
-        while ($true) {
-            $appId = Read-TextWithDefault -Prompt 'Application ID (Client ID)'
-            if ($appId -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
-                break
+                $authType = if ($authTypeSelection -eq 1) { 'Secret' } else { 'WIF' }
             }
             else {
-                Write-Warning "The Application ID must be a valid GUID. Please try again."
+                Write-Host "Using Service Principal with Secret authentication because ALM4Dataverse extension mode is disabled." -ForegroundColor Yellow
+            }
+
+            $appName = "$ProjectName - $EnvironmentName - deployment"
+
+            if ($authType -eq 'WIF') {
+                return New-EntraIdApplication `
+                    -DisplayName $appName `
+                    -TenantId $TenantId `
+                    -AuthType 'WIF'
+            }
+            else {
+                return New-EntraIdApplication `
+                    -DisplayName $appName `
+                    -TenantId $TenantId `
+                    -AuthType 'Secret'
             }
         }
+        elseif ($action.Type -eq 'ExistingSCApp') {
+            if (-not $UseAlm4DataverseExtension) {
+                throw "Reusing existing service connection credentials requires ALM4Dataverse extension mode. Enable extension mode or enter Service Principal details manually."
+            }
+            $app = $action.App
+            Write-Host "Using existing service connection with App: $($app.displayName) ($($app.appId))" -ForegroundColor Cyan
 
-        $authType = 'Secret'
-        if ($UseAlm4DataverseExtension) {
-            # Prompt for authentication type
-            Write-Host ""
-            $authTypeItems = @(
-                "Service Principal with Secret (traditional)",
-                "Workload Identity Federation (recommended, no secrets)"
-            )
-            $authTypeSelection = Select-FromMenu -Title "Select authentication type" -Items $authTypeItems -PromptGuidanceLines @(
-                'Choose the authentication mode for the supplied Service Principal details.',
-                'Use secret-based auth only when workload identity federation is not the intended option.'
-            ) -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' -PromptGuidanceRef $ALM4DataverseRef
-            if ($null -eq $authTypeSelection) { throw "No authentication type selected." }
-
-            $authType = if ($authTypeSelection -eq 0) { 'Secret' } else { 'WIF' }
-        }
-        else {
-            Write-Host "Using Service Principal with Secret authentication because ALM4Dataverse extension mode is disabled." -ForegroundColor Yellow
-        }
-
-        $secret = $null
-        if ($authType -eq 'Secret') {
-            while ($true) {
-                $secret = Read-SecretText -Prompt 'Client Secret'
-
-                if ($secret -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
-                    Write-Warning "The Client Secret looks like a GUID. You should enter the Secret VALUE, not the Secret ID."
-                    if (Read-YesNo -Prompt "Are you sure this is the Secret Value?" -DefaultNo) {
-                        break
-                    }
-                } else {
-                    break
-                }
+            # Since the service connection already exists, we just return a marker object
+            # The credentials are already configured in the existing service connection
+            return [pscustomobject]@{
+                Name = $app.displayName
+                ApplicationId = $app.appId
+                ApplicationObjectId = $app.id
+                ClientSecret = $null
+                TenantId = $TenantId
+                AuthType = 'Unknown' # Existing SC, auth type already configured
+                IsExistingServiceConnection = $true
             }
         }
+        elseif ($action.Type -eq 'Manual') {
+            Write-Host "Enter Service Principal details:" -ForegroundColor Cyan
+            $name = Read-TextWithDefault -Prompt 'Credential name (for reuse reference)' -AllowEmpty
+            if ([string]::IsNullOrWhiteSpace($name)) { $name = "Credential-" + (Get-Date -Format "HHmm") }
 
-        [void](Initialize-EntraIdServicePrincipal -ApplicationId $appId -TenantId $TenantId)
+            $credential = Read-SetupEntraIdApplicationCredential `
+                -TenantId $TenantId `
+                -ProviderName 'AzureDevOps' `
+                -Name $name `
+                -WorkloadIdentityFederationSubject $existingWifSubject `
+                -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
+                -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+                -PromptGuidanceRef $ALM4DataverseRef
 
-        return [pscustomobject]@{
-            Name = $name
-            ApplicationId = $appId
-            ApplicationObjectId = $null
-            ClientSecret = $secret
-            TenantId = $TenantId
-            AuthType = $authType
-            IsExistingServiceConnection = $false
+            $validation = Get-OptionalObjectPropertyValue -InputObject $credential -PropertyName 'Validation'
+            $hasServicePrincipal = Get-OptionalObjectPropertyValue -InputObject $validation -PropertyName 'HasServicePrincipal'
+            $createServicePrincipal = -not ($hasServicePrincipal -eq $false -and $entraState.CanCreateApplications -eq $false)
+            [void](Initialize-EntraIdServicePrincipal `
+                -ApplicationId ([string](Get-OptionalObjectPropertyValue -InputObject $credential -PropertyName 'ApplicationId')) `
+                -TenantId $TenantId `
+                -CreateIfMissing:$createServicePrincipal)
+            return $credential
+        }
+        elseif ($action.Type -eq 'ManualWithInstructions') {
+            Write-Host "Create a new application manually (with instructions)" -ForegroundColor Cyan
+            $credential = Read-SetupEntraIdApplicationCredential `
+                -TenantId $TenantId `
+                -ProviderName 'AzureDevOps' `
+                -ShowCreationInstructions `
+                -WorkloadIdentityFederationSubject $existingWifSubject `
+                -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
+                -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+                -PromptGuidanceRef $ALM4DataverseRef
+
+            $validation = Get-OptionalObjectPropertyValue -InputObject $credential -PropertyName 'Validation'
+            $hasServicePrincipal = Get-OptionalObjectPropertyValue -InputObject $validation -PropertyName 'HasServicePrincipal'
+            $createServicePrincipal = -not ($hasServicePrincipal -eq $false -and $entraState.CanCreateApplications -eq $false)
+            [void](Initialize-EntraIdServicePrincipal `
+                -ApplicationId ([string](Get-OptionalObjectPropertyValue -InputObject $credential -PropertyName 'ApplicationId')) `
+                -TenantId $TenantId `
+                -CreateIfMissing:$createServicePrincipal)
+            return $credential
+        }
+        elseif ($action.Type -eq 'Search') {
+            $searchedApplication = Select-EntraIdApplicationBySearch `
+                -TenantId $TenantId `
+                -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+                -PromptGuidanceRef $ALM4DataverseRef
+            if ($null -eq $searchedApplication) {
+                $promptNotice = 'No application was selected from search. Choose another credential option or search again.'
+                continue
+            }
+
+            $credential = Read-SetupEntraIdApplicationCredential `
+                -TenantId $TenantId `
+                -ProviderName 'AzureDevOps' `
+                -ApplicationId ([string]$searchedApplication.appId) `
+                -WorkloadIdentityFederationSubject $existingWifSubject `
+                -DisableWorkloadIdentityFederation:(-not $UseAlm4DataverseExtension) `
+                -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
+                -PromptGuidanceRef $ALM4DataverseRef
+
+            $validation = Get-OptionalObjectPropertyValue -InputObject $credential -PropertyName 'Validation'
+            $hasServicePrincipal = Get-OptionalObjectPropertyValue -InputObject $validation -PropertyName 'HasServicePrincipal'
+            $createServicePrincipal = -not ($hasServicePrincipal -eq $false -and $entraState.CanCreateApplications -eq $false)
+            [void](Initialize-EntraIdServicePrincipal `
+                -ApplicationId ([string](Get-OptionalObjectPropertyValue -InputObject $credential -PropertyName 'ApplicationId')) `
+                -TenantId $TenantId `
+                -CreateIfMissing:$createServicePrincipal)
+            return $credential
         }
     }
 }

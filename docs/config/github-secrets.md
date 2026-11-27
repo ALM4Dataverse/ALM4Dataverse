@@ -64,6 +64,60 @@ the caller workflows are generated from the configuration, not edited by hand. C
 that the resulting environments and protection rules really exist and are supported by
 your plan before treating a target as protected.
 
+### App registration permissions
+
+Setup checks the signed-in account's Entra ID directory roles, app-registration
+ownership and the tenant's **Users can register applications** setting before it
+offers app-registration changes. Actions the account cannot perform are dimmed and
+cannot be selected:
+
+- **Create new App Registration (Entra ID)** needs permission to create an app
+  registration and its enterprise application. The Application Administrator,
+  Cloud Application Administrator, Global Administrator and Application Developer
+  roles grant it; otherwise the tenant must allow users to register applications.
+- **Generate a new client secret when changes are applied** adds a password
+  credential, and the **Workload Identity Federation** choice adds a federated
+  identity credential. Both need ownership of the app registration or an
+  application-administration role.
+- **Reuse** of a WIF credential for another environment adds a federated identity
+  credential with that environment's subject, so it needs the same access.
+
+When Microsoft Graph cannot answer, setup leaves the action available rather than
+block a permitted account after a transient read failure; the later write still
+requires Graph authorization and can fail. Custom directory roles are not inspected,
+and an application owner can still be denied by the client application's granted
+Graph scopes.
+
+### Existing application validation
+
+When you select **Enter existing App Registration details** or a search result, setup
+reads the App Registration and checks:
+
+- The client ID exists in the tenant.
+- An enterprise application (service principal) exists.
+- The app registration requests the Dataverse `user_impersonation` delegated
+  permission (**API permissions** > **Dynamics CRM** > **Delegated permissions** >
+  `user_impersonation`). An Entra administrator must grant admin consent.
+- A non-expired client secret exists, a federated identity credential with audience
+  `api://AzureADTokenExchange` and the exact required subject exists, or both. The
+  subject is checked when setup knows it: the GitHub repository and environment subject,
+  or the Azure DevOps service connection subject.
+
+The Dataverse application user grants access to the environment; the
+`user_impersonation` permission is the scope the deployment identity requests.
+
+Problems are shown before the authentication step with **Continue with this
+application**, **Recheck application setup**, and **Enter a different application ID**.
+Continuing records the explicit choice but does not change the app. The authentication
+menu offers only the configured methods; if neither method is usable, both remain
+available after the warning. Setup never displays or retrieves an existing secret value,
+so client secret authentication still asks for the value.
+
+**Create a new application manually (with instructions)** displays the Entra portal
+steps and then validates the application ID you enter. **Search for an existing
+application by name** lists applications whose display name starts with the text you
+enter; it is dimmed when the account cannot list applications.
+
 ---
 
 ## Repository dispatch token for EXPORT → BUILD
@@ -172,6 +226,9 @@ The numeric IDs are the GitHub `repository_owner_id` and `repository_id` values.
 They are included when the repository uses GitHub's immutable subject claims. The
 setup script reads the repository setting and configures the matching subject;
 existing repositories retain the legacy format unless immutable subjects are enabled.
+Manual-creation guidance shows the exact subject for the selected repository and
+environment in its current mode; do not substitute a subject from another repository or
+a generic example.
 
 For an existing legacy repository, setup offers to enable immutable subjects when WIF
 is selected. Review the [GitHub changelog](https://github.blog/changelog/2026-04-23-immutable-subject-claims-for-github-actions-oidc-tokens/#opt-in-for-existing-repositories)
