@@ -29,8 +29,34 @@ function Select-OrderedSolution {
             ) `
             -GuidanceDocRelativePath 'docs/config/alm-config.md'
 
+        # The browser has no Spectre renderer, so project the same summary as text.
+        $browserSetup = $null -ne (Get-SetupWebHost)
         if ($selectedSolutions.Count -eq 0) {
-            [Spectre.Console.AnsiConsole]::MarkupLine('[grey]No solutions selected yet.[/]')
+            if ($browserSetup) {
+                Write-Host 'No solutions selected yet.'
+            }
+            else {
+                [Spectre.Console.AnsiConsole]::MarkupLine('[grey]No solutions selected yet.[/]')
+            }
+        }
+        elseif ($browserSetup) {
+            $solutionRows = @(
+                for ($solutionIndex = 0; $solutionIndex -lt $selectedSolutions.Count; $solutionIndex++) {
+                    $solution = $selectedSolutions[$solutionIndex]
+                    , @([string]($solutionIndex + 1), [string]$solution.friendlyname, [string]$solution.uniquename)
+                }
+            )
+            Add-SetupWebContentBlock -Block ([ordered]@{
+                    type    = 'table'
+                    heading = 'Selected solutions (dependency order)'
+                    columns = @('#', 'Friendly name', 'Unique name')
+                    rows    = $solutionRows
+                })
+            Write-Host 'Selected solutions (dependency order)' -ForegroundColor Green
+            for ($solutionIndex = 0; $solutionIndex -lt $selectedSolutions.Count; $solutionIndex++) {
+                $solution = $selectedSolutions[$solutionIndex]
+                Write-Host ("  {0}. {1} ({2})" -f ($solutionIndex + 1), [string]$solution.friendlyname, [string]$solution.uniquename)
+            }
         }
         else {
             [Spectre.Console.AnsiConsole]::MarkupLine('[bold green]Selected solutions (dependency order)[/]')
@@ -47,7 +73,12 @@ function Select-OrderedSolution {
             [Spectre.Console.AnsiConsole]::Write($table)
         }
 
-        [Spectre.Console.AnsiConsole]::WriteLine()
+        if ($browserSetup) {
+            Write-Host ''
+        }
+        else {
+            [Spectre.Console.AnsiConsole]::WriteLine()
+        }
 
         $menuItems = @('Add a solution')
         if ($selectedSolutions.Count -gt 0) {
@@ -83,7 +114,7 @@ function Select-OrderedSolution {
                 })
 
                 if ($available.Count -eq 0) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]All available solutions are already selected.[/]')
+                    Write-Host 'All available solutions are already selected.' -ForegroundColor Yellow
                     continue
                 }
 
@@ -129,7 +160,7 @@ function Select-OrderedSolution {
             }
             'Clear list' {
                 $selectedSolutions = @()
-                [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]Solution list cleared.[/]')
+                Write-Host 'Solution list cleared.' -ForegroundColor Yellow
             }
             'Done' {
                 return @($selectedSolutions)

@@ -314,7 +314,7 @@ function Invoke-GitHubBranchAwareSetup {
                                                 -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' `
                                                 -PromptGuidanceRef $ALM4DataverseRef
                                             if ([string]::IsNullOrWhiteSpace($shortName)) {
-                                                [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
+                                                Write-Host 'An environment short name is required.' -ForegroundColor Red
                                                 & $requestSetupWizardBackCommand
                                             }
                                             if ($currentSelections | Where-Object { $_.ShortName -ieq $shortName }) {
@@ -390,7 +390,7 @@ function Invoke-GitHubBranchAwareSetup {
                                                 -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' `
                                                 -PromptGuidanceRef $ALM4DataverseRef
                                             if ([string]::IsNullOrWhiteSpace($shortName)) {
-                                                [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
+                                                Write-Host 'An environment short name is required.' -ForegroundColor Red
                                                 & $requestSetupWizardBackCommand
                                             }
                                             if ($otherSelections | Where-Object { $_.ShortName -ieq $shortName }) {
@@ -501,7 +501,7 @@ function Invoke-GitHubBranchAwareSetup {
                                         -PromptGuidanceDocRelativePath 'docs/config/github-secrets.md' `
                                         -PromptGuidanceRef $ALM4DataverseRef
                                     if ([string]::IsNullOrWhiteSpace($environmentName)) {
-                                        [Spectre.Console.AnsiConsole]::MarkupLine('[red]A GitHub environment name is required for BUILD validation.[/]')
+                                        Write-Host 'A GitHub environment name is required for BUILD validation.' -ForegroundColor Red
                                         & $requestSetupWizardBackCommand
                                     }
                                     return $environmentName.Trim()
@@ -749,7 +749,7 @@ function Invoke-GitHubBranchAwareSetup {
 
                     $candidateBranches = @($wizardState.BranchStates | Where-Object { $_.DevEnvironmentConfiguration })
                     if ($candidateBranches.Count -eq 0) {
-                        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No branch currently has a DEV environment configured, so solution selection will be skipped for now.[/]')
+                        Write-Host 'No branch currently has a DEV environment configured, so solution selection will be skipped for now.' -ForegroundColor Yellow
                         $wizardState.SolutionResult = $null
                         $wizardState.SolutionSourceBranch = $null
                         return
@@ -960,7 +960,7 @@ function Invoke-GitHubBranchAwareSetup {
                         })
 
                         Show-BranchEnvironmentMappingTable -BranchMappings $branchMappingsForReview
-                        [Spectre.Console.AnsiConsole]::WriteLine()
+                        Write-Host ''
                         foreach ($branchState in @($wizardState.BranchStates)) {
                             $publishPlan = Get-OptionalObjectPropertyValue -InputObject $branchState -PropertyName 'PublishPlan'
                             $publishSummary = if ($publishPlan -and $publishPlan.Mode -eq 'PullRequest') {

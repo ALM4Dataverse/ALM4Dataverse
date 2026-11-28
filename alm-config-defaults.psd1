@@ -2,8 +2,8 @@
     # Consumer configuration overrides scalars, recursively merges hashtables and
     # appends arrays. Keep shared defaults here rather than in copied repositories.
     scriptDependencies = @{
-        # 3.4.0 fixes connection handling in the export comparison cmdlets.
-        "Rnwood.Dataverse.Data.PowerShell" = "3.4.0"
+        # 3.5.4 includes connection-handling fixes for the export comparison cmdlets.
+        "Rnwood.Dataverse.Data.PowerShell" = "3.5.4"
         # Pin Az.Accounts to avoid Azure assembly conflicts with Dataverse PowerShell.
         "Az.Accounts" = "5.5.0"
     }

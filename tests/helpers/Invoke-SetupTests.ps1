@@ -3,7 +3,7 @@
 [CmdletBinding()]
 # Paths are repository-relative, independent of the caller's current directory.
 param(
-    [string[]]$TestPath = @('tests/SetupCommon.Tests.ps1', 'tests/SetupEnvironment.Tests.ps1', 'tests/SetupProviders.Tests.ps1', 'tests/SetupRepository.Tests.ps1', 'tests/SetupWizard.Tests.ps1')
+    [string[]]$TestPath = @('tests/SetupCommon.Tests.ps1', 'tests/SetupEnvironment.Tests.ps1', 'tests/SetupProviders.Tests.ps1', 'tests/SetupRepository.Tests.ps1', 'tests/SetupWizard.Tests.ps1', 'tests/SetupWeb.Tests.ps1')
 )
 
 Set-StrictMode -Version Latest

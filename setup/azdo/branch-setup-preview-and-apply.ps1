@@ -645,7 +645,7 @@ function Invoke-AzDoSetupPostApply {
     Write-Section -Message 'Configure DEV environments'
     $devBranchStates = @($branchStates | Where-Object { $_.DevEnvironmentConfiguration })
     if ($devBranchStates.Count -eq 0) {
-        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No DEV environment configuration was captured in the wizard, so this step will be skipped.[/]')
+        Write-Host 'No DEV environment configuration was captured in the wizard, so this step will be skipped.' -ForegroundColor Yellow
     }
     else {
         foreach ($branchState in $devBranchStates) {
@@ -674,10 +674,10 @@ function Invoke-AzDoSetupPostApply {
         throw "BUILD validation is enabled for branch(es) '$branchNames', but no environment configuration was returned."
     }
     if ($enabledBuildBranchStates.Count -eq 0) {
-        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]BUILD validation is disabled for every branch, so BUILD environment configuration will be skipped.[/]')
+        Write-Host 'BUILD validation is disabled for every branch, so BUILD environment configuration will be skipped.' -ForegroundColor Yellow
     }
     elseif (-not $buildPipeline) {
-        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]BUILD pipeline was not found, so BUILD validation environment configuration could not be applied.[/]')
+        Write-Host 'BUILD pipeline was not found, so BUILD validation environment configuration could not be applied.' -ForegroundColor Yellow
     }
     else {
         $configuredBuildEnvironmentNames = @()
@@ -708,7 +708,7 @@ function Invoke-AzDoSetupPostApply {
     Write-Section -Message 'Configure deployment environments'
     $deploymentBranchStates = @($branchStates | Where-Object { @($_.DeploymentEnvironments).Count -gt 0 })
     if ($deploymentBranchStates.Count -eq 0) {
-        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No deployment environments were configured in the wizard, so this step will be skipped.[/]')
+        Write-Host 'No deployment environments were configured in the wizard, so this step will be skipped.' -ForegroundColor Yellow
     }
     else {
         foreach ($branchState in $deploymentBranchStates) {

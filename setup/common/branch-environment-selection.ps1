@@ -175,7 +175,7 @@ function Select-ConfiguredDeploymentEnvironment {
             -GuidanceRef $Ref
 
         Show-EnvironmentConfigurationTable -EnvironmentConfigurations $selectedEnvironments
-        [Spectre.Console.AnsiConsole]::WriteLine()
+        Write-Host ''
 
         if (-not [string]::IsNullOrWhiteSpace($InitialEditEnvironmentName)) {
             if (-not $EditEnvironmentScriptBlock) {
@@ -283,7 +283,7 @@ function Select-ConfiguredDeploymentEnvironment {
             }
             'Clear list' {
                 $selectedEnvironments = @()
-                [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]Environment list cleared.[/]')
+                Write-Host 'Environment list cleared.' -ForegroundColor Yellow
             }
             'Edit an environment' {
                 $environmentMenuItems = @($selectedEnvironments | ForEach-Object { & $formatEnvironmentMenuLabel $_ })
@@ -381,7 +381,7 @@ function Test-BranchEnvironmentMappingDuplicate {
     [CmdletBinding()]
     [OutputType([bool])]
     param(
-        [Parameter(Mandatory)][array]$BranchMappings
+        [Parameter(Mandatory)][AllowEmptyCollection()][array]$BranchMappings
     )
 
     $assignedUrls = @{}

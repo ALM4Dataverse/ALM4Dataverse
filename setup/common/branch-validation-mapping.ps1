@@ -265,7 +265,7 @@ function Select-BranchEnvironmentMapping {
                 -GuidanceRef $Ref
 
             Show-BranchEnvironmentMappingTable -BranchMappings $branchMappings
-            [Spectre.Console.AnsiConsole]::WriteLine()
+            Write-Host ''
 
             $menuItems = @('Add a branch mapping')
             if ($branchMappings.Count -gt 0) {
@@ -297,12 +297,12 @@ function Select-BranchEnvironmentMapping {
                 $branchName = Read-TextWithDefault -Prompt 'Branch name' -DefaultValue $defaultBranchName
                 $branchName = $branchName.Trim()
                 if ([string]::IsNullOrWhiteSpace($branchName)) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[red]Branch name is required.[/]')
+                    Write-Host 'Branch name is required.' -ForegroundColor Red
                     continue
                 }
 
                 if ($branchMappings | Where-Object { $_.BranchName -ieq $branchName }) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine("[red]Branch '$([string](ConvertTo-SpectreMarkupLiteral -Text $branchName))' already exists.[/]")
+                    Write-Host "Branch '$branchName' already exists." -ForegroundColor Red
                     continue
                 }
 
@@ -401,7 +401,7 @@ function Select-BranchEnvironmentMapping {
                     }
                     else {
                         Show-BranchEnvironmentMappingTable -BranchMappings @($currentMapping)
-                        [Spectre.Console.AnsiConsole]::WriteLine()
+                        Write-Host ''
                         $mappingAction = Select-FromMenu `
                             -Title "Edit branch '$($currentMapping.BranchName)'" `
                             -Items $mappingMenuItems `
@@ -418,7 +418,7 @@ function Select-BranchEnvironmentMapping {
                             $newBranchName = Read-TextWithDefault -Prompt 'Branch name' -DefaultValue $currentMapping.BranchName
                             $newBranchName = $newBranchName.Trim()
                             if ([string]::IsNullOrWhiteSpace($newBranchName)) {
-                                [Spectre.Console.AnsiConsole]::MarkupLine('[red]Branch name is required.[/]')
+                                Write-Host 'Branch name is required.' -ForegroundColor Red
                                 continue
                             }
 
@@ -435,7 +435,7 @@ function Select-BranchEnvironmentMapping {
                             }
 
                             if ($duplicate) {
-                                [Spectre.Console.AnsiConsole]::MarkupLine("[red]Branch '$([string](ConvertTo-SpectreMarkupLiteral -Text $newBranchName))' already exists.[/]")
+                                Write-Host "Branch '$newBranchName' already exists." -ForegroundColor Red
                                 continue
                             }
 
@@ -558,7 +558,7 @@ function Select-BranchEnvironmentMapping {
                                 }
 
                                 if ($candidateItems.Count -eq 0) {
-                                    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No selectable environments available for this branch.[/]')
+                                    Write-Host 'No selectable environments available for this branch.' -ForegroundColor Yellow
                                     break
                                 }
 
@@ -614,7 +614,7 @@ function Select-BranchEnvironmentMapping {
             }
             'Done' {
                 if (Test-BranchEnvironmentMappingDuplicate -BranchMappings $branchMappings) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[red]Each environment can only be assigned to one branch. Resolve duplicates before continuing.[/]')
+                    Write-Host 'Each environment can only be assigned to one branch. Resolve duplicates before continuing.' -ForegroundColor Red
                     continue
                 }
 

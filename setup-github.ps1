@@ -23,6 +23,12 @@
 .PARAMETER ALM4DataverseRef
     Upstream template ref. Releases inject a default; repository development resolves
     the current branch/commit after Git is available, with stable as a fallback.
+.PARAMETER Web
+    Runs the same guided setup in a local browser window. Starts a loopback-only web
+    server, serves an embedded UI with the product logo, and launches the default
+    browser. Non-linear setup steps appear as a card-based setup map instead of a
+    console menu. The browser and terminal remain available together, and no setup
+    credential or secret value is served to the page.
 .PARAMETER ApplyConfig
     Read the committed alm-config.psd1 from an existing repository, review the generated
     changes and publish them without Azure sign-in or running the configuration editors.
@@ -58,6 +64,9 @@ param(
 
     [Parameter()]
     [switch]$ApplyConfig,
+
+    [Parameter()]
+    [switch]$Web,
 
     [Parameter()]
     [switch]$PreviewOnly,
@@ -104,6 +113,10 @@ if ($Commit -and $PreviewOnly) {
     throw 'Commit cannot be combined with PreviewOnly.'
 }
 
+if ($Web -and ($Commit -or $PreviewOnly)) {
+    throw 'Web requires interactive setup and cannot be combined with Commit or PreviewOnly.'
+}
+
 if ($Commit -and [string]::IsNullOrWhiteSpace($RepositoryFullName)) {
     throw 'Commit requires RepositoryFullName so the repository can be resolved without prompts.'
 }
@@ -121,6 +134,15 @@ if ($setupCommonPath -and (Test-Path -LiteralPath $setupCommonPath)) {
 }
 else {
     __SETUP_COMMON_LIB__
+}
+
+if ($Web) {
+    Initialize-SetupWebHost `
+        -Provider 'GitHub' `
+        -ProductVersion 'Development' `
+        -Title 'GitHub Actions setup' `
+        -Reference $ALM4DataverseRef `
+        -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath | Out-Null
 }
 
 #region Initialization
@@ -142,6 +164,10 @@ Write-Host "Using temp module root: $TempModuleRoot"
 $script:ALM4DataverseVersion = '__ALM4DATAVERSE_VERSION__'
 if ($script:ALM4DataverseVersion -like '__*') {
     $script:ALM4DataverseVersion = 'Development'
+}
+
+if ($Web) {
+    Publish-SetupWebIdentity -ProductVersion $script:ALM4DataverseVersion -Reference $ALM4DataverseRef
 }
 
 # Version numbers are injected during release process
@@ -229,6 +255,10 @@ Write-Host "Git: $($gitCmd.Source)"
 if ($resolveDevRefAfterGitIsAvailable) {
     $ALM4DataverseRef = Resolve-DevelopmentDefaultAlm4DataverseRef -PrimaryRepositoryPath $upstreamRepo -FallbackRef $ALM4DataverseRef
     Write-Host "Development mode: Resolved ALM4DataverseRef to '$ALM4DataverseRef'" -ForegroundColor Yellow
+}
+
+if ($Web) {
+    Publish-SetupWebIdentity -Reference $ALM4DataverseRef
 }
 
 #region GitHub CLI Operations
@@ -449,6 +479,14 @@ try {
 catch {
     if ($_.Exception.Message -eq 'Setup cancelled before changes were applied.' -or (Test-IsSetupWizardBackException -Exception $_.Exception)) {
         Write-Host 'GitHub setup cancelled before branch configuration.' -ForegroundColor Yellow
+        if ($Web) {
+            Show-SetupWebStopScreen -Title 'GitHub setup cancelled' -Message 'Setup stopped before branch configuration. No changes were applied.'
+        }
+        return
+    }
+    if ($Web) {
+        Show-SetupWebFailure -Title 'GitHub setup failed' -ErrorRecord $_
+        Close-SetupWebHost
         return
     }
     throw
@@ -460,6 +498,10 @@ $TenantId = $script:githubAuthentication.TenantId
 $repoOwner = $script:githubRepositoryContext.RepoOwner
 $repoName = $script:githubRepositoryContext.RepoName
 $repoFullName = $script:githubRepositoryContext.RepoFullName
+
+if ($Web -and -not [string]::IsNullOrWhiteSpace([string]$repoFullName)) {
+    Publish-SetupWebRepository -Name $repoFullName -Url "https://github.com/$repoFullName"
+}
 $repoIdentity = $script:githubRepositoryContext.RepoIdentity
 $repoOwnerId = $script:githubRepositoryContext.RepoOwnerId
 $repoId = $script:githubRepositoryContext.RepoId
@@ -987,9 +1029,17 @@ catch {
         (Test-IsSetupWizardBackException -Exception $_.Exception)
     ) {
         Write-Host 'GitHub setup exited before applying changes.' -ForegroundColor Yellow
+        if ($Web) {
+            Show-SetupWebStopScreen -Title 'GitHub setup stopped' -Message 'Setup exited before applying changes. The repository was not published.'
+        }
         if ($cloneRoot -and (Test-Path -LiteralPath $cloneRoot)) {
             try { Remove-Item -LiteralPath $cloneRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the repository clone; continuing cleanup.' }
         }
+        return
+    }
+    if ($Web) {
+        Show-SetupWebFailure -Title 'GitHub setup failed' -ErrorRecord $_
+        Close-SetupWebHost
         return
     }
     throw
@@ -1045,3 +1095,7 @@ Show-SetupCompletionScreen `
         @{ Label = 'Configure EV and CR values for environments'; Url = (Get-Alm4DataverseDocUrl -RelativePath 'docs/setup/github-variables.md' -Ref $ALM4DataverseRef) },
         @{ Label = 'Run DEPLOY to promote the build'; Url = (Get-Alm4DataverseDocUrl -RelativePath 'docs/usage/deploying.md' -Ref $ALM4DataverseRef) }
     )
+
+if ($Web) {
+    Close-SetupWebHost
+}

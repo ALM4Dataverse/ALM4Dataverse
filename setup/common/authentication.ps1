@@ -437,6 +437,7 @@ function Get-AuthToken {
             }
             else {
                 try {
+                    Publish-SetupWebBusy -Message 'Waiting for Azure sign-in in your browser...'
                     $interactiveBuilder = $app.AcquireTokenInteractive($scopes)
 
                     if ($ForceInteractive) {
@@ -448,6 +449,7 @@ function Get-AuthToken {
                     }
 
                     $authResult = $interactiveBuilder.ExecuteAsync().GetAwaiter().GetResult()
+                    Publish-SetupWebBusy -Message 'Completing Azure sign-in...'
                 }
                 catch {
                     if (-not (Test-SetupBrowserLaunchFailure -ErrorRecord $_)) {

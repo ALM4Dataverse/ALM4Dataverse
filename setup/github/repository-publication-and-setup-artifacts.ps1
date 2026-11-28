@@ -1061,7 +1061,7 @@ function Invoke-GitHubSetupPostApply {
 
     $devBranchStates = @($branchStates | Where-Object { $_.DevEnvironmentConfiguration })
     if ($devBranchStates.Count -eq 0) {
-        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No DEV environment credentials were configured in the wizard, so this step will be skipped.[/]')
+        Write-Host 'No DEV environment credentials were configured in the wizard, so this step will be skipped.' -ForegroundColor Yellow
     }
     else {
         foreach ($branchState in $devBranchStates) {
@@ -1103,7 +1103,7 @@ function Invoke-GitHubSetupPostApply {
         throw "BUILD validation is enabled for branch(es) '$branchNames', but no environment configuration was returned."
     }
     if ($enabledBuildBranchStates.Count -eq 0) {
-        [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]BUILD validation is disabled for every branch, so BUILD environment credentials will be skipped.[/]')
+        Write-Host 'BUILD validation is disabled for every branch, so BUILD environment credentials will be skipped.' -ForegroundColor Yellow
     }
     else {
         $configuredBuildEnvironmentNames = @()

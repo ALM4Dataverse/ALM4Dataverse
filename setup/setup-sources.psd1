@@ -14,6 +14,8 @@
         'common/module-management.ps1'
         'common/setup-progress.ps1'
         'common/authentication.ps1'
+        'common/web-setup-assets.ps1'
+        'common/web-setup-host.ps1'
     )
     AzDoBootstrap = @(
         'azdo/bootstrap.ps1'

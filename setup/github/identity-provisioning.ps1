@@ -629,6 +629,75 @@ function Get-GitHubCredentialSecretForApply {
     return (New-EntraIdApplicationSecret -ApplicationObjectId $applicationObjectId -TenantId $tenantId)
 }
 
+function Invoke-GitHubCliAuthenticationCommand {
+    <#
+    .SYNOPSIS
+        Runs a GitHub CLI sign-in command and mirrors its output into the browser.
+    .DESCRIPTION
+        Browser setup has no visible terminal. The GitHub CLI prints a one-time code
+        and verification URL while it waits, so output is streamed line by line and
+        the sign-in lines are published to the browser banner until the command exits.
+        Console runs invoke the CLI directly so its terminal handling is unchanged.
+        The native exit code is returned for the caller to validate.
+    .PARAMETER Arguments
+        Arguments passed to gh.
+    .PARAMETER Status
+        Busy message shown in the browser while the command runs.
+    .PARAMETER ShowDeviceMessages
+        Publishes one-time-code and verification-URL lines to the browser banner.
+    .OUTPUTS
+        System.Int32 native command exit code.
+    #>
+    [CmdletBinding()]
+    [OutputType([int])]
+    param(
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$Status,
+        [Parameter()][switch]$ShowDeviceMessages
+    )
+
+    $webHost = Get-SetupWebHost
+    if ($null -eq $webHost) {
+        & gh @Arguments
+        return [int]$LASTEXITCODE
+    }
+
+    Publish-SetupWebBusy -Message $Status
+    $deviceLines = [System.Collections.Generic.List[string]]::new()
+    Publish-SetupWebDeviceCode -Message ''
+    try {
+        & gh @Arguments 2>&1 | ForEach-Object {
+            $line = [string]$_
+            Write-Host $line
+            if (-not $ShowDeviceMessages) {
+                return
+            }
+
+            # gh may still emit terminal control sequences when output is redirected.
+            $cleanLine = [regex]::Replace($line, '\x1b\[[0-9;?]*[ -/]*[@-~]', '').Trim()
+            if ([string]::IsNullOrWhiteSpace($cleanLine)) {
+                return
+            }
+            if ($cleanLine -match 'one-time code|verification code|open this url|continue in your web browser|github\.com/login/device|microsoft\.com/devicelogin|aka\.ms/devicelogin') {
+                $deviceLines.Add($cleanLine)
+                if ($deviceLines.Count -gt 6) {
+                    $deviceLines.RemoveAt(0)
+                }
+                Publish-SetupWebDeviceCode -Message ($deviceLines -join [Environment]::NewLine)
+            }
+        }
+
+        $exitCode = [int]$LASTEXITCODE
+        return $exitCode
+    }
+    finally {
+        Publish-SetupWebDeviceCode -Message ''
+        if ($ShowDeviceMessages) {
+            Publish-SetupWebBusy -Message 'Completing GitHub sign-in...'
+        }
+    }
+}
+
 function Initialize-GitHubSetupAuthentication {
     <#
     .SYNOPSIS
@@ -691,17 +760,25 @@ function Initialize-GitHubSetupAuthentication {
         }
         else {
             Write-Host 'Signing in with a different GitHub account...' -ForegroundColor Yellow
-            & gh auth logout --hostname github.com 2>&1 | Out-Host
-            & gh auth login --web --hostname github.com
-            if ($LASTEXITCODE -ne 0) {
+            $null = Invoke-GitHubCliAuthenticationCommand `
+                -Arguments @('auth', 'logout', '--hostname', 'github.com') `
+                -Status 'Signing out of the current GitHub CLI session...'
+            $loginExitCode = Invoke-GitHubCliAuthenticationCommand `
+                -Arguments @('auth', 'login', '--web', '--hostname', 'github.com') `
+                -Status 'Waiting for GitHub sign-in in your browser...' `
+                -ShowDeviceMessages
+            if ($loginExitCode -ne 0) {
                 throw 'GitHub authentication failed.'
             }
         }
     }
     else {
         Write-Host 'Not logged in to GitHub. Opening browser for authentication...' -ForegroundColor Yellow
-        & gh auth login --web --hostname github.com
-        if ($LASTEXITCODE -ne 0) {
+        $loginExitCode = Invoke-GitHubCliAuthenticationCommand `
+            -Arguments @('auth', 'login', '--web', '--hostname', 'github.com') `
+            -Status 'Waiting for GitHub sign-in in your browser...' `
+            -ShowDeviceMessages
+        if ($loginExitCode -ne 0) {
             throw 'GitHub authentication failed.'
         }
     }

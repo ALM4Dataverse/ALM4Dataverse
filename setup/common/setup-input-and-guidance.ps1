@@ -99,11 +99,12 @@ function Select-FromMenu {
 
     .DESCRIPTION
         Arrow keys move, Enter selects, and search is enabled automatically for long lists.
-        Returns a zero-based index into Items, or null for no items, a declined
-        single-item confirmation, or an unrecognized prompt result. Explicit Back
-        choices throw the wizard navigation marker rather than returning an index.
-        Escape returns to the previous setup menu or step, or cancels when there is no
-        parent. Literal labels are escaped for display; duplicate labels resolve to
+        Returns a zero-based index into Items, or null for no items or an
+        unrecognized prompt result. A single item is still presented as a menu.
+        Explicit Back choices throw the wizard navigation marker rather than
+        returning an index. Escape returns to the previous setup menu or step, or
+        cancels when there is no parent. Literal labels are escaped for display;
+        duplicate labels resolve to
         their first match. A single guidance panel is always visible; nested menus
         preserve an existing panel. Console input mode restoration is attempted after
         selection, including prompt failure.
@@ -166,11 +167,9 @@ function Select-FromMenu {
         $canRestoreTreatControlCAsInput = $false
     }
 
-    $isSingleChoiceConfirmation = $Items.Count -eq 1
-    $promptKind = if ($isSingleChoiceConfirmation) { 'YesNo' } else { 'Menu' }
     Write-SetupPromptFrame `
         -PromptText $Title `
-        -PromptKind $promptKind `
+        -PromptKind 'Menu' `
         -PromptGuidanceLines $PromptGuidanceLines `
         -PromptGuidanceDocRelativePath $PromptGuidanceDocRelativePath `
         -PromptGuidanceRef $PromptGuidanceRef `
@@ -179,145 +178,118 @@ function Select-FromMenu {
         -SkipPromptGuidance:$SkipPromptGuidance
 
     $effectiveItems = @($Items)
-    Write-SetupDebug -Message "Select-FromMenu title='$Title' items=$($Items.Count) singleChoiceConfirmation=$isSingleChoiceConfirmation"
+    Write-SetupDebug -Message "Select-FromMenu title='$Title' items=$($Items.Count)"
     if (Test-SetupDebugEnabled) {
         for ($debugIndex = 0; $debugIndex -lt $effectiveItems.Count; $debugIndex++) {
             Write-SetupDebug -Message "  [$debugIndex] $($effectiveItems[$debugIndex])"
         }
     }
 
-    if ($isSingleChoiceConfirmation) {
-        $confirmationLabel = [string](ConvertTo-SpectreMarkupLiteral -Text $effectiveItems[0])
-        if ($DimItems -contains $effectiveItems[0]) {
-            $confirmationLabel = "[grey]$confirmationLabel[/]"
-        }
-        elseif ($ActionItems -contains $effectiveItems[0]) {
-            [Spectre.Console.AnsiConsole]::MarkupLine('[grey]---[/]')
-            $confirmationLabel = "[bold deepskyblue1]$confirmationLabel[/]"
-        }
-
-        $prompt = [Spectre.Console.ConfirmationPrompt]::new($confirmationLabel)
-        $prompt.DefaultValue = $true
+    $prompt = [Spectre.Console.SelectionPrompt[string]]::new()
+    $prompt.MoreChoicesText = ''
+    $prompt.WrapAround = ($effectiveItems.Count -gt 1)
+    $hasActionSection = @($effectiveItems | Where-Object { $ActionItems -contains $_ }).Count -gt 0
+    $hasSetupSection = $hasActionSection -and @($effectiveItems | Where-Object { $ActionItems -notcontains $_ }).Count -gt 0
+    $sectionCount = if ($hasActionSection) {
+        1 + [int]$hasSetupSection
     }
     else {
-        $prompt = [Spectre.Console.SelectionPrompt[string]]::new()
-        $prompt.MoreChoicesText = ''
-        $prompt.WrapAround = ($effectiveItems.Count -gt 1)
-        $hasActionSection = @($effectiveItems | Where-Object { $ActionItems -contains $_ }).Count -gt 0
-        $hasSetupSection = $hasActionSection -and @($effectiveItems | Where-Object { $ActionItems -notcontains $_ }).Count -gt 0
-        $sectionCount = if ($hasActionSection) {
-            1 + [int]$hasSetupSection
-        }
-        else {
-            0
-        }
-        $displayItemCount = $effectiveItems.Count + $sectionCount
+        0
+    }
+    $displayItemCount = $effectiveItems.Count + $sectionCount
 
+    $availableMenuRows = 10
+    try {
+        $windowTop = [Console]::WindowTop
+        $windowHeight = [Console]::WindowHeight
+        $cursorTop = [Console]::CursorTop
+        $visibleWindowBottom = $windowTop + [Math]::Max($windowHeight, 1)
+        $reservedRows = 4
+        $availableMenuRows = [Math]::Max($visibleWindowBottom - $cursorTop - $reservedRows, 1)
+    }
+    catch {
         $availableMenuRows = 10
-        try {
-            $windowTop = [Console]::WindowTop
-            $windowHeight = [Console]::WindowHeight
-            $cursorTop = [Console]::CursorTop
-            $visibleWindowBottom = $windowTop + [Math]::Max($windowHeight, 1)
-            $reservedRows = 4
-            $availableMenuRows = [Math]::Max($visibleWindowBottom - $cursorTop - $reservedRows, 1)
-        }
-        catch {
-            $availableMenuRows = 10
-        }
+    }
 
-        $prompt.PageSize = [Math]::Min([Math]::Max($displayItemCount, 1), $availableMenuRows)
+    $prompt.PageSize = [Math]::Min([Math]::Max($displayItemCount, 1), $availableMenuRows)
 
-        $searchEnabled = $effectiveItems.Count -gt 8
+    $searchEnabled = $effectiveItems.Count -gt 8
+    if ($searchEnabled) {
+        $prompt.SearchEnabled = $true
+        $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
+    }
+
+    $effectiveDisplayItems = @()
+    $setupDisplayItems = @()
+    $actionDisplayItems = @()
+    foreach ($item in $effectiveItems) {
+        $displayItem = [string](ConvertTo-SpectreMarkupLiteral -Text $item)
         if ($searchEnabled) {
-            $prompt.SearchEnabled = $true
-            $prompt.SearchPlaceholderText = '[grey]Start typing to filter options[/]'
+            # Spectre's search highlight rebuilds choice markup without restoring
+            # escaped brackets, turning them into style tags that abort the prompt.
+            # Full-width look-alikes keep literal brackets readable and safe.
+            $displayItem = $displayItem.Replace('[[', '［').Replace(']]', '］')
         }
-
-        $effectiveDisplayItems = @()
-        $setupDisplayItems = @()
-        $actionDisplayItems = @()
-        foreach ($item in $effectiveItems) {
-            $displayItem = [string](ConvertTo-SpectreMarkupLiteral -Text $item)
-            if ($searchEnabled) {
-                # Spectre's search highlight rebuilds choice markup without restoring
-                # escaped brackets, turning them into style tags that abort the prompt.
-                # Full-width look-alikes keep literal brackets readable and safe.
-                $displayItem = $displayItem.Replace('[[', '［').Replace(']]', '］')
-            }
-            if ($DimItems -contains $item) {
-                $displayItem = "[grey]$displayItem[/]"
-            }
-            elseif ($null -ne $ItemStyles -and $ItemStyles.Contains($item)) {
-                $itemStyle = [string]$ItemStyles[$item]
-                if (-not [string]::IsNullOrWhiteSpace($itemStyle)) {
-                    $displayItem = "[$itemStyle]$displayItem[/]"
-                }
-            }
-            if ($hasActionSection -and $ActionItems -contains $item) {
-                $displayItem = "[bold deepskyblue1]$displayItem[/]"
-                $actionDisplayItems += $displayItem
-            }
-            else {
-                $setupDisplayItems += $displayItem
-            }
-            $effectiveDisplayItems += $displayItem
+        if ($DimItems -contains $item) {
+            $displayItem = "[grey]$displayItem[/]"
         }
-
-        if ($hasActionSection) {
-            $actionGroupTitle = "[grey]$(ConvertTo-SpectreMarkupLiteral -Text $ActionSectionTitle)[/]"
-            $setupGroupTitle = '[bold]Setup steps[/]'
-            if ($ActionSectionFirst) {
-                $actionGroup = $prompt.AddChoice($actionGroupTitle)
-                foreach ($displayItem in $actionDisplayItems) {
-                    [void]$actionGroup.AddChild($displayItem)
-                }
-                if ($hasSetupSection) {
-                    $setupGroup = $prompt.AddChoice($setupGroupTitle)
-                    foreach ($displayItem in $setupDisplayItems) {
-                        [void]$setupGroup.AddChild($displayItem)
-                    }
-                }
+        elseif ($null -ne $ItemStyles -and $ItemStyles.Contains($item)) {
+            $itemStyle = [string]$ItemStyles[$item]
+            if (-not [string]::IsNullOrWhiteSpace($itemStyle)) {
+                $displayItem = "[$itemStyle]$displayItem[/]"
             }
-            else {
-                if ($hasSetupSection) {
-                    $setupGroup = $prompt.AddChoice($setupGroupTitle)
-                    foreach ($displayItem in $setupDisplayItems) {
-                        [void]$setupGroup.AddChild($displayItem)
-                    }
-                }
-                $actionGroup = $prompt.AddChoice($actionGroupTitle)
-                foreach ($displayItem in $actionDisplayItems) {
-                    [void]$actionGroup.AddChild($displayItem)
+        }
+        if ($hasActionSection -and $ActionItems -contains $item) {
+            $displayItem = "[bold deepskyblue1]$displayItem[/]"
+            $actionDisplayItems += $displayItem
+        }
+        else {
+            $setupDisplayItems += $displayItem
+        }
+        $effectiveDisplayItems += $displayItem
+    }
+
+    if ($hasActionSection -and $effectiveItems.Count -gt 1) {
+        $actionGroupTitle = "[grey]$(ConvertTo-SpectreMarkupLiteral -Text $ActionSectionTitle)[/]"
+        $setupGroupTitle = '[bold]Setup steps[/]'
+        if ($ActionSectionFirst) {
+            $actionGroup = $prompt.AddChoice($actionGroupTitle)
+            foreach ($displayItem in $actionDisplayItems) {
+                [void]$actionGroup.AddChild($displayItem)
+            }
+            if ($hasSetupSection) {
+                $setupGroup = $prompt.AddChoice($setupGroupTitle)
+                foreach ($displayItem in $setupDisplayItems) {
+                    [void]$setupGroup.AddChild($displayItem)
                 }
             }
         }
         else {
-            foreach ($displayItem in $effectiveDisplayItems) {
-                [void]$prompt.AddChoice($displayItem)
+            if ($hasSetupSection) {
+                $setupGroup = $prompt.AddChoice($setupGroupTitle)
+                foreach ($displayItem in $setupDisplayItems) {
+                    [void]$setupGroup.AddChild($displayItem)
+                }
+            }
+            $actionGroup = $prompt.AddChoice($actionGroupTitle)
+            foreach ($displayItem in $actionDisplayItems) {
+                [void]$actionGroup.AddChild($displayItem)
             }
         }
     }
-
-    if ($isSingleChoiceConfirmation) {
-        Show-SetupStatusBarAtBottom -PromptKind 'YesNo'
-    }
     else {
-        Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
+        foreach ($displayItem in $effectiveDisplayItems) {
+            [void]$prompt.AddChoice($displayItem)
+        }
     }
+
+    Show-SetupStatusBarAtBottom -PromptKind 'Menu' -SearchEnabled:$prompt.SearchEnabled
 
     try {
         $selectedDisplayValue = Show-SetupPromptWithInterruptHandling `
             -Prompt $prompt `
             -ReturnNullAtNavigationMenuOnEscape
         Write-SetupDebug -Message "Interactive setup prompt returned: '$selectedDisplayValue'"
-
-        if ($isSingleChoiceConfirmation) {
-            if ($selectedDisplayValue) {
-                return 0
-            }
-            return $null
-        }
 
         $selectedEffectiveIndex = -1
         for ($effectiveIndex = 0; $effectiveIndex -lt $effectiveDisplayItems.Count; $effectiveIndex++) {

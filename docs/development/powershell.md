@@ -120,6 +120,7 @@ Suites live under `tests/`, grouped by the behaviour they own:
     `SetupProviders`.
 - Repository selection, synchronization, publication and cleanup: `SetupRepository`.
 - Branch-aware setup wizard decisions and editor callbacks: `SetupWizard`.
+- Browser setup host, embedded assets, prompt bridge and web step board: `SetupWeb`.
 
 Each suite is named `<Suite>.Tests.ps1`. Tests invoke the production scripts and
 helpers, assert resulting artifacts and decisions, and mock external service and
