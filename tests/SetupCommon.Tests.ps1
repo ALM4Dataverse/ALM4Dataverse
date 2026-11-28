@@ -370,6 +370,23 @@ Describe 'Setup authentication helpers' {
         Should -Invoke Write-Warning -Times 1 -Exactly
     }
 
+    It 'publishes a waiting message while interactive Azure sign-in is pending' {
+        Mock Get-SetupAuthenticationMode { 'Interactive' }
+        Mock Get-SetupWebHost { [pscustomobject]@{} }
+        Mock Publish-SetupWebBusy {}
+        $script:MsalApp = New-SetupTestMsalApplication -Accounts @() -InteractiveResult ([pscustomobject]@{ ResultName = 'interactive-result' })
+
+        $result = Get-AuthToken -ResourceUrl 'https://api.example.invalid/'
+
+        $result.ResultName | Should -Be 'interactive-result'
+        Should -Invoke Publish-SetupWebBusy -Times 1 -Exactly -ParameterFilter {
+            $Message -eq 'Waiting for Azure sign-in in your browser...'
+        }
+        Should -Invoke Publish-SetupWebBusy -Times 1 -Exactly -ParameterFilter {
+            $Message -eq 'Completing Azure sign-in...'
+        }
+    }
+
     It 'does not use a device code for other sign-in failures' {
         Mock Get-SetupAuthenticationMode { 'Interactive' }
         Mock Write-Error {}
@@ -800,6 +817,29 @@ Describe 'Setup selector state transitions' {
         @(Select-OrderedSolution -AvailableSolutions @($solution) -InitiallySelectedSolutions @($solution)).Count | Should -Be 0
     }
 
+    It 'summarizes solutions as browser text when a web host is active' {
+        Mock Get-SetupWebHost { [pscustomobject]@{ Active = $true } }
+        Mock Write-Section {}
+        Mock Write-Host {}
+        $script:SetupWebPendingBlocks = @()
+        $script:menuAnswers.Enqueue('Done')
+        $solution = [pscustomobject]@{ friendlyname = 'One'; uniquename = 'one' }
+
+        $selected = @(Select-OrderedSolution -AvailableSolutions @($solution) -InitiallySelectedSolutions @($solution))
+
+        $selected.Count | Should -Be 1
+        Should -Invoke Write-Host -Times 1 -Exactly -ParameterFilter {
+            $Object -eq 'Selected solutions (dependency order)'
+        }
+        Should -Invoke Write-Host -Times 1 -Exactly -ParameterFilter {
+            $Object -eq '  1. One (one)'
+        }
+        $blocks = @(Get-SetupWebContentQueue)
+        $blocks.Count | Should -Be 1
+        $blocks[0].type | Should -Be 'table'
+        (@($blocks[0].rows[0]) -join '|') | Should -Be '1|One|one'
+    }
+
     It 'initializes both supported bootstrap branch strategies and calls environment editors' -ForEach @(
         @{ Strategy = 'main only (recommended simple option)'; ExpectedBranches = @('main') }
         @{ Strategy = 'main + develop (required for environments that enforce PRs)'; ExpectedBranches = @('main', 'develop') }
@@ -831,6 +871,22 @@ Describe 'Setup selector state transitions' {
 
         @($result.BranchName) | Should -Be @('main')
         $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'reports branch validation through browser output when a web host is active' {
+        Mock Get-SetupWebHost { [pscustomobject]@{ Active = $true } }
+        Mock Show-BranchEnvironmentMappingTable {}
+        Mock Write-Host {}
+        $script:menuAnswers.Enqueue('Add a branch mapping')
+        $script:menuAnswers.Enqueue('Done')
+        $script:textAnswers.Enqueue('   ')
+
+        $result = @(Select-BranchEnvironmentMapping -InitialBranchMappings @() -BranchOnly)
+
+        $result.Count | Should -Be 0
+        Should -Invoke Write-Host -Times 1 -Exactly -ParameterFilter {
+            $Object -eq 'Branch name is required.'
+        }
     }
 
     It 'shows the selected branch setup before opening its edit menu' {
@@ -2296,36 +2352,34 @@ Describe 'Shared setup prompt and rendering contracts' {
         $script:stepHelpContext.Ref | Should -Be 'selected-ref'
     }
 
-    It 'maps markup-safe menu values and confirms single-item choices without a cancel option' {
+    It 'maps markup-safe menu values and renders single-item choices as menus' {
         [Spectre.Console.AnsiConsole]::Answers.Enqueue('[[One]]')
         Select-FromMenu -Title Test -Items @('[One]', 'Two') | Should -Be 0
 
         $script:singleChoicePromptTypes = @()
-        $script:singleChoiceResults = [System.Collections.Generic.Queue[bool]]::new()
-        $script:singleChoiceResults.Enqueue($true)
-        $script:singleChoiceResults.Enqueue($false)
         Mock Show-SetupPromptWithInterruptHandling {
             $script:singleChoicePromptTypes += $Prompt.GetType().Name
-            return $script:singleChoiceResults.Dequeue()
+            return 'Continue'
         }
 
         Select-FromMenu -Title Test -Items @('Continue') | Should -Be 0
-        Select-FromMenu -Title Test -Items @('Continue') | Should -BeNullOrEmpty
-        $script:singleChoicePromptTypes | Should -Be @('ConfirmationPrompt', 'ConfirmationPrompt')
+        @($script:singleChoicePromptTypes).Count | Should -Be 1
+        $script:singleChoicePromptTypes[0] | Should -BeLike 'SelectionPrompt*'
         Select-FromMenu -Title Test -Items @() | Should -BeNullOrEmpty
     }
 
-    It 'uses confirmations instead of visible cancel options for acknowledgement and apply actions' {
+    It 'renders acknowledgement and apply actions as single-item menus' {
         $script:singleActionPromptTypes = @()
         Mock Show-SetupPromptWithInterruptHandling {
             $script:singleActionPromptTypes += $Prompt.GetType().Name
-            return $true
+            return [string]$Prompt.Choices[0]
         }
 
         Wait-ForUserAcknowledgement -Message 'Continue setup'
         Confirm-SetupReviewAction
 
-        $script:singleActionPromptTypes | Should -Be @('ConfirmationPrompt', 'ConfirmationPrompt')
+        @($script:singleActionPromptTypes).Count | Should -Be 2
+        $script:singleActionPromptTypes | ForEach-Object { $_ | Should -BeLike 'SelectionPrompt*' }
     }
 
     It 'groups action choices separately, styles them, and preserves their item indexes' {

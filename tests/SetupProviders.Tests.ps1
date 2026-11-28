@@ -824,7 +824,7 @@ Describe 'GitHub API response handling' {
 Describe 'GitHub setup authentication and application repository context' {
     BeforeAll {
         $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
-        foreach ($name in @('Initialize-GitHubSetupAuthentication', 'Initialize-GitHubApplicationRepositoryContext')) {
+        foreach ($name in @('Invoke-GitHubCliAuthenticationCommand', 'Initialize-GitHubSetupAuthentication', 'Initialize-GitHubApplicationRepositoryContext')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -945,6 +945,40 @@ Describe 'GitHub setup authentication and application repository context' {
         $result.GitHubUserId | Should -Be 42
         $script:authenticationGhCalls.Count | Should -Be 4
         Should -Invoke Select-FromMenu -Times 0 -Exactly
+    }
+
+    It 'streams GitHub CLI device instructions to the browser while login waits' {
+        Mock Get-SetupWebHost { [pscustomobject]@{ Server = [pscustomobject]@{} } }
+        Mock Write-Host {}
+        Mock Publish-SetupWebBusy {}
+        Mock Publish-SetupWebDeviceCode {}
+        Mock gh {
+            $global:LASTEXITCODE = 0
+            '! Did you know? Read more at https://gh.io/gh-expiring-tokens'
+            '! First copy your one-time code: ABCD-1234'
+            'Open this URL to continue in your web browser: https://github.com/login/device'
+        }
+
+        $exitCode = Invoke-GitHubCliAuthenticationCommand `
+            -Arguments @('auth', 'login', '--web', '--hostname', 'github.com') `
+            -Status 'Waiting for GitHub sign-in in your browser...' `
+            -ShowDeviceMessages
+
+        $exitCode | Should -Be 0
+        Should -Invoke Publish-SetupWebBusy -Times 1 -Exactly -ParameterFilter {
+            $Message -eq 'Waiting for GitHub sign-in in your browser...'
+        }
+        Should -Invoke Publish-SetupWebDeviceCode -Times 1 -Exactly -ParameterFilter {
+            $Message -match 'ABCD-1234' -and
+            $Message -match 'https://github.com/login/device' -and
+            $Message -notmatch 'gh\.io'
+        }
+        Should -Invoke Publish-SetupWebDeviceCode -Times 2 -Exactly -ParameterFilter {
+            $Message -eq ''
+        }
+        Should -Invoke Publish-SetupWebBusy -Times 1 -Exactly -ParameterFilter {
+            $Message -eq 'Completing GitHub sign-in...'
+        }
     }
 
     It 'clones and inspects the selected existing repository in setup mode' {

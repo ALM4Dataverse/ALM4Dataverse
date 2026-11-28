@@ -556,7 +556,7 @@ function Write-SetupPromptFrame {
 }
 
 function Wait-ForUserAcknowledgement {
-    # A default-yes confirmation keeps the acknowledgement dismissible without a cancel menu item.
+    # The acknowledgement is a normal single-item menu; Back or Cancel still dismisses it.
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Message,

@@ -327,7 +327,7 @@ function Invoke-AzDoBranchAwareSetup {
                                 -PromptGuidanceDocRelativePath 'docs/config/azdo-environment-service-connection.md' `
                                 -PromptGuidanceRef $ALM4DataverseRef
                             if ([string]::IsNullOrWhiteSpace($environmentName)) {
-                                [Spectre.Console.AnsiConsole]::MarkupLine('[red]A service connection name is required for BUILD validation.[/]')
+                                Write-Host 'A service connection name is required for BUILD validation.' -ForegroundColor Red
                                 & $requestSetupWizardBackCommand
                             }
                             return $environmentName.Trim()
@@ -497,7 +497,7 @@ function Invoke-AzDoBranchAwareSetup {
                     -Message 'Configure solutions'
                 $solutionCandidateBranches = @($wizardState.BranchStates | Where-Object { $_.DevEnvironmentConfiguration })
                 if ($solutionCandidateBranches.Count -eq 0) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[yellow]No branch has a DEV environment configured, so solution selection will be skipped for now.[/]')
+                    Write-Host 'No branch has a DEV environment configured, so solution selection will be skipped for now.' -ForegroundColor Yellow
                     $wizardState.SolutionData = $null
                     $wizardState.SolutionSourceBranch = $null
                     return

@@ -58,6 +58,28 @@ iex ((irm https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/downloa
 To select a tenant or a specific shared-code ref, see
 [setup parameters](../config/pipelines.md#setup-script-parameters).
 
+### Browser Setup
+
+Add `-Web` to run the same guided setup in a local browser window:
+
+```powershell
+.\setup-azdo.ps1 -Web
+```
+
+The script starts a server bound to `127.0.0.1`, displays the ALM4Dataverse logo, and
+opens the default browser. The terminal stays available as a complete fallback log.
+Prompts become full-width cards, and non-linear setup steps appear as a clickable step
+board instead of a menu. Completed cards stay editable, unavailable cards explain the
+prerequisite they are waiting for, and **Apply changes** unlocks when every step is
+complete. The branch step groups each branch's DEV, BUILD validation and deployment
+targets beneath the branch, so you can open the exact target to edit. Password fields
+are masked, and entered values are never written into page state. Long-running steps
+show an in-page progress indicator, and their messages remain available from the
+Activity button.
+
+> [!NOTE]
+> `-Web` is interactive only. It cannot be combined with `-Commit` or `-PreviewOnly`.
+
 > [!NOTE]
 > Released setup scripts embed their helpers. A raw script downloaded from the source
 > repository is not equivalent and needs its adjacent files.

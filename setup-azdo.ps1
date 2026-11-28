@@ -22,6 +22,12 @@ Retained for invocation compatibility; the current authentication flow does not 
 .PARAMETER ALM4DataverseRef
 Upstream template ref. Releases supply a default; development resolves a local branch or
 commit after Git is available, falling back to stable.
+.PARAMETER Web
+Runs the same guided setup in a local browser window. Starts a loopback-only web
+server, serves an embedded UI with the product logo, and launches the default
+browser. Non-linear setup steps appear as a card-based setup map instead of a
+console menu. The browser and terminal remain available together, and no setup
+credential or secret value is served to the page.
 .PARAMETER ApplyConfig
 Read the committed alm-config.psd1 from an existing repository, review the generated
 changes and publish them without running the configuration editors.
@@ -51,6 +57,9 @@ param(
 
     [Parameter()]
     [switch]$ApplyConfig,
+
+    [Parameter()]
+    [switch]$Web,
 
     [Parameter()]
     [switch]$PreviewOnly,
@@ -105,6 +114,10 @@ if ($Commit -and $PreviewOnly) {
     throw 'Commit cannot be combined with PreviewOnly.'
 }
 
+if ($Web -and ($Commit -or $PreviewOnly)) {
+    throw 'Web requires interactive setup and cannot be combined with Commit or PreviewOnly.'
+}
+
 $missingResourceParameters = @(@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) })
 if ($Commit -and $missingResourceParameters.Count -gt 0) {
     throw 'Commit requires AccessToken, OrganizationName, ProjectName and RepositoryName so setup can resolve resources without prompts.'
@@ -138,6 +151,15 @@ else {
     __SETUP_AZDO_BOOTSTRAP_LIB__
 }
 
+if ($Web) {
+    Initialize-SetupWebHost `
+        -Provider 'Azure DevOps' `
+        -ProductVersion 'Development' `
+        -Title 'Azure DevOps setup' `
+        -Reference $ALM4DataverseRef `
+        -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath | Out-Null
+}
+
 #region Initialization
 
 Write-Section `
@@ -157,6 +179,10 @@ Write-Host "Using temp module root: $TempModuleRoot"
 $script:ALM4DataverseVersion = '__ALM4DATAVERSE_VERSION__'
 if ($script:ALM4DataverseVersion -like '__*') {
     $script:ALM4DataverseVersion = 'Development'
+}
+
+if ($Web) {
+    Publish-SetupWebIdentity -ProductVersion $script:ALM4DataverseVersion -Reference $ALM4DataverseRef
 }
 
 # Version numbers are injected during release process
@@ -226,6 +252,10 @@ Write-Host "Version: $(git --version)"
 if ($resolveDevRefAfterGitIsAvailable) {
     $ALM4DataverseRef = Resolve-DevelopmentDefaultAlm4DataverseRef -PrimaryRepositoryPath $upstreamRepo -FallbackRef $ALM4DataverseRef
     Write-Host "Development mode: Resolved ALM4DataverseRef to '$ALM4DataverseRef'" -ForegroundColor Yellow
+}
+
+if ($Web) {
+    Publish-SetupWebIdentity -Reference $ALM4DataverseRef
 }
 
 if ($ApplyConfig) {
@@ -429,6 +459,14 @@ try {
 catch {
     if ($_.Exception.Message -eq 'Setup cancelled before changes were applied.' -or (Test-IsSetupWizardBackException -Exception $_.Exception)) {
         Write-Host 'Azure DevOps setup cancelled before branch configuration.' -ForegroundColor Yellow
+        if ($Web) {
+            Show-SetupWebStopScreen -Title 'Azure DevOps setup cancelled' -Message 'Setup stopped before branch configuration. No changes were applied.'
+        }
+        return
+    }
+    if ($Web) {
+        Show-SetupWebFailure -Title 'Azure DevOps setup failed' -ErrorRecord $_
+        Close-SetupWebHost
         return
     }
     throw
@@ -450,6 +488,13 @@ $azDevOpsAccessToken = $initialization.AzDevOpsAccessToken
 $sharedRepoName = $initialization.SharedRepoName
 $sharedRepositoryRef = $initialization.SharedRepositoryRef
 $isNewRepository = [bool]$initialization.MainRepoIsNew
+
+if ($Web) {
+    $repositoryUrlName = [System.Uri]::EscapeDataString([string]$mainRepo.Name)
+    Publish-SetupWebRepository `
+        -Name "$orgName/$($selectedProject.Name)/$($mainRepo.Name)" `
+        -Url "https://dev.azure.com/$orgName/$($selectedProject.Name)/_git/$repositoryUrlName"
+}
 
 Write-Section `
     -Message "Ensuring main repository contains pipeline YAMLs"
@@ -760,6 +805,11 @@ catch {
     if ($sharedRepoClone -and (Test-Path -LiteralPath $sharedRepoClone)) {
         try { Remove-Item -LiteralPath $sharedRepoClone -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared repository clone; continuing cleanup.' }
     }
+    if ($Web) {
+        Show-SetupWebFailure -Title 'Azure DevOps setup failed' -ErrorRecord $_
+        Close-SetupWebHost
+        return
+    }
     throw
 }
 
@@ -875,9 +925,17 @@ catch {
         (Test-IsSetupWizardBackException -Exception $_.Exception)
     ) {
         Write-Host 'Azure DevOps setup exited before applying changes.' -ForegroundColor Yellow
+        if ($Web) {
+            Show-SetupWebStopScreen -Title 'Azure DevOps setup stopped' -Message 'Setup exited before applying changes. The repository was not published.'
+        }
         if ($mainRepoWorkingRoot -and (Test-Path -LiteralPath $mainRepoWorkingRoot)) {
             try { Remove-Item -LiteralPath $mainRepoWorkingRoot -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the main repository clone; continuing cleanup.' }
         }
+        return
+    }
+    if ($Web) {
+        Show-SetupWebFailure -Title 'Azure DevOps setup failed' -ErrorRecord $_
+        Close-SetupWebHost
         return
     }
     throw
@@ -937,3 +995,7 @@ Show-SetupCompletionScreen `
         @{ Label = 'Configure EV and CR values for environments'; Url = (Get-Alm4DataverseDocUrl -RelativePath 'docs/config/azdo-environment-variable-group.md' -Ref $ALM4DataverseRef) },
         @{ Label = 'Run DEPLOY to promote the build'; Url = (Get-Alm4DataverseDocUrl -RelativePath 'docs/usage/deploying.md' -Ref $ALM4DataverseRef) }
     )
+
+if ($Web) {
+    Close-SetupWebHost
+}

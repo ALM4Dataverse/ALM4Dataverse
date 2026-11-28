@@ -387,7 +387,7 @@ function Get-DataverseEnvironmentsSelection {
                     -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' `
                     -PromptGuidanceRef $ALM4DataverseRef
                 if ([string]::IsNullOrWhiteSpace($shortName)) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
+                    Write-Host 'An environment short name is required.' -ForegroundColor Red
                     & $requestSetupWizardBackCommand
                 }
                 if ($currentSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
@@ -454,7 +454,7 @@ function Get-DataverseEnvironmentsSelection {
                     -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' `
                     -PromptGuidanceRef $ALM4DataverseRef
                 if ([string]::IsNullOrWhiteSpace($shortName)) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
+                    Write-Host 'An environment short name is required.' -ForegroundColor Red
                     & $requestSetupWizardBackCommand
                 }
                 if ($otherSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {
@@ -528,7 +528,7 @@ function Get-DataverseEnvironmentsSelection {
                     -PromptGuidanceDocRelativePath 'docs/config/alm-config.md' `
                     -PromptGuidanceRef $ALM4DataverseRef
                 if ([string]::IsNullOrWhiteSpace($shortName)) {
-                    [Spectre.Console.AnsiConsole]::MarkupLine('[red]An environment short name is required.[/]')
+                    Write-Host 'An environment short name is required.' -ForegroundColor Red
                     & $requestSetupWizardBackCommand
                 }
                 if ($otherSelections | Where-Object { $_.Url -ieq $environmentState.Url }) {

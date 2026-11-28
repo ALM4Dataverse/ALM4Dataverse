@@ -200,6 +200,7 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 | --- | --- | --- | --- |
 | `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. Ignored by GitHub `-ApplyConfig`, which does not sign in to Azure. |
 | `ALM4DataverseRef` | String | Embedded release ref | Choose the shared code ref used during setup. Repository-source scripts resolve the local branch/commit, falling back to `stable`. |
+| `Web` | Switch | Off | Run guided setup in a local browser window instead of the terminal UI. The script starts a loopback-only server, shows the product logo, and launches the default browser. Non-linear setup steps appear as a step board of cards rather than a menu. The terminal remains a fallback log. Cannot be combined with `Commit` or `PreviewOnly`. |
 | `ApplyConfig` | Switch | Off | Select an existing repository and review then regenerate/publish caller files from its committed `alm-config.psd1`; skips settings editors and provider-resource provisioning. Branch, environment, solution, BUILD validation and OIDC changes are made only by editing and committing `alm-config.psd1`. Its external-resource plan is empty. Requires provider, repository, ref, and a non-empty branches map. |
 | `PreviewOnly` | Switch | Off | With `ApplyConfig`, show the setup summary and select individual changed files to preview without publishing or modifying files. The selected file diff is written without paging. Requires `ApplyConfig`. Supplying the headless parameters below makes the run unattended; the APPLY-CONFIG caller's preview option uses this. |
 | `Commit` | Switch | Off | With `ApplyConfig`, skip every prompt and commit the regenerated files for all configured branches directly to the default branch. Used by the APPLY-CONFIG caller; it requires the headless parameters below. |
@@ -208,6 +209,12 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 | `OrganizationName` | String | Empty | Azure DevOps only: organization used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline derives it from `System.CollectionUri`. |
 | `ProjectName` | String | Empty | Azure DevOps only: project used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `System.TeamProject`. |
 | `RepositoryName` | String | Empty | Azure DevOps only: application repository used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `Build.Repository.Name`. |
+
+Add `-Web` to either script to use the browser setup experience. The page is served
+from `127.0.0.1` with a random per-run token, and the terminal remains available as a
+fallback log. Setup never sends a prompt response value or secret to the page; password
+fields are masked and values are only read back by the setup process. Closing the
+terminal stops setup, and the browser page cannot reconnect after that.
 
 `UseDeviceAuthentication` is still accepted so older invocations keep working, but it
 does not select the sign-in flow. Setup uses browser sign-in when the host can open a

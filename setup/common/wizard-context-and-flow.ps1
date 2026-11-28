@@ -989,7 +989,7 @@ function Write-SetupWizardApplyFailure {
 }
 
 function Confirm-SetupReviewAction {
-    # Returns no value on approval; declining the confirmation throws.
+    # Returns no value when the action is selected; Back or Cancel throws.
     [CmdletBinding()]
     param(
         [Parameter()][string]$ApplyLabel = 'Apply changes',
