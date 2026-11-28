@@ -91,7 +91,9 @@ function Select-GitHubSharedWorkflowRepositoryState {
     .DESCRIPTION
     Re-selecting the current repository preserves its configured ref. A different repository
     uses its default branch, falling back to main when the provider returns no default. An
-    empty current repository opens the selector without a preferred choice.
+    empty current repository opens the selector without a preferred choice. A repository
+    created during selection is recorded as newly created so the update-strategy step can
+    complete without asking for a strategy.
     .PARAMETER RepositoryState
     Mutable repository/ref state shared with setup previews and publication.
     #>
@@ -141,6 +143,7 @@ function Select-GitHubSharedWorkflowRepositoryState {
     $RepositoryState.Repository = $selectedRepository
     $RepositoryState.Reference = $selectedReference
     $RepositoryState.ValidationError = ''
+    $RepositoryState.NewlyCreated = [bool](Get-OptionalObjectPropertyValue -InputObject $selectedSharedWorkflowRepo -PropertyName 'NewlyCreated')
     return $RepositoryState
 }
 

@@ -65,17 +65,17 @@ and real tenant, environment, or user identifiers.
 Regenerate the full screenshot set with
 `pwsh -NoLogo -NoProfile -File ./tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1`;
 use `-Scene <name>` for one image and `-ListScenes` to list scene names. This
-PowerShell-only tool runs the real helpers in a PTY-backed terminal, captures the
-rendered terminal frames with an explicit monospaced font, and downloads pinned
-NuGet libraries on first use. It requires PowerShell 7.6/.NET 10 or newer and
-NuGet access on first use. A full run also requires ffmpeg with drawtext and
-fontconfig support
-and regenerates the interactive `setup-walkthrough.gif` embedded in the README,
-using real setup input and captured terminal checkpoints. The GIF holds setup
-checkpoints for six seconds, types characters one at a time, and uses a
-semi-transparent caption footer below a raised green divider.
-Use `-SkipAnimation` for a full PNG-only capture; a `-Scene` run captures just one
-PNG. Do not add `.cs` or `.csproj` files to the screenshot workflow.
+tool runs the real setup helpers, starts the real loopback browser setup, and
+captures the page with a pinned Playwright Chromium build. It requires PowerShell
+7.6/.NET 10 or newer, Node.js with npm, and NuGet access on first use; the first
+browser capture downloads the pinned Playwright browser. A full run also requires
+ffmpeg with drawtext and fontconfig support and regenerates the interactive
+`setup-walkthrough.gif` embedded in the README from the same browser screens. The
+GIF holds setup checkpoints for six seconds and uses a semi-transparent caption
+footer below a raised green divider.
+Use `-SkipAnimation` for a full PNG-only capture, a `-Scene` run for one PNG, and
+`-Console` to capture the console setup instead. Do not add `.cs` or `.csproj`
+files to the screenshot workflow.
 
 ## Comments and Help
 

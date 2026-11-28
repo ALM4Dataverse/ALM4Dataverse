@@ -33,7 +33,8 @@
     and rendered screen state, and writes a synchronised transcript, an asciinema
     v2 cast, JSONL events and screen dumps under TestResults/setup-e2e/<run>.
     The terminal runtime is reused from the screenshot capture tool, so frames
-    render headlessly without a display server.
+    render headlessly without a display server. Scenarios drive the console
+    experience, so the harness always passes -Console to setup.
 .NOTES
     Run artifacts can contain tenant, organization, project and environment names.
     The default RunRoot is ignored by Git; do not publish raw recordings.
@@ -1660,7 +1661,7 @@ if ($Interactive) {
         -RunDirectory $runDirectory `
         -RepositoryRoot $repositoryRoot `
         -SetupScriptPath $setupScriptPath `
-        -SetupArguments $SetupArgument `
+        -SetupArguments (@('-Console') + $SetupArgument) `
         -Columns $Columns `
         -Rows $Rows `
         -ScreenPollMilliseconds $ScreenPollMilliseconds `
@@ -1685,7 +1686,7 @@ $session = Open-SetupE2eSession `
     -RunDirectory $runDirectory `
     -RepositoryRoot $repositoryRoot `
     -SetupScriptPath $setupScriptPath `
-    -SetupArguments ($SetupArgument + $scenarioDefinition.SetupArguments) `
+    -SetupArguments (@('-Console') + $SetupArgument + $scenarioDefinition.SetupArguments) `
     -Columns $Columns `
     -Rows $Rows `
     -ScreenPollMilliseconds $ScreenPollMilliseconds `

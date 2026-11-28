@@ -6,7 +6,8 @@
       "version": "stable"
     },
     "ghcr.io/devcontainers/features/git:1": {},
-    "ghcr.io/devcontainers/features/github-cli:1": {}
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {}
   },
   // The setup container is not a security boundary, and its bind mounts must
   // stay readable on SELinux hosts such as Fedora.

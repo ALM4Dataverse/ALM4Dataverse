@@ -824,7 +824,7 @@ Describe 'GitHub API response handling' {
 Describe 'GitHub setup authentication and application repository context' {
     BeforeAll {
         $ast = Get-SetupProviderAst -RepositoryRoot $repoRoot -EntryPoint 'setup-github.ps1'
-        foreach ($name in @('Invoke-GitHubCliAuthenticationCommand', 'Initialize-GitHubSetupAuthentication', 'Initialize-GitHubApplicationRepositoryContext')) {
+        foreach ($name in @('Invoke-GitHubCliAuthenticationCommand', 'Get-GitHubCliScopeState', 'Initialize-GitHubCliWorkflowScope', 'Initialize-GitHubSetupAuthentication', 'Set-GitHubCloneCredentialHelper', 'Initialize-GitHubApplicationRepositoryContext')) {
             $definition = $ast.Find({
                 param($node)
                 $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name
@@ -847,10 +847,16 @@ Describe 'GitHub setup authentication and application repository context' {
             [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
             param($RepoRoot, $DefaultBranch)
         }
+        function New-GitHubRepositoryInteractive {
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseShouldProcessForStateChangingFunctions', '', Justification = 'Empty test command stub; repository creation is mocked.')]
+            [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', '', Justification = 'Mock command signature; Pester inspects these arguments.')]
+            param($DefaultOwner)
+        }
     }
 
     BeforeEach {
         $script:ALM4DataverseRef = 'stable'
+        $script:ghUser = 'example-owner'
         $script:savedSetupGitHubExitCode = $global:LASTEXITCODE
         Mock Invoke-WithSpectreStatus { & $ScriptBlock }
         Mock Invoke-WithErrorHandling { & $ScriptBlock }
@@ -945,6 +951,89 @@ Describe 'GitHub setup authentication and application repository context' {
         $result.GitHubUserId | Should -Be 42
         $script:authenticationGhCalls.Count | Should -Be 4
         Should -Invoke Select-FromMenu -Times 0 -Exactly
+        $loginCall = $script:authenticationGhCalls |
+            Where-Object { $_[0] -eq 'auth' -and $_[1] -eq 'login' } |
+            Select-Object -First 1
+        ($loginCall -join ' ') | Should -Match 'auth login --web --hostname github\.com --scopes workflow'
+    }
+
+    It 'reads reported GitHub CLI scopes and treats unreported scopes as unknown' {
+        Mock gh {
+            $global:LASTEXITCODE = 0
+            "- Token scopes: 'gist', 'read:org', 'repo'"
+        }
+
+        $state = Get-GitHubCliScopeState
+
+        $state.Known | Should -BeTrue
+        $state.Scopes | Should -Contain 'repo'
+        $state.Scopes | Should -Not -Contain 'workflow'
+
+        Mock gh {
+            $global:LASTEXITCODE = 0
+            '- Token scopes: none'
+        }
+
+        $unknown = Get-GitHubCliScopeState
+
+        $unknown.Known | Should -BeFalse
+        $unknown.Scopes.Count | Should -Be 0
+    }
+
+    It 'uses the active account scopes when the GitHub CLI has multiple logins' {
+        Mock gh {
+            $global:LASTEXITCODE = 0
+            @(
+                'github.com'
+                '  - Logged in to github.com account other-user (keyring)'
+                '  - Active account: false'
+                "  - Token scopes: 'gist', 'repo'"
+                '  - Logged in to github.com account example-owner (keyring)'
+                '  - Active account: true'
+                "  - Token scopes: 'gist', 'repo', 'workflow'"
+            )
+        }
+
+        $state = Get-GitHubCliScopeState
+
+        $state.Known | Should -BeTrue
+        $state.Scopes | Should -Contain 'workflow'
+    }
+
+    It 'adds the workflow scope to an existing OAuth login' {
+        $savedGhToken = $env:GH_TOKEN
+        $savedGhEnterpriseToken = $env:GH_ENTERPRISE_TOKEN
+        $env:GH_TOKEN = $null
+        $env:GH_ENTERPRISE_TOKEN = $null
+        try {
+            $script:scopeChecks = 0
+            Mock Get-GitHubCliScopeState {
+                $script:scopeChecks++
+                if ($script:scopeChecks -eq 1) {
+                    return [pscustomobject]@{ Known = $true; Scopes = @('gist', 'repo') }
+                }
+                return [pscustomobject]@{ Known = $true; Scopes = @('gist', 'repo', 'workflow') }
+            }
+            Mock Invoke-GitHubCliAuthenticationCommand { 0 }
+
+            Initialize-GitHubCliWorkflowScope
+
+            Should -Invoke Invoke-GitHubCliAuthenticationCommand -Times 1 -Exactly -ParameterFilter {
+                ($Arguments -join ' ') -match 'auth refresh --hostname github\.com --scopes workflow'
+            }
+            $script:scopeChecks | Should -Be 2
+        }
+        finally {
+            $env:GH_TOKEN = $savedGhToken
+            $env:GH_ENTERPRISE_TOKEN = $savedGhEnterpriseToken
+        }
+    }
+
+    It 'skips the interactive workflow scope check for apply and headless runs' {
+        Mock Get-GitHubCliScopeState { throw 'Scope lookup must not run.' }
+
+        Initialize-GitHubCliWorkflowScope -ApplyConfig
+        Initialize-GitHubCliWorkflowScope -Headless
     }
 
     It 'streams GitHub CLI device instructions to the browser while login waits' {
@@ -1014,6 +1103,62 @@ Describe 'GitHub setup authentication and application repository context' {
             $RepoRoot -eq $result.CloneRoot -and $RepoOwner -eq 'example-owner' -and $RepoName -eq 'application' -and
             $DefaultBranch -eq 'release' -and -not $SkipProviderState
         }
+    }
+
+    It 'configures a fresh clone to authenticate git through the GitHub CLI' {
+        $script:cloneCredentialGitCalls = @()
+        Mock git {
+            $script:cloneCredentialGitCalls += ,@($args)
+            $global:LASTEXITCODE = 0
+        }
+
+        Set-GitHubCloneCredentialHelper -RepoRoot '/tmp/example-repository'
+
+        $script:cloneCredentialGitCalls.Count | Should -Be 2
+        ($script:cloneCredentialGitCalls[0] -join ' ') |
+            Should -Match 'config --add credential\.helper !gh auth git-credential'
+        ($script:cloneCredentialGitCalls[1] -join ' ') |
+            Should -Match 'config credential\.interactive never'
+    }
+
+    It 'creates a new repository without repeating the repository selection menu' {
+        $script:createdRepository = [pscustomobject]@{
+            name             = 'new-application'
+            nameWithOwner    = 'example-owner/new-application'
+            owner            = [pscustomobject]@{ login = 'example-owner' }
+            defaultBranchRef = [pscustomobject]@{ name = 'main' }
+        }
+        $script:existingRepositoryState = [pscustomobject]@{ IsConfigured = $false }
+
+        Mock New-GitHubRepositoryInteractive { $script:createdRepository }
+        Mock Get-GitHubRepoList { throw 'Repository listing must not run when creating a new repository.' }
+        Mock Select-FromMenu { throw 'Repository selection must not prompt when creating a new repository.' }
+        Mock Get-GitHubRepositoryIdentity {
+            [pscustomobject]@{ OwnerId = 11; RepositoryId = 33; UseImmutableSubject = $true }
+        }
+        Mock Get-GitHubRepositoryExistingSetupState { $script:existingRepositoryState }
+        Mock Invoke-GitHubCloneBaseBranchCheckout {}
+        Mock gh { $global:LASTEXITCODE = 0 }
+        Mock git { $global:LASTEXITCODE = 0 }
+
+        $result = Initialize-GitHubApplicationRepositoryContext -NewSetupMode
+
+        $result.RepoFullName | Should -Be 'example-owner/new-application'
+        $result.IsNewRepository | Should -BeTrue
+        Should -Invoke New-GitHubRepositoryInteractive -Times 1 -Exactly -ParameterFilter {
+            $DefaultOwner -eq 'example-owner'
+        }
+        Should -Invoke Get-GitHubRepoList -Times 0 -Exactly
+        Should -Invoke Select-FromMenu -Times 0 -Exactly
+    }
+
+    It 'rejects new-repository setup combined with existing repository options' {
+        { Initialize-GitHubApplicationRepositoryContext -NewSetupMode -ExistingSetupMode } |
+            Should -Throw '*NewSetupMode cannot be combined*'
+        { Initialize-GitHubApplicationRepositoryContext -NewSetupMode -ApplyConfig } |
+            Should -Throw '*NewSetupMode cannot be combined*'
+        { Initialize-GitHubApplicationRepositoryContext -NewSetupMode -RepoFullName 'owner/app' } |
+            Should -Throw '*NewSetupMode cannot be combined*'
     }
 }
 

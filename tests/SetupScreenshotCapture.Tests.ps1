@@ -23,11 +23,82 @@ BeforeAll {
     . (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1')
 }
 
+Describe 'Setup browser screenshot capture' {
+    It 'starts the browser setup for web scenes and exposes the URL' {
+        $harness = Get-CaptureHarness -RepositoryRoot '/repo' -Provider 'github' -SceneName 'github-authentication' -Mode 'Web' -Section 'GitHub setup prerequisites'
+
+        $harness | Should -Match 'Initialize-SetupWebHost'
+        $harness | Should -Match 'CAPTURE-WEB-URL:'
+        $harness | Should -Match '\$captureMode = ''Web'''
+        $harness | Should -Match '\$captureSection = ''GitHub setup prerequisites'''
+        $harness | Should -Match 'Publish-SetupWebIdentity'
+    }
+
+    It 'leaves the console harness unchanged when web mode is not requested' {
+        $harness = Get-CaptureHarness -RepositoryRoot '/repo' -Provider 'azdo' -SceneName 'azdo-authentication'
+
+        $harness | Should -Match '\$captureMode -eq ''Web'''
+        $harness | Should -Match '\$captureMode = ''Console'''
+    }
+
+    It 'waits for the prompt before a still frame and reports missing wait text' {
+        $scene = [pscustomobject]@{ Name = 'example'; ExpectedText = 'ignored' }
+        $steps = @(ConvertTo-CaptureWebJobStep -Scene $scene -FramePath '/tmp/example.png')
+
+        $steps[0].waitForPrompt | Should -BeTrue
+        $steps[-1].screenshot | Should -Be '/tmp/example.png'
+    }
+
+    It 'runs declared scene navigation before the frame' {
+        $scene = [pscustomobject]@{
+            Name = 'example'
+            ExpectedText = 'ignored'
+            WebActions = @([ordered]@{ clickText = 'Edit a branch mapping' })
+            WebWaitText = 'Enable DEV environment'
+        }
+
+        $steps = @(ConvertTo-CaptureWebJobStep -Scene $scene -FramePath '/tmp/example.png')
+
+        $actions = @($steps | Where-Object { $_ -is [System.Collections.IDictionary] })
+        @($actions | Where-Object { $_.Contains('clickText') -and $_['clickText'] -eq 'Edit a branch mapping' }).Count | Should -Be 1
+        @($actions | Where-Object { $_.Contains('waitText') -and $_['waitText'] -eq 'Enable DEV environment' }).Count | Should -Be 1
+    }
+
+    It 'maps recorded console input onto browser clicks and typing' {
+        $click = @(Get-CaptureWalkthroughWebAction -Interaction ([pscustomobject]@{ WaitForText = 'Use existing login'; Input = "`r" }) -FramePattern '')
+        $click[0].clickText | Should -Be 'Use existing login'
+
+        $typed = @(Get-CaptureWalkthroughWebAction -Interaction ([pscustomobject]@{ WaitForText = 'Name'; Input = "contoso`r" }) -FramePattern '/tmp/frame-%02d.png')
+        $typed[0].typeText | Should -Be 'contoso'
+        $typed[0].framePattern | Should -Be '/tmp/frame-%02d.png'
+        $typed[1].clickRole | Should -Be 'button'
+        $typed[1].name | Should -Be 'Continue'
+
+        $yes = @(Get-CaptureWalkthroughWebAction -Interaction ([pscustomobject]@{ WaitForText = 'Create?'; Input = "y`r" }) -FramePattern '')
+        $yes[0].name | Should -Be 'Yes'
+        $no = @(Get-CaptureWalkthroughWebAction -Interaction ([pscustomobject]@{ WaitForText = 'Create?'; Input = 'n' }) -FramePattern '')
+        $no[0].name | Should -Be 'No'
+    }
+
+    It 'points the browser driver at the cached Playwright module' {
+        $source = Get-Content -LiteralPath (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/SetupCaptureWebDriver.cjs') -Raw
+
+        $source | Should -Match 'SETUP_CAPTURE_PLAYWRIGHT_MODULE'
+        $source | Should -Match 'waitForPrompt'
+        $source | Should -Match 'capture-failure'
+    }
+}
+
 Describe 'Setup screenshot capture infrastructure' {
     It 'defines all documented setup scenes and waits for visible content' {
         $scenes = @(Get-CaptureScene)
 
-        $scenes.Count | Should -Be 58
+        $scenes.Count | Should -Be 71
+        @($scenes.Name | Sort-Object -Unique).Count | Should -Be $scenes.Count
+        $scenes.Name | Should -Contain 'azdo-setup-mode-choice'
+        $scenes.Name | Should -Contain 'azdo-branch-strategy'
+        $scenes.Name | Should -Contain 'azdo-validation-missing-credentials'
+        ($scenes | Where-Object { $_.Name -eq 'azdo-branch-strategy' }).Provider | Should -Be 'azdo'
         foreach ($scene in $scenes) {
             $scene.Name | Should -Not -BeNullOrEmpty
             $scene.Provider | Should -BeIn @('common', 'github', 'azdo')
@@ -714,7 +785,7 @@ Describe 'Setup screenshot capture infrastructure' {
     It 'runs scene listing without installing or loading the capture runtime' {
         $listedScenes = @(& (Join-Path $repositoryRoot 'tools/SetupScreenshotCapture/Capture-SetupScreenshots.ps1') -ListScenes)
 
-        $listedScenes.Count | Should -Be 58
+        $listedScenes.Count | Should -Be 71
         $listedScenes | Should -Contain 'branch-mapping'
         $listedScenes | Should -Contain 'environment-detail-menu'
         $listedScenes | Should -Contain 'setup-mode-choice'

@@ -113,9 +113,11 @@ and [GitHub environment protection rules](https://docs.github.com/en/actions/ref
 ## Can I Run Setup If I Can't Run PowerShell?
 
 Yes. Both automated setup scripts can run in [Azure Cloud Shell](https://shell.azure.com).
+Cloud Shell cannot show the browser setup, so setup uses the console menu automatically.
 Choose **PowerShell** and use the one-line bootstrap in
 [GitHub automated setup](setup/github-setup.md#run-in-azure-cloud-shell) or
 [Azure DevOps automated setup](setup/azdo-automated-setup.md#run-in-azure-cloud-shell).
+Any other machine can use `-Console` when the browser page is not reachable.
 
 ## Why should I use this instead of Power Platform Pipelines?
 
@@ -221,6 +223,15 @@ For a public repository, it can be. For the supplied private-repository setup, n
 the jobs require environments, which need an eligible paid plan. Paying only for extra
 Actions minutes does not unlock them. See [Azure DevOps or GitHub?](#should-i-use-azure-devops-or-github)
 for the free limits, paid costs, and distinction between environments and approval gates.
+
+## Why Is A Git Push Rejected For Workflow Files?
+
+GitHub only lets credentials with the `workflow` permission create or update files under
+`.github/workflows`. The GitHub CLI OAuth login does not request that scope by default.
+Setup requests it for new logins and adds it to an existing OAuth login; if a push still
+reports `without 'workflow' scope`, run `gh auth refresh -h github.com -s workflow` and
+rerun. Fine-grained personal access tokens need **Workflows: Read and write**, and
+classic tokens need the `workflow` scope.
 
 ## Where Do I Start When A Run Fails?
 

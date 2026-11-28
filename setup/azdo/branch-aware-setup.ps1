@@ -85,7 +85,7 @@ function Invoke-AzDoBranchAwareSetup {
             -SkipProviderState:$ApplyConfig
     }
 
-    $initialBranchMappings = @(Get-AzDoInitialBranchMapping -ExistingSetupState $existingSetupState -DefaultBranch $DefaultBranch)
+    $initialBranchMappings = @(Get-AzDoInitialBranchMapping -ExistingSetupState $existingSetupState -DefaultBranch $DefaultBranch -NewRepository:$IsNewRepository)
     $branchStates = @()
     foreach ($selectedBranchMapping in $initialBranchMappings) {
         $branchName = [string]$selectedBranchMapping.BranchName

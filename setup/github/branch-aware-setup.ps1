@@ -100,7 +100,7 @@ function Invoke-GitHubBranchAwareSetup {
         throw 'TenantId is required when configuring GitHub provider resources.'
     }
 
-    $initialBranchMappings = @(Get-GitHubInitialBranchMapping -ExistingSetupState $ExistingSetupState -DefaultBranch $DefaultBranch)
+    $initialBranchMappings = @(Get-GitHubInitialBranchMapping -ExistingSetupState $ExistingSetupState -DefaultBranch $DefaultBranch -NewRepository:$IsNewRepository)
     $branchStates = @()
     foreach ($mapping in $initialBranchMappings) {
         $branchName = [string]$mapping.BranchName

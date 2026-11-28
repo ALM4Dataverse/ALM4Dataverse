@@ -974,12 +974,14 @@ function Get-GitHubRepositoryExistingSetupState {
 
 function Get-GitHubInitialBranchMapping {
     # Adapt config-backed branch state to the editor contract. An empty config starts
-    # with DefaultBranch, and a DEV-only branch is preserved without deploy stages.
+    # with DefaultBranch for an existing repository. A new repository starts empty so
+    # the guided menu does not show a branch before the branching strategy is chosen.
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
-        [Parameter(Mandatory)][string]$DefaultBranch
+        [Parameter(Mandatory)][string]$DefaultBranch,
+        [Parameter()][switch]$NewRepository
     )
 
     $branchMappings = @()
@@ -1020,17 +1022,19 @@ function Get-GitHubInitialBranchMapping {
     }
 
     if ($branchMappings.Count -eq 0) {
-        $defaultEnvironments = @($ExistingSetupState.DeploymentEnvironments | Where-Object { $null -ne $_ })
-        $branchMappings = @(
-            [pscustomobject]@{
-                BranchName                         = $DefaultBranch
-                Environments                       = $defaultEnvironments
-                ExistingDevEnvironment             = $ExistingSetupState.DevEnvironment
-                ExistingBuildValidationEnvironment = Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'ExistingBuildValidationEnvironment'
-                BuildValidationEnvironmentName     = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnvironmentName')
-                BuildValidationBaselineRelease     = ''
-            }
-        )
+        if (-not $NewRepository) {
+            $defaultEnvironments = @($ExistingSetupState.DeploymentEnvironments | Where-Object { $null -ne $_ })
+            $branchMappings = @(
+                [pscustomobject]@{
+                    BranchName                         = $DefaultBranch
+                    Environments                       = $defaultEnvironments
+                    ExistingDevEnvironment             = $ExistingSetupState.DevEnvironment
+                    ExistingBuildValidationEnvironment = Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'ExistingBuildValidationEnvironment'
+                    BuildValidationEnvironmentName     = [string](Get-OptionalObjectPropertyValue -InputObject $ExistingSetupState -PropertyName 'BuildValidationEnvironmentName')
+                    BuildValidationBaselineRelease     = ''
+                }
+            )
+        }
     }
     elseif (
         -not ($branchMappings | Where-Object { $_.BranchName -ieq $DefaultBranch }) -and
@@ -1080,6 +1084,42 @@ function New-GitHubBranchSetupState {
     }
 }
 
+function Set-GitHubCloneCredentialHelper {
+    <#
+    .SYNOPSIS
+        Configures a fresh GitHub clone to reuse the authenticated GitHub CLI for git.
+    .DESCRIPTION
+        gh repo clone authenticates the initial clone but does not write a credential
+        helper into the checkout. A later git fetch or push can then fall back to an
+        unconfigured credential manager and prompt for credentials. Adds the GitHub
+        CLI helper and disables interactive credential prompting in the clone only.
+    #>
+    [CmdletBinding(SupportsShouldProcess = $true)]
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    if (-not $PSCmdlet.ShouldProcess($RepoRoot, 'Configure GitHub CLI git credentials')) {
+        return
+    }
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        [void](& git -C $RepoRoot config --add credential.helper '!gh auth git-credential' 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not configure the GitHub CLI credential helper in '$RepoRoot'."
+        }
+        [void](& git -C $RepoRoot config credential.interactive never 2>&1)
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not disable interactive git credentials in '$RepoRoot'."
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 function Initialize-GitHubApplicationRepositoryContext {
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'TenantId', Justification = 'Captured by the nested repository-state status callback.')]
     [CmdletBinding()]
@@ -1087,28 +1127,36 @@ function Initialize-GitHubApplicationRepositoryContext {
         [Parameter()][string]$TenantId,
         [Parameter()][switch]$ApplyConfig,
         [Parameter()][switch]$ExistingSetupMode,
+        [Parameter()][switch]$NewSetupMode,
         [Parameter()][string]$RepoFullName
     )
 
-    Write-Section -Message 'Select GitHub Repository'
+    if ($NewSetupMode -and ($ApplyConfig -or $ExistingSetupMode -or -not [string]::IsNullOrWhiteSpace($RepoFullName))) {
+        throw 'NewSetupMode cannot be combined with ApplyConfig, ExistingSetupMode or RepoFullName.'
+    }
 
-    if (-not [string]::IsNullOrWhiteSpace($RepoFullName)) {
-        # A headless caller supplies the repository. Fetch it directly so an
-        # installation token, which cannot list /user/repos, still works.
-        $repoParts = $RepoFullName.Split('/', 2)
-        if ($repoParts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($repoParts[0]) -or [string]::IsNullOrWhiteSpace($repoParts[1])) {
-            throw "Repository '$RepoFullName' must use the owner/name format."
+    Write-Section -Message $(if ($NewSetupMode) { 'Create GitHub Repository' } else { 'Select GitHub Repository' })
+
+    $repos = @()
+    if (-not $NewSetupMode) {
+        if (-not [string]::IsNullOrWhiteSpace($RepoFullName)) {
+            # A headless caller supplies the repository. Fetch it directly so an
+            # installation token, which cannot list /user/repos, still works.
+            $repoParts = $RepoFullName.Split('/', 2)
+            if ($repoParts.Count -ne 2 -or [string]::IsNullOrWhiteSpace($repoParts[0]) -or [string]::IsNullOrWhiteSpace($repoParts[1])) {
+                throw "Repository '$RepoFullName' must use the owner/name format."
+            }
+            $repos = @(Invoke-WithSpectreStatus -Status "Loading GitHub repository '$RepoFullName'..." -ScriptBlock {
+                Get-GitHubRepo -Owner $repoParts[0] -Repo $repoParts[1]
+            })
         }
-        $repos = @(Invoke-WithSpectreStatus -Status "Loading GitHub repository '$RepoFullName'..." -ScriptBlock {
-            Get-GitHubRepo -Owner $repoParts[0] -Repo $repoParts[1]
-        })
+        else {
+            $repos = @(Invoke-WithSpectreStatus -Status 'Fetching repositories you have write access to...' -ScriptBlock {
+                Get-GitHubRepoList
+            })
+        }
+        $repos = @($repos | Sort-Object -Property nameWithOwner)
     }
-    else {
-        $repos = @(Invoke-WithSpectreStatus -Status 'Fetching repositories you have write access to...' -ScriptBlock {
-            Get-GitHubRepoList
-        })
-    }
-    $repos = @($repos | Sort-Object -Property nameWithOwner)
     $repoMenuItems = @()
     $repoMenuActions = @()
 
@@ -1118,7 +1166,7 @@ function Initialize-GitHubApplicationRepositoryContext {
     if ($ExistingSetupMode -and $repos.Count -eq 0) {
         throw 'Existing-repository setup requires an existing GitHub repository.'
     }
-    if (-not $ApplyConfig -and -not $ExistingSetupMode) {
+    if (-not $ApplyConfig -and -not $ExistingSetupMode -and -not $NewSetupMode) {
         $repoMenuItems += 'Create a new repository'
         $repoMenuActions += @{ Type = 'CreateNew' }
     }
@@ -1129,7 +1177,12 @@ function Initialize-GitHubApplicationRepositoryContext {
     }
 
     $repoSelection = $null
-    if (-not [string]::IsNullOrWhiteSpace($RepoFullName)) {
+    if ($NewSetupMode) {
+        # The upfront new/existing choice already selected creation, so do not
+        # repeat it as an item in a menu of existing repositories.
+        $repoAction = @{ Type = 'CreateNew' }
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($RepoFullName)) {
         # Headless repository selection: the caller supplies the repository so the
         # guided setup menu is skipped.
         $matchingRepos = @($repos | Where-Object { $_.nameWithOwner -ieq $RepoFullName })
@@ -1209,6 +1262,8 @@ function Initialize-GitHubApplicationRepositoryContext {
             $cloneErrorMessage = if ($cloneErrorDetails.Count -gt 0) { $cloneErrorDetails[-1] } else { "Exit code: $cloneExitCode" }
             throw "gh repo clone failed. $cloneErrorMessage"
         }
+
+        Set-GitHubCloneCredentialHelper -RepoRoot $attemptCloneRoot
 
         $previousErrorActionPreference = $ErrorActionPreference
         try {

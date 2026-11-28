@@ -697,7 +697,9 @@ function Invoke-SetupEnvironmentConfigurationWizard {
         and pre-completed. Changing a configured Dataverse URL clears credentials and
         ownership selected for a different environment. Done returns the updated
         state; cancelling returns null to the calling editor. OptionalConfiguration
-        adds a leading enable step whose completion unlocks the remaining steps.
+        adds a leading enable decision with explicit enable and decline choices; the
+        remaining steps stay unavailable until DEV is enabled, and declining cancels
+        this detail wizard without configuring the branch.
     #>
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectDataverseEnvironmentAction', Justification = 'Captured by the nested Dataverse-environment step.')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSReviewUnusedParameter', 'SelectCredentialsAction', Justification = 'Captured by the nested credential step.')]
@@ -725,6 +727,8 @@ function Invoke-SetupEnvironmentConfigurationWizard {
 
     # Bind commands now: closures created below cannot resolve sibling setup functions at invocation time.
     $requestSetupWizardBackCommand = Get-SetupCommandBinding -Name Request-SetupWizardBack
+    $requestSetupWizardCancelCommand = Get-SetupCommandBinding -Name Request-SetupWizardCancel
+    $selectFromMenuCommand = Get-SetupCommandBinding -Name Select-FromMenu
 
     $normalizeEnvironmentUrlScriptBlock = (Get-Command ConvertTo-NormalizedEnvironmentUrl -CommandType Function -ErrorAction Stop).ScriptBlock
     $credentialSummaryScriptBlock = (Get-Command Get-CredentialSummaryText -CommandType Function -ErrorAction Stop).ScriptBlock
@@ -747,15 +751,34 @@ function Invoke-SetupEnvironmentConfigurationWizard {
     if ($OptionalConfiguration) {
         $optionalConfigurationState = [pscustomobject]@{ Enabled = $false }
         $steps.Add([pscustomobject]@{
-            Name = 'DEV environment'
+            Name = 'Enable DEV environment'
             IsComplete = $false
             Summary = {
                 if ($optionalConfigurationState.Enabled) {
                     return 'Enabled'
                 }
-                return 'Not configured'
+                return 'Not enabled'
             }.GetNewClosure()
             Action = {
+                $enableChoice = & $selectFromMenuCommand `
+                    -Title $Title `
+                    -Items @(
+                        'Enable DEV environment (recommended) - configure the branch''s Dataverse environment'
+                        'Do not enable DEV environment - this branch cannot export or provide solutions'
+                    ) `
+                    -PromptGuidanceLines @(
+                        'Only branches with a DEV environment can be the solution source.'
+                        'Deployment targets and BUILD validation can still be configured without DEV.'
+                        'You can enable DEV later from the branch mapping menu.'
+                    ) `
+                    -PromptGuidanceDocRelativePath $HelpDocRelativePath `
+                    -PromptGuidanceRef $HelpRef
+                if ($null -eq $enableChoice) {
+                    & $requestSetupWizardBackCommand
+                }
+                if ($enableChoice -eq 1) {
+                    & $requestSetupWizardCancelCommand
+                }
                 $optionalConfigurationState.Enabled = $true
             }.GetNewClosure()
         })
@@ -889,7 +912,7 @@ function Invoke-SetupEnvironmentConfigurationWizard {
     }
 
     $applyAction = { return $environmentState }.GetNewClosure()
-    $cancelActionName = if ($OptionalConfiguration) { 'Do not configure DEV environment' } else { '' }
+    $cancelActionName = if ($OptionalConfiguration) { 'Do not enable DEV environment' } else { '' }
     return Invoke-SetupWizard `
         -Title $Title `
         -Steps @($steps.ToArray()) `

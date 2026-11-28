@@ -698,13 +698,125 @@ function Invoke-GitHubCliAuthenticationCommand {
     }
 }
 
+function Get-GitHubCliScopeState {
+    <#
+    .SYNOPSIS
+        Reads the OAuth scopes reported for the active GitHub CLI login.
+    .DESCRIPTION
+        Returns Known = false when the CLI does not report scopes, as with fine-grained
+        personal access tokens and GitHub App installation tokens. Callers must not treat
+        an unknown scope list as missing permission.
+    .OUTPUTS
+        PSCustomObject with Known and Scopes properties.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param()
+
+    $statusOutput = @(& gh auth status --hostname github.com 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        return [pscustomobject]@{ Known = $false; Scopes = @() }
+    }
+
+    $scopeValue = ''
+    $firstReportedScopeValue = ''
+    $inActiveAccount = $false
+    foreach ($line in $statusOutput) {
+        $cleanLine = [regex]::Replace([string]$line, '\x1b\[[0-9;?]*[ -/]*[@-~]', '')
+        $activeMatch = [regex]::Match($cleanLine, 'Active account:\s*(true|false)')
+        if ($activeMatch.Success) {
+            $inActiveAccount = $activeMatch.Groups[1].Value -eq 'true'
+            continue
+        }
+        $scopeMatch = [regex]::Match($cleanLine, 'Token scopes:\s*(.+)$')
+        if (-not $scopeMatch.Success) {
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($firstReportedScopeValue)) {
+            $firstReportedScopeValue = $scopeMatch.Groups[1].Value.Trim()
+        }
+        if ($inActiveAccount) {
+            $scopeValue = $scopeMatch.Groups[1].Value.Trim()
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($scopeValue)) {
+        $scopeValue = $firstReportedScopeValue
+    }
+
+    if ([string]::IsNullOrWhiteSpace($scopeValue) -or $scopeValue -ieq 'none') {
+        return [pscustomobject]@{ Known = $false; Scopes = @() }
+    }
+
+    $scopes = @(
+        $scopeValue.Split(',') |
+            ForEach-Object { $_.Trim().Trim("'").Trim('"') } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    return [pscustomobject]@{ Known = $true; Scopes = $scopes }
+}
+
+function Initialize-GitHubCliWorkflowScope {
+    <#
+    .SYNOPSIS
+        Ensures the GitHub CLI login can create or update workflow files.
+    .DESCRIPTION
+        Setup writes .github/workflows files, which GitHub rejects for OAuth logins
+        without the workflow scope. New logins request it directly. For an existing
+        OAuth login, this adds the scope through gh auth refresh and verifies the result.
+        Fine-grained, App and externally supplied GH_TOKEN credentials do not report
+        refreshable scopes, so they are left unchanged and the push error remains the
+        fallback. Headless and ApplyConfig runs never start an interactive refresh.
+    .PARAMETER ApplyConfig
+        Skips the interactive scope check when setup is applying committed configuration.
+    .PARAMETER Headless
+        Skips the interactive scope check when setup cannot prompt.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter()][switch]$ApplyConfig,
+        [Parameter()][switch]$Headless
+    )
+
+    if ($ApplyConfig -or $Headless) {
+        return
+    }
+
+    # An externally supplied token cannot be refreshed by gh; leave it to the push
+    # error, which names the workflow permission.
+    if (-not [string]::IsNullOrWhiteSpace($env:GH_TOKEN) -or -not [string]::IsNullOrWhiteSpace($env:GH_ENTERPRISE_TOKEN)) {
+        return
+    }
+
+    $scopeState = Get-GitHubCliScopeState
+    if (-not $scopeState.Known -or $scopeState.Scopes -contains 'workflow') {
+        return
+    }
+
+    Write-Host "The GitHub CLI login is missing the 'workflow' scope required to create or update workflow files." -ForegroundColor Yellow
+    Write-Host 'Opening GitHub to add the workflow scope...' -ForegroundColor Yellow
+    $refreshExitCode = Invoke-GitHubCliAuthenticationCommand `
+        -Arguments @('auth', 'refresh', '--hostname', 'github.com', '--scopes', 'workflow') `
+        -Status 'Adding the workflow scope to the GitHub CLI login...' `
+        -ShowDeviceMessages
+    if ($refreshExitCode -ne 0) {
+        throw "GitHub did not grant the workflow scope. Run 'gh auth refresh -h github.com -s workflow', or sign in with a token that has the workflow scope, then rerun setup."
+    }
+
+    $scopeState = Get-GitHubCliScopeState
+    if ($scopeState.Known -and $scopeState.Scopes -notcontains 'workflow') {
+        throw "GitHub still reports no workflow scope. Run 'gh auth refresh -h github.com -s workflow', or sign in with a token that has the workflow scope, then rerun setup."
+    }
+}
+
 function Initialize-GitHubSetupAuthentication {
     <#
     .SYNOPSIS
         Authenticates GitHub (and, outside ApplyConfig, Azure) for guided setup.
     .DESCRIPTION
         Headless mode skips the account menu and requires the GitHub CLI to already be
-        authenticated, for example through a GH_TOKEN environment variable.
+        authenticated, for example through a GH_TOKEN environment variable. Interactive
+        setup requests the workflow scope for new logins and adds it to an existing OAuth
+        login, because setup creates and updates .github/workflows files.
     #>
     [CmdletBinding()]
     param(
@@ -764,7 +876,7 @@ function Initialize-GitHubSetupAuthentication {
                 -Arguments @('auth', 'logout', '--hostname', 'github.com') `
                 -Status 'Signing out of the current GitHub CLI session...'
             $loginExitCode = Invoke-GitHubCliAuthenticationCommand `
-                -Arguments @('auth', 'login', '--web', '--hostname', 'github.com') `
+                -Arguments @('auth', 'login', '--web', '--hostname', 'github.com', '--scopes', 'workflow') `
                 -Status 'Waiting for GitHub sign-in in your browser...' `
                 -ShowDeviceMessages
             if ($loginExitCode -ne 0) {
@@ -775,13 +887,15 @@ function Initialize-GitHubSetupAuthentication {
     else {
         Write-Host 'Not logged in to GitHub. Opening browser for authentication...' -ForegroundColor Yellow
         $loginExitCode = Invoke-GitHubCliAuthenticationCommand `
-            -Arguments @('auth', 'login', '--web', '--hostname', 'github.com') `
+            -Arguments @('auth', 'login', '--web', '--hostname', 'github.com', '--scopes', 'workflow') `
             -Status 'Waiting for GitHub sign-in in your browser...' `
             -ShowDeviceMessages
         if ($loginExitCode -ne 0) {
             throw 'GitHub authentication failed.'
         }
     }
+
+    Initialize-GitHubCliWorkflowScope -ApplyConfig:$ApplyConfig -Headless:$Headless
 
     $script:ghUser = (& gh api user --jq '.login' 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0) {

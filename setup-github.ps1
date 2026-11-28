@@ -16,6 +16,9 @@
     or provisioning GitHub environments, secrets or other provider resources.
     Individual helpers support ShouldProcess, but the full wizard is not a dry run
     and changes across services are not rolled back together.
+    Interactive setup opens the guided wizard in a local browser window. Console
+    forces the console menu, and environments that cannot show the browser page fall
+    back to it automatically.
 .PARAMETER TenantId
     Azure tenant identifier for provider setup. Ignored when ApplyConfig is specified.
 .PARAMETER UseDeviceAuthentication
@@ -23,12 +26,11 @@
 .PARAMETER ALM4DataverseRef
     Upstream template ref. Releases inject a default; repository development resolves
     the current branch/commit after Git is available, with stable as a fallback.
+.PARAMETER Console
+    Forces the console menu instead of the browser setup.
 .PARAMETER Web
-    Runs the same guided setup in a local browser window. Starts a loopback-only web
-    server, serves an embedded UI with the product logo, and launches the default
-    browser. Non-linear setup steps appear as a card-based setup map instead of a
-    console menu. The browser and terminal remain available together, and no setup
-    credential or secret value is served to the page.
+    Deprecated. Setup opens the browser setup by default, so this switch changes
+    nothing; use Console to force the console menu.
 .PARAMETER ApplyConfig
     Read the committed alm-config.psd1 from an existing repository, review the generated
     changes and publish them without Azure sign-in or running the configuration editors.
@@ -64,6 +66,9 @@ param(
 
     [Parameter()]
     [switch]$ApplyConfig,
+
+    [Parameter()]
+    [switch]$Console,
 
     [Parameter()]
     [switch]$Web,
@@ -117,6 +122,10 @@ if ($Web -and ($Commit -or $PreviewOnly)) {
     throw 'Web requires interactive setup and cannot be combined with Commit or PreviewOnly.'
 }
 
+if ($Console -and $Web) {
+    throw 'Console cannot be combined with the deprecated Web switch.'
+}
+
 if ($Commit -and [string]::IsNullOrWhiteSpace($RepositoryFullName)) {
     throw 'Commit requires RepositoryFullName so the repository can be resolved without prompts.'
 }
@@ -136,13 +145,31 @@ else {
     __SETUP_COMMON_LIB__
 }
 
+$interfaceSelection = Resolve-SetupInterfaceMode -Console:$Console -Web:$Web -Unattended:$headlessMode
+$webMode = $interfaceSelection.Mode -eq 'Web'
 if ($Web) {
-    Initialize-SetupWebHost `
-        -Provider 'GitHub' `
-        -ProductVersion 'Development' `
-        -Title 'GitHub Actions setup' `
-        -Reference $ALM4DataverseRef `
-        -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath | Out-Null
+    Write-Host 'The -Web switch is deprecated. Setup opens the browser by default; use -Console to force the console menu.' -ForegroundColor Yellow
+}
+if (-not $webMode -and -not [string]::IsNullOrWhiteSpace($interfaceSelection.Reason)) {
+    Write-Host $interfaceSelection.Reason -ForegroundColor Yellow
+}
+
+if ($webMode) {
+    try {
+        Initialize-SetupWebHost `
+            -Provider 'GitHub' `
+            -ProductVersion 'Development' `
+            -Title 'GitHub Actions setup' `
+            -Reference $ALM4DataverseRef `
+            -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath | Out-Null
+    }
+    catch {
+        # Setup must not lose the run because the browser page cannot start; the
+        # console menus cover the same steps.
+        $webMode = $false
+        Write-Warning "The browser setup could not start: $($_.Exception.Message) Continuing in the console; use -Console to choose it deliberately."
+        Close-SetupWebHost
+    }
 }
 
 #region Initialization
@@ -166,7 +193,7 @@ if ($script:ALM4DataverseVersion -like '__*') {
     $script:ALM4DataverseVersion = 'Development'
 }
 
-if ($Web) {
+if ($webMode) {
     Publish-SetupWebIdentity -ProductVersion $script:ALM4DataverseVersion -Reference $ALM4DataverseRef
 }
 
@@ -252,12 +279,18 @@ if (-not $gitCmd) {
 Write-Host "GitHub CLI: $($ghCmd.Source)"
 Write-Host "Git: $($gitCmd.Source)"
 
+# Setup must never block on a credential prompt. The cloned repositories use the
+# authenticated GitHub CLI helper; make a missing login fail with a clear error
+# instead of falling into a terminal or desktop credential prompt.
+$env:GIT_TERMINAL_PROMPT = '0'
+$env:GCM_INTERACTIVE = 'never'
+
 if ($resolveDevRefAfterGitIsAvailable) {
     $ALM4DataverseRef = Resolve-DevelopmentDefaultAlm4DataverseRef -PrimaryRepositoryPath $upstreamRepo -FallbackRef $ALM4DataverseRef
     Write-Host "Development mode: Resolved ALM4DataverseRef to '$ALM4DataverseRef'" -ForegroundColor Yellow
 }
 
-if ($Web) {
+if ($webMode) {
     Publish-SetupWebIdentity -Reference $ALM4DataverseRef
 }
 
@@ -457,7 +490,8 @@ $startupSteps = @(
             $script:githubRepositoryContext = Initialize-GitHubApplicationRepositoryContext `
                 -TenantId $script:TenantId `
                 -ApplyConfig:$ApplyConfig `
-                -ExistingSetupMode:$existingSetupMode
+                -ExistingSetupMode:$script:existingSetupMode `
+                -NewSetupMode:(-not $script:existingSetupMode)
         }
     }
 )
@@ -479,12 +513,12 @@ try {
 catch {
     if ($_.Exception.Message -eq 'Setup cancelled before changes were applied.' -or (Test-IsSetupWizardBackException -Exception $_.Exception)) {
         Write-Host 'GitHub setup cancelled before branch configuration.' -ForegroundColor Yellow
-        if ($Web) {
+        if ($webMode) {
             Show-SetupWebStopScreen -Title 'GitHub setup cancelled' -Message 'Setup stopped before branch configuration. No changes were applied.'
         }
         return
     }
-    if ($Web) {
+    if ($webMode) {
         Show-SetupWebFailure -Title 'GitHub setup failed' -ErrorRecord $_
         Close-SetupWebHost
         return
@@ -499,7 +533,7 @@ $repoOwner = $script:githubRepositoryContext.RepoOwner
 $repoName = $script:githubRepositoryContext.RepoName
 $repoFullName = $script:githubRepositoryContext.RepoFullName
 
-if ($Web -and -not [string]::IsNullOrWhiteSpace([string]$repoFullName)) {
+if ($webMode -and -not [string]::IsNullOrWhiteSpace([string]$repoFullName)) {
     Publish-SetupWebRepository -Name $repoFullName -Url "https://github.com/$repoFullName"
 }
 $repoIdentity = $script:githubRepositoryContext.RepoIdentity
@@ -654,6 +688,7 @@ $script:sharedWorkflowRepositoryState = [ordered]@{
     Repository                      = $sharedWorkflowRepository
     Reference                       = $sharedWorkflowReference
     ValidationError                 = $sharedWorkflowRepositoryValidationError
+    NewlyCreated                    = $false
     UpdateKind                      = 'Unknown'
     PendingUpdate                   = $false
     UpdateStatus                    = ''
@@ -672,6 +707,16 @@ $refreshSharedWorkflowRepositoryUpdateState = {
         [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.Repository) -or
         -not [string]::IsNullOrWhiteSpace([string]$script:sharedWorkflowRepositoryState.ValidationError)
     ) {
+        return
+    }
+
+    if ([bool]$script:sharedWorkflowRepositoryState.NewlyCreated) {
+        # Selection already created and aligned the repository, so a fresh comparison
+        # would only add a redundant strategy prompt (and could race the first push).
+        $script:sharedWorkflowRepositoryState.UpdateKind = 'UpToDate'
+        $script:sharedWorkflowRepositoryState.PendingUpdate = $false
+        $script:sharedWorkflowRepositoryState.UpdateStatus = "Created and aligned to '$ALM4DataverseRef'."
+        $script:sharedWorkflowRepositoryState.UpdateStrategy = 'None'
         return
     }
 
@@ -1029,7 +1074,7 @@ catch {
         (Test-IsSetupWizardBackException -Exception $_.Exception)
     ) {
         Write-Host 'GitHub setup exited before applying changes.' -ForegroundColor Yellow
-        if ($Web) {
+        if ($webMode) {
             Show-SetupWebStopScreen -Title 'GitHub setup stopped' -Message 'Setup exited before applying changes. The repository was not published.'
         }
         if ($cloneRoot -and (Test-Path -LiteralPath $cloneRoot)) {
@@ -1037,7 +1082,7 @@ catch {
         }
         return
     }
-    if ($Web) {
+    if ($webMode) {
         Show-SetupWebFailure -Title 'GitHub setup failed' -ErrorRecord $_
         Close-SetupWebHost
         return
@@ -1096,6 +1141,6 @@ Show-SetupCompletionScreen `
         @{ Label = 'Run DEPLOY to promote the build'; Url = (Get-Alm4DataverseDocUrl -RelativePath 'docs/usage/deploying.md' -Ref $ALM4DataverseRef) }
     )
 
-if ($Web) {
+if ($webMode) {
     Close-SetupWebHost
 }

@@ -8,17 +8,23 @@
     Lists available scene names without loading capture dependencies.
 .PARAMETER SkipAnimation
     Captures the full PNG set without generating the walkthrough GIF.
+.PARAMETER Console
+    Captures the console setup UI in a terminal instead of the browser setup. The
+    browser capture is the default because setup opens it by default.
 .DESCRIPTION
-    Runs the real setup helper functions in a PTY-backed Terminal.Avalonia control
-    and saves the rendered frames under docs/setup/screenshots. The walkthrough
-    captures real terminal states around setup inputs, then creates
-    setup-walkthrough.gif. Checkpoints stay on screen for six seconds, and typed
-    text appears one character at a time. Captions sit over a semi-transparent
-    white footer beneath a raised green divider. The tool downloads its pinned
-    NuGet dependencies on first use. It requires PowerShell 7.6 or newer on .NET
-    10 or newer and a platform monospaced font: Consolas on Windows, Noto Sans
-    Mono on Linux, or Menlo on macOS. Full captures require ffmpeg with drawtext
-    and fontconfig support; use -SkipAnimation for PNG-only captures.
+    Runs the real setup helper functions and captures the rendered browser setup
+    under docs/setup/screenshots. Each scene starts the real loopback setup host with
+    the helper calls that produce the documented prompt, and a pinned Playwright
+    Chromium renders it. The walkthrough drives the same page through real setup
+    inputs, then creates setup-walkthrough.gif. Checkpoints stay on screen for six
+    seconds, and typed text appears one character at a time. Captions sit over a
+    semi-transparent white footer beneath a raised green divider. The tool downloads
+    its pinned NuGet packages and Playwright browser on first use. It requires
+    PowerShell 7.6 or newer on .NET 10 or newer, Node.js with npm, and a platform
+    monospaced font: Consolas on Windows, Noto Sans Mono on Linux, or Menlo on macOS.
+    Full captures require ffmpeg with drawtext and fontconfig support; use
+    -SkipAnimation for PNG-only captures. Console captures keep the PTY-backed
+    Terminal.Avalonia path and need no Node.js.
 .NOTES
     Provider API calls are stubbed and all displayed values are reserved examples.
     No GitHub, Azure DevOps, Entra ID, or Dataverse resources are accessed.
@@ -27,7 +33,8 @@
 param(
     [Parameter()][string]$Scene,
     [Parameter()][switch]$ListScenes,
-    [Parameter()][switch]$SkipAnimation
+    [Parameter()][switch]$SkipAnimation,
+    [Parameter()][switch]$Console
 )
 
 $script:CaptureTerminalWidth = 1600
@@ -43,6 +50,12 @@ $script:CaptureWalkthroughFooterHeight = 200
 $script:CaptureWalkthroughOutputFrameRate = 6
 $script:CaptureWalkthroughDwellSeconds = 6
 $script:CaptureWalkthroughTypingFrameDurationSeconds = 1.0 / $script:CaptureWalkthroughOutputFrameRate
+$script:CaptureWebPlaywrightVersion = '1.56.1'
+$script:CaptureWebDriverFileName = 'SetupCaptureWebDriver.cjs'
+$script:CaptureWebViewportWidth = 1120
+$script:CaptureWebViewportHeight = 720
+$script:CaptureWebDeviceScaleFactor = 1.5
+$script:CaptureWebPromptWaitTimeoutMs = 30000
 
 function Get-CapturePlatformName {
     [CmdletBinding()]
@@ -144,7 +157,7 @@ function Get-CaptureScene {
     [OutputType([object[]])]
     param()
 
-    return @(
+    $scenes = @(
         [pscustomobject]@{
             Name = 'setup-mode-choice'
             Provider = 'common'
@@ -211,7 +224,7 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'github-application-repository'
             Provider = 'github'
-            ExpectedText = 'Create a new repository'
+            ExpectedText = 'Use existing repository: example-org/sample-app'
             Rows = 32
             Interactions = @()
         },
@@ -287,6 +300,12 @@ function Get-CaptureScene {
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
                 [pscustomobject]@{ WaitForText = "Enable Dataverse deployment validation during BUILD for branch 'main'"; Input = "y`r" }
             )
+            WebActions = @(
+                [ordered]@{ clickText = 'Edit a branch mapping' }
+                [ordered]@{ clickText = 'main' }
+                [ordered]@{ clickText = 'Edit BUILD validation' }
+            )
+            WebWaitText = 'Enable Dataverse deployment validation'
         },
         [pscustomobject]@{
             Name = 'azdo-build-validation'
@@ -297,6 +316,12 @@ function Get-CaptureScene {
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
                 [pscustomobject]@{ WaitForText = "Enable Dataverse deployment validation during BUILD for branch 'main'"; Input = "y`r" }
             )
+            WebActions = @(
+                [ordered]@{ clickText = 'Edit a branch mapping' }
+                [ordered]@{ clickText = 'main' }
+                [ordered]@{ clickText = 'Edit BUILD validation' }
+            )
+            WebWaitText = 'Enable Dataverse deployment validation'
         },
         [pscustomobject]@{
             Name = 'branch-strategy'
@@ -311,13 +336,23 @@ function Get-CaptureScene {
             ExpectedText = 'Branch name'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Add a branch mapping'; Input = "`r" })
+            WebActions = @(
+                [ordered]@{ clickText = 'Add a branch mapping' }
+            )
+            WebWaitText = 'Branch name'
         },
         [pscustomobject]@{
             Name = 'github-dev-menu'
             Provider = 'github'
-            ExpectedText = 'DEV environment - Not configured'
+            ExpectedText = 'Enable DEV environment - Not enabled'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" })
+            WebActions = @(
+                [ordered]@{ clickText = 'Edit a branch mapping' }
+                [ordered]@{ clickText = 'main' }
+                [ordered]@{ clickText = 'Edit DEV environment' }
+            )
+            WebWaitText = 'Enable DEV environment'
         },
         [pscustomobject]@{
             Name = 'github-dev-environment-selection'
@@ -326,9 +361,21 @@ function Get-CaptureScene {
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = 'DEV environment - Not configured'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = 'DEV environment - Enabled'; Input = "$([char]27)[B`r" }
+                [pscustomobject]@{ WaitForText = 'Enable DEV environment - Not enabled'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'Enable DEV environment (recommended)'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'Enable DEV environment - Enabled'; Input = "$([char]27)[B`r" }
             )
+            WebActions = @(
+                [ordered]@{ clickText = 'Edit a branch mapping' }
+                [ordered]@{ clickText = 'main' }
+                [ordered]@{ clickText = 'Edit DEV environment' }
+                [ordered]@{ waitText = 'Enable DEV environment' }
+                [ordered]@{ clickText = 'Enable DEV environment' }
+                [ordered]@{ clickText = 'Enable DEV environment (recommended)' }
+                [ordered]@{ waitText = 'Dataverse environment' }
+                [ordered]@{ clickText = 'Dataverse environment' }
+            )
+            WebWaitText = 'Contoso Development'
         },
         [pscustomobject]@{
             Name = 'github-credentials'
@@ -406,6 +453,10 @@ function Get-CaptureScene {
             ExpectedText = 'Workload Identity Federation (recommended, no secrets)'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Select App Registration credentials'; Input = "`r" })
+            WebActions = @(
+                [ordered]@{ clickText = 'Create new App Registration (Entra ID)' }
+            )
+            WebWaitText = 'Select authentication type for the new App Registration'
         },
         [pscustomobject]@{
             Name = 'github-service-account'
@@ -466,9 +517,15 @@ function Get-CaptureScene {
         [pscustomobject]@{
             Name = 'azdo-dev-menu'
             Provider = 'azdo'
-            ExpectedText = 'DEV environment - Not configured'
+            ExpectedText = 'Enable DEV environment - Not enabled'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" })
+            WebActions = @(
+                [ordered]@{ clickText = 'Edit a branch mapping' }
+                [ordered]@{ clickText = 'main' }
+                [ordered]@{ clickText = 'Edit DEV environment' }
+            )
+            WebWaitText = 'Enable DEV environment'
         },
         [pscustomobject]@{
             Name = 'azdo-dev-environment-selection'
@@ -477,9 +534,21 @@ function Get-CaptureScene {
             Rows = 32
             Interactions = @(
                 [pscustomobject]@{ WaitForText = 'Choose a branching strategy'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = 'DEV environment - Not configured'; Input = "`r" },
-                [pscustomobject]@{ WaitForText = 'DEV environment - Enabled'; Input = "$([char]27)[B`r" }
+                [pscustomobject]@{ WaitForText = 'Enable DEV environment - Not enabled'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'Enable DEV environment (recommended)'; Input = "`r" },
+                [pscustomobject]@{ WaitForText = 'Enable DEV environment - Enabled'; Input = "$([char]27)[B`r" }
             )
+            WebActions = @(
+                [ordered]@{ clickText = 'Edit a branch mapping' }
+                [ordered]@{ clickText = 'main' }
+                [ordered]@{ clickText = 'Edit DEV environment' }
+                [ordered]@{ waitText = 'Enable DEV environment' }
+                [ordered]@{ clickText = 'Enable DEV environment' }
+                [ordered]@{ clickText = 'Enable DEV environment (recommended)' }
+                [ordered]@{ waitText = 'Dataverse environment' }
+                [ordered]@{ clickText = 'Dataverse environment' }
+            )
+            WebWaitText = 'Contoso Development'
         },
         [pscustomobject]@{
             Name = 'azdo-credentials'
@@ -494,6 +563,10 @@ function Get-CaptureScene {
             ExpectedText = 'Workload Identity Federation (recommended, no secrets)'
             Rows = 32
             Interactions = @([pscustomobject]@{ WaitForText = 'Select Service Principal credentials'; Input = "`r" })
+            WebActions = @(
+                [ordered]@{ clickText = 'Create new App Registration (Entra ID)' }
+            )
+            WebWaitText = 'Select authentication type'
         },
         [pscustomobject]@{
             Name = 'azdo-manual-instructions'
@@ -570,6 +643,38 @@ function Get-CaptureScene {
             Interactions = @()
         }
     )
+
+    # Guides share most setup screens, but the browser header names the provider, so
+    # each provider gets its own copy of the shared screens.
+    $sharedAzDoSceneNames = @(
+        'setup-mode-choice'
+        'branch-strategy'
+        'branch-name'
+        'branch-mapping'
+        'environment-detail-menu'
+        'solutions-configuration'
+        'setup-change-side-by-side-diff'
+        'validation-application-not-found'
+        'validation-missing-dataverse-permission'
+        'validation-missing-enterprise-app'
+        'validation-missing-credentials'
+        'validation-expired-secret'
+        'validation-check-failed'
+    )
+    $sharedScenes = @($scenes)
+    foreach ($sharedSceneName in $sharedAzDoSceneNames) {
+        $sourceScene = @($sharedScenes | Where-Object { $_.Name -eq $sharedSceneName })
+        if ($sourceScene.Count -ne 1) {
+            throw "Shared screenshot scene '$sharedSceneName' must be defined exactly once."
+        }
+        $variant = $sourceScene[0].PSObject.Copy()
+        $variant.Name = "azdo-$sharedSceneName"
+        $variant.Provider = 'azdo'
+        $variant | Add-Member -NotePropertyName 'BodyName' -NotePropertyValue $sharedSceneName -Force
+        $scenes += $variant
+    }
+
+    return $scenes
 }
 
 function Resolve-CaptureScene {
@@ -745,12 +850,16 @@ function Get-CaptureWalkthroughStep {
                     Input = $enter
                 },
                 [pscustomobject]@{
-                    WaitForText = 'DEV environment - Not configured'
+                    WaitForText = 'Enable DEV environment - Not enabled'
                     Input = $enter
                     CaptureAfter = $true
                 },
                 [pscustomobject]@{
-                    WaitForText = 'DEV environment - Enabled'
+                    WaitForText = 'Enable DEV environment (recommended)'
+                    Input = $enter
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Enable DEV environment - Enabled'
                     Input = "$arrowDown$enter"
                     CaptureAfter = $true
                 },
@@ -780,12 +889,16 @@ function Get-CaptureWalkthroughStep {
                     CaptureAfter = $true
                 },
                 [pscustomobject]@{
-                    WaitForText = 'DEV environment - Not configured'
+                    WaitForText = 'Enable DEV environment - Not enabled'
                     Input = $enter
                     CaptureAfter = $true
                 },
                 [pscustomobject]@{
-                    WaitForText = 'DEV environment - Enabled'
+                    WaitForText = 'Enable DEV environment (recommended)'
+                    Input = $enter
+                },
+                [pscustomobject]@{
+                    WaitForText = 'Enable DEV environment - Enabled'
                     Input = "$arrowDown$enter"
                     CaptureAfter = $true
                 },
@@ -993,10 +1106,13 @@ function ConvertTo-PowerShellLiteral {
 
 function Get-CaptureHarness {
     [CmdletBinding()]
+    [OutputType([string])]
     param(
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][string]$Provider,
-        [Parameter(Mandatory)][string]$SceneName
+        [Parameter(Mandatory)][string]$SceneName,
+        [Parameter()][ValidateSet('Web', 'Console')][string]$Mode = 'Console',
+        [Parameter()][AllowEmptyString()][string]$Section = ''
     )
 
     $harnessTemplate = @'
@@ -1005,6 +1121,8 @@ $ProgressPreference = 'SilentlyContinue'
 $repoRoot = {{REPO_ROOT}}
 $provider = {{PROVIDER}}
 $scene = {{SCENE}}
+$captureMode = {{MODE}}
+$captureSection = {{SECTION}}
 . (Join-Path $repoRoot 'setup/setup-common.ps1')
 $script:ALM4DataverseRef = 'stable'
 $script:ALM4DataverseVersion = 'v0.0.0'
@@ -1501,6 +1619,26 @@ $deploymentEnvironmentEditor = {
     }
 }.GetNewClosure()
 
+if ($captureMode -eq 'Web') {
+    $captureWebProvider = switch ($provider) {
+        'azdo' { 'Azure DevOps' }
+        default { 'GitHub' }
+    }
+    $captureWebHost = Initialize-SetupWebHost `
+        -Provider $captureWebProvider `
+        -ProductVersion $script:ALM4DataverseVersion `
+        -Title $(if ($captureWebProvider -eq 'Azure DevOps') { 'Azure DevOps setup' } else { 'GitHub Actions setup' }) `
+        -Reference $script:ALM4DataverseRef `
+        -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath `
+        -NoBrowser
+    if (-not [string]::IsNullOrWhiteSpace($captureSection)) {
+        Write-Section -Message $captureSection
+    }
+    Publish-SetupWebIdentity -ProductVersion $script:ALM4DataverseVersion -Reference $script:ALM4DataverseRef
+    [Console]::Out.WriteLine("CAPTURE-WEB-URL:$($captureWebHost.Url)")
+    [Console]::Out.Flush()
+}
+
 switch ($scene) {
     'setup-mode-choice' {
         Select-FromMenu `
@@ -1593,7 +1731,6 @@ switch ($scene) {
         Select-FromMenu `
             -Title 'Select the repository to set up ALM4Dataverse in' `
             -Items @(
-                'Create a new repository'
                 'Use existing repository: example-org/sample-app'
                 'Use existing repository: example-org/contoso-crm'
             ) `
@@ -2136,7 +2273,9 @@ switch ($scene) {
     return $harnessTemplate.
         Replace('{{REPO_ROOT}}', (ConvertTo-PowerShellLiteral -Value $RepositoryRoot)).
         Replace('{{PROVIDER}}', (ConvertTo-PowerShellLiteral -Value $Provider)).
-        Replace('{{SCENE}}', (ConvertTo-PowerShellLiteral -Value $SceneName))
+        Replace('{{SCENE}}', (ConvertTo-PowerShellLiteral -Value $SceneName)).
+        Replace('{{MODE}}', (ConvertTo-PowerShellLiteral -Value $Mode)).
+        Replace('{{SECTION}}', $(if ([string]::IsNullOrWhiteSpace($Section)) { "''" } else { ConvertTo-PowerShellLiteral -Value $Section }))
 }
 
 function Get-CaptureCacheRoot {
@@ -2183,6 +2322,538 @@ function Get-CaptureFfmpegExecutable {
     }
 
     return $ffmpegCommand.Source
+}
+
+function Get-CaptureNodeExecutable {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $nodeCommand = Get-Command -Name 'node' -CommandType Application -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -eq $nodeCommand) {
+        throw 'Browser screenshots require Node.js on PATH so the pinned Playwright renderer can run. Install Node.js, or rerun with -Console to capture the console setup.'
+    }
+
+    return $nodeCommand.Source
+}
+
+function Get-CaptureNpmExecutable {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param()
+
+    $npmNames = if ($IsWindows) { @('npm.cmd', 'npm') } else { @('npm') }
+    foreach ($npmName in $npmNames) {
+        $npmCommand = Get-Command -Name $npmName -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($null -ne $npmCommand) {
+            return $npmCommand.Source
+        }
+    }
+
+    throw 'Browser screenshots require npm on PATH to install the pinned Playwright renderer. Install Node.js with npm, or rerun with -Console to capture the console setup.'
+}
+
+function Install-CaptureWebRuntime {
+    <#
+    .SYNOPSIS
+        Installs the pinned Playwright renderer and its Chromium build on first use.
+    .DESCRIPTION
+        Reuses a cached npm package directory and Playwright's own browser cache so
+        later captures start immediately. The browser is only downloaded when its
+        executable is missing.
+    .PARAMETER CacheRoot
+        Root directory owned by the capture tool.
+    .OUTPUTS
+        PSCustomObject with NodeExecutable and PackageDirectory.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][string]$CacheRoot
+    )
+
+    $nodeExecutable = Get-CaptureNodeExecutable
+    $npmExecutable = Get-CaptureNpmExecutable
+    $webRoot = Join-Path $CacheRoot 'web'
+    $packageDirectory = Join-Path $webRoot ('playwright-' + $script:CaptureWebPlaywrightVersion)
+    $packageJsonPath = Join-Path $packageDirectory 'package.json'
+    [System.IO.Directory]::CreateDirectory($packageDirectory) | Out-Null
+
+    $playwrightModulePath = Join-Path $packageDirectory 'node_modules/playwright'
+    if (-not (Test-Path -LiteralPath $playwrightModulePath -PathType Container)) {
+        if (-not (Test-Path -LiteralPath $packageJsonPath -PathType Leaf)) {
+            [System.IO.File]::WriteAllText(
+                $packageJsonPath,
+                "{`n  `"name`": `"alm4dataverse-setup-capture`",`n  `"private`": true`n}`n",
+                [System.Text.UTF8Encoding]::new($false)
+            )
+        }
+
+        Write-Output "Installing Playwright $($script:CaptureWebPlaywrightVersion) for browser screenshots..."
+        Invoke-CaptureProcess `
+            -ExecutablePath $npmExecutable `
+            -Arguments @('install', '--no-audit', '--no-fund', '--silent', "playwright@$($script:CaptureWebPlaywrightVersion)") `
+            -WorkingDirectory $packageDirectory `
+            -Operation 'Playwright renderer installation'
+    }
+
+    $executableCheck = 'const { chromium } = require("playwright"); process.stdout.write(chromium.executablePath());'
+    $executablePath = Invoke-CaptureProcessWithOutput `
+        -ExecutablePath $nodeExecutable `
+        -Arguments @('-e', $executableCheck) `
+        -WorkingDirectory $packageDirectory `
+        -Operation 'Playwright browser discovery'
+    if (-not (Test-Path -LiteralPath $executablePath.Trim() -PathType Leaf)) {
+        Write-Output 'Downloading the pinned Playwright Chromium build for browser screenshots...'
+        $escapedCliPath = (Join-Path $packageDirectory 'node_modules/playwright/cli.js')
+        Invoke-CaptureProcess `
+            -ExecutablePath $nodeExecutable `
+            -Arguments @($escapedCliPath, 'install', 'chromium') `
+            -WorkingDirectory $packageDirectory `
+            -Operation 'Playwright Chromium installation'
+
+        $executablePath = Invoke-CaptureProcessWithOutput `
+            -ExecutablePath $nodeExecutable `
+            -Arguments @('-e', $executableCheck) `
+            -WorkingDirectory $packageDirectory `
+            -Operation 'Playwright browser discovery'
+        if (-not (Test-Path -LiteralPath $executablePath.Trim() -PathType Leaf)) {
+            throw "Playwright could not provide a Chromium executable at '$($executablePath.Trim())'. Rerun the browser download or use -Console to capture the console setup."
+        }
+    }
+
+    return [pscustomobject]@{
+        NodeExecutable   = $nodeExecutable
+        PackageDirectory = $packageDirectory
+    }
+}
+
+function Invoke-CaptureProcessWithOutput {
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter(Mandatory)][string]$ExecutablePath,
+        [Parameter(Mandatory)][string[]]$Arguments,
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [Parameter(Mandatory)][string]$Operation
+    )
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = $ExecutablePath
+    $startInfo.WorkingDirectory = $WorkingDirectory
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    foreach ($argument in $Arguments) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start the capture process for '$Operation'."
+        }
+
+        $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $standardErrorTask = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $standardOutput = $standardOutputTask.GetAwaiter().GetResult()
+        $standardError = $standardErrorTask.GetAwaiter().GetResult()
+        if ($process.ExitCode -ne 0) {
+            throw "Capture process failed during '$Operation' with exit code $($process.ExitCode). $($standardError.Trim())"
+        }
+
+        return $standardOutput
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Invoke-CaptureWebSceneHostStart {
+    <#
+    .SYNOPSIS
+        Starts the real browser setup for one scene and returns its URL.
+    .DESCRIPTION
+        Runs the generated setup harness in web mode, so the scene's real helper
+        calls publish the prompt the browser renders. The harness blocks on that
+        prompt until the caller stops it.
+    .OUTPUTS
+        PSCustomObject with Process, Url and HarnessPath.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Scene,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$WorkingDirectory
+    )
+
+    [System.IO.Directory]::CreateDirectory($WorkingDirectory) | Out-Null
+    $harnessPath = Join-Path $WorkingDirectory ("harness-{0}.ps1" -f ($Scene.Name -replace '[^A-Za-z0-9._-]', '-'))
+    $section = if ($Scene.PSObject.Properties['WebSection']) { [string]$Scene.WebSection } else { '' }
+    $bodyName = if ($Scene.PSObject.Properties['BodyName']) { [string]$Scene.BodyName } else { $Scene.Name }
+    $harness = Get-CaptureHarness -RepositoryRoot $RepositoryRoot -Provider $Scene.Provider -SceneName $bodyName -Mode 'Web' -Section $section
+    [System.IO.File]::WriteAllText($harnessPath, $harness, [System.Text.UTF8Encoding]::new($false))
+
+    $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+    $startInfo.FileName = Get-CapturePowerShellExecutable
+    $startInfo.WorkingDirectory = $RepositoryRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    foreach ($argument in @('-NoLogo', '-NoProfile', '-File', $harnessPath)) {
+        [void]$startInfo.ArgumentList.Add($argument)
+    }
+    foreach ($entry in (Get-CaptureTerminalEnvironment).GetEnumerator()) {
+        $startInfo.Environment[[string]$entry.Key] = [string]$entry.Value
+    }
+
+    $process = [System.Diagnostics.Process]::new()
+    $process.StartInfo = $startInfo
+    $url = $null
+    try {
+        if (-not $process.Start()) {
+            throw "Could not start the browser setup for screenshot scene '$($Scene.Name)'."
+        }
+
+        # Only one pending read may exist per stream, so keep re-arming it on this
+        # thread; standard error is drained as one task and only read on failure.
+        $errorTask = $process.StandardError.ReadToEndAsync()
+        $lineTask = $process.StandardOutput.ReadLineAsync()
+        $deadline = [DateTime]::UtcNow.AddSeconds(120)
+        while ([DateTime]::UtcNow -lt $deadline) {
+            if (-not $lineTask.Wait(100)) {
+                if ($process.HasExited) {
+                    break
+                }
+                continue
+            }
+
+            $line = $lineTask.Result
+            if ($null -eq $line) {
+                break
+            }
+            if ($line -match '^CAPTURE-WEB-URL:(.+)$') {
+                $url = $Matches[1].Trim()
+                break
+            }
+            $lineTask = $process.StandardOutput.ReadLineAsync()
+        }
+
+        if ([string]::IsNullOrWhiteSpace($url)) {
+            $details = ''
+            if ($errorTask.Wait(2000)) {
+                $details = $errorTask.Result.Trim()
+            }
+            throw "The browser setup for screenshot scene '$($Scene.Name)' did not publish a URL. $details"
+        }
+
+        return [pscustomobject]@{
+            Process     = $process
+            Url         = $url
+            HarnessPath = $harnessPath
+        }
+    }
+    catch {
+        if (-not $process.HasExited) {
+            $process.Kill($true)
+        }
+        $process.Dispose()
+        throw
+    }
+}
+
+function Close-CaptureWebSceneHost {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$SceneHost
+    )
+
+    $process = $SceneHost.Process
+    try {
+        if (-not $process.HasExited) {
+            $process.Kill($true)
+        }
+        $process.WaitForExit(10000) | Out-Null
+    }
+    catch {
+        Write-Verbose "The browser setup process for the screenshot scene did not stop cleanly: $($_.Exception.Message)"
+    }
+    finally {
+        $process.Dispose()
+    }
+}
+
+function Invoke-CaptureWebJob {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][System.Collections.IDictionary]$Job,
+        [Parameter(Mandatory)][string]$WorkingDirectory,
+        [Parameter(Mandatory)][pscustomobject]$Runtime
+    )
+
+    [System.IO.Directory]::CreateDirectory($WorkingDirectory) | Out-Null
+    $jobPath = Join-Path $WorkingDirectory 'capture-job.json'
+    $jobJson = ConvertTo-Json -InputObject $Job -Depth 8
+    [System.IO.File]::WriteAllText($jobPath, $jobJson, [System.Text.UTF8Encoding]::new($false))
+    $driverPath = Join-Path $PSScriptRoot $script:CaptureWebDriverFileName
+    $playwrightModuleDirectory = Join-Path $Runtime.PackageDirectory 'node_modules/playwright'
+    Invoke-CaptureProcess `
+        -ExecutablePath $Runtime.NodeExecutable `
+        -Arguments @($driverPath, $jobPath) `
+        -WorkingDirectory $Runtime.PackageDirectory `
+        -Operation 'browser screenshot capture' `
+        -Environment ([ordered]@{ SETUP_CAPTURE_PLAYWRIGHT_MODULE = $playwrightModuleDirectory })
+}
+
+function ConvertTo-CaptureWebJobStep {
+    <#
+    .SYNOPSIS
+        Builds the Playwright steps for one documented setup surface.
+    .PARAMETER Scene
+        Scene whose prompt must appear before the frame is captured.
+    .PARAMETER FramePath
+        PNG written once the prompt is visible.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Scene,
+        [Parameter(Mandatory)][string]$FramePath
+    )
+
+    $steps = [System.Collections.Generic.List[object]]::new()
+    $steps.Add([ordered]@{ waitForPrompt = $true; timeoutMs = $script:CaptureWebPromptWaitTimeoutMs })
+
+    # Console scenes describe keystrokes. A scene documents a deeper browser screen
+    # only when it declares the clicks and waits that reach it.
+    $webActions = if ($Scene.PSObject.Properties['WebActions']) { @($Scene.WebActions) } else { @() }
+    foreach ($action in $webActions) {
+        $steps.Add($action)
+        $steps.Add([ordered]@{ waitMs = 250 })
+    }
+
+    $waitText = if ($Scene.PSObject.Properties['WebWaitText']) { [string]$Scene.WebWaitText } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($waitText)) {
+        $steps.Add([ordered]@{ waitText = $waitText; timeoutMs = $script:CaptureWebPromptWaitTimeoutMs })
+    }
+    $steps.Add([ordered]@{ waitMs = 400 })
+    $steps.Add([ordered]@{ screenshot = $FramePath })
+    return @($steps)
+}
+
+function Invoke-CaptureWebScene {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Scene,
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [Parameter(Mandatory)][pscustomobject]$Runtime,
+        [Parameter(Mandatory)][string]$WorkingDirectory
+    )
+
+    $sceneHost = Invoke-CaptureWebSceneHostStart -Scene $Scene -RepositoryRoot $RepositoryRoot -WorkingDirectory $WorkingDirectory
+    try {
+        $job = [ordered]@{
+            url              = $sceneHost.Url
+            viewport         = [ordered]@{ width = $script:CaptureWebViewportWidth; height = $script:CaptureWebViewportHeight }
+            deviceScaleFactor = $script:CaptureWebDeviceScaleFactor
+            steps            = @(ConvertTo-CaptureWebJobStep -Scene $Scene -FramePath $OutputPath)
+        }
+        Invoke-CaptureWebJob -Job $job -WorkingDirectory $WorkingDirectory -Runtime $Runtime
+    }
+    finally {
+        Close-CaptureWebSceneHost -SceneHost $sceneHost
+    }
+}
+
+function Get-CaptureWalkthroughWebAction {
+    <#
+    .SYNOPSIS
+        Translates one recorded scenario interaction into browser steps.
+    .DESCRIPTION
+        Console scenarios describe keystrokes. In the browser the same choice is a
+        click on the matching option or button, typed text fills the prompt field, and
+        a confirmation becomes a Yes or No button.
+    .PARAMETER Interaction
+        Walkthrough interaction with WaitForText and Input.
+    .PARAMETER FramePattern
+        Screenshot pattern written for every typed character.
+    #>
+    [CmdletBinding()]
+    [OutputType([object[]])]
+    param(
+        [Parameter(Mandatory)][pscustomobject]$Interaction,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$FramePattern
+    )
+
+    $inputText = [string]$Interaction.Input
+    $target = [string]$Interaction.WaitForText
+    if ($inputText -match '^(\x1b\[[A-D])*\r$') {
+        return @([ordered]@{ clickText = $target })
+    }
+
+    if ($inputText -match '^[yY]$' -or $inputText -match '^[yY]\r$') {
+        return @([ordered]@{ clickRole = 'button'; name = 'Yes'; exact = $true })
+    }
+    if ($inputText -match '^[nN]$' -or $inputText -match '^[nN]\r$') {
+        return @([ordered]@{ clickRole = 'button'; name = 'No'; exact = $true })
+    }
+
+    if ($inputText.EndsWith("`r")) {
+        $typedText = $inputText.Substring(0, $inputText.Length - 1)
+        return @(
+            [ordered]@{ typeText = $typedText; framePattern = $FramePattern }
+            [ordered]@{ clickRole = 'button'; name = 'Continue'; exact = $true }
+        )
+    }
+
+    return @([ordered]@{ typeText = $inputText; framePattern = $FramePattern })
+}
+
+function Invoke-CaptureWebWalkthrough {
+    <#
+    .SYNOPSIS
+        Builds the README walkthrough GIF from the real browser setup.
+    .DESCRIPTION
+        Each walkthrough step captures the same browser screen its guide documents,
+        including the clicks that reach a detail step, and the frames reuse the scene
+        captions with the standard footer.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$RepositoryRoot,
+        [Parameter(Mandatory)][string]$FfmpegExecutable,
+        [Parameter(Mandatory)][pscustomobject]$Runtime
+    )
+
+    $steps = @(Get-CaptureWalkthroughStep)
+    $scenes = @(Get-CaptureScene)
+    foreach ($step in $steps) {
+        if ($null -eq ($scenes | Where-Object { $_.Name -eq $step.SceneName } | Select-Object -First 1)) {
+            throw "Setup walkthrough references unknown screenshot scene '$($step.SceneName)'."
+        }
+    }
+
+    $logoPath = Join-Path $RepositoryRoot 'logo.png'
+    if (-not (Test-Path -LiteralPath $logoPath -PathType Leaf)) {
+        throw "Setup walkthrough logo '$logoPath' was not found."
+    }
+
+    $fontFamilyName = Get-CaptureFontFamily
+    $temporaryDirectory = Join-Path ([System.IO.Path]::GetTempPath()) (
+        'alm4dataverse-setup-walkthrough-' + [guid]::NewGuid().ToString('N')
+    )
+    [System.IO.Directory]::CreateDirectory($temporaryDirectory) | Out-Null
+    try {
+        $frameNumber = 0
+        $frameManifestLines = [System.Collections.Generic.List[string]]::new()
+        $frameManifestLines.Add('ffconcat version 1.0')
+        $introFramePath = Join-Path $temporaryDirectory ('frame-{0:D3}.png' -f $frameNumber)
+        Invoke-CaptureWalkthroughFrame `
+            -FfmpegExecutable $FfmpegExecutable `
+            -FontFamilyName $fontFamilyName `
+            -WorkingDirectory $temporaryDirectory `
+            -OutputPath $introFramePath `
+            -LogoPath $logoPath `
+            -Title 'ALM4Dataverse  - automated setup' `
+            -Subtitle 'the easiest way to get powerful ALM for Dataverse/D365/Power Platform set up in minutes'
+        $frameManifestLines.Add("file '$([System.IO.Path]::GetFileName($introFramePath))'")
+        $frameManifestLines.Add(
+            [string]::Format(
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                'duration {0:0.#########}',
+                $script:CaptureWalkthroughDwellSeconds
+            )
+        )
+
+        $stepNumber = 0
+        foreach ($step in $steps) {
+            $stepNumber++
+            $scene = @($scenes | Where-Object { $_.Name -eq $step.SceneName })[0]
+            $checkpointPath = Join-Path $temporaryDirectory ('checkpoint-{0:D3}.png' -f $stepNumber)
+            $sceneWorkingDirectory = Join-Path $temporaryDirectory ('step-{0:D3}' -f $stepNumber)
+            Invoke-CaptureWebScene `
+                -Scene $scene `
+                -RepositoryRoot $RepositoryRoot `
+                -OutputPath $checkpointPath `
+                -Runtime $Runtime `
+                -WorkingDirectory $sceneWorkingDirectory
+
+            $frameNumber++
+            $framePath = Join-Path $temporaryDirectory ('frame-{0:D3}.png' -f $frameNumber)
+            Invoke-CaptureWalkthroughFrame `
+                -FfmpegExecutable $FfmpegExecutable `
+                -FontFamilyName $fontFamilyName `
+                -WorkingDirectory $temporaryDirectory `
+                -OutputPath $framePath `
+                -SourceImagePath $checkpointPath `
+                -CaptionLines $step.CaptionLines
+            $frameManifestLines.Add("file '$([System.IO.Path]::GetFileName($framePath))'")
+            $frameManifestLines.Add(
+                [string]::Format(
+                    [System.Globalization.CultureInfo]::InvariantCulture,
+                    'duration {0:0.#########}',
+                    $script:CaptureWalkthroughDwellSeconds
+                )
+            )
+        }
+
+        if ($frameNumber -lt 1) {
+            throw 'No frames were captured for the setup walkthrough.'
+        }
+        $lastFramePath = Join-Path $temporaryDirectory ('frame-{0:D3}.png' -f $frameNumber)
+        $frameManifestLines.Add("file '$([System.IO.Path]::GetFileName($lastFramePath))'")
+        [System.IO.File]::WriteAllLines(
+            (Join-Path $temporaryDirectory 'walkthrough-frames.ffconcat'),
+            $frameManifestLines,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+
+        $temporaryGifPath = Join-Path $temporaryDirectory 'setup-walkthrough.gif'
+        $paletteFilter = '[0:v]fps={0},split[palette_source][frame_source];[palette_source]palettegen=stats_mode=diff[palette];[frame_source][palette]paletteuse=dither=bayer:bayer_scale=3[gif]' -f `
+            $script:CaptureWalkthroughOutputFrameRate
+        Invoke-CaptureProcess `
+            -ExecutablePath $FfmpegExecutable `
+            -Arguments @(
+                '-hide_banner', '-loglevel', 'error', '-y',
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', 'walkthrough-frames.ffconcat',
+                '-filter_complex', $paletteFilter,
+                '-map', '[gif]',
+                '-loop', '0',
+                $temporaryGifPath
+            ) `
+            -WorkingDirectory $temporaryDirectory `
+            -Operation 'setup walkthrough GIF encoding'
+
+        $temporaryGif = Get-Item -LiteralPath $temporaryGifPath -ErrorAction Stop
+        if ($temporaryGif.Length -le 0) {
+            throw 'FFmpeg created an empty setup walkthrough GIF.'
+        }
+
+        $outputPath = Join-Path $RepositoryRoot $script:CaptureWalkthroughRelativePath
+        Move-Item -LiteralPath $temporaryGifPath -Destination $outputPath -Force
+        $relativeOutputPath = [System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath).Replace('\', '/')
+        Write-Output "Captured $relativeOutputPath."
+    }
+    finally {
+        if (Test-Path -LiteralPath $temporaryDirectory -PathType Container) {
+            try {
+                Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Could not remove temporary walkthrough files from '$temporaryDirectory': $($_.Exception.Message)"
+            }
+        }
+    }
 }
 
 function Assert-CaptureRuntimePrerequisite {
@@ -2651,7 +3322,8 @@ function Invoke-CaptureProcess {
         [Parameter(Mandatory)][string]$ExecutablePath,
         [Parameter(Mandatory)][string[]]$Arguments,
         [Parameter(Mandatory)][string]$WorkingDirectory,
-        [Parameter(Mandatory)][string]$Operation
+        [Parameter(Mandatory)][string]$Operation,
+        [Parameter()][System.Collections.IDictionary]$Environment
     )
 
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
@@ -2663,6 +3335,11 @@ function Invoke-CaptureProcess {
     $startInfo.CreateNoWindow = $true
     foreach ($argument in $Arguments) {
         [void]$startInfo.ArgumentList.Add($argument)
+    }
+    if ($null -ne $Environment) {
+        foreach ($name in $Environment.Keys) {
+            $startInfo.Environment[[string]$name] = [string]$Environment[$name]
+        }
     }
 
     $process = [System.Diagnostics.Process]::new()
@@ -3165,8 +3842,37 @@ function Invoke-CaptureScreenshotSet {
         [Parameter(Mandatory)][string]$RepositoryRoot,
         [Parameter(Mandatory)][pscustomobject[]]$Scenes,
         [Parameter(Mandatory)][string]$OutputDirectory,
-        [Parameter()][string]$FfmpegExecutable
+        [Parameter()][string]$FfmpegExecutable,
+        [Parameter()][switch]$Console
     )
+
+    [System.IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
+
+    if (-not $Console) {
+        $webCacheRoot = Get-CaptureCacheRoot
+        $webRuntime = Install-CaptureWebRuntime -CacheRoot $webCacheRoot
+        foreach ($scene in $Scenes) {
+            $outputPath = Join-Path $OutputDirectory "$($scene.Name).png"
+            $sceneWorkingDirectory = Join-Path $webCacheRoot (Join-Path 'web-work' $scene.Name)
+            Invoke-CaptureWebScene `
+                -Scene $scene `
+                -RepositoryRoot $RepositoryRoot `
+                -OutputPath $outputPath `
+                -Runtime $webRuntime `
+                -WorkingDirectory $sceneWorkingDirectory
+            $relativeOutputPath = [System.IO.Path]::GetRelativePath($RepositoryRoot, $outputPath).Replace('\', '/')
+            Write-Output "Captured $relativeOutputPath."
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($FfmpegExecutable)) {
+            Invoke-CaptureWebWalkthrough `
+                -RepositoryRoot $RepositoryRoot `
+                -FfmpegExecutable $FfmpegExecutable `
+                -Runtime $webRuntime
+        }
+
+        return
+    }
 
     Assert-CaptureRuntimePrerequisite
     $platformName = Get-CapturePlatformName
@@ -3227,4 +3933,5 @@ Invoke-CaptureScreenshotSet `
     -RepositoryRoot $repositoryRoot `
     -Scenes $selectedScenes `
     -OutputDirectory $outputDirectory `
-    -FfmpegExecutable $ffmpegExecutable
+    -FfmpegExecutable $ffmpegExecutable `
+    -Console:$Console

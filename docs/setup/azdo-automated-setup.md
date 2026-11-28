@@ -64,7 +64,8 @@ To select a tenant or a specific shared-code ref, see
 
 ### Run in Azure Cloud Shell
 
-Setup can run in [Azure Cloud Shell](https://shell.azure.com). Choose **PowerShell** and
+Setup can run in [Azure Cloud Shell](https://shell.azure.com). Cloud Shell cannot show
+the browser setup, so setup uses the console menu automatically. Choose **PowerShell** and
 run the one-line bootstrap:
 
 ```powershell
@@ -74,17 +75,23 @@ iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setu
 
 ## Guided Setup
 
-Setup asks a few questions, then opens a menu. New repositories unlock steps in order; an
+Setup opens a guided wizard in your browser. New repositories unlock steps in order; an
 existing repository starts from the settings in `alm-config.psd1` and lets you open any
-step. After each step you return to the menu. **Preview changes** is optional, and
-**Apply changes** stays unavailable until every required step is complete. Press F1 for
-the current step's help page; Esc returns to the previous prompt or menu.
+step. After each step you return to the setup map. **Preview changes** is optional, and
+**Apply changes** stays unavailable until every required step is complete. Each prompt
+links to its help page, and **Back** returns to the previous prompt. The terminal stays
+available and shows the same activity log as the page.
 
-![Guided setup menu for a new Azure DevOps repository](./screenshots/azdo-menu-new-repository.png)
+Pass `-Console` to use the console menu instead, for example over a slow remote
+connection. Azure Cloud Shell, a remote shell without a local browser, and unattended
+`-Commit`/`-PreviewOnly` runs use the console automatically, and setup falls back to it
+with a message if the browser page cannot start.
 
-![Guided setup menu for an existing Azure DevOps repository with saved branch mappings](./screenshots/azdo-menu-existing-repository.png)
+![Guided setup map for a new Azure DevOps repository](./screenshots/azdo-menu-new-repository.png)
 
-![Guided setup menu when the configured Azure DevOps shared repository is unavailable](./screenshots/azdo-menu-unavailable-shared-repository.png)
+![Guided setup map for an existing Azure DevOps repository with saved branch mappings](./screenshots/azdo-menu-existing-repository.png)
+
+![Guided setup map when the configured Azure DevOps shared repository is unavailable](./screenshots/azdo-menu-unavailable-shared-repository.png)
 
 ### 1. New or existing repository
 
@@ -92,7 +99,7 @@ Choose **Set up a new application repository** to create the repository and its 
 branch, or **Configure an existing repository** to use one that already exists. The
 choice appears before authentication.
 
-![New or existing repository choice with ALM4Dataverse branding below the setup header](./screenshots/setup-mode-choice.png)
+![New or existing repository choice with ALM4Dataverse branding below the setup header](./screenshots/azdo-setup-mode-choice.png)
 
 ### 2. Sign in and select resources
 
@@ -147,21 +154,23 @@ environment, BUILD validation and deployment targets in that order.
    and skip this prompt. This creates branch mappings, not branch policies. See
    [branching strategies](../usage/branching-strategies.md).
 
-   ![Branch strategy menu from Azure DevOps setup](./screenshots/branch-strategy.png)
+   ![Branch strategy menu from Azure DevOps setup](./screenshots/azdo-branch-strategy.png)
 
 2. **Add or edit branch mappings.** Choose **Add a branch mapping** or **Edit a branch
-   mapping**. Branch names must be unique.
+   mapping**. The branch table above the menu, and the same table inside a branch's edit
+   menu, show its current DEV environment, deployment targets and BUILD validation. Branch
+   names must be unique.
 
-   ![Prompt for a new branch name](./screenshots/branch-name.png)
+   ![Prompt for a new branch name](./screenshots/azdo-branch-name.png)
 
 3. **Configure the DEV environment.** A branch without one shows **DEV: Not configured**.
-   Select it (or **Edit DEV environment**) to open the DEV detail menu, then select **DEV
-   environment** to enable it. The remaining steps stay unavailable until it is enabled;
-   choose **Do not configure DEV environment** to leave it unconfigured. Enable it to
-   select the Dataverse environment; setup names it `Dev-<branch>`. Only branches with a
+   Select it (or **Edit DEV environment**) to open the DEV detail menu, then choose
+   **Enable DEV environment** to configure a Dataverse environment for the branch, or
+   **Do not enable DEV environment** to leave it unconfigured. The remaining steps stay
+   unavailable until it is enabled. Setup names it `Dev-<branch>`. Only branches with a
    DEV environment can be a solution source.
 
-   ![Azure DevOps DEV environment detail menu with the enable step](./screenshots/azdo-dev-menu.png)
+   ![Azure DevOps DEV environment detail menu with the enable choice](./screenshots/azdo-dev-menu.png)
 
    ![Azure DevOps DEV environment selection](./screenshots/azdo-dev-environment-selection.png)
 
@@ -206,14 +215,14 @@ environment, BUILD validation and deployment targets in that order.
 
    | Validation problem | What setup reports |
    | --- | --- |
-   | Application not found | ![Validation: application not found](./screenshots/validation-application-not-found.png) |
-   | Dataverse user_impersonation permission missing | ![Validation: Dataverse permission missing](./screenshots/validation-missing-dataverse-permission.png) |
-   | Enterprise application missing | ![Validation: enterprise application missing](./screenshots/validation-missing-enterprise-app.png) |
-   | No usable client secret or federated credential | ![Validation: no usable credential](./screenshots/validation-missing-credentials.png) |
-   | Client secret expired | ![Validation: expired client secret](./screenshots/validation-expired-secret.png) |
+   | Application not found | ![Validation: application not found](./screenshots/azdo-validation-application-not-found.png) |
+   | Dataverse user_impersonation permission missing | ![Validation: Dataverse permission missing](./screenshots/azdo-validation-missing-dataverse-permission.png) |
+   | Enterprise application missing | ![Validation: enterprise application missing](./screenshots/azdo-validation-missing-enterprise-app.png) |
+   | No usable client secret or federated credential | ![Validation: no usable credential](./screenshots/azdo-validation-missing-credentials.png) |
+   | Client secret expired | ![Validation: expired client secret](./screenshots/azdo-validation-expired-secret.png) |
    | Federated credential uses the wrong issuer or audience | ![Validation: wrong federated credential](./screenshots/azdo-validation-wrong-federated-credential.png) |
    | Federated credential uses the wrong subject | ![Validation: wrong federated subject](./screenshots/azdo-validation-wrong-federated-subject.png) |
-   | Validation could not complete | ![Validation: check failed](./screenshots/validation-check-failed.png) |
+   | Validation could not complete | ![Validation: check failed](./screenshots/azdo-validation-check-failed.png) |
 
    ![Azure DevOps authentication type choices](./screenshots/azdo-authentication-type.png)
 
@@ -224,7 +233,7 @@ environment, BUILD validation and deployment targets in that order.
    targets in promotion order; the list order becomes the deployment stage order. A
    branch can have no deployment targets.
 
-   ![Per-environment detail menu with completed prerequisites and the service-account step ready to configure](./screenshots/environment-detail-menu.png)
+   ![Per-environment detail menu with completed prerequisites and the service-account step ready to configure](./screenshots/azdo-environment-detail-menu.png)
 
    ![Azure DevOps deployment environment selection](./screenshots/azdo-deployment-environment-selection.png)
 
@@ -242,7 +251,7 @@ environment, BUILD validation and deployment targets in that order.
 7. **Review the branch map.** Check the table, then choose **Done**. Reopen a branch to
    change its DEV environment, deployment targets or BUILD validation.
 
-   ![Azure DevOps branch-to-environment mapping table](./screenshots/branch-mapping.png)
+   ![Azure DevOps branch-to-environment mapping table](./screenshots/azdo-branch-mapping.png)
 
 ### 5. Configure solutions
 
@@ -250,7 +259,7 @@ Choose a branch with a DEV environment as the discovery source, then select and 
 solutions. The summary shows them in dependency order. See
 [solutions configuration](../config/alm-config.md#solutions).
 
-![Selecting and ordering managed solutions](./screenshots/solutions-configuration.png)
+![Selecting and ordering managed solutions](./screenshots/azdo-solutions-configuration.png)
 
 ### 6. Preview and apply
 
@@ -263,7 +272,7 @@ environments unchanged. Operations already completed during setup are marked
 
 ![Azure DevOps setup change summary and review menu](./screenshots/azdo-setup-change-review.png)
 
-![Scrollable colored side-by-side setup diff](./screenshots/setup-change-side-by-side-diff.png)
+![Scrollable colored side-by-side setup diff](./screenshots/azdo-setup-change-side-by-side-diff.png)
 
 When the menu shows **Apply changes** as ready, select it to publish the files and apply
 the listed operations. You do not have to preview first.

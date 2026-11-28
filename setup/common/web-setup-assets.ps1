@@ -107,10 +107,10 @@ $script:SetupWebUiHtml = @'
       </div>
     </header>
 
-    <div id="device-banner" class="device-banner" hidden>
+    <div id="device-banner" class="device-banner" role="dialog" aria-modal="true" aria-labelledby="device-title" hidden>
       <div class="device-mark" aria-hidden="true"><svg class="icon" aria-hidden="true"><use href="#icon-warning"></use></svg></div>
       <div class="device-copy">
-        <p class="eyebrow">Sign-in required</p>
+        <p id="device-title" class="eyebrow">Sign-in required</p>
         <pre id="device-message" class="device-message"></pre>
         <div class="device-actions">
           <a id="device-link" class="btn btn-secondary" href="#" target="_blank" rel="noreferrer noopener" hidden>Open sign-in page</a>
@@ -1267,6 +1267,10 @@ h3 {
   gap: 8px;
 }
 
+.field-control > .btn {
+  flex: 0 0 auto;
+}
+
 .field-input {
   width: 100%;
   min-height: 32px;
@@ -1396,6 +1400,11 @@ h3 {
   display: grid;
   gap: 16px;
   margin-top: 16px;
+}
+
+/* A prompt's queued summary tables already sit inside their own card. */
+.context-card .blocks {
+  margin-top: 0;
 }
 
 .block-title {
@@ -1832,17 +1841,39 @@ h3 {
   word-break: break-word;
 }
 
-/* Fluent MessageBar (sign-in) */
+/* Sign-in modal (device code) */
 
 .device-banner {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 60;
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin-top: 16px;
-  padding: 10px 12px;
+  gap: 12px;
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  overflow: auto;
+  margin: 0;
+  padding: 20px;
   border: 1px solid var(--warning-border);
-  border-radius: var(--radius-medium);
+  border-radius: var(--radius-large);
   background: var(--warning-background);
+  box-shadow: var(--shadow-16);
+}
+
+body.device-signin::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: var(--busy-scrim);
+  backdrop-filter: blur(2px);
+}
+
+body.device-signin #stage {
+  pointer-events: none;
 }
 
 .device-mark {
@@ -2080,6 +2111,45 @@ h3 {
 .working-card .busy-spinner {
   width: 36px;
   height: 36px;
+}
+
+.working-output {
+  margin-top: 20px;
+  border: 1px solid var(--neutral-stroke-2);
+  border-radius: var(--radius-medium);
+  background: var(--neutral-background-2);
+  text-align: left;
+  overflow: hidden;
+}
+
+.working-output-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--neutral-stroke-2);
+  color: var(--neutral-foreground-3);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.working-output-log {
+  max-height: 220px;
+  overflow: auto;
+  padding: 8px 12px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.working-output-log .log-entry {
+  padding: 1px 0;
+}
+
+.working-output-empty {
+  color: var(--neutral-foreground-3);
 }
 
 .busy-indicator {
@@ -2351,6 +2421,13 @@ $script:SetupWebUiJavaScript = @'
   // The action response only confirms the queue. Setup may run for seconds before
   // it publishes the next state, so progress must start on the click.
   function showBusy(message) {
+    if (stage.querySelector('.working-card')) {
+      return;
+    }
+    // Sign-in is its own modal and must stay above busy progress.
+    if (!deviceBanner.hidden) {
+      return;
+    }
     if (busyMessage) {
       busyMessage.textContent = message || 'Working on the next step...';
     }
@@ -2529,6 +2606,11 @@ $script:SetupWebUiJavaScript = @'
       }
     }
 
+    if (!prompt && !wizard) {
+      hideBusy();
+      updateWorkingOutput(state.activity);
+    }
+
     if (state.finished) {
       stopPolling();
     }
@@ -2562,9 +2644,14 @@ $script:SetupWebUiJavaScript = @'
     lastDeviceCode = message;
     if (!message) {
       deviceBanner.hidden = true;
+      document.body.classList.remove('device-signin');
       return;
     }
+    var wasHidden = deviceBanner.hidden;
     deviceBanner.hidden = false;
+    document.body.classList.add('device-signin');
+    // Sign-in owns the modal layer; busy progress must not cover its instructions.
+    hideBusy();
     deviceMessage.textContent = message;
     var match = message.match(/https?:\/\/[^\s]+/i);
     if (match) {
@@ -2575,6 +2662,13 @@ $script:SetupWebUiJavaScript = @'
     }
     var codeMatch = message.match(/(?:one-time code|verification code|enter the code)[^A-Z0-9]*([A-Z0-9][A-Z0-9-]{3,})/i);
     deviceCopy.setAttribute('data-code', codeMatch ? codeMatch[1] : '');
+    if (wasHidden) {
+      if (!deviceLink.hidden) {
+        deviceLink.focus();
+      } else {
+        deviceCopy.focus();
+      }
+    }
   }
 
   function renderGuidance(prompt) {
@@ -2706,6 +2800,7 @@ $script:SetupWebUiJavaScript = @'
     if (wizard && prompt.kind !== 'complete') {
       html += renderWizardTrail(wizard);
     }
+    html += renderPromptContext(prompt);
     switch (prompt.kind) {
       case 'menu':
         html += renderMenu(prompt);
@@ -2747,6 +2842,19 @@ $script:SetupWebUiJavaScript = @'
     }
     stage.innerHTML = '<div class="stage-inner">' + html + '</div>';
     focusStage(prompt);
+  }
+
+  function renderPromptContext(prompt) {
+    // Summary tables queued before a prompt, such as the current branch or environment
+    // configuration the console prints above its edit menu. Review renders its own.
+    if (prompt.kind === 'review') {
+      return '';
+    }
+    var body = renderBlocks(prompt.blocks);
+    if (!body) {
+      return '';
+    }
+    return '<section class="card context-card">' + body + '</section>';
   }
 
   function renderWizardTrail(wizard) {
@@ -2837,12 +2945,16 @@ $script:SetupWebUiJavaScript = @'
 
   function renderTextPrompt(prompt) {
     var isSecret = prompt.kind === 'secret';
+    var defaultValue = !isSecret && prompt.default ? String(prompt.default) : '';
     var inputAttributes = isSecret
       ? 'type="password" autocomplete="off" spellcheck="false"'
       : 'type="text" autocomplete="off" spellcheck="false"';
+    var inputValue = defaultValue ? ' value="' + escapeAttribute(defaultValue) + '"' : '';
     var valueHint = '';
-    if (prompt.default) {
-      valueHint = '<span class="field-hint">Leave blank to keep <strong>' + escapeHtml(prompt.default) + '</strong>.</span>';
+    var resetButton = '';
+    if (defaultValue) {
+      valueHint = '<span class="field-hint">Default: <strong>' + escapeHtml(defaultValue) + '</strong>.</span>';
+      resetButton = '<button class="btn btn-ghost" type="button" data-reset-default disabled title="Reset to the default value">Reset to default</button>';
     } else if (prompt.allowEmpty) {
       valueHint = '<span class="field-hint">This value is optional.</span>';
     }
@@ -2853,7 +2965,7 @@ $script:SetupWebUiJavaScript = @'
     return '<section class="card">' + promptHeader(prompt, isSecret ? 'Private input' : 'Input') +
       '<form data-text-form>' +
       '<div class="field"><label for="prompt-value">' + escapeHtml(prompt.valueLabel || prompt.title || 'Value') + '</label>' +
-      '<div class="field-control"><input id="prompt-value" class="field-input" ' + inputAttributes + ' />' + revealButton + '</div>' +
+      '<div class="field-control"><input id="prompt-value" class="field-input" ' + inputAttributes + inputValue + ' />' + resetButton + revealButton + '</div>' +
       valueHint + errorHtml + '</div>' +
       '<div class="prompt-actions"><button class="btn btn-primary" type="submit">Continue</button>' +
       (prompt.allowBack ? '<button class="btn btn-ghost" type="button" data-back>Back</button>' : '') +
@@ -3099,7 +3211,34 @@ $script:SetupWebUiJavaScript = @'
       '<circle class="busy-spinner-track" cx="24" cy="24" r="19"></circle>' +
       '<circle class="busy-spinner-arc" cx="24" cy="24" r="19"></circle>' +
       '</svg><span>This page updates automatically.</span></div>' +
+      '<div class="working-output"><div class="working-output-head"><span>Console output</span><span>Live</span></div>' +
+      '<div class="working-output-log" id="working-output-log" role="log" aria-live="polite"></div></div>' +
       '</section></div>';
+  }
+
+  function updateWorkingOutput(entries) {
+    var log = document.getElementById('working-output-log');
+    if (!log) {
+      return;
+    }
+    entries = asArray(entries).slice(-14);
+    if (!entries.length) {
+      log.innerHTML = '<div class="working-output-empty">Waiting for console output...</div>';
+      return;
+    }
+    var initialized = log.getAttribute('data-initialized') === 'true';
+    var wasNearBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    log.innerHTML = entries.map(function (entry) {
+      var tone = entry.tone || 'info';
+      return '<div class="log-entry is-' + escapeHtml(tone) + '">' +
+        '<span class="log-time">' + escapeHtml(entry.time || '') + '</span>' +
+        '<span class="log-text">' + escapeHtml(entry.text || '') + '</span>' +
+        '</div>';
+    }).join('');
+    if (!initialized || wasNearBottom) {
+      log.scrollTop = log.scrollHeight;
+    }
+    log.setAttribute('data-initialized', 'true');
   }
 
   function focusStage(prompt) {
@@ -3132,6 +3271,9 @@ $script:SetupWebUiJavaScript = @'
     }
     if (element && typeof element.focus === 'function') {
       element.focus({ preventScroll: true });
+      if (prompt.kind === 'text' && element.value && typeof element.select === 'function') {
+        element.select();
+      }
     }
   }
 
@@ -3193,6 +3335,15 @@ $script:SetupWebUiJavaScript = @'
           var reveal = field.type === 'password';
           field.type = reveal ? 'text' : 'password';
           target.textContent = reveal ? 'Hide' : 'Show';
+        }
+        return;
+      }
+      if (target.hasAttribute('data-reset-default')) {
+        var resetField = stage.querySelector('#prompt-value');
+        if (resetField) {
+          resetField.value = resetField.defaultValue;
+          resetField.dispatchEvent(new Event('input', { bubbles: true }));
+          resetField.focus();
         }
         return;
       }
@@ -3259,6 +3410,16 @@ $script:SetupWebUiJavaScript = @'
           }
           child.hidden = !hasVisibleChoice;
         });
+      }
+    });
+
+    stage.addEventListener('input', function (event) {
+      if (!event.target || event.target.id !== 'prompt-value') {
+        return;
+      }
+      var reset = stage.querySelector('[data-reset-default]');
+      if (reset) {
+        reset.disabled = event.target.value === event.target.defaultValue;
       }
     });
 
