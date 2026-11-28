@@ -105,11 +105,11 @@ confinement to keep the bind-mounted workspace readable on enforcing hosts such 
 Rebuild an existing container after changing these options; an attached container keeps
 the mounts and security options it was created with.
 
-The container has no browser or display. Setup detects that and signs in with a device
-code: it prints a verification URL and code, which you open in a browser on the host. The
-MSAL token cache stays inside the container, so a rebuilt container asks for sign-in
-again. The setup entrypoints and the shared authentication helpers remain usable on a
-normal desktop, where browser sign-in is used instead.
+The container has no browser or display. The browser setup still prints its local URL, so
+forward the port with VS Code to use it, or pass `-Console` to use the console menu. Setup
+signs in with a device code either way: it prints a verification URL and code, which you
+open in a browser on the host. The MSAL token cache stays inside the container, so a
+rebuilt container asks for sign-in again.
 
 The container also supports opening a linked Git worktree. Before the container starts,
 `initializeCommand` links the checkout's Git common directory at

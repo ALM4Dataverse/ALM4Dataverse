@@ -748,10 +748,35 @@ Describe 'Shared repository lifecycle in <Provider>' -ForEach @(
         $result.Repository | Should -Be $SelectedRepository
         $result.Reference | Should -Be $ExpectedReference
         $result.ValidationError | Should -Be ''
+        $result.NewlyCreated | Should -BeFalse
         Should -Invoke Initialize-GitHubSharedWorkflowFork -Times 1 -Exactly -ParameterFilter {
             $PreferredRepositoryFullName -eq 'owner/current' -and $Reference -eq 'stable' -and $SelectOnly
         }
         Should -Invoke Initialize-GitHubSharedWorkflowAccessPolicy -Times 0 -Exactly
+    }
+
+    It 'records a newly created shared repository so the update strategy step can complete' -Skip:($Provider -ne 'GitHub') {
+        $script:selectedSharedWorkflowRepo = [pscustomobject]@{
+            nameWithOwner    = 'owner/new-shared'
+            defaultBranchRef = [pscustomobject]@{ name = 'main' }
+            NewlyCreated     = $true
+        }
+        $script:sharedWorkflowRepositoryStateForTest = [ordered]@{
+            Repository      = ''
+            Reference       = ''
+            ValidationError = ''
+        }
+        Mock Initialize-GitHubSharedWorkflowFork { $script:selectedSharedWorkflowRepo }
+
+        $result = Select-GitHubSharedWorkflowRepositoryState `
+            -RepositoryState $script:sharedWorkflowRepositoryStateForTest `
+            -UpstreamFullName upstream/shared `
+            -DefaultOwner owner `
+            -UpstreamGitSource $repoRoot `
+            -Reference stable
+
+        $result.Repository | Should -Be 'owner/new-shared'
+        $result.NewlyCreated | Should -BeTrue
     }
 
     It 'checks and updates the selected GitHub repository without prompting again' -Skip:($Provider -ne 'GitHub') {
@@ -1702,6 +1727,30 @@ Describe 'Repository configuration and synchronization in <Provider>' -ForEach @
             $initialMapping.BuildValidationEnvironmentName | Should -BeNullOrEmpty
         }
         Should -Invoke Get-GitRepoFileContentFromRemoteBranch -Times 2 -Exactly -ParameterFilter { $RelativePath -eq 'alm-config.psd1' }
+    }
+
+    It 'does not seed a default branch for a new repository' {
+        $state = [pscustomobject]@{
+            DeploymentBranchMappings           = @()
+            BranchStates                       = @()
+            DeploymentEnvironments             = @()
+            DevEnvironment                     = $null
+            ExistingBuildValidationEnvironment = $null
+            BuildValidationEnvironmentName     = ''
+            BuildValidationEnabled             = $false
+            ExistingConfiguration              = $null
+        }
+
+        $mappings = @(
+            if ($Provider -eq 'GitHub') {
+                Get-GitHubInitialBranchMapping -ExistingSetupState $state -DefaultBranch main -NewRepository
+            }
+            else {
+                Get-AzDoInitialBranchMapping -ExistingSetupState $state -DefaultBranch main -NewRepository
+            }
+        )
+
+        $mappings.Count | Should -Be 0
     }
 
     It 'converts legacy pipeline facts into branch settings when alm-config.psd1 has no branches' {

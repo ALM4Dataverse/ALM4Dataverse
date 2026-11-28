@@ -1,11 +1,14 @@
 function Get-AzDoInitialBranchMapping {
     # Adapt config-backed states to the branch editor's BranchName/Environments contract.
-    # Null targets are removed; no usable states gives one empty DefaultBranch mapping.
+    # Null targets are removed; no usable states gives one empty DefaultBranch mapping for
+    # an existing repository. A new repository starts empty so the branching strategy is
+    # chosen before any branch appears in the guided menu.
     [CmdletBinding()]
     [OutputType([pscustomobject], [object[]])]
     param(
         [Parameter(Mandatory)][object]$ExistingSetupState,
-        [Parameter(Mandatory)][string]$DefaultBranch
+        [Parameter(Mandatory)][string]$DefaultBranch,
+        [Parameter()][switch]$NewRepository
     )
 
     $branchMappings = @()
@@ -47,7 +50,7 @@ function Get-AzDoInitialBranchMapping {
         }
     }
 
-    if ($branchMappings.Count -eq 0) {
+    if ($branchMappings.Count -eq 0 -and -not $NewRepository) {
         $branchMappings = @(
             [pscustomobject]@{
                 BranchName                         = $DefaultBranch

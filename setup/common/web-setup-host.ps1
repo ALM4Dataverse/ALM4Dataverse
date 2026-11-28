@@ -663,6 +663,96 @@ function Get-SetupWebHost {
     return (Get-Variable -Name 'SetupWebHost' -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
 }
 
+function Get-SetupBrowserModeLimitation {
+    <#
+    .SYNOPSIS
+        Returns why the browser setup cannot run in this session, or an empty string.
+    .DESCRIPTION
+        The browser setup needs a loopback page that an operator can see and click.
+        Azure Cloud Shell does not expose it, a remote shell without a local display
+        cannot reach it, and an unattended run has nobody to answer it. Setup keeps
+        working in the console in each case.
+    .PARAMETER Unattended
+        The run publishes without prompting, as with a Commit or PreviewOnly publish.
+    .OUTPUTS
+        System.String
+    #>
+    [CmdletBinding()]
+    [OutputType([string])]
+    param(
+        [Parameter()][switch]$Unattended
+    )
+
+    if ($Unattended) {
+        return 'This run publishes without prompts, so setup continues in the console.'
+    }
+
+    $cloudShellDetected = -not [string]::IsNullOrWhiteSpace([string]$env:ACC_CLOUD) -or
+        [string]$env:AZUREPS_HOST_ENVIRONMENT -match 'CloudShell'
+    if ($cloudShellDetected) {
+        return 'Azure Cloud Shell cannot show the browser setup, so setup continues in the console.'
+    }
+
+    $isRemoteSession = @(@(
+            $env:SSH_CONNECTION
+            $env:SSH_CLIENT
+            $env:SSH_TTY
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    if ($isRemoteSession.Count -gt 0) {
+        # A remote Unix shell can still reach a local display through X or Wayland
+        # forwarding; Windows and macOS shells have no desktop session over SSH.
+        $hasLocalDisplay = -not [string]::IsNullOrWhiteSpace([string]$env:DISPLAY) -or
+            -not [string]::IsNullOrWhiteSpace([string]$env:WAYLAND_DISPLAY)
+        if ($IsWindows -or $IsMacOS -or -not $hasLocalDisplay) {
+            return 'This remote session has no local browser, so setup continues in the console.'
+        }
+    }
+
+    return ''
+}
+
+function Resolve-SetupInterfaceMode {
+    <#
+    .SYNOPSIS
+        Chooses the browser or console setup experience for this run.
+    .DESCRIPTION
+        The browser setup is the default. Console forces the console menu, and the Web
+        switch remains accepted because the browser setup is already the default.
+        Environments that cannot show the browser page fall back to the console with a
+        reason the caller can display.
+    .PARAMETER Console
+        Forces the console menu.
+    .PARAMETER Web
+        Deprecated switch, accepted so existing invocations keep working.
+    .PARAMETER Unattended
+        The run publishes without prompting, so it cannot use the browser setup.
+    .OUTPUTS
+        PSCustomObject with Mode and Reason properties.
+    #>
+    [CmdletBinding()]
+    [OutputType([pscustomobject])]
+    param(
+        [Parameter()][switch]$Console,
+        [Parameter()][switch]$Web,
+        [Parameter()][switch]$Unattended
+    )
+
+    if ($Console -and $Web) {
+        throw 'Console cannot be combined with the deprecated Web switch.'
+    }
+
+    if ($Console) {
+        return [pscustomobject]@{ Mode = 'Console'; Reason = '' }
+    }
+
+    $limitation = Get-SetupBrowserModeLimitation -Unattended:$Unattended
+    if (-not [string]::IsNullOrWhiteSpace($limitation)) {
+        return [pscustomobject]@{ Mode = 'Console'; Reason = $limitation }
+    }
+
+    return [pscustomobject]@{ Mode = 'Web'; Reason = '' }
+}
+
 function Initialize-SetupWebHost {
     <#
     .SYNOPSIS
@@ -1509,7 +1599,7 @@ function Write-SetupWebPromptFrame {
     if ($effectiveGuidanceLines.Count -eq 0) {
         $effectiveGuidanceLines = switch ($PromptKind) {
             'Menu' { @('Choose the option that fits your setup.', 'You can return to earlier setup steps at any time.') }
-            'Text' { @('Enter the requested value. Leave it blank to accept the shown default when one is available.') }
+            'Text' { @('Enter the requested value. When a default is available, the field is pre-filled and Reset to default restores it.') }
             'YesNo' { @('Choose Yes or No. The highlighted choice is the default.') }
             'Secret' { @('Input is masked while typing and is never included in setup summaries.') }
         }
@@ -1660,8 +1750,10 @@ function Read-SetupWebTextWithDefault {
     .SYNOPSIS
         Browser replacement for Read-TextWithDefault.
     .DESCRIPTION
-        Blank input returns a nonblank default, then an allowed empty string, otherwise
-        shows a validation message and waits again. Nonblank text is trimmed.
+        The browser pre-fills the editable field with a nonblank default and offers a
+        reset control. Blank input still returns the default, then an allowed empty
+        string, otherwise shows a validation message and waits again. Nonblank text is
+        trimmed.
     #>
     [CmdletBinding()]
     [OutputType([string])]
@@ -2450,6 +2542,9 @@ function Invoke-SetupWebWizard {
 
                         throw ([System.OperationCanceledException]::new('Setup cancelled by user.'))
                     }
+                    if (Test-IsSetupWizardCancelException -Exception $_.Exception) {
+                        return $null
+                    }
 
                     throw
                 }
@@ -2646,6 +2741,9 @@ function Invoke-SetupWebWizard {
                         if (Test-IsSetupWizardBackException -Exception $_.Exception) {
                             continue
                         }
+                        if (Test-IsSetupWizardCancelException -Exception $_.Exception) {
+                            return $null
+                        }
                         if ($_.Exception -is [System.OperationCanceledException] -or (Test-IsUserInterruptException -Exception $_.Exception)) {
                             throw
                         }
@@ -2727,6 +2825,9 @@ function Invoke-SetupWebWizard {
                     catch {
                         if (Test-IsSetupWizardBackException -Exception $_.Exception) {
                             continue
+                        }
+                        if (Test-IsSetupWizardCancelException -Exception $_.Exception) {
+                            return $null
                         }
                         if ($_.Exception -is [System.OperationCanceledException] -or (Test-IsUserInterruptException -Exception $_.Exception)) {
                             throw

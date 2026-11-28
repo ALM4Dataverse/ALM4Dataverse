@@ -9,6 +9,18 @@ out safely.
 
 ## Setup
 
+### Guided Setup Opens In The Browser
+
+**You'll see:** running `setup-github.ps1` or `setup-azdo.ps1` opens the guided setup in
+your default browser instead of the console menu. The browser page and the terminal stay
+available together, and no setup credential or secret value is served to the page.
+
+**Do this:** nothing for a normal run. Pass `-Console` when you want the console menu, for
+example over a slow remote connection. `-Web` is still accepted but no longer changes
+anything. Azure Cloud Shell, a remote shell without a local browser, and unattended
+`-Commit`/`-PreviewOnly` runs use the console automatically, and setup falls back to the
+console with a message if the browser page cannot start.
+
 ### Guided Setup Validates Existing App Registrations
 
 **You'll see:** after you enter an existing application ID, guided setup reports whether
@@ -28,6 +40,20 @@ action is needed for app registrations that already have the permission, an ente
 application and a correctly configured authentication method. The new **Create a new
 application manually (with instructions)** and **Search for an existing application by
 name** options are optional.
+
+### Guided Setup Requests The GitHub Workflow Scope
+
+**You'll see:** guided setup signs in to GitHub with the `workflow` scope, and an existing
+GitHub CLI OAuth login that lacks it opens GitHub to add the scope before setup continues.
+Setup creates and updates `.github/workflows` files, which GitHub rejects for OAuth
+credentials without that scope. Fine-grained and App tokens are not refreshed
+automatically.
+
+**Do this:** approve the scope request. If you decline, run
+`gh auth refresh -h github.com -s workflow` and rerun, or grant **Workflows: Read and
+write** to a fine-grained token. Until the credential has the permission, a push fails
+with `refusing to allow an OAuth App to create or update workflow ... without 'workflow'
+scope`.
 
 ### Apply Configuration Opens A Pull Request
 

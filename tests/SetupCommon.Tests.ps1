@@ -846,8 +846,7 @@ Describe 'Setup selector state transitions' {
     ) {
         $script:menuAnswers.Enqueue($Strategy)
         $script:menuAnswers.Enqueue('Done')
-        $initial = [pscustomobject]@{ BranchName = 'main'; Environments = @() }
-        $result = @(Select-BranchEnvironmentMapping -InitialBranchMappings @($initial) -BranchOnly -IsNewRepository -EditDevEnvironmentScriptBlock {
+        $result = @(Select-BranchEnvironmentMapping -InitialBranchMappings @() -BranchOnly -IsNewRepository -EditDevEnvironmentScriptBlock {
             param($allMappings, $mapping)
             $allMappings.Count | Should -Be $ExpectedBranches.Count
             [pscustomobject]@{ ShortName = "Dev-$($mapping.BranchName)" }
@@ -868,6 +867,16 @@ Describe 'Setup selector state transitions' {
         $initial = [pscustomobject]@{ BranchName = 'main'; Environments = @() }
 
         $result = @(Select-BranchEnvironmentMapping -InitialBranchMappings @($initial) -BranchOnly)
+
+        @($result.BranchName) | Should -Be @('main')
+        $script:menuAnswers.Count | Should -Be 0
+    }
+
+    It 'skips branch-strategy selection when a new repository already has mappings' {
+        $script:menuAnswers.Enqueue('Done')
+        $initial = [pscustomobject]@{ BranchName = 'main'; Environments = @() }
+
+        $result = @(Select-BranchEnvironmentMapping -InitialBranchMappings @($initial) -BranchOnly -IsNewRepository)
 
         @($result.BranchName) | Should -Be @('main')
         $script:menuAnswers.Count | Should -Be 0
@@ -1120,7 +1129,30 @@ Describe 'Setup wizard navigation menu' {
             }
             $script:wizardSelections.Dequeue()
         }
+        # Closures resolve Select-FromMenu through Get-SetupCommandBinding. Give the
+        # override the same recording behavior as the test mock so prompt menus are
+        # visible in the assertions and consume the queued selections.
+        Set-Variable -Name SetupCommandBindingOverrides -Scope Global -Value @{
+            'Select-FromMenu' = {
+                param($Title, $Items, $PromptGuidanceLines, $PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                $null = @($PromptGuidanceDocRelativePath, $PromptGuidanceRef)
+                $script:wizardMenuItems += ,@($Items)
+                $script:wizardDimMenuItems += ,@()
+                $script:wizardItemStyles += ,$null
+                $script:wizardActionMenuItems += ,@()
+                $script:wizardActionSectionsFirst += $false
+                $script:wizardPromptGuidanceLines += ,@($PromptGuidanceLines)
+                if ($script:wizardSelections.Count -eq 0) {
+                    throw "Unexpected setup menu: $Title"
+                }
+                $script:wizardSelections.Dequeue()
+            }
+        }
         [Spectre.Console.AnsiConsole]::Clear()
+    }
+
+    AfterEach {
+        Remove-Variable -Name SetupCommandBindingOverrides -Scope Global -ErrorAction SilentlyContinue
     }
 
     It 'allows existing repositories to jump between steps and invalidates later completion' {
@@ -1276,7 +1308,7 @@ Describe 'Setup wizard navigation menu' {
     }
 
     It 'keeps optional environment steps unavailable until the enable step is completed' {
-        foreach ($selection in @(0, 1, 2, 3, 4, 0)) {
+        foreach ($selection in @(0, 0, 1, 2, 3, 4, 0)) {
             $script:wizardSelections.Enqueue($selection)
         }
         $script:environmentTestCredential = [pscustomobject]@{
@@ -1299,10 +1331,30 @@ Describe 'Setup wizard navigation menu' {
         $result.Url | Should -Be 'https://dev.example.com'
         $result.Credentials | Should -Be $script:environmentTestCredential
         $result.ServiceAccountUPN | Should -Be 'dev@example.com'
-        $script:wizardMenuItems[0] | Should -Contain '• DEV environment - Not configured'
+        $script:wizardMenuItems[0] | Should -Contain '• Enable DEV environment - Not enabled'
+        $script:wizardMenuItems[1] | Should -Contain 'Enable DEV environment (recommended) - configure the branch''s Dataverse environment'
+        $script:wizardMenuItems[1] | Should -Contain 'Do not enable DEV environment - this branch cannot export or provide solutions'
         $script:wizardDimMenuItems[0] | Should -Contain '• Dataverse environment - Not selected'
-        $script:wizardMenuItems[1] | Should -Contain '✓ DEV environment - Enabled'
-        $script:wizardDimMenuItems[1] | Should -Not -Contain '• Dataverse environment - Not selected'
+        $script:wizardMenuItems[2] | Should -Contain '✓ Enable DEV environment - Enabled'
+        $script:wizardDimMenuItems[2] | Should -Not -Contain '• Dataverse environment - Not selected'
+        $script:wizardSelections.Count | Should -Be 0
+    }
+
+    It 'returns null when the DEV enable step is declined' {
+        $script:wizardSelections.Enqueue(0)
+        $script:wizardSelections.Enqueue(1)
+
+        $result = Invoke-SetupEnvironmentConfigurationWizard `
+            -Title 'Configure DEV environment' `
+            -OptionalConfiguration `
+            -SelectDataverseEnvironmentAction { throw 'Declining must not select a Dataverse environment.' } `
+            -SelectTargetNameAction { 'Dev-main' } `
+            -SelectCredentialsAction { throw 'Declining must not select credentials.' } `
+            -SelectServiceAccountAction { throw 'Declining must not select a service account.' }
+
+        $result | Should -BeNullOrEmpty
+        $script:wizardMenuItems[0] | Should -Contain '• Enable DEV environment - Not enabled'
+        $script:wizardMenuItems[1] | Should -Contain 'Do not enable DEV environment - this branch cannot export or provide solutions'
         $script:wizardSelections.Count | Should -Be 0
     }
 

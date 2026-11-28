@@ -3,7 +3,9 @@
 [`tools/SetupE2e/Invoke-SetupE2e.ps1`](../../tools/SetupE2e/Invoke-SetupE2e.ps1) runs the
 real `setup-azdo.ps1` or `setup-github.ps1` in a pseudo-terminal, records every keystroke
 and screen frame, and can replay a recorded sequence. Use it to verify the interactive
-setup experience end to end against disposable organizations.
+setup experience end to end against disposable organizations. Scenarios drive the console
+menus, so the harness always passes `-Console` to setup; the browser experience is covered
+by the screenshot capture tool.
 
 > [!WARNING]
 > A run provisions real Azure DevOps or GitHub resources, creates Entra app

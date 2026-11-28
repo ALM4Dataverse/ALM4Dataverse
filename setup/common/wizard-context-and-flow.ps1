@@ -196,6 +196,35 @@ function Test-IsSetupWizardBackException {
     return $false
 }
 
+function Request-SetupWizardCancel {
+    # Cancels the current nested wizard without completing its active step. The
+    # exception protocol lets an optional step leave the wizard from its own action.
+    [CmdletBinding()]
+    param()
+
+    throw ([System.InvalidOperationException]::new('__ALM4DATAVERSE_WIZARD_CANCEL__'))
+}
+
+function Test-IsSetupWizardCancelException {
+    # Match the exact marker and exception type, including reflection-wrapped errors.
+    [CmdletBinding()]
+    [OutputType([bool])]
+    param(
+        [Parameter(Mandatory)][System.Exception]$Exception
+    )
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [System.InvalidOperationException] -and $current.Message -eq '__ALM4DATAVERSE_WIZARD_CANCEL__') {
+            return $true
+        }
+
+        $current = $current.InnerException
+    }
+
+    return $false
+}
+
 function New-SetupHeroPanel {
     # Despite the legacy name this returns plain banner text, not a Spectre panel.
     [CmdletBinding()]
@@ -884,6 +913,9 @@ function Invoke-SetupWizard {
                     if (Test-IsSetupWizardBackException -Exception $_.Exception) {
                         continue
                     }
+                    if (Test-IsSetupWizardCancelException -Exception $_.Exception) {
+                        return $null
+                    }
                     throw
                 }
 
@@ -958,6 +990,9 @@ function Invoke-SetupWizard {
                     }
 
                     throw ([System.OperationCanceledException]::new('Setup cancelled by user.'))
+                }
+                if (Test-IsSetupWizardCancelException -Exception $_.Exception) {
+                    return $null
                 }
 
                 throw

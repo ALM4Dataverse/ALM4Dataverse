@@ -198,6 +198,8 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 
 | Parameter | Type | Default | Meaning |
 | --- | --- | --- | --- |
+| `Console` | Switch | Off | Use the console menu instead of the browser setup. Environments that cannot show the browser page, such as Azure Cloud Shell, a remote shell without a local browser, and unattended `-Commit`/`-PreviewOnly` runs, already use the console. |
+| `Web` | Switch | Deprecated | Accepted so existing invocations keep working. Setup opens the browser setup by default; use `Console` to force the console menu. |
 | `TenantId` | String | Tenant returned by sign-in | Constrain setup's Microsoft sign-in to a tenant GUID or domain. Ignored by GitHub `-ApplyConfig`, which does not sign in to Azure. |
 | `ALM4DataverseRef` | String | Embedded release ref | Choose the shared code ref used during setup. Repository-source scripts resolve the local branch/commit, falling back to `stable`. |
 | `ApplyConfig` | Switch | Off | Select an existing repository and review then regenerate/publish caller files from its committed `alm-config.psd1`; skips settings editors and provider-resource provisioning. Branch, environment, solution, BUILD validation and OIDC changes are made only by editing and committing `alm-config.psd1`. Its external-resource plan is empty. Requires provider, repository, ref, and a non-empty branches map. |
@@ -208,6 +210,11 @@ Both [setup-azdo.ps1](../../setup-azdo.ps1) and [setup-github.ps1](../../setup-g
 | `OrganizationName` | String | Empty | Azure DevOps only: organization used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline derives it from `System.CollectionUri`. |
 | `ProjectName` | String | Empty | Azure DevOps only: project used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `System.TeamProject`. |
 | `RepositoryName` | String | Empty | Azure DevOps only: application repository used by unattended `-Commit` and `-PreviewOnly` runs; the APPLY-CONFIG pipeline supplies `Build.Repository.Name`. |
+
+Interactive setup opens a guided wizard in a local browser window. Pass `Console` to
+use the console menu instead. Azure Cloud Shell, a remote shell without a local browser,
+and unattended `-Commit`/`-PreviewOnly` runs use the console automatically, and setup
+falls back to it if the browser page cannot start.
 
 `UseDeviceAuthentication` is still accepted so older invocations keep working, but it
 does not select the sign-in flow. Setup uses browser sign-in when the host can open a

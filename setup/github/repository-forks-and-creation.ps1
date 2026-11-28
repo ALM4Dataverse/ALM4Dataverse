@@ -224,6 +224,8 @@ function Get-GitHubForkSyncState {
         throw "Failed to clone repository '$ForkFullName'. $cloneErrorMessage"
     }
 
+    Set-GitHubCloneCredentialHelper -RepoRoot $WorkRoot
+
     $previousErrorActionPreference = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
@@ -535,8 +537,11 @@ function Invoke-GitHubSharedWorkflowRepositorySync {
                     & git -C $WorkRoot merge --ff-only $forkSyncState.UpstreamRef 2>&1 | Out-Host
                     if ($LASTEXITCODE -ne 0) { throw 'Git merge failed.' }
 
-                    & git -C $WorkRoot push origin $DefaultBranch 2>&1 | Out-Host
-                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                    $fastForwardPushOutput = @(& git -C $WorkRoot push origin $DefaultBranch 2>&1)
+                    if ($LASTEXITCODE -ne 0) {
+                        Assert-GitHubPushSucceeded -Output $fastForwardPushOutput -Target $DefaultBranch
+                    }
+                    $fastForwardPushOutput | Out-Host
                 }
                 finally {
                     $ErrorActionPreference = $previousErrorActionPreference
@@ -561,8 +566,11 @@ function Invoke-GitHubSharedWorkflowRepositorySync {
                         throw "Git rebase failed - resolve conflicts manually in '$RepositoryFullName'."
                     }
 
-                    & git -C $WorkRoot push --force-with-lease origin $DefaultBranch 2>&1 | Out-Host
-                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                    $rebasePushOutput = @(& git -C $WorkRoot push --force-with-lease origin $DefaultBranch 2>&1)
+                    if ($LASTEXITCODE -ne 0) {
+                        Assert-GitHubPushSucceeded -Output $rebasePushOutput -Target $DefaultBranch
+                    }
+                    $rebasePushOutput | Out-Host
                 }
                 finally {
                     $ErrorActionPreference = $previousErrorActionPreference
@@ -584,8 +592,11 @@ function Invoke-GitHubSharedWorkflowRepositorySync {
                         throw "Failed to reset shared workflow repository '$RepositoryFullName' to ref '$Reference'."
                     }
 
-                    & git -C $WorkRoot push --force-with-lease origin $DefaultBranch 2>&1 | Out-Host
-                    if ($LASTEXITCODE -ne 0) { throw 'Git push failed.' }
+                    $resetPushOutput = @(& git -C $WorkRoot push --force-with-lease origin $DefaultBranch 2>&1)
+                    if ($LASTEXITCODE -ne 0) {
+                        Assert-GitHubPushSucceeded -Output $resetPushOutput -Target $DefaultBranch
+                    }
+                    $resetPushOutput | Out-Host
                 }
                 finally {
                     $ErrorActionPreference = $previousErrorActionPreference
@@ -697,14 +708,17 @@ function Initialize-GitHubSharedWorkflowFork {
         with lease protection to Reference; other repositories follow ancestry-based
         update prompts. Creating a repository requires an explicit confirmation because
         the write happens during selection, before preview and Apply. SelectOnly returns
-        repository details without checking or changing its version. UsePreferredRepository
-        skips the selection prompt and resolves PreferredRepositoryFullName directly.
-        This interactive operation is not guarded by ShouldProcess.
+        existing repository details without checking or changing its version; a
+        repository created during selection is still aligned because it has no usable
+        history. UsePreferredRepository skips the selection prompt and resolves
+        PreferredRepositoryFullName directly. This interactive operation is not guarded
+        by ShouldProcess.
     .PARAMETER PreferredRepositoryFullName
         Existing repository offered first during selection, or resolved directly with
         UsePreferredRepository.
     .PARAMETER SelectOnly
-        Returns the selected repository without checking or changing its version.
+        Returns an existing repository without checking or changing its version. A
+        repository created during selection is aligned to the upstream ref first.
     .PARAMETER UsePreferredRepository
         Skips the selection menu and loads PreferredRepositoryFullName directly.
     #>
@@ -921,7 +935,7 @@ function Initialize-GitHubSharedWorkflowFork {
         $defaultBranch = $sharedRepo.defaultBranchRef.name
     }
 
-    if ($SelectOnly) {
+    if ($SelectOnly -and -not $createdNewSharedRepository) {
         return $sharedRepo
     }
 
@@ -944,7 +958,11 @@ function Initialize-GitHubSharedWorkflowFork {
         try { Remove-Item -LiteralPath $workParent -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared workflow repository; continuing cleanup.' }
     }
 
-    return Get-GitHubRepo -Owner $sharedRepoOwnerName -Repo $sharedRepoName
+    $resultRepository = Get-GitHubRepo -Owner $sharedRepoOwnerName -Repo $sharedRepoName
+    if ($createdNewSharedRepository) {
+        $resultRepository | Add-Member -NotePropertyName 'NewlyCreated' -NotePropertyValue $true
+    }
+    return $resultRepository
 }
 
 function New-GitHubRepositoryInteractive {

@@ -36,12 +36,13 @@ and small caller files; the shared automation stays here or in your fork. See th
 ## Getting Started
 
 Pick a platform and follow its quickstart: it takes you from nothing to a first test
-deployment using automated setup.
+deployment using automated setup. Setup opens a guided wizard in your browser and asks
+only for the choices it needs; pass `-Console` when you prefer the console menu.
 
 - [Quickstart: GitHub Actions](docs/getting-started/quickstart-github.md)
 - [Quickstart: Azure DevOps](docs/getting-started/quickstart-azdo.md)
 
-![Interactive walkthrough of ALM4Dataverse automated setup with character-by-character typing: sign-in, project and repository selection, shared repository update strategy, branch environments, authentication, manual app-creation instructions, existing-app validation, preview, apply, and GitHub support](docs/setup/screenshots/setup-walkthrough.gif)
+![Interactive walkthrough of the ALM4Dataverse browser setup: sign-in, project and repository selection, shared repository update strategy, branch environments, authentication, manual app-creation instructions, existing-app validation, preview, apply, and GitHub support](docs/setup/screenshots/setup-walkthrough.gif)
 
 Not sure which platform? Read
 [Should I use Azure DevOps or GitHub?](docs/faqs.md#should-i-use-azure-devops-or-github)

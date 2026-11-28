@@ -38,6 +38,9 @@ Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/lates
 .\setup-azdo.ps1
 ```
 
+Setup opens a guided wizard in your browser. Pass `-Console` to use the console menu
+instead; Azure Cloud Shell uses it automatically because it cannot show the browser page.
+
 You can also run setup in [Azure Cloud Shell](../setup/azdo-automated-setup.md#run-in-azure-cloud-shell);
 choose PowerShell and use the one-line bootstrap there.
 

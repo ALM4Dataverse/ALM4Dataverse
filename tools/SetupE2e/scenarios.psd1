@@ -42,8 +42,10 @@
             @{ Action = 'Select'; Text = 'Configure branches, dev and deployment envs' }
             @{ Action = 'Wait'; Text = 'Choose a branching strategy' }
             @{ Action = 'Select'; Text = 'main + develop' }
-            @{ Action = 'Wait'; Text = "Configure a DEV environment for branch 'main'" }
-            @{ Action = 'Keys'; Keys = 'n{ENTER}' }
+            @{ Action = 'Wait'; Text = "Configure DEV environment for branch 'main' menu" }
+            @{ Action = 'Select'; Text = 'Enable DEV environment - Not enabled' }
+            @{ Action = 'Wait'; Text = 'Enable DEV environment (recommended)' }
+            @{ Action = 'Select'; Text = 'Do not enable DEV environment' }
             @{ Action = 'Wait'; Text = "Target Deployment Environments for branch 'main'" }
             @{ Action = 'Select'; Text = 'Add an environment' }
             @{ Action = 'Wait'; Text = 'Configure a deployment environment menu' }
@@ -72,7 +74,9 @@
             @{ Action = 'Select'; Text = 'Done - Ready' }
             @{ Action = 'Wait'; Text = "Target Deployment Environments for branch 'main'" }
             @{ Action = 'Select'; Text = 'Done' }
-            @{ Action = 'Wait'; Text = "Configure a DEV environment for branch 'develop'" }
+            @{ Action = 'Wait'; Text = "Configure DEV environment for branch 'develop' menu" }
+            @{ Action = 'Select'; Text = 'Enable DEV environment - Not enabled' }
+            @{ Action = 'Wait'; Text = 'Enable DEV environment (recommended)' }
             @{ Action = 'Keys'; Keys = '{ENTER}' }
             @{ Action = 'Wait'; Text = "Configure DEV environment for branch 'develop' menu" }
             @{ Action = 'Select'; Text = 'Dataverse environment' }
@@ -180,8 +184,9 @@
             @{ Action = 'Wait'; Text = 'Branch name' }
             @{ Action = 'Type'; Text = 'develop' }
             @{ Action = 'Keys'; Keys = '{ENTER}' }
-            @{ Action = 'Wait'; Text = "Configure a DEV Dataverse environment for branch 'develop'" }
-            @{ Action = 'Type'; Text = 'y' }
+            @{ Action = 'Wait'; Text = "Configure DEV environment for branch 'develop' menu" }
+            @{ Action = 'Select'; Text = 'Enable DEV environment - Not enabled' }
+            @{ Action = 'Wait'; Text = 'Enable DEV environment (recommended)' }
             @{ Action = 'Keys'; Keys = '{ENTER}' }
             @{ Action = 'Wait'; Text = "Configure DEV environment for branch 'develop' menu" }
             @{ Action = 'Select'; Text = 'Dataverse environment' }

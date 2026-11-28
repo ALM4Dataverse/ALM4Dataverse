@@ -12,6 +12,9 @@ are published; cancelling publication does not roll back those resources.
 ApplyConfig reads the selected existing repository's committed alm-config.psd1,
 reviews generated changes and publishes them without editing settings or provisioning
 Azure DevOps pipelines, permissions or environment resources.
+Interactive setup opens the guided wizard in a local browser window. Console forces
+the console menu, and environments that cannot show the browser page fall back to it
+automatically.
 .NOTES
 Selected mutation helpers support ShouldProcess; the interactive installer as a whole
 does not provide a dry run.
@@ -22,12 +25,11 @@ Retained for invocation compatibility; the current authentication flow does not 
 .PARAMETER ALM4DataverseRef
 Upstream template ref. Releases supply a default; development resolves a local branch or
 commit after Git is available, falling back to stable.
+.PARAMETER Console
+Forces the console menu instead of the browser setup.
 .PARAMETER Web
-Runs the same guided setup in a local browser window. Starts a loopback-only web
-server, serves an embedded UI with the product logo, and launches the default
-browser. Non-linear setup steps appear as a card-based setup map instead of a
-console menu. The browser and terminal remain available together, and no setup
-credential or secret value is served to the page.
+Deprecated. Setup opens the browser setup by default, so this switch changes
+nothing; use Console to force the console menu.
 .PARAMETER ApplyConfig
 Read the committed alm-config.psd1 from an existing repository, review the generated
 changes and publish them without running the configuration editors.
@@ -57,6 +59,9 @@ param(
 
     [Parameter()]
     [switch]$ApplyConfig,
+
+    [Parameter()]
+    [switch]$Console,
 
     [Parameter()]
     [switch]$Web,
@@ -118,6 +123,10 @@ if ($Web -and ($Commit -or $PreviewOnly)) {
     throw 'Web requires interactive setup and cannot be combined with Commit or PreviewOnly.'
 }
 
+if ($Console -and $Web) {
+    throw 'Console cannot be combined with the deprecated Web switch.'
+}
+
 $missingResourceParameters = @(@($AccessToken, $OrganizationName, $ProjectName, $RepositoryName) | Where-Object { [string]::IsNullOrWhiteSpace([string]$_) })
 if ($Commit -and $missingResourceParameters.Count -gt 0) {
     throw 'Commit requires AccessToken, OrganizationName, ProjectName and RepositoryName so setup can resolve resources without prompts.'
@@ -151,13 +160,31 @@ else {
     __SETUP_AZDO_BOOTSTRAP_LIB__
 }
 
+$interfaceSelection = Resolve-SetupInterfaceMode -Console:$Console -Web:$Web -Unattended:$headlessMode
+$webMode = $interfaceSelection.Mode -eq 'Web'
 if ($Web) {
-    Initialize-SetupWebHost `
-        -Provider 'Azure DevOps' `
-        -ProductVersion 'Development' `
-        -Title 'Azure DevOps setup' `
-        -Reference $ALM4DataverseRef `
-        -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath | Out-Null
+    Write-Host 'The -Web switch is deprecated. Setup opens the browser by default; use -Console to force the console menu.' -ForegroundColor Yellow
+}
+if (-not $webMode -and -not [string]::IsNullOrWhiteSpace($interfaceSelection.Reason)) {
+    Write-Host $interfaceSelection.Reason -ForegroundColor Yellow
+}
+
+if ($webMode) {
+    try {
+        Initialize-SetupWebHost `
+            -Provider 'Azure DevOps' `
+            -ProductVersion 'Development' `
+            -Title 'Azure DevOps setup' `
+            -Reference $ALM4DataverseRef `
+            -DefaultHelpDocRelativePath $script:SetupDefaultHelpDocRelativePath | Out-Null
+    }
+    catch {
+        # Setup must not lose the run because the browser page cannot start; the
+        # console menus cover the same steps.
+        $webMode = $false
+        Write-Warning "The browser setup could not start: $($_.Exception.Message) Continuing in the console; use -Console to choose it deliberately."
+        Close-SetupWebHost
+    }
 }
 
 #region Initialization
@@ -181,7 +208,7 @@ if ($script:ALM4DataverseVersion -like '__*') {
     $script:ALM4DataverseVersion = 'Development'
 }
 
-if ($Web) {
+if ($webMode) {
     Publish-SetupWebIdentity -ProductVersion $script:ALM4DataverseVersion -Reference $ALM4DataverseRef
 }
 
@@ -254,7 +281,7 @@ if ($resolveDevRefAfterGitIsAvailable) {
     Write-Host "Development mode: Resolved ALM4DataverseRef to '$ALM4DataverseRef'" -ForegroundColor Yellow
 }
 
-if ($Web) {
+if ($webMode) {
     Publish-SetupWebIdentity -Reference $ALM4DataverseRef
 }
 
@@ -459,12 +486,12 @@ try {
 catch {
     if ($_.Exception.Message -eq 'Setup cancelled before changes were applied.' -or (Test-IsSetupWizardBackException -Exception $_.Exception)) {
         Write-Host 'Azure DevOps setup cancelled before branch configuration.' -ForegroundColor Yellow
-        if ($Web) {
+        if ($webMode) {
             Show-SetupWebStopScreen -Title 'Azure DevOps setup cancelled' -Message 'Setup stopped before branch configuration. No changes were applied.'
         }
         return
     }
-    if ($Web) {
+    if ($webMode) {
         Show-SetupWebFailure -Title 'Azure DevOps setup failed' -ErrorRecord $_
         Close-SetupWebHost
         return
@@ -489,7 +516,7 @@ $sharedRepoName = $initialization.SharedRepoName
 $sharedRepositoryRef = $initialization.SharedRepositoryRef
 $isNewRepository = [bool]$initialization.MainRepoIsNew
 
-if ($Web) {
+if ($webMode) {
     $repositoryUrlName = [System.Uri]::EscapeDataString([string]$mainRepo.Name)
     Publish-SetupWebRepository `
         -Name "$orgName/$($selectedProject.Name)/$($mainRepo.Name)" `
@@ -805,7 +832,7 @@ catch {
     if ($sharedRepoClone -and (Test-Path -LiteralPath $sharedRepoClone)) {
         try { Remove-Item -LiteralPath $sharedRepoClone -Recurse -Force -ErrorAction Stop } catch { Write-Verbose 'Could not remove the shared repository clone; continuing cleanup.' }
     }
-    if ($Web) {
+    if ($webMode) {
         Show-SetupWebFailure -Title 'Azure DevOps setup failed' -ErrorRecord $_
         Close-SetupWebHost
         return
@@ -925,7 +952,7 @@ catch {
         (Test-IsSetupWizardBackException -Exception $_.Exception)
     ) {
         Write-Host 'Azure DevOps setup exited before applying changes.' -ForegroundColor Yellow
-        if ($Web) {
+        if ($webMode) {
             Show-SetupWebStopScreen -Title 'Azure DevOps setup stopped' -Message 'Setup exited before applying changes. The repository was not published.'
         }
         if ($mainRepoWorkingRoot -and (Test-Path -LiteralPath $mainRepoWorkingRoot)) {
@@ -933,7 +960,7 @@ catch {
         }
         return
     }
-    if ($Web) {
+    if ($webMode) {
         Show-SetupWebFailure -Title 'Azure DevOps setup failed' -ErrorRecord $_
         Close-SetupWebHost
         return
@@ -996,6 +1023,6 @@ Show-SetupCompletionScreen `
         @{ Label = 'Run DEPLOY to promote the build'; Url = (Get-Alm4DataverseDocUrl -RelativePath 'docs/usage/deploying.md' -Ref $ALM4DataverseRef) }
     )
 
-if ($Web) {
+if ($webMode) {
     Close-SetupWebHost
 }

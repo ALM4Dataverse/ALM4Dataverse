@@ -73,12 +73,15 @@ Release packaging tests generate and parse both standalone setup installers.
 ## Setup Screenshot Capture
 
 The full capture regenerates the setup PNGs and the interactive walkthrough GIF
-embedded in the [README](../../README.md). It requires PowerShell 7.6 on .NET 10 or
-newer, NuGet access on first use, the platform font listed in the
+embedded in the [README](../../README.md). It runs the real setup helpers, starts the
+real loopback browser setup, and renders the page with a pinned Playwright Chromium
+build. It requires PowerShell 7.6 on .NET 10 or newer, Node.js with npm, NuGet access on
+first use, the platform font listed in the
 [repository instructions](../../AGENTS.md), and ffmpeg with drawtext and
-fontconfig support. The Dev Container installs ffmpeg and Noto Sans Mono.
-The GIF holds setup checkpoints for six seconds, types characters one at a time,
-and uses a semi-transparent caption footer below a raised green divider.
+fontconfig support. The first browser capture downloads the pinned Playwright browser.
+The Dev Container installs ffmpeg, Node.js and Noto Sans Mono.
+The GIF holds setup checkpoints for six seconds and uses a semi-transparent caption
+footer below a raised green divider.
 
 Run the full capture from the repository root:
 
@@ -87,7 +90,9 @@ pwsh -NoLogo -NoProfile -File ./tools/SetupScreenshotCapture/Capture-SetupScreen
 ```
 
 Use `-Scene <name>` to capture one PNG without creating the GIF, or
-`-SkipAnimation` to regenerate the complete PNG set without ffmpeg.
+`-SkipAnimation` to regenerate the complete PNG set without ffmpeg. Pass `-Console` to
+capture the console setup instead; that path needs no Node.js and keeps the PTY-backed
+terminal renderer used by the setup E2E tool.
 
 ## Test Organisation
 

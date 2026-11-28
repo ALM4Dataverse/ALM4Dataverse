@@ -27,6 +27,9 @@ with the [GitHub quickstart](../getting-started/quickstart-github.md).
   PowerShell 7 on Linux with Git and GitHub CLI on `PATH`, and network access to GitHub
   and the required Microsoft services. Setup downloads a temporary GitHub CLI when `gh`
   is missing on Windows. Azure Cloud Shell includes PowerShell, Git and GitHub CLI.
+  The GitHub CLI sign-in needs the `workflow` scope because setup creates and updates
+  `.github/workflows` files; setup requests it for new logins and adds it to an existing
+  OAuth login.
 
 > [!NOTE]
 > **Optional Dev Container.** The repository includes a
@@ -67,7 +70,8 @@ To select a tenant or a specific shared-code ref, see
 
 ### Run in Azure Cloud Shell
 
-Setup can run in [Azure Cloud Shell](https://shell.azure.com). Choose **PowerShell** and
+Setup can run in [Azure Cloud Shell](https://shell.azure.com). Cloud Shell cannot show
+the browser setup, so setup uses the console menu automatically. Choose **PowerShell** and
 run the one-line bootstrap:
 
 ```powershell
@@ -77,16 +81,22 @@ iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setu
 
 ### Guided Setup
 
-Setup asks a few questions, then opens a menu. New repositories unlock steps in order; an
+Setup opens a guided wizard in your browser. New repositories unlock steps in order; an
 existing repository starts from the settings in `alm-config.psd1` and lets you open any
-step. After each step you return to the menu. **Preview changes** is optional, and
-**Apply changes** stays unavailable until every required step is complete.
+step. After each step you return to the setup map. **Preview changes** is optional, and
+**Apply changes** stays unavailable until every required step is complete. The terminal
+stays available and shows the same activity log as the page.
 
-![Guided setup menu for a new GitHub repository](./screenshots/github-menu-new-repository.png)
+Pass `-Console` to use the console menu instead, for example over a slow remote
+connection. Azure Cloud Shell, a remote shell without a local browser, and unattended
+`-Commit`/`-PreviewOnly` runs use the console automatically, and setup falls back to it
+with a message if the browser page cannot start.
 
-![Guided setup menu for an existing GitHub repository with saved branch mappings](./screenshots/github-menu-existing-repository.png)
+![Guided setup map for a new GitHub repository](./screenshots/github-menu-new-repository.png)
 
-![Guided setup menu when the configured shared workflow repository is inaccessible](./screenshots/github-menu-unavailable-shared-repository.png)
+![Guided setup map for an existing GitHub repository with saved branch mappings](./screenshots/github-menu-existing-repository.png)
+
+![Guided setup map when the configured shared workflow repository is inaccessible](./screenshots/github-menu-unavailable-shared-repository.png)
 
 #### 1. New or existing repository
 
@@ -99,13 +109,17 @@ publishes files. The choice appears before authentication.
 
 #### 2. Sign in and select the application repository
 
-Setup signs in to GitHub and Azure, then asks for the application repository. Existing
-repository choices include repositories you own, repositories in your organizations, and
-repositories shared with you as a collaborator.
+Setup signs in to GitHub and Azure, then resolves the application repository. When the
+GitHub CLI login is missing the `workflow` scope required for workflow files, setup opens
+GitHub to add it before continuing. With
+**Set up a new application repository**, setup asks for the owner, repository name and
+visibility and creates the repository directly. With **Configure an existing
+repository**, setup lists repositories you own, repositories in your organizations, and
+repositories shared with you as a collaborator; choose the repository to configure.
 
 ![GitHub authentication choices](./screenshots/github-authentication.png)
 
-![Selecting the GitHub application repository](./screenshots/github-application-repository.png)
+![Selecting an existing GitHub application repository](./screenshots/github-application-repository.png)
 
 #### 3. Select the shared workflow repository
 
@@ -115,13 +129,14 @@ confirmation because it is created before preview. When creating, setup asks for
 and defaults to the owner of the application repository.
 
 Setup checks the selected repository automatically when it resolves an existing
-repository and again after you select a different shared repository. The
-**Define shared repository update strategy** step shows **No action needed** when the
-repository already matches, or is ahead of, the ALM4Dataverse ref you are running. If the
-check finds a fast-forward, an alignment, or diverged history, choose the strategy there;
-setup records it and performs the update only when you choose **Apply changes**. Apply
-uses the selected strategy without prompting again. If a check fails, the step shows the
-reason and lets you retry.
+repository and again after you select a different shared repository. A repository created
+by setup is aligned to the running ref immediately, so its strategy step starts as **No
+action needed**. The **Define shared repository update strategy** step shows **No action
+needed** when the repository already matches, or is ahead of, the ALM4Dataverse ref you are
+running. If the check finds a fast-forward, an alignment, or diverged history, choose the
+strategy there; setup records it and performs the update only when you choose **Apply
+changes**. Apply uses the selected strategy without prompting again. If a check fails, the
+step shows the reason and lets you retry.
 
 ![Selecting or creating the shared workflow repository](./screenshots/github-shared-workflow-repository.png)
 
@@ -147,18 +162,20 @@ environment, BUILD validation and deployment targets in that order.
    ![Branch strategy menu from GitHub setup](./screenshots/branch-strategy.png)
 
 2. **Add or edit branch mappings.** Choose **Add a branch mapping** or **Edit a branch
-   mapping**. Branch names must be unique.
+   mapping**. The branch table above the menu, and the same table inside a branch's edit
+   menu, show its current DEV environment, deployment targets and BUILD validation. Branch
+   names must be unique.
 
    ![Prompt for a new branch name](./screenshots/branch-name.png)
 
 3. **Configure the DEV environment.** A branch without one shows **DEV: Not configured**.
-   Select it (or **Edit DEV environment**) to open the DEV detail menu, then select **DEV
-   environment** to enable it. The remaining steps stay unavailable until it is enabled;
-   choose **Do not configure DEV environment** to leave it unconfigured. Enable it to
-   select the Dataverse environment; setup names it `Dev-<branch>`. Only branches with a
+   Select it (or **Edit DEV environment**) to open the DEV detail menu, then choose
+   **Enable DEV environment** to configure a Dataverse environment for the branch, or
+   **Do not enable DEV environment** to leave it unconfigured. The remaining steps stay
+   unavailable until it is enabled. Setup names it `Dev-<branch>`. Only branches with a
    DEV environment can be a solution source.
 
-   ![GitHub DEV environment detail menu with the enable step](./screenshots/github-dev-menu.png)
+   ![GitHub DEV environment detail menu with the enable choice](./screenshots/github-dev-menu.png)
 
    ![GitHub DEV environment selection](./screenshots/github-dev-environment-selection.png)
 

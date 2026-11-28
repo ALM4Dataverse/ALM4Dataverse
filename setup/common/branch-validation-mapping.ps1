@@ -132,24 +132,7 @@ function Select-BranchEnvironmentMapping {
         }
     }
 
-    if ($IsNewRepository) {
-        if ($branchMappings.Count -eq 0) {
-            $branchMappings = @(
-                [pscustomobject]@{
-                    BranchName = 'main'
-                    DevEnvironmentConfiguration = $null
-                    ExistingDevEnvironment = $null
-                    Environments = @()
-                    BuildValidationEnabled = $false
-                    BuildValidationEnvironmentName = ''
-                    BuildValidationBaselineRelease = ''
-                    BuildValidationEnvironmentConfiguration = $null
-                    ExistingBuildValidationEnvironment = $null
-                    PublishPlan = $null
-                }
-            )
-        }
-
+    if ($IsNewRepository -and $branchMappings.Count -eq 0) {
         $strategyItems = @(
             'main only (recommended simple option)',
             'main + develop (required for environments that enforce PRs)'
@@ -169,22 +152,11 @@ function Select-BranchEnvironmentMapping {
             return @($branchMappings)
         }
 
-        if ($strategySelection -eq 1) {
-            $branchMappings = @(
+        $strategyBranchNames = if ($strategySelection -eq 1) { @('main', 'develop') } else { @('main') }
+        $branchMappings = @(
+            foreach ($strategyBranchName in $strategyBranchNames) {
                 [pscustomobject]@{
-                    BranchName                  = 'main'
-                    DevEnvironmentConfiguration = $null
-                    ExistingDevEnvironment      = $null
-                    Environments                = @()
-                    BuildValidationEnabled = $false
-                    BuildValidationEnvironmentName = ''
-                    BuildValidationBaselineRelease = ''
-                    BuildValidationEnvironmentConfiguration = $null
-                    ExistingBuildValidationEnvironment = $null
-                    PublishPlan = $null
-                },
-                [pscustomobject]@{
-                    BranchName                  = 'develop'
+                    BranchName                  = $strategyBranchName
                     DevEnvironmentConfiguration = $null
                     ExistingDevEnvironment      = $null
                     Environments                = @()
@@ -195,8 +167,8 @@ function Select-BranchEnvironmentMapping {
                     ExistingBuildValidationEnvironment = $null
                     PublishPlan = $null
                 }
-            )
-        }
+            }
+        )
 
         for ($bootstrapIndex = 0; $bootstrapIndex -lt $branchMappings.Count; $bootstrapIndex++) {
             $bootstrapMapping = $branchMappings[$bootstrapIndex]

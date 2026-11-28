@@ -33,7 +33,18 @@ Describe 'Embedded browser setup assets' {
         $html | Should -Match 'footer-status'
         $html | Should -Match 'busy-indicator'
         $html | Should -Match 'busy-spinner'
+        $html | Should -Match 'id="device-banner"'
+        $html | Should -Match 'role="dialog"'
+        $html | Should -Match 'aria-modal="true"'
+        $css | Should -Match 'body\.device-signin'
+        $css | Should -Match '\.device-banner'
+        $css | Should -Match '(?s)\.device-banner\s*\{[^}]*z-index:\s*60'
+        $js | Should -Match "classList\.add\('device-signin'\)"
+        $js | Should -Match 'if \(!deviceBanner\.hidden\)'
         $html | Should -Not -Match 'Everything runs locally'
+        $js | Should -Match 'data-reset-default'
+        $js | Should -Match 'Default: <strong>'
+        $js | Should -Not -Match 'Leave blank to keep'
         $css | Should -Match '\.step-card'
         $css | Should -Match '\.step-card-main'
         $css | Should -Match '\.step-subitems'
@@ -41,6 +52,12 @@ Describe 'Embedded browser setup assets' {
         $css | Should -Match '\.busy-indicator'
         $css | Should -Match '\.busy-spinner-arc'
         $css | Should -Match '\.working-card'
+        $css | Should -Match '\.working-output'
+        $js | Should -Match 'working-output-log'
+        $js | Should -Match 'updateWorkingOutput'
+        $js | Should -Match 'renderPromptContext'
+        $js | Should -Match "if \(prompt\.kind === 'review'\) \{"
+        $css | Should -Match '\.context-card \.blocks'
         $css | Should -Match 'data-theme="dark"'
         $html | Should -Match 'theme-toggle'
         $js | Should -Match 'api/state'
@@ -274,6 +291,22 @@ Describe 'Browser prompt readers' {
         $script:publishedPrompts[0].guidance | Should -Contain 'Pick one.'
     }
 
+    It 'carries the current branch configuration summary into the edit menu prompt' {
+        [Alm4DataverseSetupWebTestActions]::Queue.Enqueue([pscustomobject]@{ action = 'choose'; value = 0 })
+        $mapping = [pscustomobject]@{
+            BranchName    = 'main'
+            Environments  = @([pscustomobject]@{ ShortName = 'TEST' })
+            DevEnvironmentConfiguration = [pscustomobject]@{ ShortName = 'Dev-main' }
+        }
+
+        Show-SetupWebBranchEnvironmentMappingTable -BranchMappings @($mapping) | Out-Null
+        $null = Read-SetupWebMenu -Title "Edit branch 'main'" -Items @('Done')
+
+        $script:publishedPrompts[0].blocks.Count | Should -Be 1
+        $script:publishedPrompts[0].blocks[0].type | Should -Be 'table'
+        $script:publishedPrompts[0].blocks[0].rows[0][0] | Should -Be 'main'
+    }
+
     It 'styles action and dim items without changing their indexes' {
         [Alm4DataverseSetupWebTestActions]::Queue.Enqueue([pscustomobject]@{ action = 'choose'; value = 1 })
         $result = Read-SetupWebMenu `
@@ -344,6 +377,8 @@ Describe 'Browser prompt readers' {
     It 'accepts a default, trims typed text and allows an empty value' {
         [Alm4DataverseSetupWebTestActions]::Queue.Enqueue([pscustomobject]@{ action = 'submit'; value = '' })
         Read-SetupWebTextWithDefault -Prompt 'Name' -DefaultValue 'default-name' | Should -Be 'default-name'
+        $script:publishedPrompts[0].kind | Should -Be 'text'
+        $script:publishedPrompts[0].default | Should -Be 'default-name'
 
         [Alm4DataverseSetupWebTestActions]::Queue.Enqueue([pscustomobject]@{ action = 'submit'; value = '  typed  ' })
         Read-SetupWebTextWithDefault -Prompt 'Name' | Should -Be 'typed'
@@ -951,6 +986,83 @@ Describe 'Browser change review and display helpers' {
         $activity = @((Get-SetupWebStatePayload).activity)
         @($activity | Where-Object { $_.text -eq 'first:second' })[0].tone | Should -Be 'warn'
         @($activity | Where-Object { $_.text -eq 'error message' })[0].tone | Should -Be 'error'
+    }
+}
+
+Describe 'Setup interface mode selection' {
+    BeforeEach {
+        $script:savedEnvironment = @{}
+        foreach ($name in @('ACC_CLOUD', 'AZUREPS_HOST_ENVIRONMENT', 'SSH_CONNECTION', 'SSH_CLIENT', 'SSH_TTY', 'DISPLAY', 'WAYLAND_DISPLAY')) {
+            $script:savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name)
+            [Environment]::SetEnvironmentVariable($name, $null)
+        }
+    }
+
+    AfterEach {
+        foreach ($name in $script:savedEnvironment.Keys) {
+            [Environment]::SetEnvironmentVariable($name, $script:savedEnvironment[$name])
+        }
+    }
+
+    It 'uses the browser setup by default' {
+        $selection = Resolve-SetupInterfaceMode
+
+        $selection.Mode | Should -Be 'Web'
+        $selection.Reason | Should -BeNullOrEmpty
+    }
+
+    It 'accepts the deprecated Web switch without changing the default' {
+        (Resolve-SetupInterfaceMode -Web).Mode | Should -Be 'Web'
+    }
+
+    It 'forces the console when Console is requested' {
+        $selection = Resolve-SetupInterfaceMode -Console
+
+        $selection.Mode | Should -Be 'Console'
+        $selection.Reason | Should -BeNullOrEmpty
+    }
+
+    It 'rejects Console with the deprecated Web switch' {
+        { Resolve-SetupInterfaceMode -Console -Web } |
+            Should -Throw '*Console cannot be combined with the deprecated Web switch*'
+    }
+
+    It 'falls back to the console in Azure Cloud Shell' {
+        $env:ACC_CLOUD = '1'
+
+        $selection = Resolve-SetupInterfaceMode
+
+        $selection.Mode | Should -Be 'Console'
+        $selection.Reason | Should -Match 'Azure Cloud Shell'
+    }
+
+    It 'recognizes Cloud Shell from its PowerShell host environment' {
+        $env:AZUREPS_HOST_ENVIRONMENT = 'CloudShell'
+
+        (Resolve-SetupInterfaceMode).Mode | Should -Be 'Console'
+    }
+
+    It 'falls back to the console for a remote session without a local display' {
+        $env:SSH_CONNECTION = '192.0.2.1 4242 192.0.2.2 22'
+
+        $selection = Resolve-SetupInterfaceMode
+
+        $selection.Mode | Should -Be 'Console'
+        $selection.Reason | Should -Match 'remote session'
+    }
+
+    It 'keeps the browser setup in a remote session with a forwarded display' -Skip:(!$IsLinux) {
+        $env:SSH_CONNECTION = '192.0.2.1 4242 192.0.2.2 22'
+        $env:DISPLAY = ':10'
+
+        (Resolve-SetupInterfaceMode).Mode | Should -Be 'Web'
+    }
+
+    It 'falls back to the console for unattended runs' {
+        $selection = Resolve-SetupInterfaceMode -Unattended
+
+        $selection.Mode | Should -Be 'Console'
+        $selection.Reason | Should -Match 'without prompts'
     }
 }
 
