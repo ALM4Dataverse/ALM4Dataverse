@@ -23,9 +23,10 @@ with the [GitHub quickstart](../getting-started/quickstart-github.md).
   its authentication.
 - **An existing licensed user** in each environment to own and activate flows and other
   processes.
-- **For automated setup:** Windows PowerShell 5.1 or PowerShell 7 on Windows, Git, and
-  network access to GitHub and the required Microsoft services. Setup downloads a
-  temporary GitHub CLI when `gh` is missing.
+- **For automated setup:** Windows PowerShell 5.1 or PowerShell 7 on Windows, or
+  PowerShell 7 on Linux with Git and GitHub CLI on `PATH`, and network access to GitHub
+  and the required Microsoft services. Setup downloads a temporary GitHub CLI when `gh`
+  is missing on Windows. Azure Cloud Shell includes PowerShell, Git and GitHub CLI.
 
 > [!NOTE]
 > **Optional Dev Container.** The repository includes a
@@ -63,6 +64,16 @@ To select a tenant or a specific shared-code ref, see
 > [!NOTE]
 > Released setup scripts embed their helpers. A raw script downloaded from the source
 > repository is not equivalent and needs its adjacent files.
+
+### Run in Azure Cloud Shell
+
+Setup can run in [Azure Cloud Shell](https://shell.azure.com). Choose **PowerShell** and
+run the one-line bootstrap:
+
+```powershell
+iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1 | iex
+```
+
 
 ### Guided Setup
 

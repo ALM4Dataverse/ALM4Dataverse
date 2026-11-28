@@ -199,17 +199,18 @@ else {
     __SETUP_GITHUB_BOOTSTRAP_LIB__
 }
 
-# Download GitHub CLI to the temporary setup directory when it is not installed.
+# Resolve GitHub CLI from PATH, or download a temporary copy on Windows when it is
+# not installed.
 $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
 if (-not $ghCmd) {
     $ghBinDir = Install-PortableGitHubCli -Destination $TempModuleRoot
-    if (-not ($env:PATH -split ';' | Where-Object { $_ -eq $ghBinDir })) {
-        $env:PATH = "$ghBinDir;$env:PATH"
+    if (-not ($env:PATH -split [Regex]::Escape($delim) | Where-Object { $_ -eq $ghBinDir })) {
+        $env:PATH = "$ghBinDir$delim$env:PATH"
     }
     $ghCmd = Get-Command gh -ErrorAction SilentlyContinue
 }
 if (-not $ghCmd) {
-    throw "GitHub CLI was downloaded but is still not available in PATH."
+    throw "GitHub CLI is still not available in PATH."
 }
 
 # Verify Git is available

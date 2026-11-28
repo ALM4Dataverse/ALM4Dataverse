@@ -30,6 +30,7 @@ You need:
   administrator who can complete those steps with you.
 - **Windows PowerShell 5.1 or PowerShell 7** on Windows, or PowerShell 7 on Linux with
   Git on `PATH`. Setup downloads its PowerShell modules and, on Windows, temporary Git.
+  Azure Cloud Shell includes PowerShell and Git.
 
 > [!NOTE]
 > **Optional Dev Container.** The repository includes a
@@ -60,6 +61,16 @@ To select a tenant or a specific shared-code ref, see
 > [!NOTE]
 > Released setup scripts embed their helpers. A raw script downloaded from the source
 > repository is not equivalent and needs its adjacent files.
+
+### Run in Azure Cloud Shell
+
+Setup can run in [Azure Cloud Shell](https://shell.azure.com). Choose **PowerShell** and
+run the one-line bootstrap:
+
+```powershell
+iwr https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-azdo.ps1 | iex
+```
+
 
 ## Guided Setup
 

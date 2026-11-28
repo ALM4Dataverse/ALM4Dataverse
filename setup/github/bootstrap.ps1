@@ -1,16 +1,34 @@
 function Install-PortableGitHubCli {
     <#
     .SYNOPSIS
-        Returns the bin directory of a Windows GitHub CLI installed beneath Destination.
+        Returns the bin directory of the GitHub CLI used by setup.
     .DESCRIPTION
-        Reuses an existing gh.exe without checking its version. Otherwise downloads the
-        latest architecture-specific release and replaces the installation directory.
-        Throws for unsupported architectures or download/extraction failures; removes
-        the archive in finally, but retains the extracted installation for reuse.
+        Uses gh from PATH on non-Windows systems, where setup cannot install system
+        packages. On Windows, reuses an existing gh.exe without checking its version or
+        downloads the latest architecture-specific release and replaces the installation
+        directory. Throws for a missing non-Windows gh, unsupported Windows architectures
+        or download/extraction failures. The Windows archive is removed in finally; the
+        extracted installation is retained for reuse.
+    .PARAMETER Destination
+        Windows installation directory for the downloaded GitHub CLI.
+    .PARAMETER Platform
+        Defaults to the current platform; overridable for testing the Windows installer path.
     #>
     param(
-        [Parameter(Mandatory)][string]$Destination
+        [Parameter(Mandatory)][string]$Destination,
+        [System.PlatformID]$Platform = [System.Environment]::OSVersion.Platform
     )
+
+    if ($Platform -ne [System.PlatformID]::Win32NT) {
+        $ghCommand = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if (-not $ghCommand) {
+            throw 'GitHub CLI (gh) must be installed and available on PATH on non-Windows systems. Azure Cloud Shell includes it.'
+        }
+
+        Write-Host "Using system GitHub CLI at: $($ghCommand.Source)"
+        return (Split-Path -Parent $ghCommand.Source)
+    }
 
     $architecture = switch ($env:PROCESSOR_ARCHITECTURE) {
         'AMD64' { 'amd64' }

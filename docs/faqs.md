@@ -110,6 +110,13 @@ and [GitHub environment protection rules](https://docs.github.com/en/actions/ref
 > still need the appropriate repository/environment plan. Self-hosting does not unlock
 > GitHub's private approval features.
 
+## Can I Run Setup If I Can't Run PowerShell?
+
+Yes. Both automated setup scripts can run in [Azure Cloud Shell](https://shell.azure.com).
+Choose **PowerShell** and use the one-line bootstrap in
+[GitHub automated setup](setup/github-setup.md#run-in-azure-cloud-shell) or
+[Azure DevOps automated setup](setup/azdo-automated-setup.md#run-in-azure-cloud-shell).
+
 ## Why should I use this instead of Power Platform Pipelines?
 
 Choose the approach that fits your delivery process. Power Platform Pipelines provides
