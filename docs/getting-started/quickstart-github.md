@@ -16,10 +16,10 @@ creates everything else.
 
 | | Automated setup | Manual setup |
 | --- | --- | --- |
-| Who does the work | One guided script, run in PowerShell on your computer with internet access | You create the repository settings, environments and credentials yourself, step by step |
+| Who does the work | One guided script, run in PowerShell locally or in Azure Cloud Shell with internet access | You create the repository settings, environments and credentials yourself, step by step |
 | `alm-config.psd1` | Setup writes it from your answers | You write and commit it yourself |
 | Caller workflows | Generated from `alm-config.psd1` by setup at the end | Generated from `alm-config.psd1` by the APPLY-CONFIG workflow (or `-ApplyConfig` locally) |
-| Choose when | Recommended: every Windows computer can run it | Running PowerShell locally is restricted, or you want to create each resource yourself |
+| Choose when | Recommended: any computer or Azure Cloud Shell can run it | Running PowerShell locally is restricted, or you want to create each resource yourself |
 
 The automated route is the default. Its prerequisites and guided steps are in
 [GitHub automated setup](../setup/github-setup.md); the manual route's prerequisites and
@@ -37,6 +37,9 @@ read it before running it:
 Invoke-WebRequest 'https://github.com/ALM4Dataverse/ALM4Dataverse/releases/latest/download/setup-github.ps1' -OutFile './setup-github.ps1'
 .\setup-github.ps1
 ```
+
+You can also run setup in [Azure Cloud Shell](../setup/github-setup.md#run-in-azure-cloud-shell);
+choose PowerShell and use the one-line bootstrap there.
 
 Follow the [guided setup steps](../setup/github-setup.md#guided-setup). For a first
 deployment, choose your solutions in dependency order, your test environment first, a

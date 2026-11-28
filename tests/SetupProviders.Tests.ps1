@@ -220,6 +220,29 @@ Describe 'GitHub CLI bootstrap' {
         $env:PROCESSOR_ARCHITECTURE = $script:savedProcessorArchitecture
     }
 
+    It 'uses the system GitHub CLI on non-Windows systems' {
+        $script:systemGhCommand = [pscustomobject]@{ Source = Join-Path $TestDrive 'usr/bin/gh' }
+        Mock Get-Command { $script:systemGhCommand }
+        Mock Invoke-RestMethod { throw 'Unexpected GitHub CLI release request.' }
+        Mock Invoke-WebRequest { throw 'Unexpected GitHub CLI archive download.' }
+
+        $binDirectory = Install-PortableGitHubCli -Destination $TestDrive -Platform ([System.PlatformID]::Unix)
+
+        $binDirectory | Should -Be (Split-Path -Parent $script:systemGhCommand.Source)
+        Should -Invoke Get-Command -Times 1 -Exactly
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly
+        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
+    }
+
+    It 'fails with an install instruction when the system GitHub CLI is missing on non-Windows systems' {
+        Mock Get-Command { $null }
+        Mock Invoke-RestMethod { throw 'Unexpected GitHub CLI release request.' }
+
+        { Install-PortableGitHubCli -Destination $TestDrive -Platform ([System.PlatformID]::Unix) } |
+            Should -Throw '*GitHub CLI (gh) must be installed and available on PATH*'
+        Should -Invoke Invoke-RestMethod -Times 0 -Exactly
+    }
+
     It 'reuses an existing GitHub CLI executable' {
         $destination = Join-Path $TestDrive ([guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $destination | Out-Null
@@ -229,7 +252,8 @@ Describe 'GitHub CLI bootstrap' {
         New-Item -ItemType File -Path (Join-Path $expectedBinDirectory 'gh.exe') -Force | Out-Null
         Mock Invoke-RestMethod { throw 'Unexpected GitHub CLI release request.' }
 
-        Install-PortableGitHubCli -Destination $destination | Should -Be $expectedBinDirectory
+        Install-PortableGitHubCli -Destination $destination -Platform ([System.PlatformID]::Win32NT) |
+            Should -Be $expectedBinDirectory
         Should -Invoke Invoke-RestMethod -Times 0 -Exactly
     }
 
@@ -258,7 +282,7 @@ Describe 'GitHub CLI bootstrap' {
             New-Item -ItemType File -Path (Join-Path $binDirectory 'gh.exe') -Force | Out-Null
         }
 
-        $binDirectory = Install-PortableGitHubCli -Destination $destination
+        $binDirectory = Install-PortableGitHubCli -Destination $destination -Platform ([System.PlatformID]::Win32NT)
 
         $binDirectory | Should -Be $expectedBinDirectory
         Test-Path (Join-Path $destination 'GitHubCLI.zip') | Should -BeFalse
@@ -277,7 +301,7 @@ Describe 'GitHub CLI bootstrap' {
         }
         Mock Invoke-WebRequest { throw 'Unexpected GitHub CLI archive download.' }
 
-        { Install-PortableGitHubCli -Destination $destination } |
+        { Install-PortableGitHubCli -Destination $destination -Platform ([System.PlatformID]::Win32NT) } |
             Should -Throw '*Could not find a GitHub CLI release archive*'
         Should -Invoke Invoke-WebRequest -Times 0 -Exactly
     }
@@ -286,7 +310,7 @@ Describe 'GitHub CLI bootstrap' {
         $env:PROCESSOR_ARCHITECTURE = 'UNSUPPORTED'
         Mock Invoke-RestMethod { throw 'Unexpected GitHub CLI release request.' }
 
-        { Install-PortableGitHubCli -Destination $TestDrive } |
+        { Install-PortableGitHubCli -Destination $TestDrive -Platform ([System.PlatformID]::Win32NT) } |
             Should -Throw '*Unsupported processor architecture*'
         Should -Invoke Invoke-RestMethod -Times 0 -Exactly
     }
