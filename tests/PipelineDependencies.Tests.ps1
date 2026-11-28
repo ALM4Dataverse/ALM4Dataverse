@@ -55,7 +55,7 @@ Describe 'Dependency installation' {
             $version = switch ($Name) {
                 'Az.Accounts' { '5.5.0' }
                 'Az.Resources' { '2.0.0' }
-                default { '3.4.1-preview.1' }
+                default { '3.5.4-preview.1' }
             }
             [pscustomobject]@{ Name = $Name; Version = $version }
         }
@@ -68,7 +68,7 @@ Describe 'Dependency installation' {
             $version = switch ($Name) {
                 'Az.Accounts' { [version]'5.5.0' }
                 'Az.Resources' { [version]'2.0.0' }
-                default { [version]'3.4.1' }
+                default { [version]'3.5.4' }
             }
             $prerelease = if ($Name -eq 'Rnwood.Dataverse.Data.PowerShell') { 'preview.1' } else { '' }
             [pscustomobject]@{ Version = $version; Prerelease = $prerelease }
@@ -105,13 +105,13 @@ Describe 'Dependency installation' {
     It 'accepts selector <Selector> when the resolved version meets the minimum' -ForEach @(
         @{ Selector = '' }
         @{ Selector = 'prerelease' }
-        @{ Selector = '3.4.1-preview.1' }
+        @{ Selector = '3.5.4-preview.1' }
     ) {
         Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '$Selector' } }"
         { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Not -Throw
         Should -Invoke Get-InstalledModule -Times 1 -Exactly -ParameterFilter {
             $Name -eq 'Rnwood.Dataverse.Data.PowerShell' -and
-            $RequiredVersion -eq '3.4.1-preview.1' -and $AllowPrerelease
+            $RequiredVersion -eq '3.5.4-preview.1' -and $AllowPrerelease
         }
         Should -Invoke dotnet -Times 1 -Exactly -ParameterFilter { $Operation -eq 'update' }
         (Get-Content -LiteralPath $env:GITHUB_PATH -Raw).Trim() | Should -Be (Join-Path $HOME '.alm4dataverse/tools')
@@ -138,7 +138,7 @@ Describe 'Dependency installation' {
                     [pscustomobject]@{ Name = $Name; Version = '2.0.0' }
                 )
             }
-            [pscustomobject]@{ Name = $Name; Version = '3.4.1-preview.1' }
+            [pscustomobject]@{ Name = $Name; Version = '3.5.4-preview.1' }
         }
         Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ scriptDependencies = @{ 'Az.Resources' = '2.0.0' } }"
 
@@ -153,12 +153,12 @@ Describe 'Dependency installation' {
         [AlmDependencyImportCapture]::ImportOrder = [System.Collections.Generic.List[string]]::new()
         Mock Install-Module { [pscustomobject]@{ Name = $Name; Version = '5.5.0' } } -ParameterFilter { $Name -eq 'Az.Accounts' }
         Mock Install-Module { [pscustomobject]@{ Name = $Name; Version = '2.0.0' } } -ParameterFilter { $Name -eq 'Az.Resources' }
-        Mock Install-Module { [pscustomobject]@{ Name = $Name; Version = '3.4.1-preview.1' } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
+        Mock Install-Module { [pscustomobject]@{ Name = $Name; Version = '3.5.4-preview.1' } } -ParameterFilter { $Name -eq 'Rnwood.Dataverse.Data.PowerShell' }
         Mock Get-InstalledModule {
             [pscustomobject]@{ InstalledLocation = (Join-Path $TestDrive $Name) }
         } -ParameterFilter { $Name -in @('Az.Accounts', 'Az.Resources', 'Rnwood.Dataverse.Data.PowerShell') }
         Mock Import-Module { [AlmDependencyImportCapture]::ImportOrder.Add([string]$Name) } -ParameterFilter { $Name -like '*.psd1' }
-        Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '3.4.1-preview.1'; 'Az.Resources' = '2.0.0' } }"
+        Set-Content -LiteralPath 'alm-config.psd1' -Value "@{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '3.5.4-preview.1'; 'Az.Resources' = '2.0.0' } }"
 
         { & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1') } | Should -Not -Throw
 
@@ -170,10 +170,10 @@ Describe 'Dependency installation' {
 
     It 'uses pinned lock-file module and CLI selectors' {
         Set-Content -LiteralPath 'alm-config.psd1' -Value '@{ pacCliVersion = "2.7.4" }'
-        @{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '3.4.1-preview.1' }; pacCliVersion = 'prerelease' } |
+        @{ scriptDependencies = @{ 'Rnwood.Dataverse.Data.PowerShell' = '3.5.4-preview.1' }; pacCliVersion = 'prerelease' } |
             ConvertTo-Json | Set-Content -LiteralPath 'scriptDependencies.lock.json'
         & (Join-Path $repoRoot 'pipelines/scripts/installdependencies.ps1')
-        Should -Invoke Install-Module -Times 1 -Exactly -ParameterFilter { $RequiredVersion -eq '3.4.1-preview.1' -and $AllowPrerelease }
+        Should -Invoke Install-Module -Times 1 -Exactly -ParameterFilter { $RequiredVersion -eq '3.5.4-preview.1' -and $AllowPrerelease }
     }
 
     It 'does not resolve Node.js when no build was requested, even with code apps configured' {
